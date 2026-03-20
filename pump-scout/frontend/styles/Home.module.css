@@ -40,6 +40,23 @@
   margin-bottom: 1px;
 }
 
+.howLink {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  margin-left: 10px;
+  align-self: flex-end;
+  margin-bottom: 1px;
+  opacity: 0.7;
+  transition: opacity 0.15s, color 0.15s;
+}
+.howLink:hover {
+  color: var(--cyan);
+  opacity: 1;
+  text-decoration: none;
+}
+
 .headerMeta {
   display: flex;
   align-items: center;
