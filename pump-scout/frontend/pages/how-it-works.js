@@ -456,7 +456,7 @@ export default function HowItWorks() {
               <li><strong>VERDICT</strong> — STRONG BUY SETUP / WATCH / AVOID</li>
             </ul>
             <p style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 11 }}>
-              Requires ANTHROPIC_API_KEY set in environment variables. Uses claude-3-5-haiku model with claude-3-haiku fallback.
+              Requires ANTHROPIC_API_KEY set in environment variables. Uses claude-haiku-4-5 model with claude-3-5-haiku / claude-3-haiku fallback.
             </p>
           </Block>
         </Section>
