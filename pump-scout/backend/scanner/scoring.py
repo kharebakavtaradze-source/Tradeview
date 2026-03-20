@@ -94,14 +94,12 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
     total_score = round(min(total_score, 100), 2)
 
     # --- Tier ---
-    # State from regime overrides tier
-    if state == "FIRE" or total_score > 80:
+    # Step 1: score-based tier
+    if total_score > 80:
         tier = "FIRE"
-    elif state == "ARM" or total_score > 60:
+    elif total_score > 60:
         tier = "ARM"
-    elif state in ("STEALTH_ARM", "STEALTH_BASE", "STEALTH"):
-        tier = "STEALTH"
-    elif state == "BASE" or total_score > 40:
+    elif total_score > 40:
         tier = "BASE"
     elif stealth.get("is_stealth") and stealth.get("stealth_score", 0) >= 50:
         tier = "STEALTH"
@@ -111,6 +109,21 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         tier = "GOGA"
     else:
         tier = "SKIP"
+
+    # Step 2: Wyckoff state can upgrade tier but never downgrade
+    _TIER_RANK = {"SKIP": 0, "GOGA": 1, "WATCH": 2, "STEALTH": 3, "BASE": 4, "ARM": 5, "FIRE": 6}
+    _STATE_MIN = {
+        "FIRE": "FIRE",
+        "ARM": "ARM",
+        "BASE": "BASE",
+        "STEALTH": "STEALTH",
+        "STEALTH_BASE": "STEALTH",
+        "STEALTH_ARM": "STEALTH",
+    }
+    if state in _STATE_MIN:
+        candidate = _STATE_MIN[state]
+        if _TIER_RANK.get(candidate, 0) > _TIER_RANK.get(tier, 0):
+            tier = candidate
 
     return {
         "total_score": total_score,

@@ -30,7 +30,7 @@ FALLBACK_TICKERS = [
     # Tech small-caps
     "BBAI", "SOUN", "AIXI", "AITX", "BRSH", "CXAI", "GFAI", "IREN", "CIFR",
     "BTBT", "MARA", "RIOT", "HUT", "CLSK", "BITF", "WULF", "ARIS", "GRIID",
-    "ACHR", "JOBY", "LILM", "EVTL", "ARCHER", "BLDE", "WKHS", "AYRO",
+    "ACHR", "JOBY", "LILM", "EVTL", "BLDE", "WKHS", "AYRO",
     "SOLO", "GOEV", "NKLA", "FFIE", "IDEX", "MULN", "EVGO", "BLNK", "CHPT",
     "PTRA", "DKNG", "PENN", "GNOG", "ACMR", "GRND", "ASTS", "SATL",
     # Biotech / Pharma
@@ -89,16 +89,16 @@ FALLBACK_TICKERS = [
     "YNDX", "YTEN", "ZFGN", "ZLAB", "ZMTP", "ZNTL", "ZSAN", "ZYXI",
     # Meme / retail favorites
     "AMC", "GME", "BB", "NOK", "BBIG", "MVIS", "EXPR", "SPCE", "WISH",
-    "CLOV", "WKHS", "GOEV", "NKLA", "PLTR", "SOFI", "HOOD", "RIVN",
+    "CLOV", "GOEV", "NKLA", "PLTR", "SOFI", "HOOD", "RIVN",
     "LCID", "OPEN", "SNDL", "TLRY", "CGC", "ACB", "CRON", "HEXO",
-    "SENS", "GNUS", "NAKD", "BBBY", "KOSS", "DOGE", "SHIB",
+    "SENS", "GNUS", "NAKD", "KOSS",
     # Energy small-caps
-    "AMPE", "AMPY", "ARNC", "ARRY", "BATL", "CDEV", "CLMT", "COHN",
+    "AMPE", "AMPY", "ARNC", "BATL", "CDEV", "CLMT", "COHN",
     "CORE", "DGLY", "DNOW", "DRIL", "ENVA", "FLNG", "FTIV", "GATO",
-    "GPOR", "GRNT", "HALO", "HNRG", "INDO", "KALU", "KLXE", "MARPS",
-    "MNRL", "MTDR", "NEXT", "NINE", "NRGU", "OASIS", "PNRG", "PUMP",
+    "GPOR", "GRNT", "HNRG", "INDO", "KLXE",
+    "MNRL", "MTDR", "NEXT", "NINE", "NRGU", "PNRG", "PUMP",
     "REI", "RES", "RRIG", "SDRL", "SESI", "SHPW", "SIBN", "SNDE",
-    "STNG", "TELL", "TPVG", "TRMD", "USWS", "VET", "VTLE", "WTTR",
+    "STNG", "TELL", "TRMD", "USWS", "VET", "VTLE", "WTTR",
 ]
 
 

@@ -106,7 +106,7 @@ export default function HowItWorks() {
                 Queries <code>small_cap_gainers</code> predefined screen.
               </li>
               <li>
-                <strong>Static List</strong> — 400+ hardcoded small-cap tickers (biotech, crypto miners,
+                <strong>Static List</strong> — curated small-cap US stocks (biotech, crypto miners,
                 EV, energy, meme stocks) used if both live sources fail.
               </li>
             </ol>
@@ -175,6 +175,11 @@ export default function HowItWorks() {
               meaning="Core signal. 2x = notable, 5x = strong, 10x+ = extreme. High volume with quiet price = stealth accumulation."
             />
             <Indicator
+              name="VOL RATIO (day-over-day)"
+              formula="Today's volume ÷ Yesterday's volume"
+              meaning="Short-term volume surge. Used in STEALTH and GOGA detection. 2x+ yesterday with flat price = someone is accumulating quietly."
+            />
+            <Indicator
               name="VOL Z-SCORE"
               formula="(Today_vol − Avg20) ÷ StdDev20"
               meaning="How many standard deviations above normal. Z > 2 is statistically significant. Less sensitive to absolute size than ratio."
@@ -216,8 +221,8 @@ export default function HowItWorks() {
             />
             <Indicator
               name="STEALTH SCORE"
-              formula="Vol ratio × price quiet formula (0–100)"
-              meaning="Smart money detector. Volume 2x yesterday + 1.5x 20d avg but price moves less than 7%. Score 70+ = STRONG stealth."
+              formula="Composite: vol_ratio × vol_vs_avg × price_quiet (0–100)"
+              meaning="Smart money detector. Volume 2x+ yesterday AND 1.5x+ 20d avg, price moves less than 7%. Bearish close halves the score. 70+ = STRONG."
             />
           </div>
         </Section>
@@ -225,38 +230,36 @@ export default function HowItWorks() {
         {/* 4. Tiers */}
         <Section id="tiers" title="4. Signal Tiers">
           <p className={styles.lead}>
-            Each ticker is assigned one tier based on its score and Wyckoff regime state.
+            Each ticker is assigned one tier. Score determines the base tier first.
+            Wyckoff regime state can then <strong>upgrade</strong> the tier but never downgrade it.
             Tiers are shown as tabs on the main dashboard.
           </p>
 
           <div className={styles.tierList}>
             <TierRow
-              emoji="🔥" name="FIRE" color="#ffd700" score="> 80 or state=FIRE"
+              emoji="🔥" name="FIRE" color="#ffd700" score="> 80  or  Wyckoff state = FIRE"
               description="Highest conviction. Breakout from accumulation with volume confirmation. Act fast — these move."
               conditions={[
-                'Wyckoff state = FIRE (breakout from TR with vol Z > 1)',
-                'OR total score exceeds 80',
-                'Squeeze bars ≥ 3 at time of breakout',
-                'Close above 20-bar high',
+                'Score exceeds 80, OR Wyckoff state = FIRE',
+                'Wyckoff FIRE: breakout above 20-bar high with vol Z > 1 and squeeze ≥ 3 bars',
+                'Wyckoff state always upgrades to FIRE if score alone did not reach it',
               ]}
             />
             <TierRow
-              emoji="👁" name="ARM" color="#00e5ff" score="> 60 or state=ARM"
+              emoji="👁" name="ARM" color="#00e5ff" score="> 60  or  Wyckoff state = ARM"
               description="Ready to fire. Near top of trading range with squeeze building. Watch for the trigger candle."
               conditions={[
-                'Wyckoff state = ARM',
-                'Price in upper 35% of trading range',
-                'Squeeze bars ≥ 3',
-                'CMF positive (buying pressure)',
+                'Score exceeds 60, OR Wyckoff state = ARM',
+                'Wyckoff ARM: price in upper 35% of range, squeeze ≥ 3 bars, CMF positive',
+                'Regime state upgrades tier upward only — a FIRE-score ticker stays FIRE',
               ]}
             />
             <TierRow
-              emoji="📦" name="BASE" color="#00c853" score="> 40 or state=BASE"
+              emoji="📦" name="BASE" color="#00c853" score="> 40  or  Wyckoff state = BASE"
               description="Building the base. In accumulation range, squeeze forming, early signals. Still needs time."
               conditions={[
-                'In accumulation regime (in_acc = true)',
-                'Squeeze bars ≥ 2',
-                'CMF positive',
+                'Score exceeds 40, OR Wyckoff state = BASE',
+                'In accumulation (in_acc = true), squeeze ≥ 2 bars, CMF positive',
               ]}
             />
             <TierRow
@@ -264,18 +267,28 @@ export default function HowItWorks() {
               description="Volume spiked quietly — smart money moving in without tipping off the market. High risk / high reward."
               conditions={[
                 'Volume ≥ 2x yesterday AND ≥ 1.5x 20-day avg',
-                'Price change < 7% (quiet price action)',
-                'Stealth score ≥ 50',
-                'Wyckoff state upgrades: STEALTH_BASE or STEALTH_ARM if also in accumulation',
+                'Price change < 7% absolute (quiet price action)',
+                'Stealth score ≥ 50 (bearish close halves the score)',
+                'Wyckoff STEALTH_BASE / STEALTH_ARM = stealth + accumulation combo (strongest)',
               ]}
             />
             <TierRow
               emoji="⚡" name="WATCH" color="#ff8800" score="25–40"
               description="On the radar. Some signals present but not enough confirmation. Monitor daily."
               conditions={[
-                'Score 25–40',
+                'Score between 25 and 40',
                 'Some volume or accumulation signal present',
                 'Not yet in clear accumulation regime',
+              ]}
+            />
+            <TierRow
+              emoji="🐂" name="GOGA" color="#a0ff80" score="< 25  (vol surge only)"
+              description="Volume doubled vs yesterday with flat price — early accumulation signal before it registers in longer-term averages."
+              conditions={[
+                'Today\'s volume ≥ 2x yesterday\'s volume (day-over-day surge)',
+                'Price change between −7% and +7% (not a gap or spike)',
+                'Score did not reach WATCH threshold (25) on other indicators',
+                'Passes the 300K minimum volume and 2x anomaly ratio filters',
               ]}
             />
           </div>
@@ -304,10 +317,10 @@ export default function HowItWorks() {
               <div className={styles.scoreItem}>
                 <div className={styles.scoreLabel} style={{ color: 'var(--arm)' }}>VOL SCORE (0–100)</div>
                 <div className={styles.scoreRules}>
-                  <span>2x avg → 40</span>
-                  <span>3x avg → 60</span>
-                  <span>5x avg → 80</span>
-                  <span>10x+ avg → 100</span>
+                  <span>2x 20d avg → 40</span>
+                  <span>3x 20d avg → 60</span>
+                  <span>5x 20d avg → 80</span>
+                  <span>10x+ 20d avg → 100</span>
                   <span>Gap Up → +8–15</span>
                   <span>Gap Down → −10–20</span>
                 </div>
@@ -340,6 +353,12 @@ export default function HowItWorks() {
                 </div>
               </div>
             </div>
+
+            <p style={{ marginTop: 14, color: 'var(--text-muted)', fontSize: 11 }}>
+              After computing the score, the Wyckoff regime state is applied as a second pass.
+              State can only <strong>upgrade</strong> the tier (e.g. state=ARM bumps a BASE-score ticker to ARM),
+              never downgrade (a score-81 ticker stays FIRE regardless of state).
+            </p>
           </Block>
         </Section>
 
@@ -352,14 +371,14 @@ export default function HowItWorks() {
 
           <div className={styles.wyckoffGrid}>
             <Block title="SELLING CLIMAX (SC)" color="var(--red)">
-              <p>High-volume bearish bar at 60-bar low. Panic selling = smart money absorbs supply.
+              <p>High-volume bearish bar within 0.1% of the 60-bar low. Panic selling = smart money absorbs supply.
               Marks the beginning of accumulation phase.</p>
-              <code>is_bearish AND vol {'>'} 2× avg AND at 60-bar low</code>
+              <code>is_bearish AND vol {'>'} 2× avg AND bar_low ≤ 60d_low × 1.001</code>
             </Block>
             <Block title="BUYING CLIMAX (BC)" color="var(--gold)">
-              <p>High-volume bullish bar at 60-bar high. Institutions distributing to retail buyers.
+              <p>High-volume bullish bar within 0.1% of the 60-bar high. Institutions distributing to retail buyers.
               Marks the beginning of distribution phase.</p>
-              <code>is_bullish AND vol {'>'} 2× avg AND at 60-bar high</code>
+              <code>is_bullish AND vol {'>'} 2× avg AND bar_high ≥ 60d_high × 0.999</code>
             </Block>
             <Block title="TRADING RANGE (TR)" color="var(--arm)">
               <p>40-bar high/low defines the trading range. Price consolidating between TR High and TR Low.
@@ -368,8 +387,10 @@ export default function HowItWorks() {
             </Block>
             <Block title="ACCUMULATION DETECTION" color="var(--green)">
               <p>Confirmed when SC is found AND price is consolidating in range (5+ bars after SC).
-              Also detected heuristically: price near 60-bar lows with contracting volume.</p>
+              Also detected heuristically: price near 60-bar lows with volume contracting over the last 10 vs 30 bars.</p>
               <code>bars_since_sc ≥ 5 AND price within TR</code>
+              <br />
+              <code>OR: near 60-bar bottom (bottom 40%) AND 10-bar avg vol {'<'} 30-bar avg vol</code>
             </Block>
           </div>
 
@@ -388,7 +409,7 @@ export default function HowItWorks() {
                 <span className={styles.state} style={{ color: 'var(--text-muted)' }}>NONE</span>
                 <span className={styles.arrow}>→</span>
                 <span className={styles.state} style={{ color: '#cc44ff' }}>STEALTH</span>
-                <span className={styles.stateNote}>(vol spike, quiet price)</span>
+                <span className={styles.stateNote}>(vol 2x yesterday, price quiet, stealth_score ≥ 50)</span>
               </div>
               <div className={styles.stateFlow} style={{ marginTop: 8 }}>
                 <span className={styles.state} style={{ color: 'var(--base)' }}>BASE</span>
@@ -403,7 +424,7 @@ export default function HowItWorks() {
                 <span className={styles.state} style={{ color: '#cc44ff' }}>stealth</span>
                 <span className={styles.arrow}>→</span>
                 <span className={styles.state} style={{ color: '#cc44ff' }}>STEALTH_ARM</span>
-                <span className={styles.stateNote}>(strongest signal)</span>
+                <span className={styles.stateNote}>(strongest signal in the system)</span>
               </div>
             </div>
           </Block>
@@ -415,10 +436,10 @@ export default function HowItWorks() {
             <p>Tickers are dropped at each stage if they fail:</p>
             <ul className={styles.ul} style={{ marginTop: 10 }}>
               <li><strong>Minimum 60 candles</strong> — need history for reliable indicators</li>
-              <li><strong>Avg volume ≥ 200,000</strong> — illiquid stocks skipped (can't trade the signal)</li>
-              <li><strong>All OHLCV fields present</strong> — no null/NaN bars</li>
-              <li><strong>Score tier ≠ SKIP</strong> — score below 25 discarded (no signal)</li>
-              <li><strong>Price $1–$50</strong> — filters applied at Finviz stage</li>
+              <li><strong>Last-day volume ≥ 300,000</strong> — illiquid stocks skipped (can't trade the signal)</li>
+              <li><strong>Vol anomaly ≥ 2x 20-day avg</strong> — must have a meaningful volume event</li>
+              <li><strong>Score tier ≠ SKIP</strong> — score below 25 with no GOGA signal discarded</li>
+              <li><strong>Price $1–$50</strong> — applied at Finviz screener stage</li>
             </ul>
           </Block>
 
@@ -435,7 +456,7 @@ export default function HowItWorks() {
               <li><strong>VERDICT</strong> — STRONG BUY SETUP / WATCH / AVOID</li>
             </ul>
             <p style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 11 }}>
-              Requires ANTHROPIC_API_KEY set in environment variables. Uses claude-3-5-haiku model.
+              Requires ANTHROPIC_API_KEY set in environment variables. Uses claude-3-5-haiku model with claude-3-haiku fallback.
             </p>
           </Block>
         </Section>
