@@ -1,0 +1,93 @@
+:root {
+  --bg: #0d0d1a;
+  --surface: #0f0f1e;
+  --surface2: #13132a;
+  --border: #1a1a33;
+  --border2: #22224a;
+  --text: #e0e0f0;
+  --text-muted: #6b6b9a;
+  --text-dim: #9999cc;
+  --cyan: #00e5ff;
+  --gold: #ffd700;
+  --green: #00c853;
+  --orange: #ff8800;
+  --red: #ff4466;
+  --purple: #b47aff;
+  --fire: #ffd700;
+  --arm: #00e5ff;
+  --base: #00c853;
+  --watch: #ff8800;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Glow animation for FIRE tier */
+@keyframes firePulse {
+  0%, 100% { box-shadow: 0 0 6px var(--fire), 0 0 12px rgba(255, 215, 0, 0.3); }
+  50% { box-shadow: 0 0 12px var(--fire), 0 0 24px rgba(255, 215, 0, 0.5); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
