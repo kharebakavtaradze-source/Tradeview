@@ -9,8 +9,11 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
     cmf_val = indicators.get("cmf", 0)
     sqz_bars = indicators.get("bb_sqz_bars", 0)
     in_acc = regime.get("in_acc", False)
-    price_change_pct = abs(indicators.get("price_change_pct", 0))
+    price_change_pct_signed = indicators.get("price_change_pct", 0)
+    price_change_pct = abs(price_change_pct_signed)
     state = regime.get("state", "NONE")
+    stealth = indicators.get("stealth", {})
+    vol_ratio = stealth.get("vol_ratio", 0)  # today_vol / yesterday_vol
 
     # --- Volume Anomaly Score (0–100) ---
     if anomaly_ratio >= 10:
@@ -69,7 +72,6 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         vol_score = max(vol_score - 10, 0)
 
     # --- Stealth Bonus ---
-    stealth = indicators.get("stealth", {})
     stealth_bonus = 0
     if stealth.get("is_stealth"):
         stealth_bonus = stealth.get("stealth_score", 0) * 0.3
@@ -105,6 +107,8 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         tier = "STEALTH"
     elif total_score > 25:
         tier = "WATCH"
+    elif vol_ratio >= 2.0 and -7.0 <= price_change_pct_signed <= 7.0:
+        tier = "GOGA"
     else:
         tier = "SKIP"
 
