@@ -7,8 +7,8 @@ import styles from '../styles/Home.module.css';
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
 const VERSION = 'v3.4';
-const TIERS = ['FIRE', 'ARM', 'BASE', 'WATCH'];
-const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', WATCH: '⚡ WATCH' };
+const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'WATCH'];
+const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH', WATCH: '⚡ WATCH' };
 
 function isMarketOpen() {
   const now = new Date();
