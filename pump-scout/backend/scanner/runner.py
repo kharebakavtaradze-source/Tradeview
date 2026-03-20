@@ -50,6 +50,11 @@ async def run_scan() -> dict:
                 skipped += 1
                 continue
 
+            # Skip tickers with avg volume < 200K (illiquid)
+            if indicators.get("avg_vol_20", 0) < 200_000:
+                skipped += 1
+                continue
+
             regime = detect_regime(candles)
             score = score_ticker(indicators, regime)
 
