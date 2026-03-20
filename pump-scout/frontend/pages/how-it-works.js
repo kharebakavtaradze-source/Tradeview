@@ -282,13 +282,12 @@ export default function HowItWorks() {
               ]}
             />
             <TierRow
-              emoji="🐂" name="GOGA" color="#a0ff80" score="< 25  (vol surge only)"
-              description="Volume doubled vs yesterday with flat price — early accumulation signal before it registers in longer-term averages."
+              emoji="🐂" name="GOGA" color="#a0ff80" score="vol_ratio ≥ 2x  (score < 25)"
+              description="Volume doubled vs yesterday — early accumulation signal before it registers in longer-term averages. Gaps and price spikes are allowed."
               conditions={[
                 'Today\'s volume ≥ 2x yesterday\'s volume (day-over-day surge)',
-                'Price change between −7% and +7% (not a gap or spike)',
-                'Score did not reach WATCH threshold (25) on other indicators',
-                'Passes the 300K minimum volume and 2x anomaly ratio filters',
+                'Gaps, spikes, and flat closes all qualify — price move is not filtered',
+                'Minimum volume: 200K (lower threshold to catch early-stage movers)',
               ]}
             />
           </div>
@@ -436,7 +435,7 @@ export default function HowItWorks() {
             <p>Tickers are dropped at each stage if they fail:</p>
             <ul className={styles.ul} style={{ marginTop: 10 }}>
               <li><strong>Minimum 60 candles</strong> — need history for reliable indicators</li>
-              <li><strong>Last-day volume ≥ 300,000</strong> — illiquid stocks skipped (can't trade the signal)</li>
+              <li><strong>Last-day volume ≥ 200,000</strong> — illiquid stocks skipped (can't trade the signal)</li>
               <li><strong>Vol anomaly ≥ 2x 20-day avg</strong> — must have a meaningful volume event</li>
               <li><strong>Score tier ≠ SKIP</strong> — score below 25 with no GOGA signal discarded</li>
               <li><strong>Price $1–$50</strong> — applied at Finviz screener stage</li>
@@ -456,7 +455,7 @@ export default function HowItWorks() {
               <li><strong>VERDICT</strong> — STRONG BUY SETUP / WATCH / AVOID</li>
             </ul>
             <p style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 11 }}>
-              Requires ANTHROPIC_API_KEY set in environment variables. Uses claude-3-5-haiku model with claude-3-haiku fallback.
+              Requires ANTHROPIC_API_KEY set in environment variables. Uses claude-haiku-4-5 model with claude-3-5-haiku / claude-3-haiku fallback.
             </p>
           </Block>
         </Section>

@@ -105,7 +105,7 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         tier = "STEALTH"
     elif total_score > 25:
         tier = "WATCH"
-    elif vol_ratio >= 2.0 and -7.0 <= price_change_pct_signed <= 7.0:
+    elif vol_ratio >= 2.0:
         tier = "GOGA"
     else:
         tier = "SKIP"
