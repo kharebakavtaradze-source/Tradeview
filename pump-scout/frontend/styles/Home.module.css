@@ -1,0 +1,192 @@
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 16px 40px;
+  min-height: 100vh;
+}
+
+/* ── Header ─────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--cyan);
+}
+
+.logoIcon {
+  font-size: 20px;
+}
+
+.headerMeta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.lastScan {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.tierCounts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tierBadge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.tierFire { background: rgba(255,215,0,0.15); color: var(--fire); border: 1px solid rgba(255,215,0,0.3); }
+.tierArm  { background: rgba(0,229,255,0.1);  color: var(--arm);  border: 1px solid rgba(0,229,255,0.25); }
+.tierBase { background: rgba(0,200,83,0.1);   color: var(--base); border: 1px solid rgba(0,200,83,0.25); }
+.tierWatch{ background: rgba(255,136,0,0.1);  color: var(--watch);border: 1px solid rgba(255,136,0,0.25); }
+
+.rescanBtn {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--cyan);
+  padding: 5px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.rescanBtn:hover:not(:disabled) {
+  background: rgba(0,229,255,0.1);
+  border-color: var(--cyan);
+}
+
+.rescanBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(0,229,255,0.3);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+/* ── Market Status Banner ───────────────────────── */
+.marketClosed {
+  background: rgba(255, 68, 102, 0.08);
+  border: 1px solid rgba(255, 68, 102, 0.25);
+  color: var(--red);
+  text-align: center;
+  padding: 8px;
+  margin: 10px 0;
+  border-radius: 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+/* ── Tabs ───────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin: 16px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  padding: 8px 16px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tabActive {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+}
+
+.tabFire.tabActive  { color: var(--fire); border-bottom-color: var(--fire); }
+.tabArm.tabActive   { color: var(--arm);  border-bottom-color: var(--arm); }
+.tabBase.tabActive  { color: var(--base); border-bottom-color: var(--base); }
+.tabWatch.tabActive { color: var(--watch);border-bottom-color: var(--watch); }
+
+/* ── Grid ───────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 60px 20px;
+  font-size: 13px;
+}
+
+.emptyIcon {
+  font-size: 32px;
+  display: block;
+  margin-bottom: 12px;
+  opacity: 0.4;
+}
+
+/* ── Loading ────────────────────────────────────── */
+.loading {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+
+.loadingSpinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(0,229,255,0.2);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+
+/* ── Error ──────────────────────────────────────── */
+.error {
+  background: rgba(255, 68, 102, 0.08);
+  border: 1px solid rgba(255, 68, 102, 0.3);
+  color: var(--red);
+  padding: 16px;
+  border-radius: 6px;
+  margin: 20px 0;
+  font-size: 12px;
+}
