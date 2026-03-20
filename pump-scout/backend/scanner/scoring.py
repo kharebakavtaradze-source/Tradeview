@@ -49,6 +49,25 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
 
     accum_score = min(accum_score, 100)
 
+    # --- RSI Divergence bonus (max +20 to accum_score) ---
+    rsi_data = indicators.get("rsi", {})
+    if rsi_data.get("has_divergence"):
+        div_strength = rsi_data.get("div_strength", 0)
+        rsi_bonus = 20 if div_strength >= 10 else 15 if div_strength >= 5 else 10
+        accum_score = min(accum_score + rsi_bonus, 100)
+
+    # --- Gap bonus (up to +15 to vol_score, penalty for gap down) ---
+    gap = indicators.get("gap", {})
+    gap_type = gap.get("gap_type", "NONE")
+    if gap_type == "GAP_UP_STRONG":
+        vol_score = min(vol_score + 15, 100)
+    elif gap_type == "GAP_UP":
+        vol_score = min(vol_score + 8, 100)
+    elif gap_type == "GAP_DOWN_STRONG":
+        vol_score = max(vol_score - 20, 0)
+    elif gap_type == "GAP_DOWN":
+        vol_score = max(vol_score - 10, 0)
+
     # --- Stealth Bonus ---
     stealth = indicators.get("stealth", {})
     stealth_bonus = 0
