@@ -213,6 +213,71 @@ def calc_atr(candles: list, period: int = 14) -> dict:
     }
 
 
+def calc_stealth(candles: list) -> dict:
+    """
+    Stealth Accumulation: volume jumped 2x+ vs yesterday
+    but price barely moved. Smart money quietly buying.
+    """
+    if len(candles) < 3:
+        return {"is_stealth": False, "vol_ratio": 0,
+                "price_change_pct": 0, "stealth_score": 0,
+                "vol_vs_avg": 0, "close_position": 0.5, "strength": "WEAK"}
+
+    today     = candles[-1]
+    yesterday = candles[-2]
+
+    vol_today     = today["v"]
+    vol_yesterday = yesterday["v"]
+    vol_ratio = vol_today / vol_yesterday if vol_yesterday > 0 else 0
+
+    avg_vol_20 = sum(c["v"] for c in candles[-21:-1]) / 20
+    vol_vs_avg = vol_today / avg_vol_20 if avg_vol_20 > 0 else 0
+
+    price_change_pct = abs((today["c"] - yesterday["c"]) / yesterday["c"] * 100) if yesterday["c"] > 0 else 0
+
+    bar_range = today["h"] - today["l"]
+    close_pos = (today["c"] - today["l"]) / bar_range if bar_range > 0 else 0.5
+
+    vol_jumped    = vol_ratio >= 2.0
+    vol_above_avg = vol_vs_avg >= 1.5
+    price_quiet   = price_change_pct <= 7.0
+    bullish_close = close_pos >= 0.4
+
+    is_stealth = vol_jumped and vol_above_avg and price_quiet
+
+    stealth_score = 0
+
+    if vol_ratio >= 5.0:    stealth_score += 40
+    elif vol_ratio >= 3.0:  stealth_score += 30
+    elif vol_ratio >= 2.0:  stealth_score += 20
+
+    if vol_vs_avg >= 4.0:   stealth_score += 30
+    elif vol_vs_avg >= 2.5: stealth_score += 20
+    elif vol_vs_avg >= 1.5: stealth_score += 10
+
+    if price_change_pct <= 1.0:   stealth_score += 30
+    elif price_change_pct <= 3.0: stealth_score += 20
+    elif price_change_pct <= 5.0: stealth_score += 10
+    elif price_change_pct <= 7.0: stealth_score += 5
+
+    if bullish_close: stealth_score += 10
+
+    if today["c"] < yesterday["c"]:
+        stealth_score = int(stealth_score * 0.5)
+
+    stealth_score = min(stealth_score, 100)
+
+    return {
+        "is_stealth":       is_stealth,
+        "vol_ratio":        round(vol_ratio, 2),
+        "vol_vs_avg":       round(vol_vs_avg, 2),
+        "price_change_pct": round(price_change_pct, 2),
+        "close_position":   round(close_pos, 2),
+        "stealth_score":    stealth_score,
+        "strength":         "STRONG" if stealth_score >= 70 else "MEDIUM" if stealth_score >= 40 else "WEAK",
+    }
+
+
 def calc_all(candles: list) -> dict:
     if len(candles) < 20:
         return {}
@@ -224,6 +289,7 @@ def calc_all(candles: list) -> dict:
     cmf = calc_cmf(candles)
     vol_anomaly = calc_volume_anomaly(candles)
     atr = calc_atr(candles)
+    stealth = calc_stealth(candles)
 
     ema20_val = ema(closes, 20)
     ema50_val = ema(closes, 50)
@@ -262,4 +328,6 @@ def calc_all(candles: list) -> dict:
         "atr": atr["value"],
         "atr_ratio": atr["ratio"],
         "atr_pct": atr["pct"],
+        # Stealth
+        "stealth": stealth,
     }
