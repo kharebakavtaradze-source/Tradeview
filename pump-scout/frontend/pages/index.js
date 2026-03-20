@@ -7,7 +7,7 @@ import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v4.0';
+const VERSION = 'v5.0';
 const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'WATCH', 'GOGA'];
 const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH', WATCH: '⚡ WATCH', GOGA: '🐂 GOGA' };
 

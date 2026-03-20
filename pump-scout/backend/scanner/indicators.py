@@ -70,24 +70,7 @@ def calc_bb(candles: list, period: int = 20, mult: float = 2.0) -> dict:
     pctl = percentrank(widths + [width], len(widths)) if widths else 50.0
     squeeze = pctl < 25
 
-    # Count consecutive squeeze bars
-    sqz_bars = 0
-    for i in range(len(candles) - 1, -1, -1):
-        end = i + 1
-        if end < period:
-            break
-        b_val = sma(closes[:end], period)
-        s_val = stdev(closes[:end], period)
-        if b_val <= 0:
-            break
-        w = (b_val + mult * s_val - (b_val - mult * s_val)) / b_val
-        # approximate: squeeze if width < historical median
-        if w < 0.1:  # tight threshold
-            sqz_bars += 1
-        else:
-            break
-
-    # Recalculate sqz_bars properly using pctl approach
+    # Count consecutive squeeze bars using percentile approach
     sqz_bars = 0
     all_widths = []
     for i in range(min(len(closes), 200)):
