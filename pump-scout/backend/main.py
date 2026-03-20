@@ -53,15 +53,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow frontend (Railway + local dev)
+# CORS — allow all origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://*.railway.app",
-        os.getenv("FRONTEND_URL", ""),
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -171,9 +167,18 @@ async def get_ticker(symbol: str):
     return {**ticker_data, "source": "scan"}
 
 
+@app.get("/api/scan/run")
+async def trigger_scan_get(background_tasks: BackgroundTasks):
+    """Manually trigger a scan via GET. Runs in background."""
+    if _scan_running:
+        return {"status": "already_running", "message": "A scan is already in progress"}
+    background_tasks.add_task(_run_scan_background)
+    return {"status": "started", "message": "Scan started in background"}
+
+
 @app.post("/api/scan/run")
 async def trigger_scan(background_tasks: BackgroundTasks):
-    """Manually trigger a scan. Runs in background."""
+    """Manually trigger a scan via POST. Runs in background."""
     if _scan_running:
         return {"status": "already_running", "message": "A scan is already in progress"}
 

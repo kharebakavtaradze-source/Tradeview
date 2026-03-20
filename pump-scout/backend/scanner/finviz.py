@@ -22,11 +22,14 @@ HEADERS = {
 }
 
 FALLBACK_TICKERS = [
-    "SNDL", "CLOV", "WISH", "EXPR", "BBBY", "AMC", "GME", "TLRY", "ACB", "CRON",
-    "APHA", "HEXO", "OGI", "KERN", "IDEX", "XPEV", "NIO", "RIDE", "WKHS", "SOLO",
-    "BLNK", "PLUG", "FCEL", "BLDP", "RUN", "NOVA", "SPWR", "ENPH", "SEDG", "CSIQ",
-    "JKS", "DQ", "AZRE", "MAXN", "ARRY", "SHLS", "STEM", "BEEM", "FLUX", "PEGI",
-    "AMRC", "HASI", "CWEN", "AY", "BEP", "CLNE", "HYLN", "NKLA", "FSR", "GOEV",
+    "AAPL", "MSFT", "NVDA", "AMD", "TSLA", "META", "AMZN",
+    "GOOGL", "NFLX", "CRM", "SHOP", "SQ", "ROKU", "PLTR",
+    "SOFI", "HOOD", "RIVN", "LCID", "JOBY", "OPEN",
+    "WISH", "CLOV", "SPCE", "WKHS", "GOEV", "NKLA",
+    "BBIG", "MVIS", "EXPR", "AMC", "GME", "BB", "NOK",
+    "SNDL", "TLRY", "CGC", "ACB", "APHA", "CRON", "HEXO",
+    "IDEX", "ONTX", "OBSV", "DARE", "OCGN", "ATOS",
+    "SENS", "SHIP", "GNUS", "NAKD",
 ]
 
 

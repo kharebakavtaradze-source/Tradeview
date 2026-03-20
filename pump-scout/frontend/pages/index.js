@@ -5,7 +5,8 @@ import Scanner from '../components/Scanner';
 import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
+const VERSION = 'v1.1';
 const TIERS = ['FIRE', 'ARM', 'BASE', 'WATCH'];
 const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', WATCH: '⚡ WATCH' };
 
@@ -111,6 +112,7 @@ export default function Home() {
           <div className={styles.logo}>
             <span className={styles.logoIcon}>🔍</span>
             PUMP SCOUT
+            <span className={styles.version}>{VERSION}</span>
           </div>
           <Scanner
             scanData={scanData}
@@ -174,9 +176,28 @@ export default function Home() {
             ) : (
               <div className={styles.empty}>
                 <span className={styles.emptyIcon}>📭</span>
-                {results.length === 0
-                  ? 'No scan data yet. Click RESCAN to run the first scan.'
-                  : `No ${activeTab} tier tickers in the latest scan.`}
+                {results.length === 0 ? (
+                  <>
+                    No scan data yet.{' '}
+                    <button
+                      onClick={handleRescan}
+                      disabled={scanning}
+                      style={{
+                        background: 'var(--fire)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        padding: '4px 12px',
+                        cursor: scanning ? 'not-allowed' : 'pointer',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {scanning ? '⏳ Scanning…' : '▶ SCAN NOW'}
+                    </button>
+                  </>
+                ) : (
+                  `No ${activeTab} tier tickers in the latest scan.`
+                )}
               </div>
             )}
           </>

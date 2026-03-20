@@ -12,7 +12,9 @@ from database import save_scan
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler(timezone="UTC")
+EASTERN_TZ = "America/New_York"
+
+scheduler = AsyncIOScheduler(timezone=EASTERN_TZ)
 
 
 async def _run_and_save():
@@ -29,53 +31,53 @@ async def _run_and_save():
 def start_scheduler():
     """Register scan jobs and start the scheduler."""
 
-    # 08:00 AM EST = 13:00 UTC
+    # 08:00 AM US/Eastern (handles EST/EDT automatically)
     scheduler.add_job(
         _run_and_save,
         trigger=CronTrigger(
             day_of_week="mon-fri",
-            hour=13,
+            hour=8,
             minute=0,
-            timezone="UTC",
+            timezone=EASTERN_TZ,
         ),
         id="scan_0800_est",
-        name="Morning Pre-Market Scan (8:00 AM EST)",
+        name="Morning Pre-Market Scan (8:00 AM ET)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # 09:30 AM EST = 14:30 UTC (market open)
+    # 09:30 AM US/Eastern (market open)
     scheduler.add_job(
         _run_and_save,
         trigger=CronTrigger(
             day_of_week="mon-fri",
-            hour=14,
+            hour=9,
             minute=30,
-            timezone="UTC",
+            timezone=EASTERN_TZ,
         ),
         id="scan_0930_est",
-        name="Market Open Scan (9:30 AM EST)",
+        name="Market Open Scan (9:30 AM ET)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # 12:00 PM EST = 17:00 UTC (midday)
+    # 12:00 PM US/Eastern (midday)
     scheduler.add_job(
         _run_and_save,
         trigger=CronTrigger(
             day_of_week="mon-fri",
-            hour=17,
+            hour=12,
             minute=0,
-            timezone="UTC",
+            timezone=EASTERN_TZ,
         ),
         id="scan_1200_est",
-        name="Midday Scan (12:00 PM EST)",
+        name="Midday Scan (12:00 PM ET)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
     scheduler.start()
-    logger.info("Scheduler started — 3 daily scan jobs registered (8AM, 9:30AM, 12PM EST weekdays)")
+    logger.info("Scheduler started — 3 daily scan jobs registered (8AM, 9:30AM, 12PM ET weekdays)")
 
 
 def stop_scheduler():
