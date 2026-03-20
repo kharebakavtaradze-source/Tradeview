@@ -50,8 +50,8 @@ async def run_scan() -> dict:
                 skipped += 1
                 continue
 
-            # Skip tickers where last-day volume < 300K (illiquid)
-            if indicators.get("today_vol", 0) < 300_000:
+            # Skip tickers where last-day volume < 200K (illiquid)
+            if indicators.get("today_vol", 0) < 200_000:
                 skipped += 1
                 continue
 
