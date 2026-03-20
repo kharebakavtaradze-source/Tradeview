@@ -116,24 +116,24 @@ export default function Chart({ candles, bbData, ema50 }) {
       emaSeries.setData(emaPoints);
     }
 
-    // BB lines if provided
+    // BB lines if provided — draw as horizontal price lines
     if (bbData && bbData.upper && bbData.lower) {
-      const bbUpper = chart.addLineSeries({
-        color: 'rgba(180,122,255,0.5)',
+      candleSeries.createPriceLine({
+        price: bbData.upper,
+        color: 'rgba(180,122,255,0.6)',
         lineWidth: 1,
-        lineStyle: 2, // dashed
-        priceLineVisible: false,
-        lastValueVisible: false,
+        lineStyle: LWC.LineStyle ? LWC.LineStyle.Dashed : 2,
+        axisLabelVisible: false,
+        title: 'BB+',
       });
-      const bbLower = chart.addLineSeries({
-        color: 'rgba(180,122,255,0.5)',
+      candleSeries.createPriceLine({
+        price: bbData.lower,
+        color: 'rgba(180,122,255,0.6)',
         lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
+        lineStyle: LWC.LineStyle ? LWC.LineStyle.Dashed : 2,
+        axisLabelVisible: false,
+        title: 'BB-',
       });
-      bbUpper.setData([{ time: candles[candles.length - 1].t, value: bbData.upper }]);
-      bbLower.setData([{ time: candles[candles.length - 1].t, value: bbData.lower }]);
     }
 
     // Volume histogram (separate pane via price scale)
