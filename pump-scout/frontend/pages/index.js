@@ -6,6 +6,7 @@ import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
+const VERSION = 'v1.1';
 const TIERS = ['FIRE', 'ARM', 'BASE', 'WATCH'];
 const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', WATCH: '⚡ WATCH' };
 
@@ -111,6 +112,7 @@ export default function Home() {
           <div className={styles.logo}>
             <span className={styles.logoIcon}>🔍</span>
             PUMP SCOUT
+            <span className={styles.version}>{VERSION}</span>
           </div>
           <Scanner
             scanData={scanData}
