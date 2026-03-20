@@ -35,7 +35,7 @@ export default function TickerCard({ data }) {
 
   const tier = score.tier || 'WATCH';
   const totalScore = score.total_score || 0;
-  const anomalyRatio = indicators.anomaly_ratio || 0;
+  const anomalyRatio = indicators.anomaly_ratio ?? null;
   const sqzBars = indicators.bb_sqz_bars || 0;
   const cmfPctl = indicators.cmf_pctl || 0;
   const priceChangePct = indicators.price_change_pct || 0;
@@ -75,8 +75,8 @@ export default function TickerCard({ data }) {
         <div className={styles.metrics}>
           <div className={styles.metric}>
             <span className={styles.metricLabel}>VOL</span>
-            <span className={`${styles.metricValue} ${anomalyRatio >= 3 ? styles.metricGold : styles.metricHighlight}`}>
-              {anomalyRatio.toFixed(1)}x
+            <span className={`${styles.metricValue} ${anomalyRatio != null && anomalyRatio >= 3 ? styles.metricGold : styles.metricHighlight}`}>
+              {anomalyRatio != null ? `${anomalyRatio.toFixed(1)}x` : 'N/A'}
             </span>
           </div>
           <div className={styles.metric}>
@@ -112,7 +112,7 @@ export default function TickerCard({ data }) {
               ema50={indicators.ema50}
             />
           )}
-          <AIAnalysis analysis={ai_analysis} loading={false} />
+          {ai_analysis && <AIAnalysis analysis={ai_analysis} loading={false} />}
           <Link href={`/ticker/${symbol}`} className={styles.detailLink}>
             Full Analysis → {symbol}
           </Link>
