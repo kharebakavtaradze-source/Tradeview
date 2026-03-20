@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 
 from .finviz import get_tickers
-from .yahoo import fetch_batch
+from .yahoo import fetch_batch, fetch_premarket_batch
 from .indicators import calc_all
 from .wyckoff import detect_regime
 from .scoring import score_ticker
@@ -78,7 +78,16 @@ async def run_scan() -> dict:
     # Step 4: Sort by score descending
     results.sort(key=lambda x: x["score"]["total_score"], reverse=True)
 
-    # Step 5: AI analysis for top 20
+    # Step 5: Pre-market data for all scored tickers
+    scored_symbols = [r["symbol"] for r in results]
+    if scored_symbols:
+        print(f"Fetching pre-market data for {len(scored_symbols)} tickers...")
+        premarket_data = await fetch_premarket_batch(scored_symbols)
+        for r in results:
+            pm = premarket_data.get(r["symbol"])
+            r["premarket"] = pm if pm else {"has_premarket": False, "premarket_pct": 0, "session": None}
+
+    # Step 6: AI analysis for top 20
     if results:
         print(f"Running AI analysis on top {min(20, len(results))} tickers...")
         top20 = await analyze_batch(results)

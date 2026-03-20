@@ -213,6 +213,173 @@ def calc_atr(candles: list, period: int = 14) -> dict:
     }
 
 
+def _calc_rsi_series(closes: list, period: int = 14) -> list:
+    """Compute RSI for every close. Returns list same length as closes."""
+    if len(closes) < period + 1:
+        return [50.0] * len(closes)
+
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        delta = closes[i] - closes[i - 1]
+        gains.append(max(delta, 0.0))
+        losses.append(max(-delta, 0.0))
+
+    avg_g = sum(gains[:period]) / period
+    avg_l = sum(losses[:period]) / period
+
+    rsi = [50.0] * (period + 1)  # pad initial bars
+    rsi.append(100.0 if avg_l == 0 else 100 - 100 / (1 + avg_g / avg_l))
+
+    for i in range(period, len(gains)):
+        avg_g = (avg_g * (period - 1) + gains[i]) / period
+        avg_l = (avg_l * (period - 1) + losses[i]) / period
+        rsi.append(100.0 if avg_l == 0 else 100 - 100 / (1 + avg_g / avg_l))
+
+    return rsi
+
+
+def calc_rsi(candles: list, period: int = 14) -> dict:
+    """
+    RSI value + bullish divergence detection.
+    Bullish divergence: price makes lower low but RSI makes higher low
+    in the last 30 bars — classic sign of hidden strength.
+    """
+    closes = [c["c"] for c in candles]
+    lows   = [c["l"] for c in candles]
+
+    rsi_series = _calc_rsi_series(closes, period)
+    current_rsi = round(rsi_series[-1], 1) if rsi_series else 50.0
+
+    has_divergence = False
+    div_strength   = 0  # RSI diff between two lows (higher = stronger)
+
+    if len(candles) >= 30:
+        lookback = min(35, len(candles) - 5)
+        seg_start = len(candles) - lookback
+
+        # Build (price_low, rsi_at_bar) pairs, skip last 3 (too fresh)
+        seg = [(lows[i], rsi_series[i]) for i in range(seg_start, len(candles) - 3)]
+
+        half = len(seg) // 2
+        if half >= 3:
+            # Lowest price point in first half vs second half
+            low1_price, low1_rsi = min(seg[:half], key=lambda x: x[0])
+            low2_price, low2_rsi = min(seg[half:], key=lambda x: x[0])
+
+            price_lower_low = low2_price < low1_price          # lower low ✓
+            rsi_higher_low  = low2_rsi  > low1_rsi + 3.0       # higher RSI ✓
+            both_oversold   = low1_rsi < 50 and low2_rsi < 55  # not from overbought
+
+            if price_lower_low and rsi_higher_low and both_oversold:
+                has_divergence = True
+                div_strength   = round(low2_rsi - low1_rsi, 1)
+
+    return {
+        "value":         current_rsi,
+        "has_divergence": has_divergence,
+        "div_strength":   div_strength,
+        "oversold":       current_rsi < 35,
+        "overbought":     current_rsi > 70,
+    }
+
+
+def calc_gap(candles: list) -> dict:
+    """
+    Gap detector: today's open vs yesterday's close.
+    Gap up = bullish momentum / overnight demand.
+    Gap down = distribution / selling pressure.
+    """
+    if len(candles) < 2:
+        return {"gap_pct": 0.0, "gap_type": "NONE", "is_gap_up": False}
+
+    today     = candles[-1]
+    yesterday = candles[-2]
+
+    gap_pct = (today["o"] - yesterday["c"]) / yesterday["c"] * 100 if yesterday["c"] > 0 else 0.0
+
+    if gap_pct >= 5.0:
+        gap_type = "GAP_UP_STRONG"
+    elif gap_pct >= 2.0:
+        gap_type = "GAP_UP"
+    elif gap_pct <= -5.0:
+        gap_type = "GAP_DOWN_STRONG"
+    elif gap_pct <= -2.0:
+        gap_type = "GAP_DOWN"
+    else:
+        gap_type = "NONE"
+
+    return {
+        "gap_pct":   round(gap_pct, 2),
+        "gap_type":  gap_type,
+        "is_gap_up": gap_pct >= 2.0,
+    }
+
+
+def calc_stealth(candles: list) -> dict:
+    """
+    Stealth Accumulation: volume jumped 2x+ vs yesterday
+    but price barely moved. Smart money quietly buying.
+    """
+    if len(candles) < 3:
+        return {"is_stealth": False, "vol_ratio": 0,
+                "price_change_pct": 0, "stealth_score": 0,
+                "vol_vs_avg": 0, "close_position": 0.5, "strength": "WEAK"}
+
+    today     = candles[-1]
+    yesterday = candles[-2]
+
+    vol_today     = today["v"]
+    vol_yesterday = yesterday["v"]
+    vol_ratio = vol_today / vol_yesterday if vol_yesterday > 0 else 0
+
+    avg_vol_20 = sum(c["v"] for c in candles[-21:-1]) / 20
+    vol_vs_avg = vol_today / avg_vol_20 if avg_vol_20 > 0 else 0
+
+    price_change_pct = abs((today["c"] - yesterday["c"]) / yesterday["c"] * 100) if yesterday["c"] > 0 else 0
+
+    bar_range = today["h"] - today["l"]
+    close_pos = (today["c"] - today["l"]) / bar_range if bar_range > 0 else 0.5
+
+    vol_jumped    = vol_ratio >= 2.0
+    vol_above_avg = vol_vs_avg >= 1.5
+    price_quiet   = price_change_pct <= 7.0
+    bullish_close = close_pos >= 0.4
+
+    is_stealth = vol_jumped and vol_above_avg and price_quiet
+
+    stealth_score = 0
+
+    if vol_ratio >= 5.0:    stealth_score += 40
+    elif vol_ratio >= 3.0:  stealth_score += 30
+    elif vol_ratio >= 2.0:  stealth_score += 20
+
+    if vol_vs_avg >= 4.0:   stealth_score += 30
+    elif vol_vs_avg >= 2.5: stealth_score += 20
+    elif vol_vs_avg >= 1.5: stealth_score += 10
+
+    if price_change_pct <= 1.0:   stealth_score += 30
+    elif price_change_pct <= 3.0: stealth_score += 20
+    elif price_change_pct <= 5.0: stealth_score += 10
+    elif price_change_pct <= 7.0: stealth_score += 5
+
+    if bullish_close: stealth_score += 10
+
+    if today["c"] < yesterday["c"]:
+        stealth_score = int(stealth_score * 0.5)
+
+    stealth_score = min(stealth_score, 100)
+
+    return {
+        "is_stealth":       is_stealth,
+        "vol_ratio":        round(vol_ratio, 2),
+        "vol_vs_avg":       round(vol_vs_avg, 2),
+        "price_change_pct": round(price_change_pct, 2),
+        "close_position":   round(close_pos, 2),
+        "stealth_score":    stealth_score,
+        "strength":         "STRONG" if stealth_score >= 70 else "MEDIUM" if stealth_score >= 40 else "WEAK",
+    }
+
+
 def calc_all(candles: list) -> dict:
     if len(candles) < 20:
         return {}
@@ -224,6 +391,9 @@ def calc_all(candles: list) -> dict:
     cmf = calc_cmf(candles)
     vol_anomaly = calc_volume_anomaly(candles)
     atr = calc_atr(candles)
+    stealth = calc_stealth(candles)
+    rsi_data = calc_rsi(candles)
+    gap = calc_gap(candles)
 
     ema20_val = ema(closes, 20)
     ema50_val = ema(closes, 50)
@@ -262,4 +432,10 @@ def calc_all(candles: list) -> dict:
         "atr": atr["value"],
         "atr_ratio": atr["ratio"],
         "atr_pct": atr["pct"],
+        # Stealth
+        "stealth": stealth,
+        # RSI
+        "rsi": rsi_data,
+        # Gap
+        "gap": gap,
     }
