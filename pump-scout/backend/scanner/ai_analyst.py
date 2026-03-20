@@ -22,7 +22,12 @@ async def analyze_ticker(
     Generate an AI analysis of a ticker's setup using Claude.
     Returns formatted analysis text.
     """
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY is not set — skipping AI analysis")
+        return f"REGIME: {regime.get('state', 'NONE')} — AI key not configured\nVERDICT: WATCH — Set ANTHROPIC_API_KEY in Railway Variables."
+
+    client = anthropic.AsyncAnthropic(api_key=api_key)
 
     # Build a clean summary of the data
     data_summary = {
@@ -72,13 +77,13 @@ Data:
 
     try:
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-3-5-haiku-20241022",
             max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
         return response.content[0].text
     except Exception as e:
-        logger.error(f"AI analysis failed for {symbol}: {e}")
+        logger.error(f"AI analysis failed for {symbol}: {type(e).__name__}: {e}")
         return f"REGIME: {regime.get('state', 'NONE')} — Analysis unavailable\nVERDICT: WATCH — Insufficient data for full analysis."
 
 
