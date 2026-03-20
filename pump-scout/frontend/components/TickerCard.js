@@ -38,7 +38,7 @@ function getCardClass(tier) {
 export default function TickerCard({ data }) {
   const [expanded, setExpanded] = useState(false);
 
-  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis } = data;
+  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket } = data;
 
   const tier = score.tier || 'WATCH';
   const totalScore = score.total_score || 0;
@@ -49,6 +49,10 @@ export default function TickerCard({ data }) {
   const state = regime.state || 'NONE';
   const stealth = indicators.stealth || {};
   const isStealth = tier === 'STEALTH' || stealth.is_stealth;
+  const rsiData = indicators.rsi || {};
+  const gapData = indicators.gap || {};
+  const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
+  const hasPremarket = premarket?.has_premarket && Math.abs(premarket.premarket_pct || 0) >= 1.0;
 
   const priceChangeClass =
     priceChangePct > 0.5
@@ -79,6 +83,11 @@ export default function TickerCard({ data }) {
           <span className={`${styles.priceChange} ${priceChangeClass}`}>
             {priceSign}{priceChangePct.toFixed(2)}%
           </span>
+          {hasPremarket && (
+            <span className={`${styles.premarketBadge} ${premarket.premarket_pct >= 0 ? styles.premarketUp : styles.premarketDown}`}>
+              {premarket.session === 'pre' ? 'PRE' : 'AH'} {premarket.premarket_pct >= 0 ? '+' : ''}{premarket.premarket_pct?.toFixed(1)}%
+            </span>
+          )}
         </div>
 
         <div className={styles.metrics}>
@@ -95,8 +104,11 @@ export default function TickerCard({ data }) {
             </span>
           </div>
           <div className={styles.metric}>
-            <span className={styles.metricLabel}>CMF%</span>
-            <span className={styles.metricValue}>{cmfPctl.toFixed(0)}</span>
+            <span className={styles.metricLabel}>RSI</span>
+            <span className={`${styles.metricValue} ${rsiData.oversold ? styles.metricGreen : rsiData.overbought ? styles.metricRed : ''}`}>
+              {rsiData.value ?? '—'}
+              {rsiData.has_divergence && <span className={styles.divDot} title="Bullish RSI Divergence">↗</span>}
+            </span>
           </div>
           <div className={styles.metric}>
             <span className={styles.metricLabel}>STATE</span>
@@ -104,15 +116,26 @@ export default function TickerCard({ data }) {
           </div>
         </div>
 
-        {isStealth && (
-          <div className={styles.stealthRow}>
-            <span className={styles.stealthIcon}>🕵</span>
-            <span className={styles.stealthText}>
-              vol {stealth.vol_ratio?.toFixed(1) ?? '?'}x yest · price {stealth.price_change_pct > 0 ? '+' : ''}{stealth.price_change_pct?.toFixed(1) ?? '?'}%
-              {stealth.strength === 'STRONG' && <span className={styles.stealthStrong}> · STRONG</span>}
-            </span>
+        {/* Signal badges row */}
+        {(rsiData.has_divergence || hasGap || isStealth) && (
+          <div className={styles.signalsRow}>
+            {rsiData.has_divergence && (
+              <span className={styles.badgeDiv}>↗ RSI DIV</span>
+            )}
+            {hasGap && (
+              <span className={`${styles.badgeGap} ${gapData.is_gap_up ? styles.badgeGapUp : styles.badgeGapDown}`}>
+                {gapData.is_gap_up ? '▲' : '▼'} GAP {gapData.gap_pct > 0 ? '+' : ''}{gapData.gap_pct}%
+              </span>
+            )}
+            {isStealth && (
+              <span className={styles.badgeStealth2}>
+                🕵 {stealth.vol_ratio?.toFixed(1) ?? '?'}x · {stealth.price_change_pct?.toFixed(1) ?? '?'}%
+                {stealth.strength === 'STRONG' && ' STRONG'}
+              </span>
+            )}
           </div>
         )}
+
       </div>
 
       {/* Expand button */}
