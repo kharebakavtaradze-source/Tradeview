@@ -137,9 +137,10 @@ async def get_ticker(symbol: str):
     results = data.get("results", [])
     ticker_data = next((r for r in results if r.get("symbol") == symbol), None)
 
+    from scanner.yahoo import fetch_ohlcv
+
     if not ticker_data:
         # Try to fetch fresh data for this specific ticker
-        from scanner.yahoo import fetch_ohlcv
         from scanner.indicators import calc_all
         from scanner.wyckoff import detect_regime
         from scanner.scoring import score_ticker
@@ -164,7 +165,13 @@ async def get_ticker(symbol: str):
             "source": "live",
         }
 
-    return {**ticker_data, "source": "scan"}
+    # Ticker found in scan — fetch fresh candles (stripped from DB to save space)
+    candles = await fetch_ohlcv(symbol)
+    return {
+        **ticker_data,
+        "candles": candles[-100:] if candles and len(candles) >= 20 else [],
+        "source": "scan",
+    }
 
 
 @app.get("/api/scan/run")
