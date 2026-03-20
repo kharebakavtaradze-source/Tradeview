@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import TickerCard from '../components/TickerCard';
 import Scanner from '../components/Scanner';
 import styles from '../styles/Home.module.css';
@@ -124,6 +125,7 @@ export default function Home() {
             <span className={styles.logoIcon}>🔍</span>
             PUMP SCOUT
             <span className={styles.version}>{VERSION}</span>
+            <Link href="/how-it-works" className={styles.howLink}>how it works</Link>
           </div>
           <Scanner
             scanData={scanData}
