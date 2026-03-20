@@ -93,6 +93,10 @@ Data:
 
     client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
 
+    # Sanitize: Yahoo Finance data can contain Unicode LINE/PARAGRAPH SEPARATOR
+    # characters (\u2028, \u2029) which break ASCII encoding in some environments
+    prompt = prompt.replace('\u2028', '\n').replace('\u2029', '\n')
+
     for model in MODELS:
         for attempt in range(2):
             try:
