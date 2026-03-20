@@ -4,7 +4,7 @@ Wyckoff regime detection for accumulation/distribution analysis.
 from .indicators import sma, stdev
 
 
-def detect_regime(candles: list) -> dict:
+def detect_regime(candles: list, precomputed: dict = None) -> dict:
     if len(candles) < 60:
         return {
             "state": "NONE",
@@ -28,7 +28,8 @@ def detect_regime(candles: list) -> dict:
         is_bearish = bar["c"] < bar["o"]
         is_high_vol = bar["v"] > avg_vol * 2
         lookback_lows = lows[max(0, i - 59) : i + 1]
-        is_at_low = bar["l"] == min(lookback_lows)
+        min_low = min(lookback_lows)
+        is_at_low = bar["l"] <= min_low * 1.001
         if is_bearish and is_high_vol and is_at_low:
             sc = True
             sc_idx = i
@@ -42,7 +43,8 @@ def detect_regime(candles: list) -> dict:
         is_bullish = bar["c"] > bar["o"]
         is_high_vol = bar["v"] > avg_vol * 2
         lookback_highs = highs[max(0, i - 59) : i + 1]
-        is_at_high = bar["h"] == max(lookback_highs)
+        max_high = max(lookback_highs)
+        is_at_high = bar["h"] >= max_high * 0.999
         if is_bullish and is_high_vol and is_at_high:
             bc = True
             bc_idx = i
@@ -95,14 +97,18 @@ def detect_regime(candles: list) -> dict:
         ):
             in_dist = True
 
-    # --- Get BB and CMF data (use precomputed from indicators if available) ---
-    # These are computed inline for independence
-    from .indicators import calc_bb, calc_cmf
-    bb = calc_bb(candles)
-    cmf = calc_cmf(candles)
+    # --- BB, CMF, vol_anomaly_ratio ---
+    # Use pre-computed indicators when available to avoid redundant work
+    if precomputed:
+        sqz_bars = precomputed.get("bb_sqz_bars", 0)
+        cmf_val = precomputed.get("cmf", 0)
+    else:
+        from .indicators import calc_bb, calc_cmf
+        bb = calc_bb(candles)
+        cmf_data = calc_cmf(candles)
+        sqz_bars = bb["sqz_bars"]
+        cmf_val = cmf_data["value"]
 
-    sqz_bars = bb["sqz_bars"]
-    cmf_val = cmf["value"]
     vol_anomaly_ratio = candles[-1]["v"] / avg_vol if avg_vol > 0 else 0
 
     # Simple vol_z
@@ -145,9 +151,12 @@ def detect_regime(candles: list) -> dict:
             confidence = 10
 
     # --- Stealth State Detection ---
-    from .indicators import calc_stealth
-    stealth = calc_stealth(candles)
-    if stealth["is_stealth"] and stealth["stealth_score"] >= 50:
+    if precomputed:
+        stealth = precomputed.get("stealth", {})
+    else:
+        from .indicators import calc_stealth
+        stealth = calc_stealth(candles)
+    if stealth.get("is_stealth") and stealth.get("stealth_score", 0) >= 50:
         if state == "NONE":
             state = "STEALTH"
         elif state == "BASE":
