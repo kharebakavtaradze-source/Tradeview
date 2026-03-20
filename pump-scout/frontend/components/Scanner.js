@@ -43,6 +43,11 @@ export default function Scanner({ scanData, scanning, onRescan, lastUpdated }) {
             📦{tierCounts.BASE}
           </span>
         )}
+        {tierCounts.STEALTH > 0 && (
+          <span className={`${styles.tierBadge} ${styles.tierStealth}`}>
+            🕵{tierCounts.STEALTH}
+          </span>
+        )}
         {tierCounts.WATCH > 0 && (
           <span className={`${styles.tierBadge} ${styles.tierWatch}`}>
             ⚡{tierCounts.WATCH}

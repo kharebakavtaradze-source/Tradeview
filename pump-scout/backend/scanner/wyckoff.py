@@ -144,6 +144,17 @@ def detect_regime(candles: list) -> dict:
             state = "NONE"
             confidence = 10
 
+    # --- Stealth State Detection ---
+    from .indicators import calc_stealth
+    stealth = calc_stealth(candles)
+    if stealth["is_stealth"] and stealth["stealth_score"] >= 50:
+        if state == "NONE":
+            state = "STEALTH"
+        elif state == "BASE":
+            state = "STEALTH_BASE"
+        elif state == "ARM":
+            state = "STEALTH_ARM"
+
     return {
         "state": state,
         "tr_high": round(tr_high, 4) if tr_high else None,

@@ -6,13 +6,17 @@ import styles from '../styles/TickerCard.module.css';
 
 const Chart = dynamic(() => import('./Chart'), { ssr: false });
 
-const TIER_EMOJI = { FIRE: '🔥', ARM: '👁', BASE: '📦', WATCH: '⚡', SKIP: '' };
+const TIER_EMOJI = { FIRE: '🔥', ARM: '👁', BASE: '📦', STEALTH: '🕵', STEALTH_BASE: '🕵', STEALTH_ARM: '🕵', WATCH: '⚡', SKIP: '' };
+const TIER_LABEL = { STEALTH: 'STEALTH', STEALTH_BASE: 'STEALTH', STEALTH_ARM: 'STEALTH' };
 
 function getBadgeClass(tier) {
   const map = {
     FIRE: styles.badgeFire,
     ARM: styles.badgeArm,
     BASE: styles.badgeBase,
+    STEALTH: styles.badgeStealth,
+    STEALTH_BASE: styles.badgeStealth,
+    STEALTH_ARM: styles.badgeStealth,
     WATCH: styles.badgeWatch,
   };
   return map[tier] || styles.badgeNone;
@@ -23,6 +27,9 @@ function getCardClass(tier) {
     FIRE: styles.cardFire,
     ARM: styles.cardArm,
     BASE: styles.cardBase,
+    STEALTH: styles.cardStealth,
+    STEALTH_BASE: styles.cardStealth,
+    STEALTH_ARM: styles.cardStealth,
     WATCH: styles.cardWatch,
   };
   return map[tier] || '';
@@ -31,7 +38,7 @@ function getCardClass(tier) {
 export default function TickerCard({ data }) {
   const [expanded, setExpanded] = useState(false);
 
-  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis } = data;
+  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket } = data;
 
   const tier = score.tier || 'WATCH';
   const totalScore = score.total_score || 0;
@@ -40,6 +47,12 @@ export default function TickerCard({ data }) {
   const cmfPctl = indicators.cmf_pctl || 0;
   const priceChangePct = indicators.price_change_pct || 0;
   const state = regime.state || 'NONE';
+  const stealth = indicators.stealth || {};
+  const isStealth = tier === 'STEALTH' || stealth.is_stealth;
+  const rsiData = indicators.rsi || {};
+  const gapData = indicators.gap || {};
+  const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
+  const hasPremarket = premarket?.has_premarket && Math.abs(premarket.premarket_pct || 0) >= 1.0;
 
   const priceChangeClass =
     priceChangePct > 0.5
@@ -57,7 +70,7 @@ export default function TickerCard({ data }) {
         <div className={styles.symbolRow}>
           <span className={styles.symbol}>{symbol}</span>
           <span className={`${styles.badge} ${getBadgeClass(tier)}`}>
-            {TIER_EMOJI[tier]} {tier}
+            {TIER_EMOJI[tier]} {TIER_LABEL[tier] || tier}
           </span>
         </div>
         <span className={styles.score}>{totalScore.toFixed(0)}</span>
@@ -70,6 +83,11 @@ export default function TickerCard({ data }) {
           <span className={`${styles.priceChange} ${priceChangeClass}`}>
             {priceSign}{priceChangePct.toFixed(2)}%
           </span>
+          {hasPremarket && (
+            <span className={`${styles.premarketBadge} ${premarket.premarket_pct >= 0 ? styles.premarketUp : styles.premarketDown}`}>
+              {premarket.session === 'pre' ? 'PRE' : 'AH'} {premarket.premarket_pct >= 0 ? '+' : ''}{premarket.premarket_pct?.toFixed(1)}%
+            </span>
+          )}
         </div>
 
         <div className={styles.metrics}>
@@ -86,14 +104,38 @@ export default function TickerCard({ data }) {
             </span>
           </div>
           <div className={styles.metric}>
-            <span className={styles.metricLabel}>CMF%</span>
-            <span className={styles.metricValue}>{cmfPctl.toFixed(0)}</span>
+            <span className={styles.metricLabel}>RSI</span>
+            <span className={`${styles.metricValue} ${rsiData.oversold ? styles.metricGreen : rsiData.overbought ? styles.metricRed : ''}`}>
+              {rsiData.value ?? '—'}
+              {rsiData.has_divergence && <span className={styles.divDot} title="Bullish RSI Divergence">↗</span>}
+            </span>
           </div>
           <div className={styles.metric}>
             <span className={styles.metricLabel}>STATE</span>
-            <span className={`${styles.metricValue} ${styles.metricHighlight}`}>{state}</span>
+            <span className={`${styles.metricValue} ${isStealth ? styles.metricStealth : styles.metricHighlight}`}>{state}</span>
           </div>
         </div>
+
+        {/* Signal badges row */}
+        {(rsiData.has_divergence || hasGap || isStealth) && (
+          <div className={styles.signalsRow}>
+            {rsiData.has_divergence && (
+              <span className={styles.badgeDiv}>↗ RSI DIV</span>
+            )}
+            {hasGap && (
+              <span className={`${styles.badgeGap} ${gapData.is_gap_up ? styles.badgeGapUp : styles.badgeGapDown}`}>
+                {gapData.is_gap_up ? '▲' : '▼'} GAP {gapData.gap_pct > 0 ? '+' : ''}{gapData.gap_pct}%
+              </span>
+            )}
+            {isStealth && (
+              <span className={styles.badgeStealth2}>
+                🕵 {stealth.vol_ratio?.toFixed(1) ?? '?'}x · {stealth.price_change_pct?.toFixed(1) ?? '?'}%
+                {stealth.strength === 'STRONG' && ' STRONG'}
+              </span>
+            )}
+          </div>
+        )}
+
       </div>
 
       {/* Expand button */}

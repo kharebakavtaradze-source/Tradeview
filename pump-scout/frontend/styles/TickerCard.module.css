@@ -20,9 +20,10 @@
   border-color: rgba(255, 215, 0, 0.6);
 }
 
-.cardArm  { border-color: rgba(0, 229, 255, 0.25); }
-.cardBase { border-color: rgba(0, 200, 83, 0.2); }
-.cardWatch{ border-color: rgba(255, 136, 0, 0.2); }
+.cardArm    { border-color: rgba(0, 229, 255, 0.25); }
+.cardBase   { border-color: rgba(0, 200, 83, 0.2); }
+.cardStealth{ border-color: rgba(170, 0, 255, 0.3); box-shadow: 0 0 10px rgba(170, 0, 255, 0.15); }
+.cardWatch  { border-color: rgba(255, 136, 0, 0.2); }
 
 /* ── Card Header ────────────────────────────────── */
 .header {
@@ -54,11 +55,12 @@
   letter-spacing: 0.08em;
 }
 
-.badgeFire  { background: rgba(255,215,0,0.15); color: var(--fire);  border: 1px solid rgba(255,215,0,0.4); }
-.badgeArm   { background: rgba(0,229,255,0.1);  color: var(--arm);   border: 1px solid rgba(0,229,255,0.3); }
-.badgeBase  { background: rgba(0,200,83,0.1);   color: var(--base);  border: 1px solid rgba(0,200,83,0.3); }
-.badgeWatch { background: rgba(255,136,0,0.1);  color: var(--watch); border: 1px solid rgba(255,136,0,0.3); }
-.badgeNone  { background: rgba(107,107,154,0.1);color: var(--text-muted); border: 1px solid var(--border); }
+.badgeFire    { background: rgba(255,215,0,0.15);  color: var(--fire);  border: 1px solid rgba(255,215,0,0.4); }
+.badgeArm     { background: rgba(0,229,255,0.1);   color: var(--arm);   border: 1px solid rgba(0,229,255,0.3); }
+.badgeBase    { background: rgba(0,200,83,0.1);    color: var(--base);  border: 1px solid rgba(0,200,83,0.3); }
+.badgeStealth { background: rgba(170,0,255,0.12);  color: #cc44ff;      border: 1px solid rgba(170,0,255,0.4); }
+.badgeWatch   { background: rgba(255,136,0,0.1);   color: var(--watch); border: 1px solid rgba(255,136,0,0.3); }
+.badgeNone    { background: rgba(107,107,154,0.1); color: var(--text-muted); border: 1px solid var(--border); }
 
 .score {
   font-size: 11px;
@@ -117,12 +119,94 @@
   color: var(--text-dim);
 }
 
-.metricHighlight {
-  color: var(--cyan);
+.metricHighlight { color: var(--cyan); }
+.metricGold      { color: var(--gold); }
+.metricStealth   { color: #cc44ff; }
+.metricGreen     { color: var(--green); }
+.metricRed       { color: var(--red); }
+
+.divDot {
+  margin-left: 3px;
+  color: #00e5ff;
+  font-size: 11px;
 }
 
-.metricGold {
-  color: var(--gold);
+/* ── Pre-market badge ───────────────────────────── */
+.premarketBadge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+  margin-left: 4px;
+}
+.premarketUp   { background: rgba(0,200,83,0.15);  color: var(--green); border: 1px solid rgba(0,200,83,0.3); }
+.premarketDown { background: rgba(255,68,102,0.12); color: var(--red);   border: 1px solid rgba(255,68,102,0.3); }
+
+/* ── Signal badges row ──────────────────────────── */
+.signalsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.badgeDiv {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--cyan);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+}
+
+.badgeGap {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+.badgeGapUp   { background: rgba(0,200,83,0.12);  color: var(--green); border: 1px solid rgba(0,200,83,0.3); }
+.badgeGapDown { background: rgba(255,68,102,0.1); color: var(--red);   border: 1px solid rgba(255,68,102,0.3); }
+
+.badgeStealth2 {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  background: rgba(170, 0, 255, 0.1);
+  color: #cc44ff;
+  border: 1px solid rgba(170, 0, 255, 0.3);
+}
+
+.stealthRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 4px 6px;
+  background: rgba(170, 0, 255, 0.07);
+  border: 1px solid rgba(170, 0, 255, 0.2);
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.stealthIcon {
+  font-size: 11px;
+}
+
+.stealthText {
+  color: #cc44ff;
+  letter-spacing: 0.03em;
+}
+
+.stealthStrong {
+  color: #ff66ff;
+  font-weight: 700;
 }
 
 /* ── Expand Button ──────────────────────────────── */

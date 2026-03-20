@@ -49,6 +49,31 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
 
     accum_score = min(accum_score, 100)
 
+    # --- RSI Divergence bonus (max +20 to accum_score) ---
+    rsi_data = indicators.get("rsi", {})
+    if rsi_data.get("has_divergence"):
+        div_strength = rsi_data.get("div_strength", 0)
+        rsi_bonus = 20 if div_strength >= 10 else 15 if div_strength >= 5 else 10
+        accum_score = min(accum_score + rsi_bonus, 100)
+
+    # --- Gap bonus (up to +15 to vol_score, penalty for gap down) ---
+    gap = indicators.get("gap", {})
+    gap_type = gap.get("gap_type", "NONE")
+    if gap_type == "GAP_UP_STRONG":
+        vol_score = min(vol_score + 15, 100)
+    elif gap_type == "GAP_UP":
+        vol_score = min(vol_score + 8, 100)
+    elif gap_type == "GAP_DOWN_STRONG":
+        vol_score = max(vol_score - 20, 0)
+    elif gap_type == "GAP_DOWN":
+        vol_score = max(vol_score - 10, 0)
+
+    # --- Stealth Bonus ---
+    stealth = indicators.get("stealth", {})
+    stealth_bonus = 0
+    if stealth.get("is_stealth"):
+        stealth_bonus = stealth.get("stealth_score", 0) * 0.3
+
     # --- Quiet Factor (multiplier) ---
     if price_change_pct < 1.0 and anomaly_ratio > 3.0:
         quiet_factor = 1.5
@@ -58,17 +83,26 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         quiet_factor = 1.0
 
     # --- Composite Score ---
-    total_score = (vol_score * 0.5 + accum_score * 0.5) * quiet_factor
+    total_score = (vol_score * 0.4 + accum_score * 0.3 + stealth_bonus * 0.3) * quiet_factor
+
+    # Stealth floor: stealth signal always at least WATCH
+    if stealth.get("is_stealth") and total_score < 25:
+        total_score = 25
+
     total_score = round(min(total_score, 100), 2)
 
     # --- Tier ---
-    # State from regime overrides tier for FIRE/ARM
+    # State from regime overrides tier
     if state == "FIRE" or total_score > 80:
         tier = "FIRE"
     elif state == "ARM" or total_score > 60:
         tier = "ARM"
+    elif state in ("STEALTH_ARM", "STEALTH_BASE", "STEALTH"):
+        tier = "STEALTH"
     elif state == "BASE" or total_score > 40:
         tier = "BASE"
+    elif stealth.get("is_stealth") and stealth.get("stealth_score", 0) >= 50:
+        tier = "STEALTH"
     elif total_score > 25:
         tier = "WATCH"
     else:
@@ -78,6 +112,7 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         "total_score": total_score,
         "vol_score": vol_score,
         "accum_score": accum_score,
+        "stealth_bonus": round(stealth_bonus, 2),
         "quiet_factor": quiet_factor,
         "tier": tier,
     }

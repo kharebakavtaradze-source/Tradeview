@@ -40,6 +40,23 @@
   margin-bottom: 1px;
 }
 
+.howLink {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  margin-left: 10px;
+  align-self: flex-end;
+  margin-bottom: 1px;
+  opacity: 0.7;
+  transition: opacity 0.15s, color 0.15s;
+}
+.howLink:hover {
+  color: var(--cyan);
+  opacity: 1;
+  text-decoration: none;
+}
+
 .headerMeta {
   display: flex;
   align-items: center;
@@ -66,10 +83,11 @@
   letter-spacing: 0.05em;
 }
 
-.tierFire { background: rgba(255,215,0,0.15); color: var(--fire); border: 1px solid rgba(255,215,0,0.3); }
-.tierArm  { background: rgba(0,229,255,0.1);  color: var(--arm);  border: 1px solid rgba(0,229,255,0.25); }
-.tierBase { background: rgba(0,200,83,0.1);   color: var(--base); border: 1px solid rgba(0,200,83,0.25); }
-.tierWatch{ background: rgba(255,136,0,0.1);  color: var(--watch);border: 1px solid rgba(255,136,0,0.25); }
+.tierFire    { background: rgba(255,215,0,0.15); color: var(--fire); border: 1px solid rgba(255,215,0,0.3); }
+.tierArm     { background: rgba(0,229,255,0.1);  color: var(--arm);  border: 1px solid rgba(0,229,255,0.25); }
+.tierBase    { background: rgba(0,200,83,0.1);   color: var(--base); border: 1px solid rgba(0,200,83,0.25); }
+.tierStealth { background: rgba(170,0,255,0.12); color: #cc44ff;     border: 1px solid rgba(170,0,255,0.3); }
+.tierWatch   { background: rgba(255,136,0,0.1);  color: var(--watch);border: 1px solid rgba(255,136,0,0.25); }
 
 .rescanBtn {
   background: var(--surface2);
@@ -105,6 +123,22 @@
 }
 
 /* ── Market Status Banner ───────────────────────── */
+.scanningBanner {
+  background: rgba(0, 229, 255, 0.06);
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  color: var(--cyan);
+  text-align: center;
+  padding: 10px;
+  margin: 10px 0;
+  border-radius: 4px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 .marketClosed {
   background: rgba(255, 68, 102, 0.08);
   border: 1px solid rgba(255, 68, 102, 0.25);
@@ -147,10 +181,11 @@
   border-bottom-color: var(--cyan);
 }
 
-.tabFire.tabActive  { color: var(--fire); border-bottom-color: var(--fire); }
-.tabArm.tabActive   { color: var(--arm);  border-bottom-color: var(--arm); }
-.tabBase.tabActive  { color: var(--base); border-bottom-color: var(--base); }
-.tabWatch.tabActive { color: var(--watch);border-bottom-color: var(--watch); }
+.tabFire.tabActive    { color: var(--fire); border-bottom-color: var(--fire); }
+.tabArm.tabActive     { color: var(--arm);  border-bottom-color: var(--arm); }
+.tabBase.tabActive    { color: var(--base); border-bottom-color: var(--base); }
+.tabStealth.tabActive { color: #cc44ff;     border-bottom-color: #aa00ff; }
+.tabWatch.tabActive   { color: var(--watch);border-bottom-color: var(--watch); }
 
 /* ── Grid ───────────────────────────────────────── */
 .grid {

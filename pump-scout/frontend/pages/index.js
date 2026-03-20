@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import TickerCard from '../components/TickerCard';
 import Scanner from '../components/Scanner';
 import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v1.1';
-const TIERS = ['FIRE', 'ARM', 'BASE', 'WATCH'];
-const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', WATCH: '⚡ WATCH' };
+const VERSION = 'v3.3';
+const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'WATCH'];
+const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH', WATCH: '⚡ WATCH' };
 
 function isMarketOpen() {
   const now = new Date();
@@ -59,11 +60,22 @@ export default function Home() {
     setScanning(true);
     try {
       await fetch(`${API_URL}/api/scan/run`, { method: 'POST' });
-      // Poll for completion
+      // Poll for completion — stop as soon as scanned_at changes
+      const prevTs = scanData?.scanned_at || null;
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
-        await fetchLatest();
+        const res = await fetch(`${API_URL}/api/scan/latest`);
+        if (res.ok) {
+          const data = await res.json();
+          setScanData(data);
+          setError(null);
+          if (data.scanned_at && data.scanned_at !== prevTs) {
+            clearInterval(poll);
+            setScanning(false);
+            return;
+          }
+        }
         if (attempts >= 60) {
           clearInterval(poll);
           setScanning(false);
@@ -113,6 +125,7 @@ export default function Home() {
             <span className={styles.logoIcon}>🔍</span>
             PUMP SCOUT
             <span className={styles.version}>{VERSION}</span>
+            <Link href="/how-it-works" className={styles.howLink}>how it works</Link>
           </div>
           <Scanner
             scanData={scanData}
@@ -126,6 +139,13 @@ export default function Home() {
         {!marketOpen && (
           <div className={styles.marketClosed}>
             MARKET CLOSED — Showing last scan data. Next scan runs at market open.
+          </div>
+        )}
+
+        {/* Scanning progress banner */}
+        {scanning && (
+          <div className={styles.scanningBanner}>
+            <span className={styles.spinner} /> Scan in progress — fetching ~800 tickers and calculating signals. This takes 2–4 minutes…
           </div>
         )}
 

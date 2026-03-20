@@ -102,6 +102,61 @@ async def fetch_ohlcv(
         return await _fetch(c)
 
 
+async def fetch_premarket_batch(tickers: List[str]) -> Dict[str, dict]:
+    """
+    Fetch pre-market / after-hours quote data for a list of tickers.
+    Uses Yahoo Finance v7 quote API (single request for all symbols).
+    Returns {symbol: {premarket_pct, premarket_price, has_premarket}} per ticker.
+    """
+    if not tickers:
+        return {}
+
+    results: Dict[str, dict] = {}
+    chunk_size = 50  # Yahoo accepts up to ~100 symbols per request
+
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
+        for i in range(0, len(tickers), chunk_size):
+            chunk = tickers[i : i + chunk_size]
+            symbols_str = ",".join(chunk)
+            url = "https://query1.finance.yahoo.com/v7/finance/quote"
+            params = {
+                "symbols": symbols_str,
+                "fields": "preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent,regularMarketPrice",
+            }
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                quotes = data.get("quoteResponse", {}).get("result", [])
+                for q in quotes:
+                    sym = q.get("symbol", "")
+                    pre_pct   = q.get("preMarketChangePercent")
+                    pre_price = q.get("preMarketPrice")
+                    post_pct  = q.get("postMarketChangePercent")
+                    post_price= q.get("postMarketPrice")
+                    # Prefer pre-market if available, else after-hours
+                    if pre_pct is not None:
+                        results[sym] = {
+                            "premarket_pct":   round(pre_pct, 2),
+                            "premarket_price": round(pre_price, 4) if pre_price else None,
+                            "session":         "pre",
+                            "has_premarket":   True,
+                        }
+                    elif post_pct is not None:
+                        results[sym] = {
+                            "premarket_pct":   round(post_pct, 2),
+                            "premarket_price": round(post_price, 4) if post_price else None,
+                            "session":         "post",
+                            "has_premarket":   True,
+                        }
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                logger.warning(f"Pre-market fetch error for chunk: {e}")
+
+    return results
+
+
 async def fetch_batch(
     tickers: List[str],
     interval: str = "1d",

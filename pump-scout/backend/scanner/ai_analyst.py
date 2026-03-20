@@ -11,6 +11,12 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
+# Try newest model first, fall back to older if unavailable
+MODELS = [
+    "claude-3-5-haiku-20241022",
+    "claude-3-haiku-20240307",
+]
+
 
 async def analyze_ticker(
     symbol: str,
@@ -22,9 +28,15 @@ async def analyze_ticker(
     Generate an AI analysis of a ticker's setup using Claude.
     Returns formatted analysis text.
     """
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY is not set — skipping AI analysis")
+        return f"REGIME: {regime.get('state', 'NONE')} — AI key not configured\nVERDICT: WATCH — Set ANTHROPIC_API_KEY in Railway Variables."
 
-    # Build a clean summary of the data
+    stealth = indicators.get("stealth", {})
+    rsi_data = indicators.get("rsi", {})
+    gap_data = indicators.get("gap", {})
+
     data_summary = {
         "symbol": symbol,
         "price": indicators.get("price"),
@@ -41,6 +53,13 @@ async def analyze_ticker(
         "ema20": indicators.get("ema20"),
         "ema50": indicators.get("ema50"),
         "atr_pct": indicators.get("atr_pct"),
+        "rsi": rsi_data.get("value"),
+        "rsi_divergence": rsi_data.get("has_divergence"),
+        "gap_type": gap_data.get("gap_type"),
+        "gap_pct": gap_data.get("gap_pct"),
+        "stealth_detected": stealth.get("is_stealth"),
+        "stealth_score": stealth.get("stealth_score"),
+        "stealth_vol_ratio": stealth.get("vol_ratio"),
         "wyckoff_state": regime.get("state"),
         "tr_high": regime.get("tr_high"),
         "tr_low": regime.get("tr_low"),
@@ -53,6 +72,7 @@ async def analyze_ticker(
         "tier": score.get("tier"),
         "vol_score": score.get("vol_score"),
         "accum_score": score.get("accum_score"),
+        "stealth_bonus": score.get("stealth_bonus"),
         "quiet_factor": score.get("quiet_factor"),
     }
 
@@ -70,16 +90,33 @@ VERDICT: [STRONG BUY SETUP / WATCH / AVOID] — [2 sentence conclusion]
 Data:
 {json.dumps(data_summary, indent=2)}"""
 
-    try:
-        response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text
-    except Exception as e:
-        logger.error(f"AI analysis failed for {symbol}: {e}")
-        return f"REGIME: {regime.get('state', 'NONE')} — Analysis unavailable\nVERDICT: WATCH — Insufficient data for full analysis."
+    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
+
+    for model in MODELS:
+        for attempt in range(2):
+            try:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                logger.info(f"AI analysis OK for {symbol} using {model}")
+                return response.content[0].text
+            except anthropic.RateLimitError:
+                logger.warning(f"Rate limit hit for {symbol}, waiting 5s...")
+                await asyncio.sleep(5)
+            except anthropic.NotFoundError:
+                logger.warning(f"Model {model} not found, trying next...")
+                break  # try next model
+            except anthropic.AuthenticationError as e:
+                logger.error(f"Auth error — check ANTHROPIC_API_KEY: {e}")
+                return f"REGIME: {regime.get('state', 'NONE')} — API key invalid\nVERDICT: WATCH — Check ANTHROPIC_API_KEY in Railway Variables."
+            except Exception as e:
+                logger.error(f"AI analysis failed for {symbol} [{model}] attempt {attempt+1}: {type(e).__name__}: {e}")
+                if attempt == 0:
+                    await asyncio.sleep(2)
+
+    return f"REGIME: {regime.get('state', 'NONE')} — Analysis unavailable\nVERDICT: WATCH — Claude API call failed. Check Railway logs."
 
 
 async def analyze_batch(results: List[dict]) -> List[dict]:
