@@ -50,8 +50,13 @@ async def run_scan() -> dict:
                 skipped += 1
                 continue
 
-            # Skip tickers with avg volume < 200K (illiquid)
-            if indicators.get("avg_vol_20", 0) < 150_000:
+            # Skip tickers where last-day volume < 300K (illiquid)
+            if indicators.get("today_vol", 0) < 300_000:
+                skipped += 1
+                continue
+
+            # VOL ANOMALY must be at least 2x the 20-day average
+            if indicators.get("anomaly_ratio", 0) < 2.0:
                 skipped += 1
                 continue
 

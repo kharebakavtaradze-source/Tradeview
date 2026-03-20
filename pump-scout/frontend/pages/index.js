@@ -7,9 +7,9 @@ import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v3.3';
-const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'WATCH'];
-const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH', WATCH: '⚡ WATCH' };
+const VERSION = 'v4.0';
+const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'WATCH', 'GOGA'];
+const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH', WATCH: '⚡ WATCH', GOGA: '🐂 GOGA' };
 
 function isMarketOpen() {
   const now = new Date();
@@ -93,13 +93,17 @@ export default function Home() {
 
   // Filter results by active tab
   const results = scanData?.results || [];
-  const filtered = results.filter((r) => r.score?.tier === activeTab);
+  const gogaResults = results.filter((r) => (r.indicators?.stealth?.vol_ratio ?? 0) >= 2.0);
+  const filtered = activeTab === 'GOGA'
+    ? gogaResults
+    : results.filter((r) => r.score?.tier === activeTab);
 
   // Auto-select first non-empty tab
   useEffect(() => {
     if (!scanData) return;
     const tierCounts = scanData.tier_counts || {};
     for (const tier of TIERS) {
+      if (tier === 'GOGA') continue; // skip GOGA in auto-select
       if (tierCounts[tier] > 0) {
         setActiveTab(tier);
         break;
@@ -107,7 +111,7 @@ export default function Home() {
     }
   }, [scanData]);
 
-  const tierCounts = scanData?.tier_counts || {};
+  const tierCounts = { ...(scanData?.tier_counts || {}), GOGA: gogaResults.length };
 
   return (
     <>
