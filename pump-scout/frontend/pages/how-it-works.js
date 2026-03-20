@@ -410,7 +410,7 @@ export default function HowItWorks() {
         </Section>
 
         {/* 7. Filters */}
-        <Section id="filters" title="7. Filters &amp; Quality Gates">
+        <Section id="filters" title="7. Filters & Quality Gates">
           <Block color="var(--red)">
             <p>Tickers are dropped at each stage if they fail:</p>
             <ul className={styles.ul} style={{ marginTop: 10 }}>

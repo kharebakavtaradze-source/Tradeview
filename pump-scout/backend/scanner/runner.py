@@ -51,7 +51,7 @@ async def run_scan() -> dict:
                 continue
 
             # Skip tickers with avg volume < 200K (illiquid)
-            if indicators.get("avg_vol_20", 0) < 200_000:
+            if indicators.get("avg_vol_20", 0) < 150_000:
                 skipped += 1
                 continue
 
