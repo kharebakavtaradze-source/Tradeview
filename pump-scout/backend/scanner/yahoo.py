@@ -35,60 +35,65 @@ async def fetch_ohlcv(
     params = {"interval": interval, "range": period}
 
     async def _fetch(c: httpx.AsyncClient) -> Optional[List[dict]]:
-        try:
-            resp = await c.get(url, params=params, timeout=15.0)
-            if resp.status_code != 200:
-                return None
-
-            data = resp.json()
-            result = data.get("chart", {}).get("result")
-            if not result:
-                return None
-
-            chart = result[0]
-            timestamps = chart.get("timestamp", [])
-            indicators = chart.get("indicators", {})
-            quote = indicators.get("quote", [{}])[0]
-
-            opens = quote.get("open", [])
-            highs = quote.get("high", [])
-            lows = quote.get("low", [])
-            closes = quote.get("close", [])
-            volumes = quote.get("volume", [])
-
-            if not timestamps or not closes:
-                return None
-
-            candles = []
-            for i, ts in enumerate(timestamps):
-                try:
-                    o = opens[i]
-                    h = highs[i]
-                    lo = lows[i]
-                    c_val = closes[i]
-                    v = volumes[i]
-                    # Skip bars with None values
-                    if any(x is None for x in [o, h, lo, c_val, v]):
-                        continue
-                    candles.append({
-                        "t": int(ts),
-                        "o": float(o),
-                        "h": float(h),
-                        "l": float(lo),
-                        "c": float(c_val),
-                        "v": int(v),
-                    })
-                except (IndexError, TypeError, ValueError):
+        for attempt in range(3):
+            try:
+                resp = await c.get(url, params=params, timeout=10.0)
+                if resp.status_code == 429:
+                    await asyncio.sleep(2 ** attempt)
                     continue
+                if resp.status_code != 200:
+                    return None
 
-            return candles if candles else None
+                data = resp.json()
+                result = data.get("chart", {}).get("result")
+                if not result:
+                    return None
 
-        except httpx.TimeoutException:
-            logger.debug(f"Timeout fetching {ticker}")
-            return None
-        except Exception as e:
-            logger.debug(f"Error fetching {ticker}: {e}")
-            return None
+                chart = result[0]
+                timestamps = chart.get("timestamp", [])
+                indicators = chart.get("indicators", {})
+                quote = indicators.get("quote", [{}])[0]
+
+                opens = quote.get("open", [])
+                highs = quote.get("high", [])
+                lows = quote.get("low", [])
+                closes = quote.get("close", [])
+                volumes = quote.get("volume", [])
+
+                if not timestamps or not closes:
+                    return None
+
+                candles = []
+                for i, ts in enumerate(timestamps):
+                    try:
+                        o = opens[i]
+                        h = highs[i]
+                        lo = lows[i]
+                        c_val = closes[i]
+                        v = volumes[i]
+                        # Skip bars with None values
+                        if any(x is None for x in [o, h, lo, c_val, v]):
+                            continue
+                        candles.append({
+                            "t": int(ts),
+                            "o": float(o),
+                            "h": float(h),
+                            "l": float(lo),
+                            "c": float(c_val),
+                            "v": int(v),
+                        })
+                    except (IndexError, TypeError, ValueError):
+                        continue
+
+                return candles if candles else None
+
+            except httpx.TimeoutException:
+                logger.debug(f"Timeout fetching {ticker}")
+                return None
+            except Exception as e:
+                logger.debug(f"Error fetching {ticker}: {e}")
+                return None
+        return None
 
     if client is not None:
         return await _fetch(client)
