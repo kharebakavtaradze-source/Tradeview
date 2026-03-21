@@ -181,11 +181,45 @@
   border-bottom-color: var(--cyan);
 }
 
-.tabFire.tabActive    { color: var(--fire); border-bottom-color: var(--fire); }
-.tabArm.tabActive     { color: var(--arm);  border-bottom-color: var(--arm); }
-.tabBase.tabActive    { color: var(--base); border-bottom-color: var(--base); }
-.tabStealth.tabActive { color: #cc44ff;     border-bottom-color: #aa00ff; }
-.tabWatch.tabActive   { color: var(--watch);border-bottom-color: var(--watch); }
+.tabFire.tabActive     { color: var(--fire); border-bottom-color: var(--fire); }
+.tabArm.tabActive      { color: var(--arm);  border-bottom-color: var(--arm); }
+.tabBase.tabActive     { color: var(--base); border-bottom-color: var(--base); }
+.tabStealth.tabActive  { color: #cc44ff;     border-bottom-color: #aa00ff; }
+.tabWatch.tabActive    { color: var(--watch);border-bottom-color: var(--watch); }
+.tabSympathy.tabActive { color: #00e5ff;     border-bottom-color: #00e5ff; }
+.tabFlow.tabActive     { color: #aa00ff;     border-bottom-color: #aa00ff; }
+
+/* ── Perfect Storm Banner ───────────────────────── */
+.perfectStorm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: linear-gradient(135deg, rgba(255,215,0,0.07), rgba(0,229,255,0.07));
+  border: 1px solid rgba(255,215,0,0.35);
+  border-radius: 5px;
+  padding: 8px 14px;
+  margin: 12px 0 4px;
+  animation: firePulse 2.5s ease-in-out infinite;
+}
+
+.perfectStormLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffd700;
+  letter-spacing: 0.08em;
+}
+
+.perfectStormTicker {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: rgba(255,215,0,0.12);
+  color: #ffd700;
+  border: 1px solid rgba(255,215,0,0.3);
+  letter-spacing: 0.05em;
+}
 
 /* ── Grid ───────────────────────────────────────── */
 .grid {

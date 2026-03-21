@@ -6,8 +6,14 @@ import styles from '../styles/TickerCard.module.css';
 
 const Chart = dynamic(() => import('./Chart'), { ssr: false });
 
-const TIER_EMOJI = { FIRE: '🔥', ARM: '👁', BASE: '📦', STEALTH: '🕵', STEALTH_BASE: '🕵', STEALTH_ARM: '🕵', WATCH: '⚡', SKIP: '' };
-const TIER_LABEL = { STEALTH: 'STEALTH', STEALTH_BASE: 'STEALTH', STEALTH_ARM: 'STEALTH' };
+const TIER_EMOJI = {
+  FIRE: '🔥', ARM: '👁', BASE: '📦', STEALTH: '🕵',
+  STEALTH_BASE: '🕵', STEALTH_ARM: '🕵', WATCH: '⚡',
+  SYMPATHY: '🔗', SKIP: '',
+};
+const TIER_LABEL = {
+  STEALTH: 'STEALTH', STEALTH_BASE: 'STEALTH', STEALTH_ARM: 'STEALTH',
+};
 
 function getBadgeClass(tier) {
   const map = {
@@ -18,6 +24,7 @@ function getBadgeClass(tier) {
     STEALTH_BASE: styles.badgeStealth,
     STEALTH_ARM: styles.badgeStealth,
     WATCH: styles.badgeWatch,
+    SYMPATHY: styles.badgeSympathy,
   };
   return map[tier] || styles.badgeNone;
 }
@@ -31,6 +38,7 @@ function getCardClass(tier) {
     STEALTH_BASE: styles.cardStealth,
     STEALTH_ARM: styles.cardStealth,
     WATCH: styles.cardWatch,
+    SYMPATHY: styles.cardSympathy,
   };
   return map[tier] || '';
 }
@@ -38,7 +46,7 @@ function getCardClass(tier) {
 export default function TickerCard({ data }) {
   const [expanded, setExpanded] = useState(false);
 
-  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket } = data;
+  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector } = data;
 
   const tier = score.tier || 'WATCH';
   const totalScore = score.total_score || 0;
@@ -48,6 +56,7 @@ export default function TickerCard({ data }) {
   const priceChangePct = indicators.price_change_pct || 0;
   const state = regime.state || 'NONE';
   const stealth = indicators.stealth || {};
+  const instFlow = indicators.institutional_flow || {};
   const isStealth = tier === 'STEALTH' || stealth.is_stealth;
   const rsiData = indicators.rsi || {};
   const gapData = indicators.gap || {};
@@ -137,6 +146,32 @@ export default function TickerCard({ data }) {
         )}
 
       </div>
+
+      {/* Sympathy banner */}
+      {sympathy?.is_sympathy && (
+        <div className={styles.sympathyBanner}>
+          <span className={styles.sympathyLabel}>🔗 SYMPATHY</span>
+          <span>Following: {sympathy.leaders?.join(', ')}</span>
+          {sector && <span>{sector}</span>}
+          <span>Leader +{sympathy.leader_change?.toFixed(0)}%</span>
+          <span>Score: {sympathy.sympathy_score}/100</span>
+          <span style={{ opacity: 0.6 }}>{sympathy.window}</span>
+        </div>
+      )}
+
+      {/* Institutional flow banner */}
+      {instFlow?.is_institutional && (
+        <div className={styles.instFlowBanner}>
+          <span className={styles.instFlowLabel}>🏦 INST FLOW</span>
+          <span>{instFlow.days}d streak</span>
+          <span>avg {instFlow.avg_vol_ratio}x vol</span>
+          <span className={
+            instFlow.strength === 'STRONG' ? styles.flowStrengthStrong
+            : instFlow.strength === 'MEDIUM' ? styles.flowStrengthMedium
+            : styles.flowStrengthEarly
+          }>{instFlow.strength}</span>
+        </div>
+      )}
 
       {/* Expand button */}
       <button className={styles.expandBtn} onClick={() => setExpanded(!expanded)}>

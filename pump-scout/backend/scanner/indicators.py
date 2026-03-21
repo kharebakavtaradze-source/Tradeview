@@ -4,6 +4,7 @@ Each candle: {"t": unix, "o": float, "h": float, "l": float, "c": float, "v": in
 """
 import math
 from typing import List, Dict, Any
+from .institutional_flow import calc_institutional_flow
 
 
 def sma(values: list, period: int) -> float:
@@ -377,6 +378,7 @@ def calc_all(candles: list) -> dict:
     stealth = calc_stealth(candles)
     rsi_data = calc_rsi(candles)
     gap = calc_gap(candles)
+    inst_flow = calc_institutional_flow(candles)
 
     ema20_val = ema(closes, 20)
     ema50_val = ema(closes, 50)
@@ -421,4 +423,6 @@ def calc_all(candles: list) -> dict:
         "rsi": rsi_data,
         # Gap
         "gap": gap,
+        # Institutional Flow
+        "institutional_flow": inst_flow,
     }

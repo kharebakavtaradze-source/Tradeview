@@ -10,6 +10,7 @@ from .indicators import calc_all
 from .wyckoff import detect_regime
 from .scoring import score_ticker
 from .ai_analyst import analyze_batch
+from .sector_sympathy import get_sectors_batch, find_sector_leaders, calc_sympathy_score
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +20,11 @@ async def run_scan() -> dict:
     Run a full market scan:
     1. Fetch tickers from Finviz
     2. Download OHLCV data from Yahoo Finance
-    3. Calculate indicators + Wyckoff regime
+    3. Calculate indicators + Wyckoff regime + institutional flow
     4. Score each ticker
-    5. AI analysis on top 20
+    4.5. Sector sympathy detection
+    5. Pre-market data
+    6. AI analysis on top 20
     Returns scan result dict.
     """
     print("Starting scan...")
@@ -87,6 +90,27 @@ async def run_scan() -> dict:
 
     # Step 4: Sort by score descending
     results.sort(key=lambda x: x["score"]["total_score"], reverse=True)
+
+    # Step 4.5: Sector sympathy
+    if results:
+        print(f"Fetching sectors for {len(results)} tickers...")
+        symbols = [r["symbol"] for r in results]
+        sectors = await get_sectors_batch(symbols)
+        for r in results:
+            r["sector"] = sectors.get(r["symbol"], "Unknown")
+
+        sector_leaders = find_sector_leaders(results)
+        _TIER_RANK = {"SKIP": 0, "WATCH": 1, "STEALTH": 2, "SYMPATHY": 3, "BASE": 3, "ARM": 4, "FIRE": 5}
+        for r in results:
+            sympathy = calc_sympathy_score(r, sector_leaders)
+            r["sympathy"] = sympathy
+            if sympathy["is_sympathy"]:
+                current_tier = r["score"]["tier"]
+                if sympathy["sympathy_score"] >= 60:
+                    if _TIER_RANK.get("SYMPATHY", 0) > _TIER_RANK.get(current_tier, 0):
+                        r["score"]["tier"] = "SYMPATHY"
+                elif sympathy["sympathy_score"] >= 40 and current_tier == "SKIP":
+                    r["score"]["tier"] = "WATCH"
 
     # Step 5: Pre-market data for all scored tickers
     scored_symbols = [r["symbol"] for r in results]
