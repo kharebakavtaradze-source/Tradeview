@@ -15,16 +15,25 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
 }
 HTML_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "text/html,application/xhtml+xml",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://finviz.com",
+    "DNT": "1",
+    "Connection": "keep-alive",
 }
 
-TIMEOUT = 12.0
+TIMEOUT = 15.0
 
 # ── Article classification ────────────────────────────────────────────────────
 
@@ -36,7 +45,10 @@ _PR_PUBLISHERS = {
 _REAL_PUBLISHERS = {
     "REUTERS", "BLOOMBERG", "CNBC", "MARKETWATCH", "SEEKING ALPHA",
     "BENZINGA", "THESTREET", "YAHOO FINANCE", "MOTLEY FOOL", "BARRONS",
-    "TIPRANKS", "FINVIZ", "INVESTORPLACE", "ZACKS",
+    "TIPRANKS", "FINVIZ", "INVESTORPLACE", "ZACKS", "FOOL.COM",
+    "WALL STREET JOURNAL", "WSJ", "FINANCIAL TIMES", "FT",
+    "INVESTOR'S BUSINESS DAILY", "IBD", "SCHAEFFERS", "SCHAEFFERRESEARCH",
+    "NASDAQ", "NYSE", "STOCKANALYSIS", "SIMPLY WALL ST",
 }
 
 
@@ -84,89 +96,154 @@ def _hours_ago(ts: datetime) -> int:
 
 # ── StockTwits ────────────────────────────────────────────────────────────────
 
+def _parse_stocktwits_messages(messages: list) -> list[dict]:
+    """Convert StockTwits API message list → unified mention dicts."""
+    results = []
+    for m in messages:
+        ts = _parse_ts(m.get("created_at"))
+        if not ts:
+            continue
+        sentiment_raw = (m.get("entities", {}) or {}).get("sentiment") or {}
+        sentiment = sentiment_raw.get("basic", "").upper() if isinstance(sentiment_raw, dict) else ""
+        results.append({
+            "source": "stocktwits",
+            "ts": ts,
+            "text": (m.get("body") or "")[:280],
+            "sentiment": sentiment,
+            "_msg_id": m.get("id", 0),
+        })
+    return results
+
+
 async def _fetch_stocktwits(ticker: str, client: httpx.AsyncClient) -> list[dict]:
-    url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
-    try:
-        resp = await client.get(url, headers=HEADERS)
-        if resp.status_code != 200:
-            return []
-        messages = resp.json().get("messages", [])
-        results = []
-        for m in messages:
-            ts = _parse_ts(m.get("created_at"))
-            if not ts:
-                continue
-            sentiment_raw = (m.get("entities", {}) or {}).get("sentiment") or {}
-            sentiment = sentiment_raw.get("basic", "").upper() if isinstance(sentiment_raw, dict) else ""
-            results.append({
-                "source": "stocktwits",
-                "ts": ts,
-                "text": (m.get("body") or "")[:280],
-                "sentiment": sentiment,
-            })
-        return results
-    except Exception as e:
-        logger.debug(f"StockTwits fetch failed for {ticker}: {e}")
-        return []
+    """
+    Fetch StockTwits messages for a ticker.
+    Paginates up to 3 pages (max ~90 messages) to build a proper 24h baseline.
+    Uses max_id cursor to walk back in time.
+    """
+    base_url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
+    all_results: list[dict] = []
+    max_id: int | None = None
+    cutoff_24h = _now_utc() - timedelta(hours=24)
+
+    for page in range(3):  # up to 3 pages × 30 = 90 messages max
+        url = base_url if max_id is None else f"{base_url}?max={max_id - 1}"
+        try:
+            resp = await client.get(url, headers=HEADERS)
+            if resp.status_code == 429:
+                logger.debug(f"StockTwits rate-limited for {ticker}")
+                break
+            if resp.status_code != 200:
+                break
+            messages = resp.json().get("messages", [])
+            if not messages:
+                break
+
+            page_results = _parse_stocktwits_messages(messages)
+            all_results.extend(page_results)
+
+            # Track the oldest message id for next page cursor
+            ids = [r["_msg_id"] for r in page_results if r.get("_msg_id")]
+            if ids:
+                max_id = min(ids)
+
+            # Stop paginating if oldest message is already > 24h old
+            oldest_ts = min((r["ts"] for r in page_results), default=None)
+            if oldest_ts and oldest_ts < cutoff_24h:
+                break
+
+            # Small delay between pages to respect rate limits
+            if page < 2:
+                await asyncio.sleep(0.3)
+
+        except Exception as e:
+            logger.debug(f"StockTwits fetch failed for {ticker} page {page}: {e}")
+            break
+
+    # Strip internal cursor field before returning
+    for r in all_results:
+        r.pop("_msg_id", None)
+
+    return all_results
 
 
 # ── Yahoo Finance News (v2 + v1 fallback) ────────────────────────────────────
 
 async def _fetch_yahoo_v2(ticker: str, client: httpx.AsyncClient) -> list[dict]:
-    """Yahoo Finance v2 news endpoint — returns PR Newswire, SEC filings, etc."""
-    url = f"https://query1.finance.yahoo.com/v2/finance/news?symbols={ticker}&count=20"
-    try:
-        resp = await client.get(url, headers=HEADERS)
-        if resp.status_code != 200:
-            return []
-        items = resp.json().get("items", {}).get("result", [])
-        results = []
-        for item in items:
-            pub_epoch = item.get("providerPublishTime", 0)
-            if not pub_epoch:
+    """
+    Yahoo Finance v2 news endpoint — returns PR Newswire, SEC filings, etc.
+    Tries query2 mirror first (more reliable on some networks), then query1.
+    """
+    for host in ("query2.finance.yahoo.com", "query1.finance.yahoo.com"):
+        url = f"https://{host}/v2/finance/news?symbols={ticker}&count=30"
+        try:
+            resp = await client.get(url, headers=HEADERS)
+            if resp.status_code != 200:
                 continue
-            ts = datetime.fromtimestamp(pub_epoch, tz=timezone.utc)
-            results.append({
-                "title": (item.get("title") or "")[:200],
-                "publisher": item.get("publisher") or "",
-                "summary": (item.get("summary") or "")[:200],
-                "url": item.get("link") or "",
-                "ts": ts,
-            })
-        return results
-    except Exception as e:
-        logger.debug(f"Yahoo v2 news failed for {ticker}: {e}")
-        return []
+            data = resp.json()
+            # v2 response shape: {"items": {"result": [...]}} or {"data": {"main": {"stream": [...]}}}
+            items = (
+                data.get("items", {}).get("result", [])
+                or data.get("data", {}).get("main", {}).get("stream", [])
+            )
+            if not items:
+                continue
+            results = []
+            for item in items:
+                # Both shapes: top-level fields or nested under "content"
+                content = item.get("content") or item
+                pub_epoch = content.get("providerPublishTime") or item.get("providerPublishTime", 0)
+                if not pub_epoch:
+                    continue
+                ts = datetime.fromtimestamp(pub_epoch, tz=timezone.utc)
+                results.append({
+                    "title": (content.get("title") or item.get("title") or "")[:200],
+                    "publisher": (content.get("provider", {}).get("displayName") or
+                                  content.get("publisher") or
+                                  item.get("publisher") or "")[:100],
+                    "summary": (content.get("summary") or item.get("summary") or "")[:200],
+                    "url": content.get("canonicalUrl", {}).get("url") or item.get("link") or "",
+                    "ts": ts,
+                })
+            if results:
+                return results
+        except Exception as e:
+            logger.debug(f"Yahoo v2 news ({host}) failed for {ticker}: {e}")
+    return []
 
 
 async def _fetch_yahoo_v1(ticker: str, client: httpx.AsyncClient) -> list[dict]:
-    """Yahoo Finance v1 search endpoint — fallback."""
-    url = (
-        f"https://query1.finance.yahoo.com/v1/finance/search"
-        f"?q={ticker}&newsCount=20&quotesCount=0&enableFuzzyQuery=false"
-    )
-    try:
-        resp = await client.get(url, headers=HEADERS)
-        if resp.status_code != 200:
-            return []
-        news = resp.json().get("news", [])
-        results = []
-        for item in news:
-            pub_epoch = item.get("providerPublishTime")
-            if not pub_epoch:
+    """Yahoo Finance v1 search endpoint — fallback. Tries both query mirrors."""
+    for host in ("query2.finance.yahoo.com", "query1.finance.yahoo.com"):
+        url = (
+            f"https://{host}/v1/finance/search"
+            f"?q={ticker}&newsCount=25&quotesCount=0&enableFuzzyQuery=false"
+        )
+        try:
+            resp = await client.get(url, headers=HEADERS)
+            if resp.status_code != 200:
                 continue
-            ts = datetime.fromtimestamp(pub_epoch, tz=timezone.utc)
-            results.append({
-                "title": (item.get("title") or "")[:200],
-                "publisher": item.get("publisher") or "",
-                "summary": "",
-                "url": "",
-                "ts": ts,
-            })
-        return results
-    except Exception as e:
-        logger.debug(f"Yahoo v1 news failed for {ticker}: {e}")
-        return []
+            news = resp.json().get("news", [])
+            if not news:
+                continue
+            results = []
+            for item in news:
+                pub_epoch = item.get("providerPublishTime")
+                if not pub_epoch:
+                    continue
+                ts = datetime.fromtimestamp(pub_epoch, tz=timezone.utc)
+                results.append({
+                    "title": (item.get("title") or "")[:200],
+                    "publisher": item.get("publisher") or "",
+                    "summary": "",
+                    "url": "",
+                    "ts": ts,
+                })
+            if results:
+                return results
+        except Exception as e:
+            logger.debug(f"Yahoo v1 news ({host}) failed for {ticker}: {e}")
+    return []
 
 
 async def fetch_yahoo_news_hype(ticker: str, client: httpx.AsyncClient | None = None) -> dict:
@@ -441,7 +518,7 @@ async def fetch_all(ticker: str) -> dict[str, Any]:
     """
     ticker = ticker.upper()
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
             twits, yahoo_raw, reddit, finviz_raw = await asyncio.gather(
                 _fetch_stocktwits(ticker, client),
                 _fetch_yahoo_v2_or_v1(ticker, client),
@@ -462,11 +539,13 @@ async def fetch_all(ticker: str) -> dict[str, Any]:
     finviz_detail = _build_news_detail(finviz_raw, "finviz")
     news_detail = _merge_news_details(yahoo_detail, finviz_detail)
 
-    # Build unified mention list for velocity.py (news as simple mention entries)
+    # Build unified mention list for velocity.py using full 7d news.
+    # velocity.py will count windows (2h/6h/24h) from this list — we need
+    # enough historical data so the 24h baseline is accurate, not just 2h.
     news_mentions = []
-    for h in news_detail["headlines"]:
-        # Reconstruct ts from hours_ago (approximate)
-        approx_ts = _now_utc() - timedelta(hours=h["hours_ago"])
+    now = _now_utc()
+    for h in news_detail["headlines_7d"]:
+        approx_ts = now - timedelta(hours=h["hours_ago"])
         news_mentions.append({
             "source": "news",
             "ts": approx_ts,
