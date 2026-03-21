@@ -51,10 +51,14 @@ async def _process_ticker(
             prev = _previous_hype_state.get(ticker)
             divergences = detect_divergences(hype_score, velocity, ticker_data, prev)
 
+            news_detail = raw.get("news_detail", {})
+
             # Only call AI if there are divergences (saves API calls)
             ai_result = None
             if divergences:
-                ai_result = await ai_analyze(ticker, hype_score, velocity, divergences, ticker_data)
+                ai_result = await ai_analyze(
+                    ticker, hype_score, velocity, divergences, ticker_data, news_detail
+                )
 
             # Send Telegram alerts for this ticker's divergences
             alerted = []
@@ -69,6 +73,7 @@ async def _process_ticker(
                 "velocity": velocity,
                 "divergences": divergences,
                 "ai_analysis": ai_result,
+                "news": news_detail,
                 "alerted": alerted,
                 "scan_tier": ticker_data.get("score", {}).get("tier", "WATCH"),
                 "scan_score": ticker_data.get("score", {}).get("total_score", 0),

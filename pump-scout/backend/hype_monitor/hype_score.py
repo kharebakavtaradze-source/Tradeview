@@ -61,33 +61,34 @@ def _velocity_bonus(velocity_2h: float) -> float:
 def calc_hype_score(raw_data: dict[str, Any], velocity: dict[str, Any]) -> dict[str, Any]:
     """
     Calculate hype_index (0–100) and sub-scores.
-
-    Returns:
-        hype_index   - overall 0–100 score
-        base_score   - from 24h mention count
-        velocity_bonus
-        sentiment_bonus
-        mention_counts - {total, stocktwits, reddit, news}
-        hype_tier    - COLD / WARM / HOT / VIRAL
+    Uses weighted news count (SEC=1.5x, real=1.0x, unknown=0.7x, PR=0.5x).
     """
     by_source = raw_data.get("by_source", {})
-    all_mentions = raw_data.get("mentions", [])
+    news_detail = raw_data.get("news_detail", {})
 
     twits_24h = velocity.get("by_source", {}).get("stocktwits", {}).get("count_24h", 0)
     reddit_24h = velocity.get("by_source", {}).get("reddit", {}).get("count_24h", 0)
-    news_24h = velocity.get("by_source", {}).get("news", {}).get("count_24h", 0)
     total_24h = velocity.get("count_24h", 0)
+
+    # Use weighted news count (honours SEC/PR/real classification)
+    news_weighted = news_detail.get("weighted_count", 0.0)
+    # If no news_detail yet (old data path), fall back to raw count
+    if news_weighted == 0.0:
+        news_weighted = velocity.get("by_source", {}).get("news", {}).get("count_24h", 0)
 
     # Per-source base scores
     twits_score = _count_to_score(twits_24h) * 0.40
     reddit_score = _count_to_score(reddit_24h) * 0.30
-    news_score = _count_to_score(news_24h) * 0.30
+    news_score = _count_to_score(news_weighted) * 0.30
     base_score = round(twits_score + reddit_score + news_score, 1)
 
     vel_bonus = _velocity_bonus(velocity.get("combined_velocity_2h", 0))
     sent_bonus = _sentiment_bonus(by_source.get("stocktwits", []))
 
-    raw_index = base_score + vel_bonus + sent_bonus
+    # SEC filing boost — official disclosure = something is happening
+    sec_boost = 5.0 if news_detail.get("has_sec_filing") else 0.0
+
+    raw_index = base_score + vel_bonus + sent_bonus + sec_boost
     hype_index = max(0, min(100, round(raw_index, 1)))
 
     if hype_index >= 75:
@@ -104,11 +105,13 @@ def calc_hype_score(raw_data: dict[str, Any], velocity: dict[str, Any]) -> dict[
         "base_score": base_score,
         "velocity_bonus": vel_bonus,
         "sentiment_bonus": sent_bonus,
+        "sec_boost": sec_boost,
         "mention_counts": {
             "total": total_24h,
             "stocktwits": twits_24h,
             "reddit": reddit_24h,
-            "news": news_24h,
+            "news_raw": news_detail.get("total_count_24h", 0),
+            "news_weighted": round(news_weighted, 1),
         },
         "hype_tier": tier,
     }
