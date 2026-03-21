@@ -174,6 +174,21 @@ export default function Home() {
     HYPE: hypeNoVolumeResults.length,
   };
 
+  // Download current tab's tickers as TradingView watchlist .txt
+  const downloadWatchlist = () => {
+    if (filtered.length === 0) return;
+    const tabLabel = TIER_LABELS[activeTab]?.replace(/[^A-Z]/g, '') || activeTab;
+    const date = new Date().toISOString().slice(0, 10);
+    const lines = filtered.map((r) => r.symbol).join('\n');
+    const blob = new Blob([lines], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pump-scout-${tabLabel.toLowerCase()}-${date}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <>
       <Head>
@@ -332,6 +347,15 @@ export default function Home() {
                   )}
                 </button>
               ))}
+              {filtered.length > 0 && (
+                <button
+                  className={styles.tvDownload}
+                  onClick={downloadWatchlist}
+                  title={`Download ${filtered.length} tickers as TradingView watchlist`}
+                >
+                  ⬇ TV ({filtered.length})
+                </button>
+              )}
             </div>
 
             {/* Grid */}
