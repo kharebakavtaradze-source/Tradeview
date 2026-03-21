@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import Column, DateTime, Integer, String, Text, select
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -79,6 +79,26 @@ class Watchlist(Base):
     symbol = Column(String(10), nullable=False, unique=True, index=True)
     added_at = Column(DateTime, default=datetime.utcnow)
     notes = Column(Text, nullable=True)
+
+
+class Journal(Base):
+    __tablename__ = "journal"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    added_at = Column(DateTime, default=datetime.utcnow)
+    entry_price = Column(Float, nullable=False)
+    entry_date = Column(String(20), nullable=False)
+    exit_price = Column(Float, nullable=True)
+    exit_date = Column(String(20), nullable=True)
+    tier = Column(String(20), nullable=True)
+    score = Column(Float, nullable=True)
+    notes = Column(Text, nullable=True)
+    outcome = Column(String(20), default="open")   # win / loss / open / skip
+    gain_pct = Column(Float, nullable=True)        # auto-calculated on save
+    indicators_snapshot = Column(Text, nullable=True)  # JSON
+    ai_analysis = Column(Text, nullable=True)
+    tags = Column(Text, nullable=True)             # JSON array
 
 
 async def init_db():
@@ -194,3 +214,142 @@ async def remove_from_watchlist(symbol: str) -> bool:
         await session.delete(item)
         await session.commit()
     return True
+
+
+# ─── Journal ─────────────────────────────────────────────────────────────────
+
+def _journal_to_dict(j: Journal) -> dict:
+    return {
+        "id": j.id,
+        "symbol": j.symbol,
+        "added_at": j.added_at.isoformat() if j.added_at else None,
+        "entry_price": j.entry_price,
+        "entry_date": j.entry_date,
+        "exit_price": j.exit_price,
+        "exit_date": j.exit_date,
+        "tier": j.tier,
+        "score": j.score,
+        "notes": j.notes,
+        "outcome": j.outcome,
+        "gain_pct": j.gain_pct,
+        "indicators_snapshot": json.loads(j.indicators_snapshot) if j.indicators_snapshot else None,
+        "ai_analysis": j.ai_analysis,
+        "tags": json.loads(j.tags) if j.tags else [],
+    }
+
+
+def _calc_gain_pct(entry_price, exit_price) -> Optional[float]:
+    if entry_price and exit_price and entry_price > 0:
+        return round((exit_price - entry_price) / entry_price * 100, 2)
+    return None
+
+
+async def get_journal() -> List[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(select(Journal).order_by(Journal.added_at.desc()))
+        items = result.scalars().all()
+    return [_journal_to_dict(j) for j in items]
+
+
+async def add_journal_entry(data: dict) -> dict:
+    gain = _calc_gain_pct(data.get("entry_price"), data.get("exit_price"))
+    async with get_session_factory()() as session:
+        entry = Journal(
+            symbol=data["symbol"].upper(),
+            entry_price=data["entry_price"],
+            entry_date=data.get("entry_date", datetime.utcnow().strftime("%Y-%m-%d")),
+            exit_price=data.get("exit_price"),
+            exit_date=data.get("exit_date"),
+            tier=data.get("tier"),
+            score=data.get("score"),
+            notes=data.get("notes"),
+            outcome=data.get("outcome", "open"),
+            gain_pct=gain,
+            indicators_snapshot=json.dumps(data["indicators_snapshot"]) if data.get("indicators_snapshot") else None,
+            ai_analysis=data.get("ai_analysis"),
+            tags=json.dumps(data.get("tags", [])),
+        )
+        session.add(entry)
+        await session.commit()
+        await session.refresh(entry)
+    return _journal_to_dict(entry)
+
+
+async def update_journal_entry(entry_id: int, data: dict) -> Optional[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(select(Journal).where(Journal.id == entry_id))
+        entry = result.scalar_one_or_none()
+        if not entry:
+            return None
+        for field in ("exit_price", "exit_date", "notes", "outcome", "tier", "score", "ai_analysis"):
+            if field in data:
+                setattr(entry, field, data[field])
+        if "tags" in data:
+            entry.tags = json.dumps(data["tags"])
+        entry.gain_pct = _calc_gain_pct(entry.entry_price, entry.exit_price)
+        await session.commit()
+        await session.refresh(entry)
+    return _journal_to_dict(entry)
+
+
+async def delete_journal_entry(entry_id: int) -> bool:
+    async with get_session_factory()() as session:
+        result = await session.execute(select(Journal).where(Journal.id == entry_id))
+        entry = result.scalar_one_or_none()
+        if not entry:
+            return False
+        await session.delete(entry)
+        await session.commit()
+    return True
+
+
+async def get_journal_stats() -> dict:
+    entries = await get_journal()
+    closed = [e for e in entries if e["outcome"] in ("win", "loss")]
+    wins = [e for e in entries if e["outcome"] == "win"]
+    losses = [e for e in entries if e["outcome"] == "loss"]
+    open_trades = [e for e in entries if e["outcome"] == "open"]
+
+    win_rate = round(len(wins) / len(closed) * 100, 1) if closed else 0
+    avg_win = round(sum(e["gain_pct"] or 0 for e in wins) / len(wins), 2) if wins else 0
+    avg_loss = round(sum(e["gain_pct"] or 0 for e in losses) / len(losses), 2) if losses else 0
+    total_pnl = round(sum(e["gain_pct"] or 0 for e in closed), 2)
+
+    # Best tier by win rate
+    tier_stats: dict = {}
+    for e in closed:
+        t = e.get("tier") or "UNKNOWN"
+        tier_stats.setdefault(t, {"wins": 0, "total": 0})
+        tier_stats[t]["total"] += 1
+        if e["outcome"] == "win":
+            tier_stats[t]["wins"] += 1
+    best_tier = max(
+        tier_stats, key=lambda t: tier_stats[t]["wins"] / tier_stats[t]["total"]
+    ) if tier_stats else None
+
+    # Best score range
+    buckets: dict = {}
+    for e in closed:
+        sc = e.get("score") or 0
+        b = f"{int(sc // 10) * 10}-{int(sc // 10) * 10 + 10}"
+        buckets.setdefault(b, {"wins": 0, "total": 0})
+        buckets[b]["total"] += 1
+        if e["outcome"] == "win":
+            buckets[b]["wins"] += 1
+    best_range = max(
+        buckets, key=lambda b: buckets[b]["wins"] / buckets[b]["total"]
+    ) if buckets else None
+
+    return {
+        "total_trades": len(entries),
+        "open_trades": len(open_trades),
+        "closed_trades": len(closed),
+        "win_rate_pct": win_rate,
+        "avg_gain_winners": avg_win,
+        "avg_loss_losers": avg_loss,
+        "total_pnl_pct": total_pnl,
+        "best_tier": best_tier,
+        "best_score_range": best_range,
+        "wins": len(wins),
+        "losses": len(losses),
+    }
