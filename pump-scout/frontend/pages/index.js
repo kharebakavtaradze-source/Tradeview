@@ -45,6 +45,7 @@ export default function Home() {
   const [marketOpen, setMarketOpen] = useState(true);
   const [hypeStatus, setHypeStatus] = useState(null);
   const [hypeResults, setHypeResults] = useState([]);
+  const [hypeRunning, setHypeRunning] = useState(false);
 
   const fetchLatest = useCallback(async () => {
     try {
@@ -241,25 +242,37 @@ export default function Home() {
               : 'auto-runs every 30min during market hours'}
           </span>
           <button
+            disabled={hypeRunning}
             onClick={async () => {
+              setHypeRunning(true);
               await fetch(`${API_URL}/api/hype/run`, { method: 'POST' });
-              setTimeout(fetchHype, 15000);
+              // Poll for result — hype monitor takes ~15-30s
+              let attempts = 0;
+              const poll = setInterval(async () => {
+                attempts++;
+                await fetchHype();
+                if (attempts >= 8) {
+                  clearInterval(poll);
+                  setHypeRunning(false);
+                }
+              }, 5000);
             }}
             style={{
               marginLeft: 'auto',
-              background: 'rgba(170,0,255,0.12)',
+              background: hypeRunning ? 'rgba(170,0,255,0.06)' : 'rgba(170,0,255,0.12)',
               border: '1px solid rgba(170,0,255,0.35)',
-              color: '#cc44ff',
+              color: hypeRunning ? 'rgba(204,68,255,0.5)' : '#cc44ff',
               borderRadius: 4,
               fontSize: 10,
               fontWeight: 700,
               padding: '2px 10px',
-              cursor: 'pointer',
+              cursor: hypeRunning ? 'not-allowed' : 'pointer',
               letterSpacing: '0.05em',
               whiteSpace: 'nowrap',
+              transition: 'all 0.2s',
             }}
           >
-            ▶ RUN HYPE
+            {hypeRunning ? '⏳ SCANNING…' : '▶ RUN HYPE'}
           </button>
         </div>
 

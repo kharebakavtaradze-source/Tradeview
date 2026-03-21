@@ -251,6 +251,29 @@ export default function TickerCard({ data, hypeData }) {
               ))}
             </div>
           )}
+          {/* News headlines */}
+          {hypeData?.news?.headlines?.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {hypeData.news.has_sec_filing && (
+                <div style={{ fontSize: 10, color: '#ffd700', fontWeight: 700, marginBottom: 3 }}>
+                  ⚠ SEC FILING DETECTED
+                </div>
+              )}
+              {hypeData.news.headlines.slice(0, 3).map((h, i) => (
+                <div key={i} style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2, lineHeight: 1.3 }}>
+                  <span style={{
+                    opacity: 0.6, marginRight: 4,
+                    color: h.type === 'sec' ? '#ffd700' : h.type === 'real' ? 'var(--green)' : h.type === 'pr' ? 'var(--text-muted)' : 'var(--text-muted)',
+                  }}>
+                    [{h.type.toUpperCase()}]
+                  </span>
+                  {h.title.length > 70 ? h.title.slice(0, 70) + '…' : h.title}
+                  <span style={{ opacity: 0.45, marginLeft: 4 }}>{h.hours_ago}h ago</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {hypeData?.ai_analysis?.summary && (
             <div className={styles.hypeAI}>
               🤖 {hypeData.ai_analysis.summary}

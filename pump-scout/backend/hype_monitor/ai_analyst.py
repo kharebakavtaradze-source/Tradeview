@@ -37,6 +37,7 @@ async def analyze(
     velocity: dict[str, Any],
     divergences: list[dict[str, Any]],
     scan_result: dict[str, Any],
+    news_detail: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Get AI analysis of hype/volume divergence for a ticker.
@@ -58,6 +59,13 @@ async def analyze(
     indicators = scan_result.get("indicators", {})
     score = scan_result.get("score", {})
 
+    nd = news_detail or {}
+    headlines = nd.get("headlines", [])
+    news_lines = "\n".join(
+        f"  [{h['hours_ago']}h ago] [{h['publisher']}] {h['title']} [{h['type'].upper()}]"
+        for h in headlines[:5]
+    ) or "  (none)"
+
     prompt = (
         f"Ticker: {ticker}\n"
         f"Scan tier: {score.get('tier', 'WATCH')} | Score: {score.get('total_score', 0):.0f}/100\n"
@@ -69,6 +77,10 @@ async def analyze(
         f"  Mentions: {hype_score.get('mention_counts', {})}\n"
         f"  Velocity 2h: {velocity.get('combined_velocity_2h', 0):.2f}x\n"
         f"  Velocity 6h: {velocity.get('velocity_6h', 0):.2f}x\n\n"
+        f"RECENT NEWS (last 7d):\n{news_lines}\n"
+        f"  SEC filings detected: {'YES' if nd.get('has_sec_filing') else 'no'}\n"
+        f"  Real news articles (24h): {nd.get('yahoo_count_24h', 0) + nd.get('finviz_count_24h', 0)}\n"
+        f"  Press releases (0.5x weight): counted in weighted score\n\n"
         f"DIVERGENCES DETECTED: {[d['type'] for d in divergences] or 'none'}\n"
         f"{json.dumps([{'type': d['type'], 'desc': d['description']} for d in divergences], indent=2)}\n\n"
         f"Respond with JSON matching this schema:\n{json.dumps(_SCHEMA, indent=2)}"
