@@ -20,10 +20,12 @@
   border-color: rgba(255, 215, 0, 0.6);
 }
 
-.cardArm    { border-color: rgba(0, 229, 255, 0.25); }
-.cardBase   { border-color: rgba(0, 200, 83, 0.2); }
-.cardStealth{ border-color: rgba(170, 0, 255, 0.3); box-shadow: 0 0 10px rgba(170, 0, 255, 0.15); }
-.cardWatch  { border-color: rgba(255, 136, 0, 0.2); }
+.cardArm      { border-color: rgba(0, 229, 255, 0.25); }
+.cardBase     { border-color: rgba(0, 200, 83, 0.2); }
+.cardStealth  { border-color: rgba(170, 0, 255, 0.3); box-shadow: 0 0 10px rgba(170, 0, 255, 0.15); }
+.cardWatch    { border-color: rgba(255, 136, 0, 0.2); }
+.cardSympathy { border-color: rgba(0, 229, 255, 0.3); box-shadow: 0 0 8px rgba(0, 229, 255, 0.1); }
+.cardFlow     { border-color: rgba(170, 0, 255, 0.2); }
 
 /* ── Card Header ────────────────────────────────── */
 .header {
@@ -55,12 +57,14 @@
   letter-spacing: 0.08em;
 }
 
-.badgeFire    { background: rgba(255,215,0,0.15);  color: var(--fire);  border: 1px solid rgba(255,215,0,0.4); }
-.badgeArm     { background: rgba(0,229,255,0.1);   color: var(--arm);   border: 1px solid rgba(0,229,255,0.3); }
-.badgeBase    { background: rgba(0,200,83,0.1);    color: var(--base);  border: 1px solid rgba(0,200,83,0.3); }
-.badgeStealth { background: rgba(170,0,255,0.12);  color: #cc44ff;      border: 1px solid rgba(170,0,255,0.4); }
-.badgeWatch   { background: rgba(255,136,0,0.1);   color: var(--watch); border: 1px solid rgba(255,136,0,0.3); }
-.badgeNone    { background: rgba(107,107,154,0.1); color: var(--text-muted); border: 1px solid var(--border); }
+.badgeFire     { background: rgba(255,215,0,0.15);  color: var(--fire);  border: 1px solid rgba(255,215,0,0.4); }
+.badgeArm      { background: rgba(0,229,255,0.1);   color: var(--arm);   border: 1px solid rgba(0,229,255,0.3); }
+.badgeBase     { background: rgba(0,200,83,0.1);    color: var(--base);  border: 1px solid rgba(0,200,83,0.3); }
+.badgeStealth  { background: rgba(170,0,255,0.12);  color: #cc44ff;      border: 1px solid rgba(170,0,255,0.4); }
+.badgeWatch    { background: rgba(255,136,0,0.1);   color: var(--watch); border: 1px solid rgba(255,136,0,0.3); }
+.badgeSympathy { background: rgba(0,229,255,0.1);   color: #00e5ff;      border: 1px solid rgba(0,229,255,0.4); }
+.badgeFlow     { background: rgba(170,0,255,0.1);   color: #aa00ff;      border: 1px solid rgba(170,0,255,0.35); }
+.badgeNone     { background: rgba(107,107,154,0.1); color: var(--text-muted); border: 1px solid var(--border); }
 
 .score {
   font-size: 11px;
@@ -262,3 +266,47 @@
   background: rgba(0,229,255,0.08);
   text-decoration: none;
 }
+
+/* ── Sympathy Banner ────────────────────────────── */
+.sympathyBanner {
+  background: #0a1a2a;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin: 6px 12px 0;
+  font-size: 11px;
+  color: #00e5ff;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sympathyLabel {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+/* ── Institutional Flow Banner ──────────────────── */
+.instFlowBanner {
+  background: #1a0a2a;
+  border: 1px solid rgba(170, 0, 255, 0.3);
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin: 6px 12px 0;
+  font-size: 11px;
+  color: #aa00ff;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.instFlowLabel {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.flowStrengthStrong { color: #ffd700; font-weight: 700; }
+.flowStrengthMedium { color: #00e5ff; }
+.flowStrengthEarly  { color: #aa00ff; }

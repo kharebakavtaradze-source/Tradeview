@@ -7,9 +7,22 @@ import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v5.0';
-const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'WATCH', 'GOGA'];
-const TIER_LABELS = { FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH', WATCH: '⚡ WATCH', GOGA: '🐂 GOGA' };
+const VERSION = 'v7.0';
+const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'SYMPATHY', 'FLOW', 'WATCH'];
+const TIER_LABELS = {
+  FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH',
+  SYMPATHY: '🔗 SYMPATHY', FLOW: '🏦 FLOW', WATCH: '⚡ WATCH',
+};
+
+function isPerfectStorm(r) {
+  const conditions = [
+    r.indicators?.stealth?.is_stealth,
+    r.indicators?.institutional_flow?.is_institutional,
+    r.sympathy?.is_sympathy,
+    ['ARM', 'FIRE', 'STEALTH_ARM'].includes(r.regime?.state),
+  ];
+  return conditions.filter(Boolean).length >= 2;
+}
 
 function isMarketOpen() {
   const now = new Date();
@@ -93,25 +106,31 @@ export default function Home() {
 
   // Filter results by active tab
   const results = scanData?.results || [];
-  const gogaResults = results.filter((r) => (r.indicators?.stealth?.vol_ratio ?? 0) >= 2.0);
-  const filtered = activeTab === 'GOGA'
-    ? gogaResults
+  const sympathyResults = results.filter((r) => r.sympathy?.is_sympathy);
+  const flowResults = results.filter((r) => r.indicators?.institutional_flow?.is_institutional);
+  const perfectStormResults = results.filter(isPerfectStorm);
+
+  const filtered =
+    activeTab === 'SYMPATHY' ? sympathyResults
+    : activeTab === 'FLOW' ? flowResults
     : results.filter((r) => r.score?.tier === activeTab);
 
   // Auto-select first non-empty tab
   useEffect(() => {
     if (!scanData) return;
-    const tierCounts = scanData.tier_counts || {};
+    const tc = scanData.tier_counts || {};
     for (const tier of TIERS) {
-      if (tier === 'GOGA') continue; // skip GOGA in auto-select
-      if (tierCounts[tier] > 0) {
-        setActiveTab(tier);
-        break;
-      }
+      if (tier === 'SYMPATHY' && sympathyResults.length > 0) { setActiveTab(tier); return; }
+      if (tier === 'FLOW' && flowResults.length > 0) continue; // don't auto-jump to FLOW
+      if (tc[tier] > 0) { setActiveTab(tier); return; }
     }
-  }, [scanData]);
+  }, [scanData]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const tierCounts = { ...(scanData?.tier_counts || {}), GOGA: gogaResults.length };
+  const tierCounts = {
+    ...(scanData?.tier_counts || {}),
+    SYMPATHY: sympathyResults.length,
+    FLOW: flowResults.length,
+  };
 
   return (
     <>
@@ -165,6 +184,16 @@ export default function Home() {
           <div className={styles.loading}>
             <div className={styles.loadingSpinner} />
             <div>Loading scan data...</div>
+          </div>
+        )}
+
+        {/* Perfect Storm banner */}
+        {!loading && perfectStormResults.length > 0 && (
+          <div className={styles.perfectStorm}>
+            <span className={styles.perfectStormLabel}>⚡ PERFECT STORM</span>
+            {perfectStormResults.map((r) => (
+              <span key={r.symbol} className={styles.perfectStormTicker}>{r.symbol}</span>
+            ))}
           </div>
         )}
 
