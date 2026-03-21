@@ -1,0 +1,360 @@
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 16px 40px;
+  min-height: 100vh;
+}
+
+/* ── Nav ─────────────────────────────────────────── */
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+}
+
+.backLink {
+  color: var(--text-muted);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  transition: color 0.15s;
+}
+.backLink:hover { color: var(--cyan); text-decoration: none; }
+
+.navTitle {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--cyan);
+}
+
+.navActions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Buttons ─────────────────────────────────────── */
+.btn {
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn:hover { color: var(--text); border-color: var(--text-muted); }
+
+.btnPrimary {
+  background: rgba(0,229,255,0.1);
+  border-color: rgba(0,229,255,0.4);
+  color: var(--cyan);
+}
+.btnPrimary:hover { background: rgba(0,229,255,0.18); }
+
+.btnGold {
+  background: rgba(255,215,0,0.08);
+  border-color: rgba(255,215,0,0.35);
+  color: var(--gold);
+}
+.btnGold:hover { background: rgba(255,215,0,0.15); }
+
+.btnDanger {
+  background: rgba(255,68,102,0.08);
+  border-color: rgba(255,68,102,0.3);
+  color: var(--red);
+}
+.btnDanger:hover { background: rgba(255,68,102,0.15); }
+
+/* ── Stats grid ──────────────────────────────────── */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 18px 0 14px;
+}
+
+.statCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.statLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+
+.statValue {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.statMeta { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.win  { color: var(--green); }
+.loss { color: var(--red); }
+.neutral { color: var(--text-muted); }
+
+/* ── Filter bar ──────────────────────────────────── */
+.filterBar {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.filterTab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  padding: 7px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.15s;
+}
+.filterTab:hover { color: var(--text); }
+.filterTabActive { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+/* ── Trade list ──────────────────────────────────── */
+.tradeList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tradeCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px 16px;
+  align-items: start;
+}
+
+.tradeCardWin  { border-left: 3px solid var(--green); }
+.tradeCardLoss { border-left: 3px solid var(--red); }
+.tradeCardOpen { border-left: 3px solid var(--cyan); }
+.tradeCardSkip { border-left: 3px solid var(--text-muted); }
+
+.tradeMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tradeSymbol {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.tradeBadge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+  width: fit-content;
+}
+
+.tradeBody {
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tradeRow { display: flex; gap: 16px; flex-wrap: wrap; }
+.tradeLabel { color: var(--text-muted); }
+.tradeNotes { color: var(--text-muted); font-style: italic; margin-top: 4px; }
+.tradeTags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.tradeTag {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0,229,255,0.08);
+  color: var(--cyan);
+  border: 1px solid rgba(0,229,255,0.2);
+}
+
+.tradeActions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.gainBadge {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.outcomeBadge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+}
+.outcomeWin  { background: rgba(0,200,83,0.12);  color: var(--green); border: 1px solid rgba(0,200,83,0.3); }
+.outcomeLoss { background: rgba(255,68,102,0.1); color: var(--red);   border: 1px solid rgba(255,68,102,0.3); }
+.outcomeOpen { background: rgba(0,229,255,0.08); color: var(--cyan);  border: 1px solid rgba(0,229,255,0.25); }
+.outcomeSkip { background: rgba(107,107,154,0.1); color: var(--text-muted); border: 1px solid var(--border); }
+
+.actionBtns { display: flex; gap: 4px; margin-top: 4px; }
+.smallBtn {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.smallBtn:hover { color: var(--text); }
+
+.empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ── Modal overlay ───────────────────────────────── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  width: 100%;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.modalTitle {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--cyan);
+  margin-bottom: 16px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.formFull { grid-column: 1 / -1; }
+
+.label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+
+.input, .select, .textarea {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+  font-family: inherit;
+}
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--cyan);
+}
+.textarea { resize: vertical; min-height: 60px; }
+
+.tagsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tagCheck {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.modalFooter {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+/* ── AI insights modal ───────────────────────────── */
+.insightsModal {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  width: 100%;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.insightsText {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-muted);
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0,229,255,0.3);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
