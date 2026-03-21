@@ -42,6 +42,13 @@ from scanner.runner import run_scan
 from scheduler import start_scheduler, stop_scheduler
 from alerts.telegram import get_status as telegram_status
 from alerts.telegram import send_scan_alert, send_test_alert
+from hype_monitor.monitor import (
+    get_alert_history,
+    get_hype_for_ticker,
+    get_latest_hype_results,
+    get_status as hype_status,
+    run_hype_monitor,
+)
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
 
@@ -61,7 +68,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Pump Scout API",
     description="Automated small-cap volume anomaly scanner",
-    version="1.0.0",
+    version="9.0.0",
     lifespan=lifespan,
 )
 
@@ -103,7 +110,7 @@ async def health():
     return {
         "status": "ok",
         "scan_running": _scan_running,
-        "version": "1.0.0",
+        "version": "9.0.0",
     }
 
 
@@ -312,6 +319,42 @@ async def journal_insights():
         return {"insights": response.content[0].text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Hype Monitor routes ──────────────────────────────────────────────────────
+
+@app.get("/api/hype/status")
+async def hype_monitor_status():
+    """Return hype monitor status and latest cycle summary."""
+    return hype_status()
+
+
+@app.get("/api/hype/results")
+async def hype_monitor_results():
+    """Return full results from the latest hype monitor cycle."""
+    return {"results": get_latest_hype_results()}
+
+
+@app.get("/api/hype/{symbol}")
+async def hype_for_ticker(symbol: str):
+    """Return hype data for a specific ticker from the latest cycle."""
+    result = get_hype_for_ticker(symbol.upper())
+    if not result:
+        raise HTTPException(status_code=404, detail=f"{symbol.upper()} not in latest hype monitor results")
+    return result
+
+
+@app.get("/api/hype/alerts/history")
+async def hype_alert_history():
+    """Return recent hype alert history."""
+    return {"alerts": get_alert_history()}
+
+
+@app.post("/api/hype/run")
+async def trigger_hype_monitor(background_tasks: BackgroundTasks):
+    """Manually trigger a hype monitor cycle."""
+    background_tasks.add_task(run_hype_monitor)
+    return {"status": "started", "message": "Hype monitor cycle started in background"}
 
 
 # ─── Alert routes ─────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from scanner.runner import run_scan
 from database import save_scan
+from hype_monitor.monitor import run_hype_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,15 @@ async def _run_and_save():
         logger.info(f"Scheduled scan complete — saved as scan #{scan_id}")
     except Exception as e:
         logger.error(f"Scheduled scan failed: {e}", exc_info=True)
+
+
+async def _run_hype_monitor():
+    """Run one hype monitor cycle."""
+    try:
+        logger.info("Hype monitor starting...")
+        await run_hype_monitor()
+    except Exception as e:
+        logger.error(f"Hype monitor failed: {e}", exc_info=True)
 
 
 def start_scheduler():
@@ -76,8 +86,23 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # Hype monitor: every 30 min, Mon–Fri, 08:00–17:00 ET
+    scheduler.add_job(
+        _run_hype_monitor,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour="8-16",
+            minute="0,30",
+            timezone=EASTERN_TZ,
+        ),
+        id="hype_monitor_30min",
+        name="Hype Monitor (every 30min, market hours)",
+        replace_existing=True,
+        misfire_grace_time=120,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started — 3 daily scan jobs registered (8AM, 9:30AM, 12PM ET weekdays)")
+    logger.info("Scheduler started — 3 scan jobs + hype monitor registered")
 
 
 def stop_scheduler():
