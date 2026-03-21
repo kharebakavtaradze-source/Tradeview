@@ -267,24 +267,32 @@ async def fetch_finviz_news(ticker: str, client: httpx.AsyncClient | None = None
 
 def _empty_news_detail() -> dict:
     return {
-        "count_24h": 0, "count_7d": 0, "weighted_count": 0.0,
+        "count_24h": 0, "count_2_7d": 0, "count_7d": 0, "weighted_count": 0.0,
         "has_sec_filing": False, "has_real_news": False,
-        "headlines": [], "error": True,
+        "headlines": [], "headlines_7d": [], "error": True,
     }
 
 
 def _build_news_detail(raw_articles: list[dict], source_tag: str = "") -> dict:
-    """Classify articles and build the rich news detail dict."""
+    """
+    Classify articles and build the rich news detail dict.
+    Scoring uses a weighted time window:
+      count_24h   × 1.0  (fresh news — full weight)
+      count_2_7d  × 0.4  (recent but not today — partial credit)
+    SEC filings and analyst upgrades from the past week stay visible.
+    """
     now = _now_utc()
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d = now - timedelta(days=7)
 
     count_24h = 0
+    count_2_7d = 0   # articles older than 24h but within 7 days
     count_7d = 0
-    weighted_24h = 0.0
+    weighted_count = 0.0
     has_sec = False
     has_real = False
-    headlines = []
+    headlines_24h = []   # for display — freshest only
+    headlines_7d = []    # full 7-day list for /api/hype/{symbol}
 
     for article in raw_articles:
         ts = article.get("ts")
@@ -296,64 +304,92 @@ def _build_news_detail(raw_articles: list[dict], source_tag: str = "") -> dict:
         title = article.get("title", "")
         publisher = article.get("publisher", "")
         art_type, weight = _classify_article(title, publisher)
+        h_ago = _hours_ago(ts)
 
         in_24h = ts >= cutoff_24h
         in_7d = ts >= cutoff_7d
 
         if in_7d:
             count_7d += 1
-        if in_24h:
-            count_24h += 1
-            weighted_24h += weight
             if art_type == "sec":
                 has_sec = True
             if art_type in ("real", "sec"):
                 has_real = True
 
-        if in_24h and len(headlines) < 8:
-            headlines.append({
-                "title": title,
-                "publisher": publisher,
-                "hours_ago": _hours_ago(ts),
-                "type": art_type,
-                "weight": weight,
-            })
+            if len(headlines_7d) < 20:
+                headlines_7d.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "hours_ago": h_ago,
+                    "type": art_type,
+                    "weight": weight,
+                })
 
-    headlines.sort(key=lambda h: h["hours_ago"])
+        if in_24h:
+            count_24h += 1
+            weighted_count += weight * 1.0
+            if len(headlines_24h) < 8:
+                headlines_24h.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "hours_ago": h_ago,
+                    "type": art_type,
+                    "weight": weight,
+                })
+        elif in_7d:
+            count_2_7d += 1
+            weighted_count += weight * 0.4  # older news contributes at 40%
+
+    headlines_24h.sort(key=lambda h: h["hours_ago"])
+    headlines_7d.sort(key=lambda h: h["hours_ago"])
 
     return {
         "count_24h": count_24h,
+        "count_2_7d": count_2_7d,
         "count_7d": count_7d,
-        "weighted_count": round(weighted_24h, 2),
+        "weighted_count": round(weighted_count, 2),
         "has_sec_filing": has_sec,
         "has_real_news": has_real,
-        "headlines": headlines,
+        "headlines": headlines_24h,        # fresh 24h — shown on cards
+        "headlines_7d": headlines_7d,      # full 7d — returned by /api/hype/{symbol}
         "error": False,
     }
 
 
 def _merge_news_details(yahoo: dict, finviz: dict) -> dict:
-    """Merge Yahoo + Finviz news, deduplicating by first-40-char title match."""
-    all_headlines = list(yahoo.get("headlines", []))
-    seen_prefixes = {h["title"][:40].lower() for h in all_headlines}
+    """
+    Merge Yahoo + Finviz news, deduplicating by first-40-char title match.
+    Produces both a 24h headlines list (for cards) and a 7d list (for /api/hype/{symbol}).
+    weighted_count already incorporates the time-decay window from _build_news_detail.
+    """
+    def _dedup_merge(a_list: list, b_list: list, limit: int) -> list:
+        merged = list(a_list)
+        seen = {h["title"][:40].lower() for h in merged}
+        for h in b_list:
+            prefix = h["title"][:40].lower()
+            if prefix not in seen:
+                merged.append(h)
+                seen.add(prefix)
+        merged.sort(key=lambda h: h["hours_ago"])
+        return merged[:limit]
 
-    for h in finviz.get("headlines", []):
-        prefix = h["title"][:40].lower()
-        if prefix not in seen_prefixes:
-            all_headlines.append(h)
-            seen_prefixes.add(prefix)
+    headlines_24h = _dedup_merge(yahoo.get("headlines", []), finviz.get("headlines", []), 8)
+    headlines_7d = _dedup_merge(yahoo.get("headlines_7d", []), finviz.get("headlines_7d", []), 20)
 
-    all_headlines.sort(key=lambda h: h["hours_ago"])
+    # Combine weighted counts (already time-decayed inside each source's _build_news_detail)
+    weighted = yahoo.get("weighted_count", 0.0) + finviz.get("weighted_count", 0.0)
 
-    weighted = yahoo.get("weighted_count", 0) + finviz.get("count_24h", 0) * 0.8
     return {
         "yahoo_count_24h": yahoo.get("count_24h", 0),
         "finviz_count_24h": finviz.get("count_24h", 0),
         "total_count_24h": yahoo.get("count_24h", 0) + finviz.get("count_24h", 0),
+        "count_2_7d": yahoo.get("count_2_7d", 0) + finviz.get("count_2_7d", 0),
+        "count_7d": yahoo.get("count_7d", 0) + finviz.get("count_7d", 0),
         "weighted_count": round(weighted, 2),
         "has_sec_filing": yahoo.get("has_sec_filing", False) or finviz.get("has_sec_filing", False),
         "has_real_news": yahoo.get("has_real_news", False) or finviz.get("has_real_news", False),
-        "headlines": all_headlines[:8],
+        "headlines": headlines_24h,
+        "headlines_7d": headlines_7d,
         "error": yahoo.get("error", True) and finviz.get("error", True),
     }
 
