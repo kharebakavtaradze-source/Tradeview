@@ -49,6 +49,10 @@ from hype_monitor.monitor import (
     get_status as hype_status,
     run_hype_monitor,
 )
+from hype_monitor.fetcher import fetch_all
+from hype_monitor.velocity import calc_velocity
+from hype_monitor.hype_score import calc_hype_score
+from hype_monitor.divergence import detect_divergences
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
 
@@ -321,7 +325,7 @@ async def journal_insights():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── Hype Monitor routes ──────────────────────────────────────────────────────
+# ─── Hype Monitor routes (specific routes BEFORE parameterized {symbol}) ───────
 
 @app.get("/api/hype/status")
 async def hype_monitor_status():
@@ -335,13 +339,12 @@ async def hype_monitor_results():
     return {"results": get_latest_hype_results()}
 
 
-@app.get("/api/hype/{symbol}")
-async def hype_for_ticker(symbol: str):
-    """Return hype data for a specific ticker from the latest cycle."""
-    result = get_hype_for_ticker(symbol.upper())
-    if not result:
-        raise HTTPException(status_code=404, detail=f"{symbol.upper()} not in latest hype monitor results")
-    return result
+@app.get("/api/hype/run")
+@app.post("/api/hype/run")
+async def trigger_hype_monitor(background_tasks: BackgroundTasks):
+    """Manually trigger a hype monitor cycle (GET or POST)."""
+    background_tasks.add_task(run_hype_monitor)
+    return {"status": "started", "message": "Hype monitor cycle started in background"}
 
 
 @app.get("/api/hype/alerts/history")
@@ -350,11 +353,30 @@ async def hype_alert_history():
     return {"alerts": get_alert_history()}
 
 
-@app.post("/api/hype/run")
-async def trigger_hype_monitor(background_tasks: BackgroundTasks):
-    """Manually trigger a hype monitor cycle."""
-    background_tasks.add_task(run_hype_monitor)
-    return {"status": "started", "message": "Hype monitor cycle started in background"}
+@app.get("/api/hype/{symbol}")
+async def hype_for_ticker(symbol: str):
+    """
+    Return hype data for a specific ticker.
+    If not in the monitor cache, fetches live data immediately — never returns 404.
+    """
+    ticker = symbol.upper()
+    result = get_hype_for_ticker(ticker)
+    if result:
+        return result
+
+    # Live fetch for tickers not yet in the monitor cache
+    raw = await fetch_all(ticker)
+    velocity = calc_velocity(raw)
+    hype_score = calc_hype_score(raw, velocity)
+    divergences = detect_divergences(hype_score, velocity, {})
+    return {
+        "ticker": ticker,
+        "hype_score": hype_score,
+        "velocity": velocity,
+        "divergences": divergences,
+        "ai_analysis": None,
+        "source": "live",
+    }
 
 
 # ─── Alert routes ─────────────────────────────────────────────────────────────
