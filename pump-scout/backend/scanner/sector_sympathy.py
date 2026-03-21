@@ -5,66 +5,102 @@ haven't moved yet often follow within 1-3 days.
 """
 import asyncio
 import logging
-from typing import Optional
 
-import aiohttp
+import httpx
 
 logger = logging.getLogger(__name__)
 
 # In-memory cache — sectors change rarely, per-process cache is fine
 _sector_cache: dict = {}
 
+_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-async def get_sector(ticker: str, session: Optional[aiohttp.ClientSession] = None) -> str:
-    """Fetch sector for a ticker from Yahoo Finance assetProfile. Cached in-process."""
+# Known sector overrides for popular small-caps (reduces API calls + avoids rate limits)
+_KNOWN_SECTORS: dict[str, str] = {
+    # Crypto miners
+    "MARA": "Financial Services", "RIOT": "Financial Services", "CLSK": "Financial Services",
+    "HUT": "Financial Services", "BITF": "Financial Services", "WULF": "Financial Services",
+    "BTBT": "Financial Services", "CIFR": "Financial Services", "IREN": "Financial Services",
+    # EV
+    "NKLA": "Consumer Cyclical", "FFIE": "Consumer Cyclical", "GOEV": "Consumer Cyclical",
+    "MULN": "Consumer Cyclical", "WKHS": "Industrials", "RIVN": "Consumer Cyclical",
+    "LCID": "Consumer Cyclical", "PTRA": "Industrials",
+    # AI/tech
+    "BBAI": "Technology", "SOUN": "Technology", "AIXI": "Technology",
+    "ASTS": "Communication Services", "SATL": "Communication Services",
+    # Biotech
+    "BNGO": "Healthcare", "NVAX": "Healthcare", "OCGN": "Healthcare",
+    "SAVA": "Healthcare", "SENS": "Healthcare",
+}
+
+
+async def _fetch_sector_httpx(ticker: str, client: httpx.AsyncClient) -> str:
+    """Fetch sector from Yahoo Finance assetProfile via httpx."""
+    # Try query2 first (more reliable on some networks), then query1
+    for host in ("query2.finance.yahoo.com", "query1.finance.yahoo.com"):
+        url = f"https://{host}/v10/finance/quoteSummary/{ticker}?modules=assetProfile"
+        try:
+            resp = await client.get(url, headers=_HEADERS)
+            if resp.status_code == 200:
+                data = resp.json()
+                result = data.get("quoteSummary", {}).get("result") or [{}]
+                sector = result[0].get("assetProfile", {}).get("sector") or ""
+                if sector:
+                    return sector
+        except Exception:
+            continue
+    return "Unknown"
+
+
+async def get_sector(ticker: str) -> str:
+    """Fetch sector for a ticker. Uses known map → cache → Yahoo API."""
+    ticker = ticker.upper()
+
+    # Check known sectors first (instant, no API call)
+    if ticker in _KNOWN_SECTORS:
+        return _KNOWN_SECTORS[ticker]
+
+    # Check cache
     if ticker in _sector_cache:
         return _sector_cache[ticker]
 
-    url = (
-        f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
-        f"?modules=assetProfile"
-    )
-    headers = {"User-Agent": "Mozilla/5.0"}
-    close_session = session is None
-    if close_session:
-        session = aiohttp.ClientSession()
-
     try:
-        async with session.get(
-            url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
-        ) as resp:
-            if resp.status != 200:
-                return "Unknown"
-            data = await resp.json(content_type=None)
-            result = data.get("quoteSummary", {}).get("result") or [{}]
-            profile = result[0].get("assetProfile", {})
-            sector = profile.get("sector") or "Unknown"
-            _sector_cache[ticker] = sector
-            return sector
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            sector = await _fetch_sector_httpx(ticker, client)
     except Exception as e:
         logger.debug(f"get_sector failed for {ticker}: {e}")
-        return "Unknown"
-    finally:
-        if close_session:
-            await session.close()
+        sector = "Unknown"
+
+    _sector_cache[ticker] = sector
+    return sector
 
 
 async def get_sectors_batch(tickers: list) -> dict:
-    """Fetch sectors for multiple tickers concurrently (max 10 at a time)."""
-    semaphore = asyncio.Semaphore(10)
+    """Fetch sectors for multiple tickers concurrently (max 8 at a time)."""
+    semaphore = asyncio.Semaphore(8)
 
-    async def fetch_one(ticker: str, session: aiohttp.ClientSession):
+    async def fetch_one(ticker: str, client: httpx.AsyncClient):
         async with semaphore:
-            sector = await get_sector(ticker, session=session)
+            ticker = ticker.upper()
+            if ticker in _KNOWN_SECTORS:
+                return ticker, _KNOWN_SECTORS[ticker]
+            if ticker in _sector_cache:
+                return ticker, _sector_cache[ticker]
+            sector = await _fetch_sector_httpx(ticker, client)
+            _sector_cache[ticker] = sector
             return ticker, sector
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_one(t, session) for t in tickers]
-        raw = await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            tasks = [fetch_one(t, client) for t in tickers]
+            raw = await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception as e:
+        logger.error(f"get_sectors_batch failed: {e}")
+        raw = []
 
     out = {}
     for r in raw:
-        if isinstance(r, tuple):
+        if isinstance(r, tuple) and len(r) == 2:
             out[r[0]] = r[1]
     return out
 

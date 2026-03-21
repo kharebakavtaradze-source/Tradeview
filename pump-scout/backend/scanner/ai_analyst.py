@@ -11,11 +11,11 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
-# Try newest model first, fall back to older if unavailable
+# Sonnet for quality analysis; Haiku as fallback for speed/cost
 MODELS = [
+    "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
     "claude-3-5-haiku-20241022",
-    "claude-3-haiku-20240307",
 ]
 
 
