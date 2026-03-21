@@ -375,6 +375,7 @@ async def hype_for_ticker(symbol: str):
         "velocity": velocity,
         "divergences": divergences,
         "ai_analysis": None,
+        "news": raw.get("news_detail", {}),
         "source": "live",
     }
 
