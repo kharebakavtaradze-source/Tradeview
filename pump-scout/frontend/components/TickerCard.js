@@ -251,28 +251,46 @@ export default function TickerCard({ data, hypeData }) {
               ))}
             </div>
           )}
-          {/* News headlines */}
-          {hypeData?.news?.headlines?.length > 0 && (
-            <div style={{ marginTop: 6 }}>
-              {hypeData.news.has_sec_filing && (
-                <div style={{ fontSize: 10, color: '#ffd700', fontWeight: 700, marginBottom: 3 }}>
-                  ⚠ SEC FILING DETECTED
-                </div>
-              )}
-              {hypeData.news.headlines.slice(0, 3).map((h, i) => (
-                <div key={i} style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2, lineHeight: 1.3 }}>
-                  <span style={{
-                    opacity: 0.6, marginRight: 4,
-                    color: h.type === 'sec' ? '#ffd700' : h.type === 'real' ? 'var(--green)' : h.type === 'pr' ? 'var(--text-muted)' : 'var(--text-muted)',
-                  }}>
-                    [{h.type.toUpperCase()}]
-                  </span>
-                  {h.title.length > 70 ? h.title.slice(0, 70) + '…' : h.title}
-                  <span style={{ opacity: 0.45, marginLeft: 4 }}>{h.hours_ago}h ago</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* News headlines — 24h first, fall back to 7d if nothing today */}
+          {(() => {
+            const news = hypeData?.news;
+            if (!news) return null;
+            const has24h = (news.headlines?.length || 0) > 0;
+            const shown = has24h ? news.headlines : (news.headlines_7d?.slice(0, 3) || []);
+            const is7dFallback = !has24h && shown.length > 0;
+            if (shown.length === 0 && !news.has_sec_filing) return null;
+            return (
+              <div style={{ marginTop: 6 }}>
+                {news.has_sec_filing && (
+                  <div style={{ fontSize: 10, color: '#ffd700', fontWeight: 700, marginBottom: 3 }}>
+                    ⚠ SEC FILING DETECTED
+                  </div>
+                )}
+                {is7dFallback && (
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', opacity: 0.6, marginBottom: 2 }}>
+                    recent (last 7d):
+                  </div>
+                )}
+                {shown.slice(0, 3).map((h, i) => (
+                  <div key={i} style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2, lineHeight: 1.3 }}>
+                    <span style={{
+                      opacity: 0.6, marginRight: 4,
+                      color: h.type === 'sec' ? '#ffd700' : h.type === 'real' ? 'var(--green)' : 'var(--text-muted)',
+                    }}>
+                      [{h.type.toUpperCase()}]
+                    </span>
+                    {h.title.length > 70 ? h.title.slice(0, 70) + '…' : h.title}
+                    <span style={{ opacity: 0.45, marginLeft: 4 }}>{h.hours_ago}h ago</span>
+                  </div>
+                ))}
+                {news.count_2_7d > 0 && !has24h && (
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', opacity: 0.5, marginTop: 3 }}>
+                    +{news.count_2_7d} more articles this week (0.4× weight in score)
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {hypeData?.ai_analysis?.summary && (
             <div className={styles.hypeAI}>

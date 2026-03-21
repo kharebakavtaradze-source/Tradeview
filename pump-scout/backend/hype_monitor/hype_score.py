@@ -111,6 +111,7 @@ def calc_hype_score(raw_data: dict[str, Any], velocity: dict[str, Any]) -> dict[
             "stocktwits": twits_24h,
             "reddit": reddit_24h,
             "news_raw": news_detail.get("total_count_24h", 0),
+            "news_2_7d": news_detail.get("count_2_7d", 0),
             "news_weighted": round(news_weighted, 1),
         },
         "hype_tier": tier,
