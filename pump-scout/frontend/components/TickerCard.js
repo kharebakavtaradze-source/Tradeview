@@ -44,9 +44,12 @@ function getCardClass(tier) {
   return map[tier] || '';
 }
 
-export default function TickerCard({ data }) {
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+export default function TickerCard({ data, hypeData }) {
   const [expanded, setExpanded] = useState(false);
   const [showJournal, setShowJournal] = useState(false);
+  const [showHype, setShowHype] = useState(false);
 
   const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector } = data;
 
@@ -60,6 +63,11 @@ export default function TickerCard({ data }) {
   const stealth = indicators.stealth || {};
   const instFlow = indicators.institutional_flow || {};
   const isStealth = tier === 'STEALTH' || stealth.is_stealth;
+
+  // Hype monitor data
+  const hypeScore = hypeData?.hype_score || null;
+  const hypeDivergences = hypeData?.divergences || [];
+  const hypeVelocity = hypeData?.velocity || null;
   const rsiData = indicators.rsi || {};
   const gapData = indicators.gap || {};
   const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
@@ -86,6 +94,30 @@ export default function TickerCard({ data }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className={styles.score}>{totalScore.toFixed(0)}</span>
+          {hypeScore && (
+            <button
+              onClick={e => { e.stopPropagation(); setShowHype(!showHype); }}
+              title={`Hype: ${hypeScore.hype_index}/100 (${hypeScore.hype_tier})`}
+              style={{
+                background: hypeScore.hype_tier === 'VIRAL' ? 'rgba(255,68,102,0.15)'
+                  : hypeScore.hype_tier === 'HOT' ? 'rgba(255,136,0,0.12)'
+                  : 'none',
+                border: hypeScore.hype_tier === 'COLD' ? 'none' : '1px solid rgba(170,0,255,0.3)',
+                borderRadius: 3,
+                cursor: 'pointer',
+                fontSize: 10,
+                fontWeight: 700,
+                padding: '1px 5px',
+                color: hypeScore.hype_tier === 'VIRAL' ? '#ff4466'
+                  : hypeScore.hype_tier === 'HOT' ? '#ff8800'
+                  : hypeScore.hype_tier === 'WARM' ? '#cc44ff'
+                  : 'var(--text-muted)',
+              }}
+            >
+              {hypeScore.hype_tier === 'VIRAL' ? '🔥' : hypeScore.hype_tier === 'HOT' ? '🚀' : hypeScore.hype_tier === 'WARM' ? '📈' : ''}
+              {hypeScore.hype_index.toFixed(0)}
+            </button>
+          )}
           <button
             onClick={e => { e.stopPropagation(); setShowJournal(true); }}
             title="Add to Journal"
@@ -185,6 +217,48 @@ export default function TickerCard({ data }) {
             : instFlow.strength === 'MEDIUM' ? styles.flowStrengthMedium
             : styles.flowStrengthEarly
           }>{instFlow.strength}</span>
+        </div>
+      )}
+
+      {/* Hype detail panel */}
+      {showHype && hypeScore && (
+        <div className={styles.hypePanel}>
+          <div className={styles.hypePanelTitle}>
+            🔮 HYPE MONITOR
+            <span style={{ marginLeft: 6, fontWeight: 400, color: 'var(--text-muted)' }}>
+              {hypeScore.hype_index.toFixed(0)}/100 · {hypeScore.hype_tier}
+            </span>
+          </div>
+          <div className={styles.hypeMetrics}>
+            <span>24h mentions: {hypeScore.mention_counts?.total ?? 0}</span>
+            <span>ST: {hypeScore.mention_counts?.stocktwits ?? 0}</span>
+            <span>Reddit: {hypeScore.mention_counts?.reddit ?? 0}</span>
+            <span>News: {hypeScore.mention_counts?.news ?? 0}</span>
+            {hypeVelocity && <span>Vel 2h: {hypeVelocity.combined_velocity_2h?.toFixed(1)}x</span>}
+          </div>
+          {hypeDivergences.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {hypeDivergences.map((d) => (
+                <div key={d.type} className={`${styles.hypeDivergence} ${
+                  d.type === 'SILENT_VOLUME' ? styles.divSilent
+                  : d.type === 'VELOCITY_SPIKE' ? styles.divVelocity
+                  : d.type === 'PEAK_FADING' ? styles.divPeak
+                  : styles.divHype
+                }`}>
+                  <span className={styles.divLabel}>{d.label}</span>
+                  <span className={styles.divSeverity}>{d.severity}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {hypeData?.ai_analysis?.summary && (
+            <div className={styles.hypeAI}>
+              🤖 {hypeData.ai_analysis.summary}
+              {hypeData.ai_analysis.recommendation && (
+                <span className={styles.hypeRec}>{hypeData.ai_analysis.recommendation}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
