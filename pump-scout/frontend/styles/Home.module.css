@@ -373,3 +373,25 @@
 
 .tabSilent.tabActive { color: #00c853; border-bottom-color: #00c853; }
 .tabHype.tabActive   { color: #ff4466; border-bottom-color: #ff4466; }
+
+/* TradingView watchlist download button — lives in the tabs bar */
+.tvDownload {
+  margin-left: auto;
+  margin-bottom: -1px;
+  align-self: center;
+  background: rgba(0, 188, 212, 0.08);
+  border: 1px solid rgba(0, 188, 212, 0.3);
+  border-radius: 4px;
+  color: var(--cyan);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.tvDownload:hover {
+  background: rgba(0, 188, 212, 0.18);
+  border-color: rgba(0, 188, 212, 0.6);
+}
