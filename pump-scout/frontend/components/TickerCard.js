@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import AIAnalysis from './AIAnalysis';
+import JournalModal from './JournalModal';
 import styles from '../styles/TickerCard.module.css';
 
 const Chart = dynamic(() => import('./Chart'), { ssr: false });
@@ -45,6 +46,7 @@ function getCardClass(tier) {
 
 export default function TickerCard({ data }) {
   const [expanded, setExpanded] = useState(false);
+  const [showJournal, setShowJournal] = useState(false);
 
   const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector } = data;
 
@@ -82,7 +84,20 @@ export default function TickerCard({ data }) {
             {TIER_EMOJI[tier]} {TIER_LABEL[tier] || tier}
           </span>
         </div>
-        <span className={styles.score}>{totalScore.toFixed(0)}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className={styles.score}>{totalScore.toFixed(0)}</span>
+          <button
+            onClick={e => { e.stopPropagation(); setShowJournal(true); }}
+            title="Add to Journal"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 14, opacity: 0.5, padding: '0 2px',
+              lineHeight: 1, transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={e => (e.target.style.opacity = 1)}
+            onMouseLeave={e => (e.target.style.opacity = 0.5)}
+          >📔</button>
+        </div>
       </div>
 
       {/* Body */}
@@ -194,6 +209,27 @@ export default function TickerCard({ data }) {
             Full Analysis → {symbol}
           </Link>
         </div>
+      )}
+
+      {showJournal && (
+        <JournalModal
+          prefill={{
+            symbol,
+            entry_price: price?.toFixed(2) || '',
+            tier,
+            score: totalScore,
+            indicators_snapshot: {
+              bb_sqz_bars: indicators.bb_sqz_bars,
+              cmf_pctl: indicators.cmf_pctl,
+              vol_z: indicators.vol_z,
+              anomaly_ratio: indicators.anomaly_ratio,
+              stealth_score: stealth.stealth_score,
+              state: regime.state,
+            },
+          }}
+          onClose={() => setShowJournal(false)}
+          onSaved={() => setShowJournal(false)}
+        />
       )}
     </div>
   );

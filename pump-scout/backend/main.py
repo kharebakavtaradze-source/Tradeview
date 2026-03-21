@@ -2,14 +2,19 @@
 Pump Scout — FastAPI backend
 Endpoints for scan results, ticker detail, manual scan trigger, and health.
 """
+import csv
+import io
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Dict, Optional
 
+import anthropic
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 load_dotenv()
 
@@ -20,16 +25,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from database import (
+    add_journal_entry,
     add_to_watchlist,
+    delete_journal_entry,
+    get_journal,
+    get_journal_stats,
     get_latest_scan,
     get_scan_history,
     get_watchlist,
     init_db,
     remove_from_watchlist,
     save_scan,
+    update_journal_entry,
 )
 from scanner.runner import run_scan
 from scheduler import start_scheduler, stop_scheduler
+from alerts.telegram import get_status as telegram_status
+from alerts.telegram import send_scan_alert, send_test_alert
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
 
@@ -77,6 +89,7 @@ async def _run_scan_background():
         result = await run_scan()
         await save_scan(result)
         logger.info("Manual scan complete and saved")
+        await send_scan_alert(result)
     except Exception as e:
         logger.error(f"Background scan error: {e}", exc_info=True)
     finally:
@@ -213,3 +226,107 @@ async def remove_watchlist(symbol: str):
     if not removed:
         raise HTTPException(status_code=404, detail=f"{symbol} not in watchlist")
     return {"status": "removed", "symbol": symbol.upper()}
+
+
+# ─── Journal routes ───────────────────────────────────────────────────────────
+
+@app.get("/api/journal")
+async def list_journal():
+    entries = await get_journal()
+    return {"entries": entries}
+
+
+@app.post("/api/journal")
+async def create_journal_entry(data: Dict[str, Any]):
+    if not data.get("symbol") or not data.get("entry_price"):
+        raise HTTPException(status_code=400, detail="symbol and entry_price are required")
+    entry = await add_journal_entry(data)
+    return {"status": "added", "entry": entry}
+
+
+@app.put("/api/journal/{entry_id}")
+async def update_entry(entry_id: int, data: Dict[str, Any]):
+    entry = await update_journal_entry(entry_id, data)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
+    return {"status": "updated", "entry": entry}
+
+
+@app.delete("/api/journal/{entry_id}")
+async def delete_entry(entry_id: int):
+    deleted = await delete_journal_entry(entry_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
+    return {"status": "deleted"}
+
+
+@app.get("/api/journal/stats")
+async def journal_stats():
+    return await get_journal_stats()
+
+
+@app.get("/api/journal/export")
+async def export_journal():
+    entries = await get_journal()
+    output = io.StringIO()
+    fields = ["id", "symbol", "added_at", "entry_price", "entry_date", "exit_price",
+              "exit_date", "tier", "score", "outcome", "gain_pct", "notes", "tags"]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for e in entries:
+        row = {**e, "tags": ",".join(e.get("tags") or [])}
+        writer.writerow(row)
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode()),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=pump_scout_journal.csv"},
+    )
+
+
+@app.post("/api/journal/insights")
+async def journal_insights():
+    """Send journal data to Claude for pattern analysis."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+    entries = await get_journal()
+    stats = await get_journal_stats()
+    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
+    prompt = (
+        f"Trade journal stats: {json.dumps(stats)}\n\n"
+        f"Recent trades (last 20): {json.dumps(entries[:20])}\n\n"
+        "Provide concise coaching insights:\n"
+        "1. WIN PATTERNS — what setups are working?\n"
+        "2. MISTAKE PATTERNS — what to avoid?\n"
+        "3. FOCUS — top 2 things to improve?\n"
+        "Keep it under 300 words, be direct and specific."
+    )
+    try:
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system="You are a trading coach analyzing a trader's journal for actionable patterns.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return {"insights": response.content[0].text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Alert routes ─────────────────────────────────────────────────────────────
+
+@app.get("/api/alerts/status")
+async def alerts_status():
+    return telegram_status()
+
+
+@app.get("/api/alerts/test")
+async def alerts_test():
+    sent = await send_test_alert()
+    if not sent:
+        status = telegram_status()
+        if not status["configured"]:
+            raise HTTPException(status_code=503, detail="Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        raise HTTPException(status_code=500, detail="Telegram send failed — check logs")
+    return {"status": "sent", "message": "Test alert delivered to Telegram"}

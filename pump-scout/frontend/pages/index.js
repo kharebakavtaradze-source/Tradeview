@@ -149,6 +149,7 @@ export default function Home() {
             PUMP SCOUT
             <span className={styles.version}>{VERSION}</span>
             <Link href="/how-it-works" className={styles.howLink}>how it works</Link>
+            <Link href="/journal" className={styles.howLink}>📔 journal</Link>
           </div>
           <Scanner
             scanData={scanData}
