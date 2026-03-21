@@ -79,7 +79,8 @@ export default function HowItWorks() {
             ['#tiers', '4. Signal Tiers'],
             ['#scoring', '5. Scoring Formula'],
             ['#wyckoff', '6. Wyckoff Regime'],
-            ['#filters', '7. Filters'],
+            ['#hype-monitor', '7. Hype Monitor'],
+            ['#filters', '8. Filters & AI'],
           ].map(([href, label]) => (
             <a key={href} href={href} className={styles.tocLink}>{label}</a>
           ))}
@@ -139,25 +140,38 @@ export default function HowItWorks() {
           <Block color="var(--arm)">
             <div className={styles.scheduleGrid}>
               <div className={styles.scheduleItem}>
-                <div className={styles.scheduleTime}>9:31 AM EST</div>
-                <div className={styles.scheduleDesc}>First scan after market open — catches overnight developments</div>
+                <div className={styles.scheduleTime}>8:00 AM ET</div>
+                <div className={styles.scheduleDesc}>Pre-market scan — catches overnight volume and gap setups before open</div>
               </div>
               <div className={styles.scheduleItem}>
-                <div className={styles.scheduleTime}>12:00 PM EST</div>
-                <div className={styles.scheduleDesc}>Midday scan — volume patterns solidify by noon</div>
+                <div className={styles.scheduleTime}>9:30 AM ET</div>
+                <div className={styles.scheduleDesc}>Market open scan — first confirmed volume of the session</div>
               </div>
               <div className={styles.scheduleItem}>
-                <div className={styles.scheduleTime}>3:30 PM EST</div>
-                <div className={styles.scheduleDesc}>End-of-day scan — final volume data, most reliable signal</div>
+                <div className={styles.scheduleTime}>12:00 PM ET</div>
+                <div className={styles.scheduleDesc}>Midday scan — volume patterns solidify, accumulation more visible</div>
               </div>
               <div className={styles.scheduleItem}>
                 <div className={styles.scheduleTime}>▶ RESCAN</div>
                 <div className={styles.scheduleDesc}>Manual trigger — runs immediately in background (~2–4 min)</div>
               </div>
             </div>
-            <p style={{ marginTop: 12, color: 'var(--text-muted)', fontSize: 11 }}>
-              Outside market hours the dashboard shows the last saved scan. The banner "MARKET CLOSED"
-              appears on weekends and before 9:30am / after 4pm EST.
+          </Block>
+
+          <Block title="HYPE MONITOR SCHEDULE" color="#cc44ff">
+            <div className={styles.scheduleGrid}>
+              <div className={styles.scheduleItem}>
+                <div className={styles.scheduleTime} style={{ color: '#cc44ff' }}>Every 30 min</div>
+                <div className={styles.scheduleDesc}>Mon–Fri 8:00 AM – 5:00 PM ET. Watches top 30 tickers from the latest scan for social sentiment changes.</div>
+              </div>
+              <div className={styles.scheduleItem}>
+                <div className={styles.scheduleTime} style={{ color: '#cc44ff' }}>▶ RUN HYPE</div>
+                <div className={styles.scheduleDesc}>Manual trigger button in the 🔮 HYPE MONITOR bar — fires immediately, results appear in ~15s.</div>
+              </div>
+            </div>
+            <p style={{ marginTop: 10, color: 'var(--text-muted)', fontSize: 11 }}>
+              Outside market hours the dashboard shows the last saved scan data. "MARKET CLOSED" banner
+              appears on weekends and before 9:30am / after 4pm ET.
             </p>
           </Block>
         </Section>
@@ -230,9 +244,9 @@ export default function HowItWorks() {
         {/* 4. Tiers */}
         <Section id="tiers" title="4. Signal Tiers">
           <p className={styles.lead}>
-            Each ticker is assigned one tier. Score determines the base tier first.
-            Wyckoff regime state can then <strong>upgrade</strong> the tier but never downgrade it.
-            Tiers are shown as tabs on the main dashboard.
+            Each ticker is assigned one tier. Score determines the base tier first (pass 1).
+            Wyckoff regime state can then <strong>upgrade</strong> the tier but never downgrade it (pass 2).
+            SYMPATHY and FLOW are virtual tabs — tickers keep their original tier but also appear there.
           </p>
 
           <div className={styles.tierList}>
@@ -251,7 +265,7 @@ export default function HowItWorks() {
               conditions={[
                 'Score exceeds 60, OR Wyckoff state = ARM',
                 'Wyckoff ARM: price in upper 35% of range, squeeze ≥ 3 bars, CMF positive',
-                'Regime state upgrades tier upward only — a FIRE-score ticker stays FIRE',
+                'Strong institutional flow (≥ 5 days, score ≥ 70) can upgrade BASE/WATCH → ARM',
               ]}
             />
             <TierRow
@@ -273,24 +287,47 @@ export default function HowItWorks() {
               ]}
             />
             <TierRow
+              emoji="🔗" name="SYMPATHY" color="#00e5ff" score="virtual tab (any score)"
+              description="Tickers in the same sector as a recent leader (10%+ gain, 3x vol) that haven't moved yet. Sector momentum plays."
+              conditions={[
+                'At least one sector leader found: +10% price AND ≥ 3x average volume',
+                'Ticker is in the same sector but has not yet moved significantly',
+                'Sympathy score 0–100: based on leader strength + ticker own volume + proximity',
+                'Sectors fetched from Yahoo Finance assetProfile (cached per ticker)',
+              ]}
+            />
+            <TierRow
+              emoji="🏦" name="FLOW" color="#aa00ff" score="virtual tab (institutional flow)"
+              description="Quiet multi-day institutional accumulation — consecutive days of above-average volume with flat price."
+              conditions={[
+                'Volume ≥ 1.3x 20-day avg for 2+ consecutive days',
+                'Price change < 5% per day (institutions hiding their hand)',
+                'Close in upper 40%+ of the day\'s bar range (buyers absorbing)',
+                'STRONG: ≥ 5 days + score ≥ 70 (gold). MEDIUM: ≥ 3 days (cyan). EARLY: 2 days (purple)',
+              ]}
+            />
+            <TierRow
               emoji="⚡" name="WATCH" color="#ff8800" score="25–40"
               description="On the radar. Some signals present but not enough confirmation. Monitor daily."
               conditions={[
                 'Score between 25 and 40',
-                'Some volume or accumulation signal present',
-                'Not yet in clear accumulation regime',
-              ]}
-            />
-            <TierRow
-              emoji="🐂" name="GOGA" color="#a0ff80" score="vol_ratio ≥ 2x  (score < 25)"
-              description="Volume doubled vs yesterday — early accumulation signal before it registers in longer-term averages. Gaps and price spikes are allowed."
-              conditions={[
-                'Today\'s volume ≥ 2x yesterday\'s volume (day-over-day surge)',
-                'Gaps, spikes, and flat closes all qualify — price move is not filtered',
-                'Minimum volume: 200K (lower threshold to catch early-stage movers)',
+                'Some volume or accumulation signal present but no tier qualifier met',
               ]}
             />
           </div>
+
+          <Block title="PERFECT STORM ⚡" color="#ffd700">
+            <p>A ticker qualifies as Perfect Storm when it hits <strong>≥ 2 of these 4 conditions simultaneously:</strong></p>
+            <ul className={styles.ul} style={{ marginTop: 8 }}>
+              <li>Stealth accumulation active (<code>is_stealth = true</code>)</li>
+              <li>Institutional flow active (<code>is_institutional = true</code>)</li>
+              <li>Sector sympathy confirmed (<code>is_sympathy = true</code>)</li>
+              <li>Wyckoff state = ARM, FIRE, or STEALTH_ARM</li>
+            </ul>
+            <p style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 11 }}>
+              Perfect Storm tickers appear in a gold banner above the tabs on the dashboard.
+            </p>
+          </Block>
         </Section>
 
         {/* 5. Scoring */}
@@ -429,8 +466,132 @@ export default function HowItWorks() {
           </Block>
         </Section>
 
-        {/* 7. Filters */}
-        <Section id="filters" title="7. Filters & Quality Gates">
+        {/* 7. Hype Monitor */}
+        <Section id="hype-monitor" title="7. Hype Monitor (v9.11)">
+          <p className={styles.lead}>
+            A completely independent service running every <strong>30 minutes</strong> during market hours.
+            It watches the top 30 tickers from the latest scan for social sentiment vs price/volume divergence.
+          </p>
+
+          <Block title="DATA SOURCES" color="#cc44ff">
+            <p>Three sources fetched concurrently per ticker (12s timeout, silent fail):</p>
+            <ul className={styles.ul} style={{ marginTop: 8 }}>
+              <li><strong>StockTwits</strong> — last ~30 stream messages with bullish/bearish sentiment tags (40% weight)</li>
+              <li><strong>Yahoo Finance News</strong> — last 15 headlines with publish timestamps (30% weight)</li>
+              <li><strong>Reddit</strong> — r/wallstreetbets + r/pennystocks + r/smallcapstocks, filtered to posts that mention the ticker (30% weight)</li>
+            </ul>
+          </Block>
+
+          <Block title="VELOCITY" color="var(--arm)">
+            <p>Mentions are bucketed into time windows to measure <em>acceleration</em> (not just total count):</p>
+            <div className={styles.indicatorGrid} style={{ marginTop: 10 }}>
+              <Indicator
+                name="VELOCITY 2H"
+                formula="(2h mention rate) ÷ (24h baseline rate)"
+                meaning="Primary acceleration signal. 3x+ = VELOCITY_SPIKE divergence. Shows if attention is building rapidly right now."
+              />
+              <Indicator
+                name="VELOCITY 6H"
+                formula="(6h mention rate) ÷ (24h baseline rate)"
+                meaning="Medium-term trend. Confirms whether the 2h spike is sustained or a single burst."
+              />
+              <Indicator
+                name="COMBINED"
+                formula="Twits × 0.4 + Reddit × 0.3 + News × 0.3"
+                meaning="Weighted cross-source velocity. Used for the velocity bonus in hype index and for VELOCITY_SPIKE detection."
+              />
+            </div>
+          </Block>
+
+          <Block title="HYPE INDEX (0–100)" color="var(--gold)">
+            <div className={styles.scoreBreakdown}>
+              <div className={styles.scoreItem}>
+                <div className={styles.scoreLabel} style={{ color: 'var(--gold)' }}>BASE SCORE</div>
+                <div className={styles.scoreRules}>
+                  <span>3 mentions → 10</span>
+                  <span>15 mentions → 35</span>
+                  <span>60 mentions → 65</span>
+                  <span>200 mentions → 90</span>
+                  <span>Weighted by source</span>
+                </div>
+              </div>
+              <div className={styles.scoreItem}>
+                <div className={styles.scoreLabel} style={{ color: '#cc44ff' }}>SENTIMENT BONUS</div>
+                <div className={styles.scoreRules}>
+                  <span>StockTwits only</span>
+                  <span>Bull ratio → +10</span>
+                  <span>Bear ratio → −10</span>
+                  <span>Min 3 tagged msgs</span>
+                </div>
+              </div>
+              <div className={styles.scoreItem}>
+                <div className={styles.scoreLabel} style={{ color: 'var(--arm)' }}>VELOCITY BONUS</div>
+                <div className={styles.scoreRules}>
+                  <span>vel_2h 1–2x → +5</span>
+                  <span>vel_2h 2–4x → +10</span>
+                  <span>vel_2h 4x+ → +15</span>
+                </div>
+              </div>
+              <div className={styles.scoreItem}>
+                <div className={styles.scoreLabel} style={{ color: 'var(--green)' }}>TIERS</div>
+                <div className={styles.scoreRules}>
+                  <span>0–25 → COLD</span>
+                  <span>25–50 → WARM 📈</span>
+                  <span>50–75 → HOT 🚀</span>
+                  <span>75–100 → VIRAL 🔥</span>
+                </div>
+              </div>
+            </div>
+          </Block>
+
+          <Block title="DIVERGENCE SIGNALS" color="var(--red)">
+            <p>The core insight — when hype and price/volume tell different stories:</p>
+            <div className={styles.wyckoffGrid} style={{ marginTop: 10 }}>
+              <Block title="🔇 SILENT VOLUME" color="var(--green)">
+                <p><strong>Volume ≥ 2.5x normal but hype index ≤ 30.</strong></p>
+                <p style={{ color: 'var(--text-muted)', fontSize: 11 }}>Smart money is moving without retail noticing. Strongest bullish divergence — institutions accumulate quietly before public awareness.</p>
+                <p style={{ marginTop: 6 }}><strong>→ SILENT tab on dashboard</strong> · 2h Telegram cooldown</p>
+              </Block>
+              <Block title="🚀 VELOCITY SPIKE" color="var(--arm)">
+                <p><strong>2h mention velocity ≥ 3x baseline.</strong></p>
+                <p style={{ color: 'var(--text-muted)', fontSize: 11 }}>Retail attention accelerating rapidly. Could be a catalyst, news, or beginning of FOMO. Enter early or wait for volume confirmation.</p>
+                <p style={{ marginTop: 6 }}><strong>→ HYPE tab on dashboard</strong> · 1h Telegram cooldown</p>
+              </Block>
+              <Block title="📉 PEAK FADING" color="var(--red)">
+                <p><strong>Hype dropped ≥ 15 pts + price flat ({'<'}3%).</strong></p>
+                <p style={{ color: 'var(--text-muted)', fontSize: 11 }}>Social interest collapsing while price hasn't moved — sentiment exhaustion. Distribution phase may be starting. Exit signal.</p>
+                <p style={{ marginTop: 6 }}><strong>→ EXIT SIGNALS banner</strong> · 3h Telegram cooldown</p>
+              </Block>
+              <Block title="⚠ HYPE, NO VOLUME" color="var(--watch)">
+                <p><strong>Hype ≥ 50 but volume {'<'} 1.5x normal.</strong></p>
+                <p style={{ color: 'var(--text-muted)', fontSize: 11 }}>Social buzz without institutional participation. Potential pump attempt. Real money is not buying — be cautious.</p>
+                <p style={{ marginTop: 6 }}><strong>→ HYPE tab on dashboard</strong> · 2h Telegram cooldown</p>
+              </Block>
+            </div>
+          </Block>
+
+          <Block title="AI ANALYSIS (Claude Sonnet)" color="var(--purple)">
+            <p>
+              Only fires when divergences are detected. Returns structured JSON: summary, signals,
+              divergence interpretation, risk level (LOW/MEDIUM/HIGH), and recommendation (WATCH/ENTER/AVOID/EXIT).
+            </p>
+            <p style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 11 }}>
+              Results cached <strong>45 minutes per ticker</strong> to limit API calls.
+              Visible in the hype panel on each card (click the hype badge to expand).
+            </p>
+          </Block>
+
+          <Block title="SMART MONEY vs EXIT SIGNALS BANNERS" color="var(--green)">
+            <ul className={styles.ul}>
+              <li><strong>💰 SMART MONEY</strong> — tickers with SILENT_VOLUME divergence (high vol, low hype). Best trade setup.</li>
+              <li><strong>🚨 EXIT SIGNALS</strong> — tickers with PEAK_FADING divergence. Review open positions.</li>
+              <li><strong>🔮 HYPE MONITOR bar</strong> — always visible. Shows HOT/VIRAL tickers and last run time. Click ▶ RUN HYPE to trigger manually.</li>
+            </ul>
+          </Block>
+        </Section>
+
+        {/* 8. Filters */}
+        <Section id="filters" title="8. Filters & Quality Gates">
           <Block color="var(--red)">
             <p>Tickers are dropped at each stage if they fail:</p>
             <ul className={styles.ul} style={{ marginTop: 10 }}>
