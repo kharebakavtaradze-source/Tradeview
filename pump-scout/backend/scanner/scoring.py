@@ -84,14 +84,19 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
     else:
         quiet_factor = 1.0
 
+    # --- Institutional Flow Bonus ---
+    inst = indicators.get("institutional_flow", {})
+    inst_bonus = inst.get("flow_score", 0) * 0.2 if inst.get("is_institutional") else 0
+
     # --- Composite Score ---
     total_score = (vol_score * 0.4 + accum_score * 0.3 + stealth_bonus * 0.3) * quiet_factor
+    total_score = min(total_score + inst_bonus, 100)
 
     # Stealth floor: stealth signal always at least WATCH
     if stealth.get("is_stealth") and total_score < 25:
         total_score = 25
 
-    total_score = round(min(total_score, 100), 2)
+    total_score = round(total_score, 2)
 
     # --- Tier ---
     # Step 1: score-based tier
@@ -105,13 +110,11 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         tier = "STEALTH"
     elif total_score > 25:
         tier = "WATCH"
-    elif vol_ratio >= 2.0:
-        tier = "GOGA"
     else:
         tier = "SKIP"
 
     # Step 2: Wyckoff state can upgrade tier but never downgrade
-    _TIER_RANK = {"SKIP": 0, "GOGA": 1, "WATCH": 2, "STEALTH": 3, "BASE": 4, "ARM": 5, "FIRE": 6}
+    _TIER_RANK = {"SKIP": 0, "WATCH": 1, "STEALTH": 2, "SYMPATHY": 3, "BASE": 3, "ARM": 4, "FIRE": 5}
     _STATE_MIN = {
         "FIRE": "FIRE",
         "ARM": "ARM",
@@ -125,11 +128,21 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         if _TIER_RANK.get(candidate, 0) > _TIER_RANK.get(tier, 0):
             tier = candidate
 
+    # Step 3: Strong institutional flow upgrades BASE/WATCH to ARM
+    if (
+        inst.get("is_institutional")
+        and inst.get("days", 0) >= 5
+        and inst.get("flow_score", 0) >= 70
+        and tier in ("BASE", "WATCH")
+    ):
+        tier = "ARM"
+
     return {
         "total_score": total_score,
         "vol_score": vol_score,
         "accum_score": accum_score,
         "stealth_bonus": round(stealth_bonus, 2),
+        "inst_bonus": round(inst_bonus, 2),
         "quiet_factor": quiet_factor,
         "tier": tier,
     }
