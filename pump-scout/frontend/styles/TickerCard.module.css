@@ -310,3 +310,71 @@
 .flowStrengthStrong { color: #ffd700; font-weight: 700; }
 .flowStrengthMedium { color: #00e5ff; }
 .flowStrengthEarly  { color: #aa00ff; }
+
+/* ── Hype Monitor Panel ──────────────────────────── */
+.hypePanel {
+  background: rgba(170, 0, 255, 0.04);
+  border: 1px solid rgba(170, 0, 255, 0.25);
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 6px 12px 0;
+  font-size: 11px;
+}
+
+.hypePanelTitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: #cc44ff;
+  letter-spacing: 0.07em;
+  margin-bottom: 6px;
+}
+
+.hypeMetrics {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+
+.hypeDivergence {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px;
+  border-radius: 3px;
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.divLabel { letter-spacing: 0.04em; }
+.divSeverity { opacity: 0.7; font-size: 9px; }
+
+.divSilent   { background: rgba(0,200,83,0.08);   color: var(--green); border: 1px solid rgba(0,200,83,0.2); }
+.divVelocity { background: rgba(0,229,255,0.08);  color: var(--cyan);  border: 1px solid rgba(0,229,255,0.2); }
+.divPeak     { background: rgba(255,68,102,0.08); color: var(--red);   border: 1px solid rgba(255,68,102,0.2); }
+.divHype     { background: rgba(255,136,0,0.08);  color: var(--watch); border: 1px solid rgba(255,136,0,0.2); }
+
+.hypeAI {
+  margin-top: 6px;
+  padding: 5px 8px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.hypeRec {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0,229,255,0.1);
+  color: var(--cyan);
+  font-weight: 700;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}

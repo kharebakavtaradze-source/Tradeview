@@ -7,11 +7,12 @@ import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v7.0';
-const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'SYMPATHY', 'FLOW', 'WATCH'];
+const VERSION = 'v9.0';
+const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'SYMPATHY', 'FLOW', 'SILENT', 'HYPE', 'WATCH'];
 const TIER_LABELS = {
   FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH',
-  SYMPATHY: '🔗 SYMPATHY', FLOW: '🏦 FLOW', WATCH: '⚡ WATCH',
+  SYMPATHY: '🔗 SYMPATHY', FLOW: '🏦 FLOW',
+  SILENT: '🔇 SILENT', HYPE: '🚀 HYPE', WATCH: '⚡ WATCH',
 };
 
 function isPerfectStorm(r) {
@@ -42,6 +43,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('FIRE');
   const [scanning, setScanning] = useState(false);
   const [marketOpen, setMarketOpen] = useState(true);
+  const [hypeStatus, setHypeStatus] = useState(null);
+  const [hypeResults, setHypeResults] = useState([]);
 
   const fetchLatest = useCallback(async () => {
     try {
@@ -57,17 +60,35 @@ export default function Home() {
     }
   }, []);
 
+  const fetchHype = useCallback(async () => {
+    try {
+      const [statusRes, resultsRes] = await Promise.all([
+        fetch(`${API_URL}/api/hype/status`),
+        fetch(`${API_URL}/api/hype/results`),
+      ]);
+      if (statusRes.ok) setHypeStatus(await statusRes.json());
+      if (resultsRes.ok) {
+        const d = await resultsRes.json();
+        setHypeResults(d.results || []);
+      }
+    } catch {
+      // hype monitor is optional — silent fail
+    }
+  }, []);
+
   useEffect(() => {
     fetchLatest();
+    fetchHype();
     setMarketOpen(isMarketOpen());
 
     const interval = setInterval(() => {
       fetchLatest();
+      fetchHype();
       setMarketOpen(isMarketOpen());
     }, REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [fetchLatest]);
+  }, [fetchLatest, fetchHype]);
 
   const handleRescan = async () => {
     setScanning(true);
@@ -110,9 +131,27 @@ export default function Home() {
   const flowResults = results.filter((r) => r.indicators?.institutional_flow?.is_institutional);
   const perfectStormResults = results.filter(isPerfectStorm);
 
+  // Hype divergence filters (based on hype monitor results)
+  const hypeByTicker = Object.fromEntries(hypeResults.map((r) => [r.ticker, r]));
+  const silentVolumeResults = results.filter((r) => {
+    const h = hypeByTicker[r.symbol];
+    return h?.divergences?.some((d) => d.type === 'SILENT_VOLUME');
+  });
+  const hypeNoVolumeResults = results.filter((r) => {
+    const h = hypeByTicker[r.symbol];
+    return h?.divergences?.some((d) => d.type === 'HYPE_NO_VOLUME' || d.type === 'VELOCITY_SPIKE');
+  });
+  const smartMoneyResults = silentVolumeResults; // alias for banner
+  const exitSignalResults = results.filter((r) => {
+    const h = hypeByTicker[r.symbol];
+    return h?.divergences?.some((d) => d.type === 'PEAK_FADING');
+  });
+
   const filtered =
     activeTab === 'SYMPATHY' ? sympathyResults
     : activeTab === 'FLOW' ? flowResults
+    : activeTab === 'SILENT' ? silentVolumeResults
+    : activeTab === 'HYPE' ? hypeNoVolumeResults
     : results.filter((r) => r.score?.tier === activeTab);
 
   // Auto-select first non-empty tab
@@ -121,7 +160,7 @@ export default function Home() {
     const tc = scanData.tier_counts || {};
     for (const tier of TIERS) {
       if (tier === 'SYMPATHY' && sympathyResults.length > 0) { setActiveTab(tier); return; }
-      if (tier === 'FLOW' && flowResults.length > 0) continue; // don't auto-jump to FLOW
+      if (['FLOW', 'SILENT', 'HYPE'].includes(tier)) continue;
       if (tc[tier] > 0) { setActiveTab(tier); return; }
     }
   }, [scanData]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -130,6 +169,8 @@ export default function Home() {
     ...(scanData?.tier_counts || {}),
     SYMPATHY: sympathyResults.length,
     FLOW: flowResults.length,
+    SILENT: silentVolumeResults.length,
+    HYPE: hypeNoVolumeResults.length,
   };
 
   return (
@@ -188,6 +229,46 @@ export default function Home() {
           </div>
         )}
 
+        {/* Hype Monitor status bar */}
+        {hypeStatus && hypeStatus.tickers_monitored > 0 && (
+          <div className={styles.hypeBar}>
+            <span className={styles.hypeBarLabel}>🔮 HYPE MONITOR</span>
+            {hypeStatus.hot_tickers?.slice(0, 6).map((t) => (
+              <span key={t} className={styles.hypeBarTicker} onClick={() => setActiveTab('SILENT')}>{t}</span>
+            ))}
+            <span className={styles.hypeBarMeta}>
+              {hypeStatus.tickers_monitored} watched · {hypeStatus.total_divergences} signals
+              {hypeStatus.last_run_at && ` · ${new Date(hypeStatus.last_run_at).toLocaleTimeString()}`}
+            </span>
+          </div>
+        )}
+
+        {/* Smart Money (SILENT_VOLUME) banner */}
+        {!loading && smartMoneyResults.length > 0 && (
+          <div className={styles.smartMoneyBanner}>
+            <span className={styles.smartMoneyLabel}>💰 SMART MONEY</span>
+            {smartMoneyResults.map((r) => (
+              <span key={r.symbol} className={styles.smartMoneyTicker}>{r.symbol}</span>
+            ))}
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 4 }}>
+              High vol, low social hype
+            </span>
+          </div>
+        )}
+
+        {/* Exit Signals (PEAK_FADING) banner */}
+        {!loading && exitSignalResults.length > 0 && (
+          <div className={styles.exitBanner}>
+            <span className={styles.exitBannerLabel}>🚨 EXIT SIGNALS</span>
+            {exitSignalResults.map((r) => (
+              <span key={r.symbol} className={styles.exitBannerTicker}>{r.symbol}</span>
+            ))}
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 4 }}>
+              Hype fading, price not moved
+            </span>
+          </div>
+        )}
+
         {/* Perfect Storm banner */}
         {!loading && perfectStormResults.length > 0 && (
           <div className={styles.perfectStorm}>
@@ -224,7 +305,7 @@ export default function Home() {
             {filtered.length > 0 ? (
               <div className={`${styles.grid} fade-in`}>
                 {filtered.map((ticker) => (
-                  <TickerCard key={ticker.symbol} data={ticker} />
+                  <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} />
                 ))}
               </div>
             ) : (
