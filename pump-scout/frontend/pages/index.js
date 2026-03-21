@@ -7,7 +7,7 @@ import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v9.0';
+const VERSION = 'v9.11';
 const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'SYMPATHY', 'FLOW', 'SILENT', 'HYPE', 'WATCH'];
 const TIER_LABELS = {
   FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH',
@@ -230,18 +230,38 @@ export default function Home() {
         )}
 
         {/* Hype Monitor status bar */}
-        {hypeStatus && hypeStatus.tickers_monitored > 0 && (
-          <div className={styles.hypeBar}>
-            <span className={styles.hypeBarLabel}>🔮 HYPE MONITOR</span>
-            {hypeStatus.hot_tickers?.slice(0, 6).map((t) => (
-              <span key={t} className={styles.hypeBarTicker} onClick={() => setActiveTab('SILENT')}>{t}</span>
-            ))}
-            <span className={styles.hypeBarMeta}>
-              {hypeStatus.tickers_monitored} watched · {hypeStatus.total_divergences} signals
-              {hypeStatus.last_run_at && ` · ${new Date(hypeStatus.last_run_at).toLocaleTimeString()}`}
-            </span>
-          </div>
-        )}
+        <div className={styles.hypeBar}>
+          <span className={styles.hypeBarLabel}>🔮 HYPE MONITOR</span>
+          {(hypeStatus?.hot_tickers || []).slice(0, 6).map((t) => (
+            <span key={t} className={styles.hypeBarTicker} onClick={() => setActiveTab('SILENT')}>{t}</span>
+          ))}
+          <span className={styles.hypeBarMeta}>
+            {hypeStatus
+              ? `${hypeStatus.tickers_monitored} watched · ${hypeStatus.total_divergences} signals${hypeStatus.last_run_at ? ` · ${new Date(hypeStatus.last_run_at).toLocaleTimeString()}` : ''}`
+              : 'auto-runs every 30min during market hours'}
+          </span>
+          <button
+            onClick={async () => {
+              await fetch(`${API_URL}/api/hype/run`, { method: 'POST' });
+              setTimeout(fetchHype, 15000);
+            }}
+            style={{
+              marginLeft: 'auto',
+              background: 'rgba(170,0,255,0.12)',
+              border: '1px solid rgba(170,0,255,0.35)',
+              color: '#cc44ff',
+              borderRadius: 4,
+              fontSize: 10,
+              fontWeight: 700,
+              padding: '2px 10px',
+              cursor: 'pointer',
+              letterSpacing: '0.05em',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ▶ RUN HYPE
+          </button>
+        </div>
 
         {/* Smart Money (SILENT_VOLUME) banner */}
         {!loading && smartMoneyResults.length > 0 && (
