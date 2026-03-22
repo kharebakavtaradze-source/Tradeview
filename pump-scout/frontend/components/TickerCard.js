@@ -50,6 +50,8 @@ export default function TickerCard({ data, hypeData }) {
   const [expanded, setExpanded] = useState(false);
   const [showJournal, setShowJournal] = useState(false);
   const [showHype, setShowHype] = useState(false);
+  const [hypeDetail, setHypeDetail] = useState(null);
+  const [fetchingHype, setFetchingHype] = useState(false);
 
   const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector } = data;
 
@@ -64,10 +66,16 @@ export default function TickerCard({ data, hypeData }) {
   const instFlow = indicators.institutional_flow || {};
   const isStealth = tier === 'STEALTH' || stealth.is_stealth;
 
-  // Hype monitor data
-  const hypeScore = hypeData?.hype_score || null;
-  const hypeDivergences = hypeData?.divergences || [];
-  const hypeVelocity = hypeData?.velocity || null;
+  // Hype monitor data — hypeDetail overrides hypeData when fetched on click
+  const activeHype = hypeDetail || hypeData;
+  const hypeScore = activeHype?.hype_score || null;
+  const hypeDivergences = activeHype?.divergences || [];
+  const hypeVelocity = activeHype?.velocity || null;
+
+  // News/SEC badges visible before clicking (from bulk props)
+  const propNews = hypeData?.news || {};
+  const newsCount24h = propNews.count_24h || 0;
+  const hasSec = propNews.has_sec_filing || false;
   const rsiData = indicators.rsi || {};
   const gapData = indicators.gap || {};
   const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
@@ -94,9 +102,38 @@ export default function TickerCard({ data, hypeData }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className={styles.score}>{totalScore.toFixed(0)}</span>
+          {hasSec && (
+            <span title="SEC Filing detected" style={{
+              fontSize: 9, fontWeight: 700, color: '#ffd700',
+              background: 'rgba(255,215,0,0.12)', border: '1px solid rgba(255,215,0,0.4)',
+              borderRadius: 3, padding: '1px 4px',
+            }}>⚠ SEC</span>
+          )}
+          {!hasSec && newsCount24h > 0 && (
+            <span title={`${newsCount24h} news articles in last 24h`} style={{
+              fontSize: 9, fontWeight: 700, color: 'var(--text-muted)',
+              background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 3, padding: '1px 4px',
+            }}>📰{newsCount24h}</span>
+          )}
           {hypeScore && (
             <button
-              onClick={e => { e.stopPropagation(); setShowHype(!showHype); }}
+              onClick={async e => {
+                e.stopPropagation();
+                if (!showHype) {
+                  setShowHype(true);
+                  if (!hypeDetail) {
+                    setFetchingHype(true);
+                    try {
+                      const res = await fetch(`${API_URL}/api/hype/${symbol}`);
+                      if (res.ok) setHypeDetail(await res.json());
+                    } catch { /* silent */ }
+                    finally { setFetchingHype(false); }
+                  }
+                } else {
+                  setShowHype(false);
+                }
+              }}
               title={`Hype: ${hypeScore.hype_index}/100 (${hypeScore.hype_tier})`}
               style={{
                 background: hypeScore.hype_tier === 'VIRAL' ? 'rgba(255,68,102,0.15)'
@@ -228,6 +265,7 @@ export default function TickerCard({ data, hypeData }) {
             <span style={{ marginLeft: 6, fontWeight: 400, color: 'var(--text-muted)' }}>
               {hypeScore.hype_index.toFixed(0)}/100 · {hypeScore.hype_tier}
             </span>
+            {fetchingHype && <span style={{ marginLeft: 8, fontSize: 9, opacity: 0.5 }}>loading…</span>}
           </div>
           <div className={styles.hypeMetrics}>
             <span>24h mentions: {hypeScore.mention_counts?.total ?? 0}</span>
@@ -253,12 +291,16 @@ export default function TickerCard({ data, hypeData }) {
           )}
           {/* News headlines — 24h first, fall back to 7d if nothing today */}
           {(() => {
-            const news = hypeData?.news;
+            const news = activeHype?.news;
             if (!news) return null;
             const has24h = (news.headlines?.length || 0) > 0;
             const shown = has24h ? news.headlines : (news.headlines_7d?.slice(0, 3) || []);
             const is7dFallback = !has24h && shown.length > 0;
-            if (shown.length === 0 && !news.has_sec_filing) return null;
+            if (shown.length === 0 && !news.has_sec_filing) return (
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6, opacity: 0.5 }}>
+                No recent news
+              </div>
+            );
             return (
               <div style={{ marginTop: 6 }}>
                 {news.has_sec_filing && (
@@ -268,36 +310,63 @@ export default function TickerCard({ data, hypeData }) {
                 )}
                 {is7dFallback && (
                   <div style={{ fontSize: 9, color: 'var(--text-muted)', opacity: 0.6, marginBottom: 2 }}>
-                    recent (last 7d):
+                    Recent (last 7d):
                   </div>
                 )}
-                {shown.slice(0, 3).map((h, i) => (
-                  <div key={i} style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2, lineHeight: 1.3 }}>
-                    <span style={{
-                      opacity: 0.6, marginRight: 4,
-                      color: h.type === 'sec' ? '#ffd700' : h.type === 'real' ? 'var(--green)' : 'var(--text-muted)',
-                    }}>
-                      [{h.type.toUpperCase()}]
-                    </span>
-                    {h.title.length > 70 ? h.title.slice(0, 70) + '…' : h.title}
-                    <span style={{ opacity: 0.45, marginLeft: 4 }}>{h.hours_ago}h ago</span>
-                  </div>
-                ))}
+                {shown.slice(0, 3).map((h, i) => {
+                  const typeBadgeStyle = {
+                    fontSize: 9, fontWeight: 700, borderRadius: 2,
+                    padding: '1px 4px', marginRight: 5, whiteSpace: 'nowrap',
+                    ...(h.type === 'sec'
+                      ? { background: 'rgba(255,215,0,0.2)', color: '#ffd700' }
+                      : h.type === 'real'
+                      ? { background: 'rgba(0,200,100,0.15)', color: 'var(--green)' }
+                      : { background: 'rgba(255,255,255,0.08)', color: 'var(--text-muted)' }
+                    ),
+                  };
+                  const typeLabel = h.type === 'sec' ? 'SEC' : h.type === 'real' ? 'REAL' : h.type === 'pr' ? 'PR' : '?';
+                  return (
+                    <div key={i} style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.35, display: 'flex', alignItems: 'baseline', gap: 0 }}>
+                      <span style={{ opacity: 0.45, marginRight: 5, whiteSpace: 'nowrap' }}>{h.hours_ago}h ago</span>
+                      <span style={typeBadgeStyle}>[{typeLabel}]</span>
+                      <span>{h.title.length > 70 ? h.title.slice(0, 70) + '…' : h.title}</span>
+                    </div>
+                  );
+                })}
                 {news.count_2_7d > 0 && !has24h && (
                   <div style={{ fontSize: 9, color: 'var(--text-muted)', opacity: 0.5, marginTop: 3 }}>
-                    +{news.count_2_7d} more articles this week (0.4× weight in score)
+                    +{news.count_2_7d} more articles this week
                   </div>
                 )}
               </div>
             );
           })()}
 
-          {hypeData?.ai_analysis?.summary && (
+          {activeHype?.ai_analysis?.summary && (
             <div className={styles.hypeAI}>
-              🤖 {hypeData.ai_analysis.summary}
-              {hypeData.ai_analysis.recommendation && (
-                <span className={styles.hypeRec}>{hypeData.ai_analysis.recommendation}</span>
-              )}
+              🤖 {activeHype.ai_analysis.summary}
+              <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {activeHype.ai_analysis.recommendation && (() => {
+                  const rec = activeHype.ai_analysis.recommendation;
+                  const recColor = rec === 'ENTER' ? { background: 'rgba(0,200,100,0.15)', color: '#00c864', border: '1px solid rgba(0,200,100,0.3)' }
+                    : rec === 'WATCH' ? { background: 'rgba(255,200,0,0.12)', color: '#ffc800', border: '1px solid rgba(255,200,0,0.35)' }
+                    : { background: 'rgba(255,68,68,0.12)', color: '#ff4444', border: '1px solid rgba(255,68,68,0.3)' };
+                  return (
+                    <span style={{ fontSize: 9, fontWeight: 700, borderRadius: 3, padding: '2px 6px', ...recColor }}>
+                      {rec}
+                    </span>
+                  );
+                })()}
+                {activeHype.ai_analysis.risk_level && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, borderRadius: 3, padding: '2px 6px',
+                    background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)',
+                    border: '1px solid rgba(255,255,255,0.12)',
+                  }}>
+                    RISK: {activeHype.ai_analysis.risk_level}
+                  </span>
+                )}
+              </div>
             </div>
           )}
         </div>
