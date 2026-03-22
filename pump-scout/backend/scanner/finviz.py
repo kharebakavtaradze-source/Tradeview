@@ -225,34 +225,167 @@ async def _fetch_finviz_filter(
     return all_tickers
 
 
-async def _fetch_yahoo_screener() -> List[str]:
-    """Fetch small-cap tickers from Yahoo Finance screener as backup."""
+_YAHOO_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Content-Type": "application/json",
+}
+
+# Small-cap US screener filter body for Yahoo POST API
+_YAHOO_SCREENER_BODY = {
+    "offset": 0,
+    "size": 100,
+    "sortField": "intradaymarketcap",
+    "sortType": "ASC",
+    "quoteType": "EQUITY",
+    "query": {
+        "operator": "AND",
+        "operands": [
+            {"operator": "GT", "operands": ["intradaymarketcap", 50_000_000]},
+            {"operator": "LT", "operands": ["intradaymarketcap", 2_000_000_000]},
+            {"operator": "GT", "operands": ["avgdailyvol3month", 300_000]},
+            {"operator": "GT", "operands": ["regularmarketprice", 1.0]},
+            {"operator": "LT", "operands": ["regularmarketprice", 50.0]},
+            {"operator": "EQ", "operands": ["region", "us"]},
+        ],
+    },
+    "userId": "",
+    "userIdType": "guid",
+}
+
+_PREDEFINED_SCREENS = [
+    "small_cap_gainers",
+    "most_actives",
+    "undervalued_growth_stocks",
+    "aggressive_small_caps",
+]
+
+
+def _extract_yahoo_symbols(data: dict) -> list[str]:
+    """Extract valid US stock symbols from Yahoo Finance screener response."""
     tickers = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-    }
-    try:
-        async with httpx.AsyncClient(headers=headers, timeout=20.0, follow_redirects=True) as client:
-            for offset in range(0, 400, 100):
-                url = (
-                    f"https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
-                    f"?scrIds=small_cap_gainers&count=100&offset={offset}"
+    quotes = (
+        data.get("finance", {}).get("result", [{}])[0].get("quotes", [])
+        or data.get("quotes", [])
+    )
+    for q in quotes:
+        sym = q.get("symbol", "")
+        if sym and 1 <= len(sym) <= 5 and sym.replace("-", "").isalpha():
+            tickers.append(sym.upper())
+    return tickers
+
+
+async def _fetch_yahoo_post_screener(client: httpx.AsyncClient, max_tickers: int = 500) -> list[str]:
+    """
+    Yahoo Finance POST screener — returns small-cap US stocks by market cap.
+    Paginates 0, 100, 200, 300, 400 until max_tickers reached.
+    """
+    url = "https://query1.finance.yahoo.com/v1/finance/screener"
+    tickers: list[str] = []
+    seen: set[str] = set()
+
+    for offset in range(0, max_tickers, 100):
+        body = {**_YAHOO_SCREENER_BODY, "offset": offset}
+        try:
+            resp = await client.post(url, json=body, headers=_YAHOO_HEADERS)
+            if resp.status_code != 200:
+                logger.warning(f"Yahoo POST screener returned {resp.status_code} at offset {offset}")
+                break
+            symbols = _extract_yahoo_symbols(resp.json())
+            if not symbols:
+                break
+            added = 0
+            for s in symbols:
+                if s not in seen:
+                    seen.add(s)
+                    tickers.append(s)
+                    added += 1
+            logger.info(f"Yahoo POST screener offset={offset}: +{added}, total={len(tickers)}")
+            if len(symbols) < 100:
+                break
+            await asyncio.sleep(0.3)
+        except Exception as e:
+            logger.warning(f"Yahoo POST screener failed at offset {offset}: {e}")
+            break
+
+    return tickers
+
+
+async def _fetch_yahoo_predefined_screens(client: httpx.AsyncClient) -> list[str]:
+    """
+    Fetch 4 predefined Yahoo Finance screens concurrently.
+    Returns combined unique symbols.
+    """
+    base_url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+    tickers: list[str] = []
+    seen: set[str] = set()
+
+    async def fetch_screen(screen_id: str) -> list[str]:
+        result = []
+        for offset in range(0, 200, 100):
+            try:
+                resp = await client.get(
+                    base_url,
+                    params={"scrIds": screen_id, "count": 100, "offset": offset, "region": "US"},
+                    headers=_YAHOO_HEADERS,
                 )
-                resp = await client.get(url)
                 if resp.status_code != 200:
                     break
-                data = resp.json()
-                quotes = data.get("finance", {}).get("result", [{}])[0].get("quotes", [])
-                for q in quotes:
-                    sym = q.get("symbol", "")
-                    if sym and 1 <= len(sym) <= 5 and sym.isalpha():
-                        tickers.append(sym)
-                if len(quotes) < 100:
+                symbols = _extract_yahoo_symbols(resp.json())
+                result.extend(symbols)
+                if len(symbols) < 100:
                     break
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
+            except Exception as e:
+                logger.debug(f"Yahoo predefined screen {screen_id} offset {offset}: {e}")
+                break
+        return result
+
+    raw = await asyncio.gather(
+        *[fetch_screen(s) for s in _PREDEFINED_SCREENS],
+        return_exceptions=True,
+    )
+    for batch in raw:
+        if isinstance(batch, list):
+            for s in batch:
+                if s not in seen:
+                    seen.add(s)
+                    tickers.append(s)
+
+    logger.info(f"Yahoo predefined screens: {len(tickers)} tickers from {_PREDEFINED_SCREENS}")
+    return tickers
+
+
+async def _fetch_yahoo_screener() -> List[str]:
+    """
+    Combined Yahoo Finance screener: POST API + 4 predefined screens.
+    Returns deduplicated list of US small-cap tickers.
+    """
+    tickers: list[str] = []
+    seen: set[str] = set()
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            # Run POST screener and predefined screens concurrently
+            post_result, predefined_result = await asyncio.gather(
+                _fetch_yahoo_post_screener(client, max_tickers=500),
+                _fetch_yahoo_predefined_screens(client),
+                return_exceptions=True,
+            )
+
+        for batch in (post_result, predefined_result):
+            if isinstance(batch, list):
+                for t in batch:
+                    if t not in seen:
+                        seen.add(t)
+                        tickers.append(t)
+
+        logger.info(f"Yahoo combined screener total: {len(tickers)} tickers")
     except Exception as e:
         logger.warning(f"Yahoo screener failed: {e}")
+
     return tickers
 
 
@@ -300,14 +433,17 @@ async def get_tickers() -> List[str]:
     except Exception as e:
         logger.error(f"Finviz client error: {e}")
 
-    if len(all_tickers) >= 50:
-        logger.info(f"Finviz OK: {len(all_tickers)} tickers")
+    finviz_count = len(all_tickers)
+    if finviz_count >= 100:
+        logger.info(f"Finviz OK: {finviz_count} tickers")
     else:
-        logger.warning(f"Finviz returned only {len(all_tickers)} — trying Yahoo screener")
+        logger.warning(f"Finviz returned only {finviz_count} (< 100) — running Yahoo screener")
         yahoo_tickers = await _fetch_yahoo_screener()
         if yahoo_tickers:
             added = _add_unique(yahoo_tickers)
             logger.info(f"Yahoo screener: {len(yahoo_tickers)} raw → +{added} unique, total={len(all_tickers)}")
+        else:
+            logger.warning("Yahoo screener also returned 0 tickers")
 
     if len(all_tickers) < 50:
         logger.warning(f"Both scrapers failed ({len(all_tickers)}) — using static fallback")

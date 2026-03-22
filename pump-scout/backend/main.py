@@ -29,6 +29,7 @@ from database import (
     add_to_watchlist,
     delete_journal_entry,
     get_journal,
+    get_journal_entry,
     get_journal_stats,
     get_latest_scan,
     get_scan_history,
@@ -247,6 +248,19 @@ async def list_journal():
     return {"entries": entries}
 
 
+@app.get("/api/journal/stats")
+async def journal_stats():
+    return await get_journal_stats()
+
+
+@app.get("/api/journal/{entry_id}")
+async def get_single_journal_entry(entry_id: int):
+    entry = await get_journal_entry(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
+    return entry
+
+
 @app.post("/api/journal")
 async def create_journal_entry(data: Dict[str, Any]):
     if not data.get("symbol") or not data.get("entry_price"):
@@ -269,11 +283,6 @@ async def delete_entry(entry_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
     return {"status": "deleted"}
-
-
-@app.get("/api/journal/stats")
-async def journal_stats():
-    return await get_journal_stats()
 
 
 @app.get("/api/journal/export")

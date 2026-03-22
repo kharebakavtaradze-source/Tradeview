@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text, select
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -29,6 +29,7 @@ def _get_db_url() -> str:
 
 
 DATABASE_URL = _get_db_url()
+_IS_SQLITE = "sqlite" in DATABASE_URL
 
 # Engine creation — defer to first use
 _engine = None
@@ -39,7 +40,7 @@ def get_engine():
     global _engine
     if _engine is None:
         connect_args = {}
-        if "sqlite" in DATABASE_URL:
+        if _IS_SQLITE:
             connect_args = {"check_same_thread": False}
         _engine = create_async_engine(
             DATABASE_URL,
@@ -87,10 +88,12 @@ class Journal(Base):
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(10), nullable=False, index=True)
     added_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     entry_price = Column(Float, nullable=False)
     entry_date = Column(String(20), nullable=False)
     exit_price = Column(Float, nullable=True)
     exit_date = Column(String(20), nullable=True)
+    direction = Column(String(10), default="LONG")
     tier = Column(String(20), nullable=True)
     score = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
@@ -101,11 +104,50 @@ class Journal(Base):
     tags = Column(Text, nullable=True)             # JSON array
 
 
+class SectorCache(Base):
+    """Persistent sector cache — avoids repeated Yahoo Finance API calls."""
+    __tablename__ = "sector_cache"
+
+    symbol = Column(String(20), primary_key=True, index=True)
+    sector = Column(String(100), nullable=False)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+
+async def _run_migrations(conn):
+    """
+    Safe ALTER TABLE statements for columns added after initial deployment.
+    Uses IF NOT EXISTS / IGNORE patterns so they're idempotent.
+    PostgreSQL and SQLite handled separately.
+    """
+    if _IS_SQLITE:
+        # SQLite: ADD COLUMN IF NOT EXISTS is not supported before 3.37
+        # Use try/except per statement
+        for stmt in [
+            "ALTER TABLE journal ADD COLUMN direction VARCHAR(10) DEFAULT 'LONG'",
+            "ALTER TABLE journal ADD COLUMN updated_at TIMESTAMP",
+        ]:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass  # column already exists
+    else:
+        # PostgreSQL supports ADD COLUMN IF NOT EXISTS
+        for stmt in [
+            "ALTER TABLE journal ADD COLUMN IF NOT EXISTS direction VARCHAR(10) DEFAULT 'LONG'",
+            "ALTER TABLE journal ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
+        ]:
+            try:
+                await conn.execute(text(stmt))
+            except Exception as e:
+                logger.warning(f"Migration stmt failed (non-fatal): {e}")
+
+
 async def init_db():
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, then run safe migrations."""
     try:
         async with get_engine().begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await _run_migrations(conn)
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
@@ -113,14 +155,12 @@ async def init_db():
 
 
 async def save_scan(data: dict) -> int:
-    """Persist a scan result to the database. Returns the scan ID."""
+    """
+    Persist a scan result. Returns the new scan ID.
+    Keeps only the last 7 scans — prunes older ones automatically.
+    """
     results = data.get("results", [])
-    # Strip candles from storage to reduce size
-    slim_results = []
-    for r in results:
-        slim = {k: v for k, v in r.items() if k != "candles"}
-        slim_results.append(slim)
-
+    slim_results = [{k: v for k, v in r.items() if k != "candles"} for r in results]
     scan_data = {**data, "results": slim_results}
 
     async with get_session_factory()() as session:
@@ -132,8 +172,27 @@ async def save_scan(data: dict) -> int:
         session.add(scan)
         await session.commit()
         await session.refresh(scan)
-        logger.info(f"Saved scan #{scan.id} with {scan.total_tickers} tickers")
-        return scan.id
+        scan_id = scan.id
+        logger.info(f"Saved scan #{scan_id} with {scan.total_tickers} tickers")
+
+    # Prune old scans — keep only the latest 7
+    try:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(Scan.id).order_by(Scan.scanned_at.desc()).offset(7)
+            )
+            old_ids = [row[0] for row in result.fetchall()]
+            if old_ids:
+                for old_id in old_ids:
+                    old = await session.get(Scan, old_id)
+                    if old:
+                        await session.delete(old)
+                await session.commit()
+                logger.info(f"Pruned {len(old_ids)} old scans (kept last 7)")
+    except Exception as e:
+        logger.warning(f"Scan pruning failed (non-fatal): {e}")
+
+    return scan_id
 
 
 async def get_latest_scan() -> Optional[dict]:
@@ -216,6 +275,48 @@ async def remove_from_watchlist(symbol: str) -> bool:
     return True
 
 
+# ─── Sector Cache ─────────────────────────────────────────────────────────────
+
+async def get_sector_from_db(symbol: str) -> Optional[str]:
+    """
+    Return cached sector if fresh (< 24h). Returns None if stale or missing.
+    """
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    try:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(SectorCache).where(SectorCache.symbol == symbol.upper())
+            )
+            row = result.scalar_one_or_none()
+            if row and row.fetched_at and row.fetched_at >= cutoff:
+                return row.sector
+    except Exception as e:
+        logger.debug(f"sector_cache read failed for {symbol}: {e}")
+    return None
+
+
+async def save_sector_to_db(symbol: str, sector: str) -> None:
+    """Upsert sector value into the DB cache."""
+    try:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(SectorCache).where(SectorCache.symbol == symbol.upper())
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                row.sector = sector
+                row.fetched_at = datetime.utcnow()
+            else:
+                session.add(SectorCache(
+                    symbol=symbol.upper(),
+                    sector=sector,
+                    fetched_at=datetime.utcnow(),
+                ))
+            await session.commit()
+    except Exception as e:
+        logger.debug(f"sector_cache write failed for {symbol}: {e}")
+
+
 # ─── Journal ─────────────────────────────────────────────────────────────────
 
 def _journal_to_dict(j: Journal) -> dict:
@@ -223,10 +324,12 @@ def _journal_to_dict(j: Journal) -> dict:
         "id": j.id,
         "symbol": j.symbol,
         "added_at": j.added_at.isoformat() if j.added_at else None,
+        "updated_at": j.updated_at.isoformat() if j.updated_at else None,
         "entry_price": j.entry_price,
         "entry_date": j.entry_date,
         "exit_price": j.exit_price,
         "exit_date": j.exit_date,
+        "direction": j.direction or "LONG",
         "tier": j.tier,
         "score": j.score,
         "notes": j.notes,
@@ -238,9 +341,12 @@ def _journal_to_dict(j: Journal) -> dict:
     }
 
 
-def _calc_gain_pct(entry_price, exit_price) -> Optional[float]:
+def _calc_gain_pct(entry_price, exit_price, direction="LONG") -> Optional[float]:
     if entry_price and exit_price and entry_price > 0:
-        return round((exit_price - entry_price) / entry_price * 100, 2)
+        pct = (exit_price - entry_price) / entry_price * 100
+        if direction == "SHORT":
+            pct = -pct
+        return round(pct, 2)
     return None
 
 
@@ -251,8 +357,16 @@ async def get_journal() -> List[dict]:
     return [_journal_to_dict(j) for j in items]
 
 
+async def get_journal_entry(entry_id: int) -> Optional[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(select(Journal).where(Journal.id == entry_id))
+        entry = result.scalar_one_or_none()
+    return _journal_to_dict(entry) if entry else None
+
+
 async def add_journal_entry(data: dict) -> dict:
-    gain = _calc_gain_pct(data.get("entry_price"), data.get("exit_price"))
+    direction = data.get("direction", "LONG").upper()
+    gain = _calc_gain_pct(data.get("entry_price"), data.get("exit_price"), direction)
     async with get_session_factory()() as session:
         entry = Journal(
             symbol=data["symbol"].upper(),
@@ -260,6 +374,7 @@ async def add_journal_entry(data: dict) -> dict:
             entry_date=data.get("entry_date", datetime.utcnow().strftime("%Y-%m-%d")),
             exit_price=data.get("exit_price"),
             exit_date=data.get("exit_date"),
+            direction=direction,
             tier=data.get("tier"),
             score=data.get("score"),
             notes=data.get("notes"),
@@ -268,6 +383,7 @@ async def add_journal_entry(data: dict) -> dict:
             indicators_snapshot=json.dumps(data["indicators_snapshot"]) if data.get("indicators_snapshot") else None,
             ai_analysis=data.get("ai_analysis"),
             tags=json.dumps(data.get("tags", [])),
+            updated_at=datetime.utcnow(),
         )
         session.add(entry)
         await session.commit()
@@ -281,12 +397,14 @@ async def update_journal_entry(entry_id: int, data: dict) -> Optional[dict]:
         entry = result.scalar_one_or_none()
         if not entry:
             return None
-        for field in ("exit_price", "exit_date", "notes", "outcome", "tier", "score", "ai_analysis"):
+        for field in ("exit_price", "exit_date", "notes", "outcome", "tier", "score", "ai_analysis", "direction"):
             if field in data:
                 setattr(entry, field, data[field])
         if "tags" in data:
             entry.tags = json.dumps(data["tags"])
-        entry.gain_pct = _calc_gain_pct(entry.entry_price, entry.exit_price)
+        direction = getattr(entry, "direction", "LONG") or "LONG"
+        entry.gain_pct = _calc_gain_pct(entry.entry_price, entry.exit_price, direction)
+        entry.updated_at = datetime.utcnow()
         await session.commit()
         await session.refresh(entry)
     return _journal_to_dict(entry)

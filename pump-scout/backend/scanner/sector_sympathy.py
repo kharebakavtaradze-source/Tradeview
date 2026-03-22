@@ -10,33 +10,76 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache — sectors change rarely, per-process cache is fine
+# In-process memory cache — fast path, avoid DB for hot-path tickers
 _sector_cache: dict = {}
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# Known sector overrides for popular small-caps (reduces API calls + avoids rate limits)
+# ─── Known sector map — zero API calls for these tickers ─────────────────────
 _KNOWN_SECTORS: dict[str, str] = {
     # Crypto miners
     "MARA": "Financial Services", "RIOT": "Financial Services", "CLSK": "Financial Services",
     "HUT": "Financial Services", "BITF": "Financial Services", "WULF": "Financial Services",
     "BTBT": "Financial Services", "CIFR": "Financial Services", "IREN": "Financial Services",
-    # EV
+    "GREE": "Financial Services",
+    # EV / Automotive
     "NKLA": "Consumer Cyclical", "FFIE": "Consumer Cyclical", "GOEV": "Consumer Cyclical",
     "MULN": "Consumer Cyclical", "WKHS": "Industrials", "RIVN": "Consumer Cyclical",
-    "LCID": "Consumer Cyclical", "PTRA": "Industrials",
-    # AI/tech
-    "BBAI": "Technology", "SOUN": "Technology", "AIXI": "Technology",
+    "LCID": "Consumer Cyclical", "PTRA": "Industrials", "SOLO": "Consumer Cyclical",
+    "BLNK": "Consumer Cyclical", "EVGO": "Consumer Cyclical", "CHPT": "Consumer Cyclical",
+    "AYRO": "Consumer Cyclical", "IDEX": "Consumer Cyclical",
+    # AI / Tech
+    "BBAI": "Technology", "SOUN": "Technology", "AIXI": "Technology", "AITX": "Technology",
+    "SMCI": "Technology", "IONQ": "Technology", "RGTI": "Technology", "QUBT": "Technology",
+    "QBTS": "Technology", "CXAI": "Technology", "GFAI": "Technology", "TUYA": "Technology",
+    "AIOT": "Technology",
+    # Space / Satellite
     "ASTS": "Communication Services", "SATL": "Communication Services",
-    # Biotech
+    "RKLB": "Industrials", "LUNR": "Industrials", "MNTS": "Industrials",
+    "VORB": "Industrials", "ASTRA": "Industrials", "SPIR": "Communication Services",
+    "GSAT": "Communication Services", "VSAT": "Communication Services",
+    "NXST": "Communication Services",
+    # Biotech / Healthcare
     "BNGO": "Healthcare", "NVAX": "Healthcare", "OCGN": "Healthcare",
     "SAVA": "Healthcare", "SENS": "Healthcare",
+    "CODX": "Healthcare", "INMB": "Healthcare", "IRWD": "Healthcare",
+    "TPST": "Healthcare", "HALO": "Healthcare", "CAPR": "Healthcare",
+    "DNLI": "Healthcare", "FOLD": "Healthcare", "MIST": "Healthcare",
+    "RCKT": "Healthcare", "RYTM": "Healthcare", "CRVS": "Healthcare",
+    "DERM": "Healthcare", "HUMA": "Healthcare", "INAB": "Healthcare",
+    "ZLAB": "Healthcare", "NRIX": "Healthcare", "VSTM": "Healthcare",
+    "CORT": "Healthcare", "ATAI": "Healthcare", "CLDX": "Healthcare",
+    "VNDA": "Healthcare", "AKBA": "Healthcare", "ADMA": "Healthcare",
+    "BCYC": "Healthcare", "XNCR": "Healthcare", "SANA": "Healthcare",
+    "TGTX": "Healthcare", "TNXP": "Healthcare", "PCVX": "Healthcare",
+    "IMVT": "Healthcare", "BHVN": "Healthcare", "KPTI": "Healthcare",
+    "VRCA": "Healthcare", "IDYA": "Healthcare", "CPRX": "Healthcare",
+    "NRXS": "Healthcare", "STRO": "Healthcare", "PDSB": "Healthcare",
+    "ALLO": "Healthcare", "AMRX": "Healthcare", "ERAS": "Healthcare",
+    "FATE": "Healthcare", "KLTR": "Healthcare", "ITRM": "Healthcare",
+    "CRBU": "Healthcare", "REPL": "Healthcare", "ARRY": "Healthcare",
+    "KYMR": "Healthcare",
+    # Financial Services
+    "EFSC": "Financial Services", "SOFI": "Financial Services",
+    "HOOD": "Financial Services",
+    # Real Estate
+    "NXRT": "Real Estate",
+    # Consumer
+    "CURV": "Consumer Cyclical", "SCHL": "Consumer Defensive",
+    # Industrials
+    "NNBR": "Industrials", "TITN": "Industrials",
+    # Gaming / Media
+    "AMC": "Communication Services", "GME": "Consumer Cyclical",
+    "DKNG": "Consumer Cyclical", "PENN": "Consumer Cyclical",
+    # Cannabis
+    "SNDL": "Consumer Defensive", "TLRY": "Consumer Defensive",
+    "CGC": "Consumer Defensive", "ACB": "Consumer Defensive",
+    "CRON": "Consumer Defensive", "HEXO": "Consumer Defensive",
 }
 
 
-async def _fetch_sector_httpx(ticker: str, client: httpx.AsyncClient) -> str:
-    """Fetch sector from Yahoo Finance assetProfile via httpx."""
-    # Try query2 first (more reliable on some networks), then query1
+async def _fetch_sector_api(ticker: str, client: httpx.AsyncClient) -> str:
+    """Fetch sector from Yahoo Finance assetProfile. Tries query2 then query1."""
     for host in ("query2.finance.yahoo.com", "query1.finance.yahoo.com"):
         url = f"https://{host}/v10/finance/quoteSummary/{ticker}?modules=assetProfile"
         try:
@@ -53,56 +96,109 @@ async def _fetch_sector_httpx(ticker: str, client: httpx.AsyncClient) -> str:
 
 
 async def get_sector(ticker: str) -> str:
-    """Fetch sector for a ticker. Uses known map → cache → Yahoo API."""
+    """
+    Fetch sector for a ticker.
+    Priority: known map → in-memory cache → DB cache → Yahoo API.
+    """
     ticker = ticker.upper()
 
-    # Check known sectors first (instant, no API call)
     if ticker in _KNOWN_SECTORS:
         return _KNOWN_SECTORS[ticker]
 
-    # Check cache
     if ticker in _sector_cache:
         return _sector_cache[ticker]
 
+    # Try DB cache (avoids API calls across restarts)
+    try:
+        from database import get_sector_from_db, save_sector_to_db
+        cached = await get_sector_from_db(ticker)
+        if cached:
+            _sector_cache[ticker] = cached
+            return cached
+    except Exception:
+        pass
+
     try:
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            sector = await _fetch_sector_httpx(ticker, client)
+            sector = await _fetch_sector_api(ticker, client)
     except Exception as e:
         logger.debug(f"get_sector failed for {ticker}: {e}")
         sector = "Unknown"
 
     _sector_cache[ticker] = sector
+    if sector != "Unknown":
+        try:
+            from database import save_sector_to_db
+            await save_sector_to_db(ticker, sector)
+        except Exception:
+            pass
+
     return sector
 
 
 async def get_sectors_batch(tickers: list) -> dict:
-    """Fetch sectors for multiple tickers concurrently (max 8 at a time)."""
-    semaphore = asyncio.Semaphore(8)
+    """Fetch sectors for multiple tickers concurrently (max 5 at a time)."""
+    semaphore = asyncio.Semaphore(5)
 
+    # Pre-fill from known map and in-memory cache
+    result: dict[str, str] = {}
+    need_fetch: list[str] = []
+    for t in tickers:
+        t = t.upper()
+        if t in _KNOWN_SECTORS:
+            result[t] = _KNOWN_SECTORS[t]
+        elif t in _sector_cache:
+            result[t] = _sector_cache[t]
+        else:
+            need_fetch.append(t)
+
+    if not need_fetch:
+        return result
+
+    # Check DB cache for remaining tickers
+    try:
+        from database import get_sector_from_db
+        still_need: list[str] = []
+        for t in need_fetch:
+            cached = await get_sector_from_db(t)
+            if cached:
+                result[t] = cached
+                _sector_cache[t] = cached
+            else:
+                still_need.append(t)
+        need_fetch = still_need
+    except Exception:
+        pass
+
+    if not need_fetch:
+        return result
+
+    # Fetch remaining from Yahoo API
     async def fetch_one(ticker: str, client: httpx.AsyncClient):
         async with semaphore:
-            ticker = ticker.upper()
-            if ticker in _KNOWN_SECTORS:
-                return ticker, _KNOWN_SECTORS[ticker]
-            if ticker in _sector_cache:
-                return ticker, _sector_cache[ticker]
-            sector = await _fetch_sector_httpx(ticker, client)
+            sector = await _fetch_sector_api(ticker, client)
             _sector_cache[ticker] = sector
+            if sector != "Unknown":
+                try:
+                    from database import save_sector_to_db
+                    await save_sector_to_db(ticker, sector)
+                except Exception:
+                    pass
             return ticker, sector
 
     try:
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            tasks = [fetch_one(t, client) for t in tickers]
+            tasks = [fetch_one(t, client) for t in need_fetch]
             raw = await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
         logger.error(f"get_sectors_batch failed: {e}")
         raw = []
 
-    out = {}
     for r in raw:
         if isinstance(r, tuple) and len(r) == 2:
-            out[r[0]] = r[1]
-    return out
+            result[r[0]] = r[1]
+
+    return result
 
 
 def find_sector_leaders(results: list) -> dict:
@@ -144,7 +240,6 @@ def calc_sympathy_score(ticker_result: dict, sector_leaders: dict) -> dict:
         or 0
     )
 
-    # Must be in same sector as a leader but not moved yet
     if ticker_change >= 5.0 or not leaders:
         return {"is_sympathy": False, "sympathy_score": 0}
 
