@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Pump Scout API",
     description="Automated small-cap volume anomaly scanner",
-    version="9.11.0",
+    version="10.0.0",
     lifespan=lifespan,
 )
 
@@ -115,7 +115,7 @@ async def health():
     return {
         "status": "ok",
         "scan_running": _scan_running,
-        "version": "9.11.0",
+        "version": "10.0.0",
     }
 
 
