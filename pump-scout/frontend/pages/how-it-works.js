@@ -467,7 +467,7 @@ export default function HowItWorks() {
         </Section>
 
         {/* 7. Hype Monitor */}
-        <Section id="hype-monitor" title="7. Hype Monitor (v9.11)">
+        <Section id="hype-monitor" title="7. Hype Monitor (v10.0)">
           <p className={styles.lead}>
             A completely independent service running every <strong>30 minutes</strong> during market hours.
             It watches the top 30 tickers from the latest scan for social sentiment vs price/volume divergence.
