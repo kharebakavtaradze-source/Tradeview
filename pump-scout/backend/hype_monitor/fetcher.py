@@ -248,9 +248,11 @@ async def _fetch_yahoo_v1(ticker: str, client: httpx.AsyncClient) -> list[dict]:
 
 async def fetch_yahoo_news_hype(ticker: str, client: httpx.AsyncClient | None = None) -> dict:
     """
-    Fetch Yahoo news using v2, falling back to v1 if v2 returns nothing.
+    Fetch Yahoo news using v2, falling back to v1, then Claude web search if both empty.
     Returns rich news detail dict with classification.
     """
+    from hype_monitor.news_claude import fetch_news_claude
+
     _client = client
     _owned = False
     if _client is None:
@@ -265,7 +267,14 @@ async def fetch_yahoo_news_hype(ticker: str, client: httpx.AsyncClient | None = 
         if _owned:
             await _client.aclose()
 
-    return _build_news_detail(raw, source_tag="yahoo")
+    result = _build_news_detail(raw, source_tag="yahoo")
+
+    # If Yahoo returns nothing, try Claude web search as fallback
+    if result.get("total_count_24h", 0) == 0 and result.get("count_7d", 0) == 0:
+        logger.info(f"Yahoo news empty for {ticker}, trying Claude web search...")
+        result = await fetch_news_claude(ticker)
+
+    return result
 
 
 # ── Finviz News ───────────────────────────────────────────────────────────────
@@ -538,6 +547,17 @@ async def fetch_all(ticker: str) -> dict[str, Any]:
     yahoo_detail = _build_news_detail(yahoo_raw, "yahoo")
     finviz_detail = _build_news_detail(finviz_raw, "finviz")
     news_detail = _merge_news_details(yahoo_detail, finviz_detail)
+
+    # If both scrapers returned nothing, fall back to Claude web search
+    if news_detail.get("total_count_24h", 0) == 0 and news_detail.get("count_7d", 0) == 0:
+        try:
+            from hype_monitor.news_claude import fetch_news_claude
+            logger.info(f"All scrapers empty for {ticker}, trying Claude web search...")
+            claude_news = await fetch_news_claude(ticker)
+            if not claude_news.get("error"):
+                news_detail = claude_news
+        except Exception as e:
+            logger.debug(f"Claude news fallback failed for {ticker}: {e}")
 
     # Build unified mention list for velocity.py using full 7d news.
     # velocity.py will count windows (2h/6h/24h) from this list — we need

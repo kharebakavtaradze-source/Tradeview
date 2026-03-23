@@ -378,13 +378,17 @@ async def hype_for_ticker(symbol: str):
     velocity = calc_velocity(raw)
     hype_score = calc_hype_score(raw, velocity)
     divergences = detect_divergences(hype_score, velocity, {})
+    news_detail = raw.get("news_detail", {})
     return {
         "ticker": ticker,
         "hype_score": hype_score,
         "velocity": velocity,
         "divergences": divergences,
         "ai_analysis": None,
-        "news": raw.get("news_detail", {}),
+        "news": {
+            **news_detail,
+            "catalyst_summary": news_detail.get("catalyst_summary", ""),
+        },
         "source": "live",
     }
 
