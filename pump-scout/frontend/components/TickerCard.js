@@ -402,6 +402,13 @@ export default function TickerCard({ data, hypeData }) {
             entry_price: price?.toFixed(2) || '',
             tier,
             score: totalScore,
+            entry_wyckoff: regime.state,
+            entry_cmf_pctl: indicators.cmf_pctl ? Math.round(indicators.cmf_pctl) : '',
+            entry_vol_ratio: indicators.anomaly_ratio ? indicators.anomaly_ratio.toFixed(1) : '',
+            entry_hype: hypeScore?.hype_index ? Math.round(hypeScore.hype_index) : 0,
+            catalyst: hypeDivergences[0]?.type || 'MANUAL',
+            stop_loss: regime.tr_low ? regime.tr_low.toFixed(2) : '',
+            target_price: regime.tr_high ? regime.tr_high.toFixed(2) : '',
             indicators_snapshot: {
               bb_sqz_bars: indicators.bb_sqz_bars,
               cmf_pctl: indicators.cmf_pctl,

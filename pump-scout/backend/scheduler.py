@@ -10,6 +10,8 @@ from apscheduler.triggers.cron import CronTrigger
 from scanner.runner import run_scan
 from database import save_scan
 from hype_monitor.monitor import run_hype_monitor
+from journal_autoclose import auto_close_journal
+from ai_portfolio import ai_portfolio_decisions, generate_daily_report
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +103,44 @@ def start_scheduler():
         misfire_grace_time=120,
     )
 
+    # 09:00 AM ET — AI Portfolio decisions
+    scheduler.add_job(
+        ai_portfolio_decisions,
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=9, minute=0, timezone=EASTERN_TZ,
+        ),
+        id="ai_portfolio_decisions",
+        name="AI Portfolio Decisions (9:00 AM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 16:05 ET — Auto-close journal entries
+    scheduler.add_job(
+        auto_close_journal,
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=5, timezone=EASTERN_TZ,
+        ),
+        id="journal_autoclose",
+        name="Journal Auto-Close (4:05 PM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 16:30 ET — AI Portfolio daily report
+    scheduler.add_job(
+        generate_daily_report,
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=30, timezone=EASTERN_TZ,
+        ),
+        id="ai_portfolio_report",
+        name="AI Portfolio Daily Report (4:30 PM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started — 3 scan jobs + hype monitor registered")
+    logger.info("Scheduler started — 3 scan jobs + hype monitor + 3 portfolio/journal jobs")
 
 
 def stop_scheduler():

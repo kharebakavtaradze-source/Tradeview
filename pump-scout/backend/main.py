@@ -27,11 +27,16 @@ logger = logging.getLogger(__name__)
 from database import (
     add_journal_entry,
     add_to_watchlist,
+    close_ai_position,
     delete_journal_entry,
+    get_ai_portfolio_history,
+    get_all_ai_positions,
     get_journal,
     get_journal_entry,
     get_journal_stats,
     get_latest_scan,
+    get_open_ai_positions,
+    get_portfolio_state,
     get_scan_history,
     get_watchlist,
     init_db,
@@ -306,7 +311,7 @@ async def export_journal():
 
 @app.post("/api/journal/insights")
 async def journal_insights():
-    """Send journal data to Claude for pattern analysis."""
+    """Send journal data to Claude for pattern analysis (legacy endpoint)."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
@@ -332,6 +337,53 @@ async def journal_insights():
         return {"insights": response.content[0].text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/journal/insights")
+async def journal_insights_cumulative():
+    """Cumulative AI insights from closed trades (6h cache)."""
+    from journal_autoclose import get_cumulative_insights
+    result = await get_cumulative_insights()
+    return result
+
+
+# ─── AI Portfolio routes ───────────────────────────────────────────────────────
+
+@app.get("/api/ai-portfolio/state")
+async def ai_portfolio_state():
+    return await get_portfolio_state()
+
+
+@app.get("/api/ai-portfolio/positions")
+async def ai_portfolio_positions():
+    return {"positions": await get_open_ai_positions()}
+
+
+@app.get("/api/ai-portfolio/history")
+async def ai_portfolio_history_route():
+    positions = await get_all_ai_positions(50)
+    history = await get_ai_portfolio_history(30)
+    return {"positions": positions, "history": history}
+
+
+@app.get("/api/ai-portfolio/report/latest")
+async def ai_portfolio_latest_report():
+    state = await get_portfolio_state()
+    return {
+        "total_value": state["total_value"],
+        "cash": state["cash"],
+        "total_pnl_pct": state["total_pnl_pct"],
+        "report": state.get("daily_report"),
+        "decisions": state.get("decisions_json"),
+    }
+
+
+@app.post("/api/ai-portfolio/run-now")
+async def ai_portfolio_run_now(background_tasks: BackgroundTasks):
+    """Manually trigger AI portfolio decisions."""
+    from ai_portfolio import ai_portfolio_decisions as run_decisions
+    background_tasks.add_task(run_decisions)
+    return {"status": "started", "message": "AI portfolio decisions running in background"}
 
 
 # ─── Hype Monitor routes (specific routes BEFORE parameterized {symbol}) ───────

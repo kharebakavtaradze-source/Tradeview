@@ -96,16 +96,33 @@ async def send_hype_alerts(
 ) -> list[str]:
     """
     Send Telegram alerts for divergences not on cooldown.
+    Only sends for FIRE/ARM tiers with HIGH severity and score >= 60.
     Returns list of divergence types that were alerted.
     """
     if not divergences:
         return []
 
-    # Filter to non-cooldown HIGH/MEDIUM divergences
+    # ── Tier / score gate ────────────────────────────────────────────────────
+    score = scan_result.get("score", {})
+    tier = score.get("tier", "WATCH")
+    total_score = score.get("total_score", 0)
+
+    # Never alert for BASE, WATCH, STEALTH
+    if tier not in ("FIRE", "ARM"):
+        logger.debug(f"Alert skipped for {ticker}: tier={tier} (only FIRE/ARM)")
+        return []
+
+    # Never alert for score < 60
+    if total_score < 60:
+        logger.debug(f"Alert skipped for {ticker}: score={total_score:.0f} < 60")
+        return []
+
+    # ── Divergence filter ────────────────────────────────────────────────────
     to_alert = [
         d for d in divergences
         if not _is_on_cooldown(ticker, d["type"])
-        and d.get("severity") in ("HIGH", "MEDIUM")
+        and d.get("severity") == "HIGH"                        # HIGH only
+        and (tier == "FIRE" or d["type"] != "VELOCITY_SPIKE")  # VELOCITY_SPIKE only for FIRE
     ]
 
     if not to_alert:
