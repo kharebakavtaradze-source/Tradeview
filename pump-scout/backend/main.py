@@ -48,6 +48,8 @@ from database import (
     remove_from_watchlist,
     save_scan,
     update_journal_entry,
+    get_eod_log,
+    get_latest_eod_log,
 )
 from scanner.runner import run_scan
 from scheduler import start_scheduler, stop_scheduler
@@ -533,3 +535,41 @@ async def alerts_test():
             raise HTTPException(status_code=503, detail="Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
         raise HTTPException(status_code=500, detail="Telegram send failed — check logs")
     return {"status": "sent", "message": "Test alert delivered to Telegram"}
+
+
+# ─── EOD Log routes ────────────────────────────────────────────────────────────
+
+@app.get("/api/eod-log/latest")
+async def eod_log_latest():
+    """Return the most recent EOD log as plain Markdown text (file download)."""
+    from fastapi.responses import PlainTextResponse
+    log = await get_latest_eod_log()
+    if not log:
+        raise HTTPException(status_code=404, detail="No EOD logs generated yet.")
+    filename = f"pump-scout-eod-{log['log_date']}.md"
+    return PlainTextResponse(
+        content=log["content"],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/eod-log/{log_date}")
+async def eod_log_by_date(log_date: str):
+    """Return EOD log for a specific date (YYYY-MM-DD) as plain Markdown."""
+    from fastapi.responses import PlainTextResponse
+    log = await get_eod_log(log_date)
+    if not log:
+        raise HTTPException(status_code=404, detail=f"No EOD log for {log_date}.")
+    filename = f"pump-scout-eod-{log_date}.md"
+    return PlainTextResponse(
+        content=log["content"],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/eod-log/generate-now")
+async def eod_log_generate_now(background_tasks: BackgroundTasks):
+    """Manually trigger EOD log generation (runs in background)."""
+    from eod_log import run_eod_log
+    background_tasks.add_task(run_eod_log)
+    return {"status": "started", "message": "EOD log generation started in background"}

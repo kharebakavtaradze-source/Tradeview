@@ -13,6 +13,7 @@ from hype_monitor.monitor import run_hype_monitor
 from journal_autoclose import auto_close_journal
 from ai_portfolio import ai_portfolio_decisions, generate_daily_report
 from scan_candidates import fill_candidate_prices
+from eod_log import run_eod_log
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +153,20 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # 16:35 ET — Generate EOD log (after all other 4 PM jobs finish)
+    scheduler.add_job(
+        run_eod_log,
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=35, timezone=EASTERN_TZ,
+        ),
+        id="eod_log",
+        name="EOD Log Generator (4:35 PM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started — 3 scan jobs + hype monitor + 4 portfolio/journal jobs")
+    logger.info("Scheduler started — 3 scan jobs + hype monitor + 5 portfolio/journal/EOD jobs")
 
 
 def stop_scheduler():
