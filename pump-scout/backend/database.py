@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text, select, text
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, Text, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -118,6 +118,53 @@ class Journal(Base):
     status = Column(String(10), default="OPEN")    # OPEN / CLOSED / STOPPED
     exit_reason = Column(String(20), nullable=True)  # TARGET_HIT / STOP_HIT / MANUAL
     final_pnl_pct = Column(Float, nullable=True)
+    # ── Alpha / SPY tracking (v13+) ───────────────────────────────────────────
+    spy_return_pct = Column(Float, nullable=True)   # SPY cumulative % during hold
+    alpha_pct = Column(Float, nullable=True)         # final_pnl_pct - spy_return_pct
+    max_gain_day = Column(Integer, nullable=True)    # day number of max gain
+    missed_exit_pct = Column(Float, nullable=True)   # max_gain_pct - final_pnl_pct
+    last_updated = Column(DateTime, nullable=True)
+
+
+class ScanCandidate(Base):
+    """Control group — every FIRE/ARM ticker from each scan."""
+    __tablename__ = "scan_candidates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scan_date = Column(Date, nullable=False, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    price = Column(Float, nullable=True)
+    tier = Column(String(10), nullable=True)
+    score = Column(Float, nullable=True)
+    wyckoff = Column(String(30), nullable=True)
+    cmf_pctl = Column(Float, nullable=True)
+    vol_ratio = Column(Float, nullable=True)
+    hype = Column(Integer, default=0)
+    divergences = Column(String(200), nullable=True)
+    was_journaled = Column(Boolean, default=False)
+    price_5d = Column(Float, nullable=True)
+    pct_5d = Column(Float, nullable=True)
+    price_10d = Column(Float, nullable=True)
+    pct_10d = Column(Float, nullable=True)
+    price_20d = Column(Float, nullable=True)
+    pct_20d = Column(Float, nullable=True)
+
+
+class PositionSnapshot(Base):
+    """Daily end-of-day snapshot for each open journal entry."""
+    __tablename__ = "position_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    journal_id = Column(Integer, nullable=False, index=True)
+    snapshot_date = Column(Date, nullable=False)
+    day_number = Column(Integer, nullable=False)
+    price = Column(Float, nullable=True)
+    pct_from_entry = Column(Float, nullable=True)
+    cmf_pctl = Column(Float, nullable=True)
+    vol_ratio = Column(Float, nullable=True)
+    hype = Column(Integer, nullable=True)
+    wyckoff = Column(String(30), nullable=True)
+    spy_daily_pct = Column(Float, nullable=True)
 
 
 class AIPortfolio(Base):
@@ -181,6 +228,12 @@ _JOURNAL_MIGRATIONS = [
     ("status",          "VARCHAR(10) DEFAULT 'OPEN'"),
     ("exit_reason",     "VARCHAR(20)"),
     ("final_pnl_pct",   "FLOAT"),
+    # v13+ alpha tracking
+    ("spy_return_pct",  "FLOAT"),
+    ("alpha_pct",       "FLOAT"),
+    ("max_gain_day",    "INTEGER"),
+    ("missed_exit_pct", "FLOAT"),
+    ("last_updated",    "TIMESTAMP"),
 ]
 
 
@@ -418,6 +471,12 @@ def _journal_to_dict(j: Journal) -> dict:
         "status": j.status or "OPEN",
         "exit_reason": j.exit_reason,
         "final_pnl_pct": j.final_pnl_pct,
+        # v13+ alpha tracking
+        "spy_return_pct": j.spy_return_pct,
+        "alpha_pct": j.alpha_pct,
+        "max_gain_day": j.max_gain_day,
+        "missed_exit_pct": j.missed_exit_pct,
+        "last_updated": j.last_updated.isoformat() if j.last_updated else None,
     }
 
 
@@ -491,6 +550,7 @@ async def update_journal_entry(entry_id: int, data: dict) -> Optional[dict]:
             "ai_analysis", "direction", "stop_loss", "target_price", "catalyst",
             "current_price", "current_pct", "days_held", "max_gain_pct", "max_loss_pct",
             "status", "exit_reason", "final_pnl_pct",
+            "spy_return_pct", "alpha_pct", "max_gain_day", "missed_exit_pct", "last_updated",
         )
         for field in updatable:
             if field in data:
@@ -741,3 +801,314 @@ async def get_ai_portfolio_history(limit: int = 10) -> List[dict]:
         }
         for r in reversed(rows)
     ]
+
+
+# ─── Scan Candidates ──────────────────────────────────────────────────────────
+
+def _candidate_to_dict(c: ScanCandidate) -> dict:
+    return {
+        "id": c.id,
+        "scan_date": c.scan_date.isoformat() if c.scan_date else None,
+        "symbol": c.symbol,
+        "price": c.price,
+        "tier": c.tier,
+        "score": c.score,
+        "wyckoff": c.wyckoff,
+        "cmf_pctl": c.cmf_pctl,
+        "vol_ratio": c.vol_ratio,
+        "hype": c.hype or 0,
+        "divergences": c.divergences,
+        "was_journaled": c.was_journaled or False,
+        "price_5d": c.price_5d,
+        "pct_5d": c.pct_5d,
+        "price_10d": c.price_10d,
+        "pct_10d": c.pct_10d,
+        "price_20d": c.price_20d,
+        "pct_20d": c.pct_20d,
+    }
+
+
+async def save_scan_candidates(scan_results: list) -> int:
+    """Save FIRE/ARM tickers from a scan as control-group candidates."""
+    from datetime import date as date_type
+    today = date_type.today()
+    candidates = [r for r in scan_results if r.get("score", {}).get("tier") in ("FIRE", "ARM")]
+    if not candidates:
+        return 0
+    saved = 0
+    async with get_session_factory()() as session:
+        for r in candidates:
+            try:
+                # Check if already saved today
+                existing = await session.execute(
+                    select(ScanCandidate).where(
+                        ScanCandidate.symbol == r["symbol"],
+                        ScanCandidate.scan_date == today,
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+                divs = ",".join(d["type"] for d in r.get("divergences", []))
+                cand = ScanCandidate(
+                    scan_date=today,
+                    symbol=r["symbol"],
+                    price=r.get("price"),
+                    tier=r["score"]["tier"],
+                    score=r["score"].get("total_score"),
+                    wyckoff=r.get("regime", {}).get("state"),
+                    cmf_pctl=r.get("indicators", {}).get("cmf_pctl"),
+                    vol_ratio=r.get("indicators", {}).get("anomaly_ratio"),
+                    hype=r.get("hype_score", {}).get("hype_index", 0),
+                    divergences=divs or None,
+                    was_journaled=False,
+                )
+                session.add(cand)
+                saved += 1
+            except Exception as e:
+                logger.warning(f"save_scan_candidate failed for {r.get('symbol')}: {e}")
+        await session.commit()
+    return saved
+
+
+async def mark_candidate_journaled(symbol: str) -> None:
+    """Mark today's scan candidate as journaled when user adds it to journal."""
+    from datetime import date as date_type
+    today = date_type.today()
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ScanCandidate).where(
+                ScanCandidate.symbol == symbol.upper(),
+                ScanCandidate.scan_date == today,
+            )
+        )
+        cand = result.scalar_one_or_none()
+        if cand:
+            cand.was_journaled = True
+            await session.commit()
+
+
+async def get_candidates_missed() -> dict:
+    """Return candidates that were not journaled and their outcome over 5d/10d/20d."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ScanCandidate).order_by(ScanCandidate.scan_date.desc())
+        )
+        candidates = result.scalars().all()
+    rows = [_candidate_to_dict(c) for c in candidates]
+    total = len(rows)
+    journaled = sum(1 for c in rows if c["was_journaled"])
+    not_journaled = [c for c in rows if not c["was_journaled"] and c["pct_5d"] is not None]
+    went_up_10 = sum(1 for c in not_journaled if (c["pct_5d"] or 0) >= 10)
+    went_down_5 = sum(1 for c in not_journaled if (c["pct_5d"] or 0) <= -5)
+    filter_accuracy = round(went_down_5 / len(not_journaled), 2) if not_journaled else 0
+    return {
+        "total_fire_arm_scanned": total,
+        "journaled": journaled,
+        "not_journaled_went_up_10pct": went_up_10,
+        "not_journaled_went_down_5pct": went_down_5,
+        "filter_accuracy": filter_accuracy,
+        "recent": rows[:50],
+    }
+
+
+async def get_candidates_summary() -> list:
+    """Return aggregate stats by tier for scan candidates."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ScanCandidate).where(ScanCandidate.pct_5d.isnot(None))
+        )
+        candidates = result.scalars().all()
+    by_tier: dict = {}
+    for c in candidates:
+        t = c.tier or "UNKNOWN"
+        by_tier.setdefault(t, {"count": 0, "up_5d": 0, "avg_5d": 0.0, "sum_5d": 0.0})
+        by_tier[t]["count"] += 1
+        by_tier[t]["sum_5d"] += c.pct_5d or 0
+        if (c.pct_5d or 0) > 0:
+            by_tier[t]["up_5d"] += 1
+    return [
+        {
+            "tier": t,
+            "count": v["count"],
+            "up_rate_5d": round(v["up_5d"] / v["count"], 2) if v["count"] else 0,
+            "avg_pct_5d": round(v["sum_5d"] / v["count"], 2) if v["count"] else 0,
+        }
+        for t, v in by_tier.items()
+    ]
+
+
+# ─── Position Snapshots ───────────────────────────────────────────────────────
+
+async def save_position_snapshot(journal_id: int, day_number: int, price: float,
+                                  pct_from_entry: float, spy_daily_pct: float) -> None:
+    from datetime import date as date_type
+    today = date_type.today()
+    async with get_session_factory()() as session:
+        snap = PositionSnapshot(
+            journal_id=journal_id,
+            snapshot_date=today,
+            day_number=day_number,
+            price=price,
+            pct_from_entry=pct_from_entry,
+            spy_daily_pct=spy_daily_pct,
+        )
+        session.add(snap)
+        await session.commit()
+
+
+async def get_position_snapshots(journal_id: int) -> List[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PositionSnapshot)
+            .where(PositionSnapshot.journal_id == journal_id)
+            .order_by(PositionSnapshot.day_number.asc())
+        )
+        snaps = result.scalars().all()
+    return [
+        {
+            "day_number": s.day_number,
+            "snapshot_date": s.snapshot_date.isoformat() if s.snapshot_date else None,
+            "price": s.price,
+            "pct_from_entry": s.pct_from_entry,
+            "spy_daily_pct": s.spy_daily_pct,
+        }
+        for s in snaps
+    ]
+
+
+async def get_spy_cumulative_for_entry(journal_id: int) -> float:
+    """Sum all spy_daily_pct snapshots for a journal entry."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PositionSnapshot.spy_daily_pct).where(PositionSnapshot.journal_id == journal_id)
+        )
+        rows = result.scalars().all()
+    return sum(r or 0 for r in rows)
+
+
+async def get_max_gain_day(journal_id: int) -> Optional[int]:
+    """Return day_number of the highest pct_from_entry snapshot."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PositionSnapshot)
+            .where(PositionSnapshot.journal_id == journal_id)
+            .order_by(PositionSnapshot.pct_from_entry.desc())
+            .limit(1)
+        )
+        snap = result.scalar_one_or_none()
+    return snap.day_number if snap else None
+
+
+# ─── Deep Analytics ───────────────────────────────────────────────────────────
+
+async def get_deep_analytics() -> dict:
+    """Full analytics breakdown: by signal, timing, alpha, missed opportunities."""
+    entries = await get_journal()
+    closed = [e for e in entries if e.get("outcome") in ("win", "loss")]
+    if not closed:
+        return {"message": "No closed trades yet"}
+
+    def win_rate(group):
+        wins = sum(1 for e in group if e["outcome"] == "win")
+        return round(wins / len(group), 2) if group else 0
+
+    def avg_return(group):
+        vals = [e.get("final_pnl_pct") or e.get("gain_pct") or 0 for e in group]
+        return round(sum(vals) / len(vals), 2) if vals else 0
+
+    def avg_alpha(group):
+        vals = [e.get("alpha_pct") or 0 for e in group]
+        return round(sum(vals) / len(vals), 2) if vals else 0
+
+    # By Wyckoff
+    wyckoff_groups: dict = {}
+    for e in closed:
+        k = e.get("entry_wyckoff") or "UNKNOWN"
+        wyckoff_groups.setdefault(k, []).append(e)
+    by_wyckoff = [
+        {"state": k, "count": len(v), "win_rate": win_rate(v),
+         "avg_return": avg_return(v), "avg_alpha": avg_alpha(v)}
+        for k, v in sorted(wyckoff_groups.items(), key=lambda x: -len(x[1]))
+    ]
+
+    # By CMF bucket
+    cmf_buckets = [
+        (">90%ile", lambda e: (e.get("entry_cmf_pctl") or 0) > 90),
+        ("70-90%ile", lambda e: 70 < (e.get("entry_cmf_pctl") or 0) <= 90),
+        ("50-70%ile", lambda e: 50 < (e.get("entry_cmf_pctl") or 0) <= 70),
+        ("<50%ile", lambda e: (e.get("entry_cmf_pctl") or 0) <= 50),
+    ]
+    by_cmf = []
+    for label, fn in cmf_buckets:
+        g = [e for e in closed if fn(e)]
+        if g:
+            by_cmf.append({"bucket": label, "count": len(g), "win_rate": win_rate(g), "avg_return": avg_return(g)})
+
+    # By Hype bucket
+    hype_buckets = [
+        ("<20", lambda e: (e.get("entry_hype") or 0) < 20),
+        ("20-40", lambda e: 20 <= (e.get("entry_hype") or 0) < 40),
+        ("40-60", lambda e: 40 <= (e.get("entry_hype") or 0) < 60),
+        (">60", lambda e: (e.get("entry_hype") or 0) >= 60),
+    ]
+    by_hype = []
+    for label, fn in hype_buckets:
+        g = [e for e in closed if fn(e)]
+        if g:
+            by_hype.append({"bucket": label, "count": len(g), "win_rate": win_rate(g), "avg_return": avg_return(g)})
+
+    # By Tier
+    tier_groups: dict = {}
+    for e in closed:
+        k = e.get("tier") or "UNKNOWN"
+        tier_groups.setdefault(k, []).append(e)
+    by_tier = [
+        {"tier": k, "count": len(v), "win_rate": win_rate(v), "avg_return": avg_return(v)}
+        for k, v in sorted(tier_groups.items(), key=lambda x: -len(x[1]))
+    ]
+
+    # Timing
+    hold_days = [e.get("days_held") or 0 for e in closed]
+    max_gain_days = [e.get("max_gain_day") for e in closed if e.get("max_gain_day")]
+    missed = [e.get("missed_exit_pct") or 0 for e in closed]
+    avg_hold = round(sum(hold_days) / len(hold_days), 1) if hold_days else 0
+    avg_max_gain_day = round(sum(max_gain_days) / len(max_gain_days), 1) if max_gain_days else 0
+    avg_missed = round(sum(missed) / len(missed), 2) if missed else 0
+    suggested_hold = int(avg_max_gain_day) if avg_max_gain_day else None
+    exit_too_late = sum(1 for e in closed if (e.get("missed_exit_pct") or 0) > 3)
+    exit_too_early = sum(1 for e in closed if (e.get("days_held") or 0) < (avg_max_gain_day or 999))
+
+    # Alpha
+    alpha_vals = [e.get("alpha_pct") for e in closed if e.get("alpha_pct") is not None]
+    avg_alpha_val = round(sum(alpha_vals) / len(alpha_vals), 2) if alpha_vals else 0
+    positive_alpha = sum(1 for a in alpha_vals if a > 0)
+    positive_alpha_rate = round(positive_alpha / len(alpha_vals), 2) if alpha_vals else 0
+
+    # Missed opportunities (from scan_candidates)
+    try:
+        missed_opp = await get_candidates_missed()
+    except Exception:
+        missed_opp = {}
+
+    return {
+        "signal_performance": {
+            "by_wyckoff": by_wyckoff,
+            "by_cmf_bucket": by_cmf,
+            "by_hype_bucket": by_hype,
+            "by_tier": by_tier,
+        },
+        "timing": {
+            "avg_max_gain_day": avg_max_gain_day,
+            "avg_days_held": avg_hold,
+            "avg_missed_exit_pct": avg_missed,
+            "suggested_hold_days": suggested_hold,
+            "exit_too_late_count": exit_too_late,
+            "exit_too_early_count": exit_too_early,
+        },
+        "alpha": {
+            "avg_alpha_vs_spy": avg_alpha_val,
+            "positive_alpha_rate": positive_alpha_rate,
+        },
+        "missed_opportunities": missed_opp,
+        "total_closed": len(closed),
+    }
