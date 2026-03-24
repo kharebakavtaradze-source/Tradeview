@@ -25,15 +25,80 @@ function isPerfectStorm(r) {
   return conditions.filter(Boolean).length >= 2;
 }
 
+function getEtOffset(now) {
+  const year = now.getUTCFullYear();
+  const dstStart = (() => {
+    const d = new Date(Date.UTC(year, 2, 1));
+    const secondSun = 1 + (7 - d.getUTCDay()) % 7 + 7;
+    return new Date(Date.UTC(year, 2, secondSun, 7)); // 2am EST = 7am UTC
+  })();
+  const dstEnd = (() => {
+    const d = new Date(Date.UTC(year, 10, 1));
+    const firstSun = 1 + (7 - d.getUTCDay()) % 7;
+    return new Date(Date.UTC(year, 10, firstSun, 6)); // 2am EDT = 6am UTC
+  })();
+  return now >= dstStart && now < dstEnd ? 4 : 5;
+}
+
 function isMarketOpen() {
   const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun, 6=Sat
+  const day = now.getUTCDay();
   if (day === 0 || day === 6) return false;
-  // EST = UTC-5 (ignoring DST for simplicity)
-  const estHour = (now.getUTCHours() - 5 + 24) % 24;
-  const estMin = now.getUTCMinutes();
-  const minutes = estHour * 60 + estMin;
-  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
+  const offsetHours = getEtOffset(now);
+  const etMinutes = (now.getUTCHours() * 60 + now.getUTCMinutes() - offsetHours * 60 + 1440) % 1440;
+  return etMinutes >= 9 * 60 + 30 && etMinutes < 16 * 60;
+}
+
+function getMarketCountdown() {
+  const now = new Date();
+  const offsetHours = getEtOffset(now);
+  const offsetMs = offsetHours * 60 * 60 * 1000;
+  const etNow = new Date(now.getTime() - offsetMs);
+  const day = etNow.getUTCDay();
+
+  // Market open/close in ET minutes from midnight
+  const OPEN = 9 * 60 + 30;
+  const CLOSE = 16 * 60;
+  const etMinutes = etNow.getUTCHours() * 60 + etNow.getUTCMinutes();
+  const etSeconds = etNow.getUTCSeconds();
+
+  const isWeekend = day === 0 || day === 6;
+  const open = !isWeekend && etMinutes >= OPEN && etMinutes < CLOSE;
+
+  let targetMs;
+  if (open) {
+    // Time until close today
+    const closeMs = new Date(Date.UTC(
+      etNow.getUTCFullYear(), etNow.getUTCMonth(), etNow.getUTCDate(),
+      16, 0, 0
+    )).getTime() + offsetMs;
+    targetMs = closeMs - now.getTime();
+  } else {
+    // Time until next open (Mon-Fri 9:30 ET)
+    let daysUntilOpen = 0;
+    if (!isWeekend && etMinutes < OPEN) {
+      daysUntilOpen = 0;
+    } else {
+      // find next weekday
+      let d = day;
+      do {
+        daysUntilOpen++;
+        d = (d + 1) % 7;
+      } while (d === 0 || d === 6);
+    }
+    const openMs = new Date(Date.UTC(
+      etNow.getUTCFullYear(), etNow.getUTCMonth(), etNow.getUTCDate() + daysUntilOpen,
+      9, 30, 0
+    )).getTime() + offsetMs;
+    targetMs = openMs - now.getTime();
+  }
+
+  const totalSec = Math.max(0, Math.floor(targetMs / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return { open, label: `${pad(h)}:${pad(m)}:${pad(s)}` };
 }
 
 export default function Home() {
@@ -43,6 +108,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('FIRE');
   const [scanning, setScanning] = useState(false);
   const [marketOpen, setMarketOpen] = useState(true);
+  const [marketTimer, setMarketTimer] = useState({ open: true, label: '00:00:00' });
   const [hypeStatus, setHypeStatus] = useState(null);
   const [hypeResults, setHypeResults] = useState([]);
   const [hypeRunning, setHypeRunning] = useState(false);
@@ -90,6 +156,17 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [fetchLatest, fetchHype]);
+
+  useEffect(() => {
+    const tick = () => {
+      const t = getMarketCountdown();
+      setMarketTimer(t);
+      setMarketOpen(t.open);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleRescan = async () => {
     setScanning(true);
@@ -223,12 +300,12 @@ export default function Home() {
           />
         </header>
 
-        {/* Market closed banner */}
-        {!marketOpen && (
-          <div className={styles.marketClosed}>
-            MARKET CLOSED — Showing last scan data. Next scan runs at market open.
-          </div>
-        )}
+        {/* Market status banner */}
+        <div className={marketOpen ? styles.marketOpen : styles.marketClosed}>
+          {marketOpen
+            ? `MARKET OPEN — Closes in ${marketTimer.label}`
+            : `MARKET CLOSED — Opens in ${marketTimer.label}. Showing last scan data.`}
+        </div>
 
         {/* Scanning progress banner */}
         {scanning && (
