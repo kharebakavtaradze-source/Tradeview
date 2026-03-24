@@ -144,6 +144,15 @@ async def run_scan() -> dict:
         tier = r["score"]["tier"]
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
+    # Save FIRE/ARM tickers as scan candidates (control group)
+    try:
+        from database import save_scan_candidates
+        saved = await save_scan_candidates(final)
+        if saved:
+            logger.info(f"Saved {saved} scan candidates (FIRE/ARM)")
+    except Exception as e:
+        logger.warning(f"save_scan_candidates failed (non-fatal): {e}")
+
     return {
         "results": final,
         "scanned_at": scan_start.isoformat(),

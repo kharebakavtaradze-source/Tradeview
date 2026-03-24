@@ -34,19 +34,25 @@ export default function AIPortfolio() {
   const [report, setReport] = useState(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [journalStats, setJournalStats] = useState(null);
+  const [deepAnalytics, setDeepAnalytics] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const [stateRes, posRes, histRes, repRes] = await Promise.all([
+      const [stateRes, posRes, histRes, repRes, jStatsRes, deepRes] = await Promise.all([
         fetch(`${API_URL}/api/ai-portfolio/state`),
         fetch(`${API_URL}/api/ai-portfolio/positions`),
         fetch(`${API_URL}/api/ai-portfolio/history`),
         fetch(`${API_URL}/api/ai-portfolio/report/latest`),
+        fetch(`${API_URL}/api/journal/stats`),
+        fetch(`${API_URL}/api/journal/deep-analytics`),
       ]);
       if (stateRes.ok) setState(await stateRes.json());
       if (posRes.ok) setPositions((await posRes.json()).positions || []);
       if (histRes.ok) setHistory(await histRes.json());
       if (repRes.ok) setReport(await repRes.json());
+      if (jStatsRes.ok) setJournalStats(await jStatsRes.json());
+      if (deepRes.ok) setDeepAnalytics(await deepRes.json());
     } catch (e) {
       console.error('Portfolio load failed:', e);
     } finally {
@@ -208,10 +214,66 @@ export default function AIPortfolio() {
           </>
         )}
 
-        {/* Comparison with user journal */}
-        <div style={{ marginTop: 20, padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 16 }}>
-          <span>🤖 AI Portfolio: <b style={{ color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)' }}>{totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(1)}%</b></span>
-          <span style={{ opacity: 0.5 }}>Compare with your journal in Analytics tab</span>
+        {/* Comparison: Your Journal vs AI Portfolio vs SPY */}
+        <div style={{ marginTop: 20, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '14px 16px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', marginBottom: 12 }}>📊 YOUR JOURNAL vs AI PORTFOLIO vs SPY</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
+            {/* Your Journal */}
+            <div style={{ background: 'rgba(0,200,100,0.06)', border: '1px solid rgba(0,200,100,0.15)', borderRadius: 6, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>📔 YOUR JOURNAL</div>
+              {journalStats ? (
+                <>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: (journalStats.total_pnl_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                    {(journalStats.total_pnl_pct || 0) >= 0 ? '+' : ''}{(journalStats.total_pnl_pct || 0).toFixed(1)}%
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                    {journalStats.win_rate_pct}% WR · {journalStats.total_trades} trades
+                  </div>
+                  {deepAnalytics?.alpha?.avg_alpha_vs_spy != null && (
+                    <div style={{ fontSize: 10, marginTop: 2 }}>
+                      α vs SPY: <span style={{ color: deepAnalytics.alpha.avg_alpha_vs_spy >= 0 ? 'var(--cyan)' : 'var(--red)', fontWeight: 700 }}>
+                        {deepAnalytics.alpha.avg_alpha_vs_spy >= 0 ? '+' : ''}{deepAnalytics.alpha.avg_alpha_vs_spy.toFixed(1)}%
+                      </span>
+                    </div>
+                  )}
+                </>
+              ) : <div style={{ color: 'var(--text-muted)', fontSize: 10 }}>No data</div>}
+            </div>
+
+            {/* AI Portfolio */}
+            <div style={{ background: 'rgba(100,200,255,0.06)', border: '1px solid rgba(100,200,255,0.15)', borderRadius: 6, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>🤖 AI PORTFOLIO</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: totalPnl >= 0 ? 'var(--cyan)' : 'var(--red)' }}>
+                {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(1)}%
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                ${totalValue.toFixed(0)} value
+              </div>
+              <div style={{ fontSize: 10, marginTop: 2, color: 'var(--text-muted)' }}>
+                {positions.length} open pos.
+              </div>
+            </div>
+
+            {/* SPY baseline */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>📈 SPY (BASELINE)</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
+                Alpha shown in journal cards and analytics tab.
+              </div>
+            </div>
+          </div>
+
+          {/* Who's winning */}
+          {journalStats && (
+            <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
+              {(journalStats.total_pnl_pct || 0) > totalPnl
+                ? <span>🏆 <b style={{ color: 'var(--green)' }}>Your journal</b> is beating the AI portfolio by <b>{((journalStats.total_pnl_pct || 0) - totalPnl).toFixed(1)}%</b></span>
+                : (journalStats.total_pnl_pct || 0) < totalPnl
+                ? <span>🤖 <b style={{ color: 'var(--cyan)' }}>AI portfolio</b> is ahead of your journal by <b>{(totalPnl - (journalStats.total_pnl_pct || 0)).toFixed(1)}%</b></span>
+                : <span>Tied between journal and AI portfolio.</span>
+              }
+            </div>
+          )}
         </div>
       </div>
     </>
