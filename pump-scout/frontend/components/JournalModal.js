@@ -13,15 +13,21 @@ export default function JournalModal({ prefill = {}, onClose, onSaved }) {
   const [form, setForm] = useState({
     symbol: prefill.symbol || '',
     entry_price: prefill.entry_price || '',
-    entry_date: prefill.entry_date || today(),
-    exit_price: '',
-    exit_date: '',
+    entry_date: today(),
     tier: prefill.tier || '',
     score: prefill.score || '',
+    stop_loss: prefill.stop_loss || '',
+    target_price: prefill.target_price || '',
     notes: '',
     outcome: 'open',
     tags: [],
     indicators_snapshot: prefill.indicators_snapshot || null,
+    // Extended fields pre-filled from scan data
+    entry_wyckoff: prefill.entry_wyckoff || '',
+    entry_cmf_pctl: prefill.entry_cmf_pctl || '',
+    entry_vol_ratio: prefill.entry_vol_ratio || '',
+    entry_hype: prefill.entry_hype || 0,
+    catalyst: prefill.catalyst || '',
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
@@ -48,8 +54,12 @@ export default function JournalModal({ prefill = {}, onClose, onSaved }) {
       const body = {
         ...form,
         entry_price: parseFloat(form.entry_price),
-        exit_price: form.exit_price ? parseFloat(form.exit_price) : null,
         score: form.score ? parseFloat(form.score) : null,
+        stop_loss: form.stop_loss ? parseFloat(form.stop_loss) : null,
+        target_price: form.target_price ? parseFloat(form.target_price) : null,
+        entry_cmf_pctl: form.entry_cmf_pctl ? parseFloat(form.entry_cmf_pctl) : null,
+        entry_vol_ratio: form.entry_vol_ratio ? parseFloat(form.entry_vol_ratio) : null,
+        entry_hype: form.entry_hype ? parseInt(form.entry_hype) : 0,
       };
       const res = await fetch(`${API_URL}/api/journal`, {
         method: 'POST',
@@ -73,14 +83,11 @@ export default function JournalModal({ prefill = {}, onClose, onSaved }) {
         <div className={styles.modalTitle}>📔 ADD TO JOURNAL</div>
 
         <div className={styles.formGrid}>
+          {/* Row 1: Symbol + Tier */}
           <div>
             <label className={styles.label}>SYMBOL *</label>
-            <input
-              className={styles.input}
-              value={form.symbol}
-              onChange={e => set('symbol', e.target.value.toUpperCase())}
-              placeholder="e.g. BATL"
-            />
+            <input className={styles.input} value={form.symbol}
+              onChange={e => set('symbol', e.target.value.toUpperCase())} placeholder="e.g. BATL" />
           </div>
           <div>
             <label className={styles.label}>TIER</label>
@@ -90,74 +97,59 @@ export default function JournalModal({ prefill = {}, onClose, onSaved }) {
             </select>
           </div>
 
+          {/* Row 2: Entry price + date */}
           <div>
             <label className={styles.label}>ENTRY PRICE *</label>
-            <input
-              className={styles.input}
-              type="number"
-              step="0.01"
-              value={form.entry_price}
-              onChange={e => set('entry_price', e.target.value)}
-              placeholder="0.00"
-            />
+            <input className={styles.input} type="number" step="0.01" value={form.entry_price}
+              onChange={e => set('entry_price', e.target.value)} placeholder="0.00" />
           </div>
           <div>
             <label className={styles.label}>ENTRY DATE</label>
-            <input
-              className={styles.input}
-              type="date"
-              value={form.entry_date}
-              onChange={e => set('entry_date', e.target.value)}
-            />
+            <input className={styles.input} type="date" value={form.entry_date}
+              onChange={e => set('entry_date', e.target.value)} />
           </div>
 
+          {/* Row 3: Stop loss + Target (required for auto-close) */}
           <div>
-            <label className={styles.label}>EXIT PRICE</label>
-            <input
-              className={styles.input}
-              type="number"
-              step="0.01"
-              value={form.exit_price}
-              onChange={e => set('exit_price', e.target.value)}
-              placeholder="optional"
-            />
+            <label className={styles.label}>STOP LOSS</label>
+            <input className={styles.input} type="number" step="0.01" value={form.stop_loss}
+              onChange={e => set('stop_loss', e.target.value)}
+              placeholder={prefill.stop_loss ? `$${prefill.stop_loss}` : 'e.g. TR Low'} />
           </div>
           <div>
-            <label className={styles.label}>EXIT DATE</label>
-            <input
-              className={styles.input}
-              type="date"
-              value={form.exit_date}
-              onChange={e => set('exit_date', e.target.value)}
-            />
+            <label className={styles.label}>TARGET PRICE</label>
+            <input className={styles.input} type="number" step="0.01" value={form.target_price}
+              onChange={e => set('target_price', e.target.value)}
+              placeholder={prefill.target_price ? `$${prefill.target_price}` : 'e.g. TR High'} />
           </div>
 
+          {/* Row 4: Score + Catalyst */}
           <div>
             <label className={styles.label}>SCORE</label>
-            <input
-              className={styles.input}
-              type="number"
-              step="0.1"
-              value={form.score}
-              onChange={e => set('score', e.target.value)}
-              placeholder="0–100"
-            />
+            <input className={styles.input} type="number" step="0.1" value={form.score}
+              onChange={e => set('score', e.target.value)} placeholder="0–100" />
           </div>
           <div>
-            <label className={styles.label}>OUTCOME</label>
-            <select className={styles.select} value={form.outcome} onChange={e => set('outcome', e.target.value)}>
-              {OUTCOMES.map(o => <option key={o} value={o}>{o.toUpperCase()}</option>)}
-            </select>
+            <label className={styles.label}>CATALYST</label>
+            <input className={styles.input} value={form.catalyst}
+              onChange={e => set('catalyst', e.target.value)}
+              placeholder="e.g. SILENT_VOLUME" />
           </div>
+
+          {/* Signal context row (pre-filled from scan, read-only display) */}
+          {(form.entry_wyckoff || form.entry_cmf_pctl || form.entry_vol_ratio) && (
+            <div className={styles.formFull} style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap', padding: '4px 0' }}>
+              {form.entry_wyckoff && <span>Wyckoff: <b>{form.entry_wyckoff}</b></span>}
+              {form.entry_cmf_pctl && <span>CMF: <b>{form.entry_cmf_pctl}%ile</b></span>}
+              {form.entry_vol_ratio && <span>Vol: <b>{form.entry_vol_ratio}x</b></span>}
+              {form.entry_hype > 0 && <span>Hype: <b>{form.entry_hype}/100</b></span>}
+            </div>
+          )}
 
           <div className={styles.formFull}>
             <label className={styles.label}>NOTES</label>
-            <textarea
-              className={styles.textarea}
-              value={form.notes}
-              onChange={e => set('notes', e.target.value)}
-              placeholder="Why this setup? What to watch..."
-            />
+            <textarea className={styles.textarea} value={form.notes}
+              onChange={e => set('notes', e.target.value)} placeholder="Why this setup? What to watch..." />
           </div>
 
           <div className={styles.formFull}>
@@ -165,11 +157,7 @@ export default function JournalModal({ prefill = {}, onClose, onSaved }) {
             <div className={styles.tagsGrid}>
               {TAG_OPTIONS.map(tag => (
                 <label key={tag} className={styles.tagCheck}>
-                  <input
-                    type="checkbox"
-                    checked={form.tags.includes(tag)}
-                    onChange={() => toggleTag(tag)}
-                  />
+                  <input type="checkbox" checked={form.tags.includes(tag)} onChange={() => toggleTag(tag)} />
                   {tag}
                 </label>
               ))}

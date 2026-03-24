@@ -102,6 +102,56 @@ class Journal(Base):
     indicators_snapshot = Column(Text, nullable=True)  # JSON
     ai_analysis = Column(Text, nullable=True)
     tags = Column(Text, nullable=True)             # JSON array
+    # ── Extended fields (v10+) ─────────────────────────────────────────────
+    entry_wyckoff = Column(String(30), nullable=True)
+    entry_cmf_pctl = Column(Float, nullable=True)
+    entry_vol_ratio = Column(Float, nullable=True)
+    entry_hype = Column(Integer, default=0)
+    catalyst = Column(String(50), nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    target_price = Column(Float, nullable=True)
+    current_price = Column(Float, nullable=True)
+    current_pct = Column(Float, nullable=True)
+    days_held = Column(Integer, default=0)
+    max_gain_pct = Column(Float, default=0)
+    max_loss_pct = Column(Float, default=0)
+    status = Column(String(10), default="OPEN")    # OPEN / CLOSED / STOPPED
+    exit_reason = Column(String(20), nullable=True)  # TARGET_HIT / STOP_HIT / MANUAL
+    final_pnl_pct = Column(Float, nullable=True)
+
+
+class AIPortfolio(Base):
+    __tablename__ = "ai_portfolio"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    action = Column(String(10), nullable=False)      # BUY / SELL / HOLD
+    decision_date = Column(DateTime, default=datetime.utcnow)
+    entry_price = Column(Float, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    shares = Column(Float, nullable=True)
+    invested_usd = Column(Float, default=0)
+    current_value = Column(Float, nullable=True)
+    pnl_usd = Column(Float, default=0)
+    pnl_pct = Column(Float, default=0)
+    status = Column(String(10), default="OPEN")      # OPEN / CLOSED
+    reason = Column(Text, nullable=True)
+    scan_data = Column(Text, nullable=True)          # JSON
+    exit_date = Column(DateTime, nullable=True)
+    days_held = Column(Integer, default=0)
+
+
+class AIPortfolioState(Base):
+    __tablename__ = "ai_portfolio_state"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(String(10), unique=True, nullable=False, index=True)  # YYYY-MM-DD
+    total_value = Column(Float, default=1000.0)
+    cash = Column(Float, default=1000.0)
+    invested = Column(Float, default=0)
+    total_pnl_pct = Column(Float, default=0)
+    decisions_json = Column(Text, nullable=True)   # JSON
+    daily_report = Column(Text, nullable=True)     # JSON
 
 
 class SectorCache(Base):
@@ -113,6 +163,27 @@ class SectorCache(Base):
     fetched_at = Column(DateTime, default=datetime.utcnow)
 
 
+_JOURNAL_MIGRATIONS = [
+    ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
+    ("updated_at",      "TIMESTAMP"),
+    ("entry_wyckoff",   "VARCHAR(30)"),
+    ("entry_cmf_pctl",  "FLOAT"),
+    ("entry_vol_ratio", "FLOAT"),
+    ("entry_hype",      "INTEGER DEFAULT 0"),
+    ("catalyst",        "VARCHAR(50)"),
+    ("stop_loss",       "FLOAT"),
+    ("target_price",    "FLOAT"),
+    ("current_price",   "FLOAT"),
+    ("current_pct",     "FLOAT"),
+    ("days_held",       "INTEGER DEFAULT 0"),
+    ("max_gain_pct",    "FLOAT DEFAULT 0"),
+    ("max_loss_pct",    "FLOAT DEFAULT 0"),
+    ("status",          "VARCHAR(10) DEFAULT 'OPEN'"),
+    ("exit_reason",     "VARCHAR(20)"),
+    ("final_pnl_pct",   "FLOAT"),
+]
+
+
 async def _run_migrations(conn):
     """
     Safe ALTER TABLE statements for columns added after initial deployment.
@@ -120,26 +191,19 @@ async def _run_migrations(conn):
     PostgreSQL and SQLite handled separately.
     """
     if _IS_SQLITE:
-        # SQLite: ADD COLUMN IF NOT EXISTS is not supported before 3.37
-        # Use try/except per statement
-        for stmt in [
-            "ALTER TABLE journal ADD COLUMN direction VARCHAR(10) DEFAULT 'LONG'",
-            "ALTER TABLE journal ADD COLUMN updated_at TIMESTAMP",
-        ]:
+        for col, coltype in _JOURNAL_MIGRATIONS:
             try:
-                await conn.execute(text(stmt))
+                await conn.execute(text(f"ALTER TABLE journal ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass  # column already exists
     else:
-        # PostgreSQL supports ADD COLUMN IF NOT EXISTS
-        for stmt in [
-            "ALTER TABLE journal ADD COLUMN IF NOT EXISTS direction VARCHAR(10) DEFAULT 'LONG'",
-            "ALTER TABLE journal ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
-        ]:
+        for col, coltype in _JOURNAL_MIGRATIONS:
             try:
-                await conn.execute(text(stmt))
+                await conn.execute(text(
+                    f"ALTER TABLE journal ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
             except Exception as e:
-                logger.warning(f"Migration stmt failed (non-fatal): {e}")
+                logger.warning(f"Migration {col} failed (non-fatal): {e}")
 
 
 async def init_db():
@@ -338,6 +402,22 @@ def _journal_to_dict(j: Journal) -> dict:
         "indicators_snapshot": json.loads(j.indicators_snapshot) if j.indicators_snapshot else None,
         "ai_analysis": j.ai_analysis,
         "tags": json.loads(j.tags) if j.tags else [],
+        # Extended v10+ fields
+        "entry_wyckoff": j.entry_wyckoff,
+        "entry_cmf_pctl": j.entry_cmf_pctl,
+        "entry_vol_ratio": j.entry_vol_ratio,
+        "entry_hype": j.entry_hype or 0,
+        "catalyst": j.catalyst,
+        "stop_loss": j.stop_loss,
+        "target_price": j.target_price,
+        "current_price": j.current_price,
+        "current_pct": j.current_pct,
+        "days_held": j.days_held or 0,
+        "max_gain_pct": j.max_gain_pct or 0,
+        "max_loss_pct": j.max_loss_pct or 0,
+        "status": j.status or "OPEN",
+        "exit_reason": j.exit_reason,
+        "final_pnl_pct": j.final_pnl_pct,
     }
 
 
@@ -384,6 +464,15 @@ async def add_journal_entry(data: dict) -> dict:
             ai_analysis=data.get("ai_analysis"),
             tags=json.dumps(data.get("tags", [])),
             updated_at=datetime.utcnow(),
+            # Extended v10+ fields
+            entry_wyckoff=data.get("entry_wyckoff"),
+            entry_cmf_pctl=data.get("entry_cmf_pctl"),
+            entry_vol_ratio=data.get("entry_vol_ratio"),
+            entry_hype=data.get("entry_hype", 0),
+            catalyst=data.get("catalyst"),
+            stop_loss=data.get("stop_loss"),
+            target_price=data.get("target_price"),
+            status="OPEN",
         )
         session.add(entry)
         await session.commit()
@@ -397,7 +486,13 @@ async def update_journal_entry(entry_id: int, data: dict) -> Optional[dict]:
         entry = result.scalar_one_or_none()
         if not entry:
             return None
-        for field in ("exit_price", "exit_date", "notes", "outcome", "tier", "score", "ai_analysis", "direction"):
+        updatable = (
+            "exit_price", "exit_date", "notes", "outcome", "tier", "score",
+            "ai_analysis", "direction", "stop_loss", "target_price", "catalyst",
+            "current_price", "current_pct", "days_held", "max_gain_pct", "max_loss_pct",
+            "status", "exit_reason", "final_pnl_pct",
+        )
+        for field in updatable:
             if field in data:
                 setattr(entry, field, data[field])
         if "tags" in data:
@@ -408,6 +503,16 @@ async def update_journal_entry(entry_id: int, data: dict) -> Optional[dict]:
         await session.commit()
         await session.refresh(entry)
     return _journal_to_dict(entry)
+
+
+async def get_open_journal_entries() -> List[dict]:
+    """Return journal entries with status=OPEN / outcome=open."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(Journal).where(Journal.outcome == "open").order_by(Journal.added_at.desc())
+        )
+        items = result.scalars().all()
+    return [_journal_to_dict(j) for j in items]
 
 
 async def delete_journal_entry(entry_id: int) -> bool:
@@ -471,3 +576,168 @@ async def get_journal_stats() -> dict:
         "wins": len(wins),
         "losses": len(losses),
     }
+
+
+# ─── AI Portfolio ─────────────────────────────────────────────────────────────
+
+def _portfolio_to_dict(p: AIPortfolio) -> dict:
+    return {
+        "id": p.id,
+        "symbol": p.symbol,
+        "action": p.action,
+        "decision_date": p.decision_date.isoformat() if p.decision_date else None,
+        "entry_price": p.entry_price,
+        "exit_price": p.exit_price,
+        "exit_date": p.exit_date.isoformat() if p.exit_date else None,
+        "shares": p.shares,
+        "invested_usd": p.invested_usd,
+        "current_value": p.current_value,
+        "pnl_usd": p.pnl_usd or 0,
+        "pnl_pct": p.pnl_pct or 0,
+        "status": p.status,
+        "reason": p.reason,
+        "days_held": p.days_held or 0,
+        "scan_data": json.loads(p.scan_data) if p.scan_data else None,
+    }
+
+
+async def get_portfolio_state() -> dict:
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolioState).order_by(AIPortfolioState.id.desc()).limit(1)
+        )
+        state = result.scalar_one_or_none()
+        if not state:
+            # Bootstrap with $1000
+            state = AIPortfolioState(date=today_str, cash=1000.0, total_value=1000.0)
+            session.add(state)
+            await session.commit()
+            await session.refresh(state)
+    return {
+        "date": state.date,
+        "total_value": state.total_value,
+        "cash": state.cash,
+        "invested": state.invested or 0,
+        "total_pnl_pct": state.total_pnl_pct or 0,
+        "decisions_json": json.loads(state.decisions_json) if state.decisions_json else None,
+        "daily_report": json.loads(state.daily_report) if state.daily_report else None,
+    }
+
+
+async def update_portfolio_state(cash: float, total_value: float, invested: float,
+                                  total_pnl_pct: float, decisions: dict | None = None,
+                                  report: dict | None = None) -> None:
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolioState).where(AIPortfolioState.date == today_str)
+        )
+        state = result.scalar_one_or_none()
+        if not state:
+            state = AIPortfolioState(date=today_str)
+            session.add(state)
+        state.cash = cash
+        state.total_value = total_value
+        state.invested = invested
+        state.total_pnl_pct = total_pnl_pct
+        if decisions:
+            state.decisions_json = json.dumps(decisions)
+        if report:
+            state.daily_report = json.dumps(report)
+        await session.commit()
+
+
+async def get_open_ai_positions() -> List[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolio).where(AIPortfolio.status == "OPEN").order_by(AIPortfolio.decision_date.desc())
+        )
+        items = result.scalars().all()
+    return [_portfolio_to_dict(p) for p in items]
+
+
+async def get_all_ai_positions(limit: int = 50) -> List[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolio).order_by(AIPortfolio.decision_date.desc()).limit(limit)
+        )
+        items = result.scalars().all()
+    return [_portfolio_to_dict(p) for p in items]
+
+
+async def insert_ai_position(symbol: str, entry_price: float, shares: float,
+                              invested_usd: float, reason: str,
+                              scan_data: dict | None = None) -> dict:
+    async with get_session_factory()() as session:
+        pos = AIPortfolio(
+            symbol=symbol.upper(),
+            action="BUY",
+            decision_date=datetime.utcnow(),
+            entry_price=entry_price,
+            shares=shares,
+            invested_usd=invested_usd,
+            current_value=invested_usd,
+            status="OPEN",
+            reason=reason,
+            scan_data=json.dumps(scan_data) if scan_data else None,
+        )
+        session.add(pos)
+        await session.commit()
+        await session.refresh(pos)
+    return _portfolio_to_dict(pos)
+
+
+async def close_ai_position(symbol: str, exit_price: float, reason: str) -> Optional[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolio).where(
+                AIPortfolio.symbol == symbol.upper(),
+                AIPortfolio.status == "OPEN",
+            ).order_by(AIPortfolio.decision_date.desc()).limit(1)
+        )
+        pos = result.scalar_one_or_none()
+        if not pos:
+            return None
+        pos.status = "CLOSED"
+        pos.exit_price = exit_price
+        pos.exit_date = datetime.utcnow()
+        if pos.entry_price and pos.entry_price > 0:
+            pos.pnl_pct = round((exit_price - pos.entry_price) / pos.entry_price * 100, 2)
+            pos.pnl_usd = round((exit_price - pos.entry_price) * (pos.shares or 0), 2)
+        pos.current_value = exit_price * (pos.shares or 0)
+        await session.commit()
+        await session.refresh(pos)
+    return _portfolio_to_dict(pos)
+
+
+async def update_ai_position_price(position_id: int, current_price: float) -> None:
+    async with get_session_factory()() as session:
+        result = await session.execute(select(AIPortfolio).where(AIPortfolio.id == position_id))
+        pos = result.scalar_one_or_none()
+        if not pos:
+            return
+        pos.current_value = current_price * (pos.shares or 0)
+        if pos.entry_price and pos.entry_price > 0:
+            pos.pnl_pct = round((current_price - pos.entry_price) / pos.entry_price * 100, 2)
+            pos.pnl_usd = round((current_price - pos.entry_price) * (pos.shares or 0), 2)
+        days = (datetime.utcnow() - pos.decision_date).days if pos.decision_date else 0
+        pos.days_held = days
+        await session.commit()
+
+
+async def get_ai_portfolio_history(limit: int = 10) -> List[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolioState).order_by(AIPortfolioState.id.desc()).limit(limit)
+        )
+        rows = result.scalars().all()
+    return [
+        {
+            "date": r.date,
+            "total_value": r.total_value,
+            "cash": r.cash,
+            "total_pnl_pct": r.total_pnl_pct or 0,
+        }
+        for r in reversed(rows)
+    ]
