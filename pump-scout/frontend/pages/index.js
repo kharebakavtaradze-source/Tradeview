@@ -29,11 +29,28 @@ function isMarketOpen() {
   const now = new Date();
   const day = now.getUTCDay(); // 0=Sun, 6=Sat
   if (day === 0 || day === 6) return false;
-  // EST = UTC-5 (ignoring DST for simplicity)
-  const estHour = (now.getUTCHours() - 5 + 24) % 24;
-  const estMin = now.getUTCMinutes();
-  const minutes = estHour * 60 + estMin;
-  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
+
+  // Determine if DST is active (US Eastern: UTC-4 in DST, UTC-5 otherwise)
+  // DST starts: 2nd Sunday in March at 2am, ends: 1st Sunday in November at 2am
+  const year = now.getUTCFullYear();
+  const dstStart = (() => {
+    const d = new Date(Date.UTC(year, 2, 1)); // March 1
+    const dow = d.getUTCDay();
+    const secondSun = 1 + (7 - dow) % 7 + 7; // 2nd Sunday
+    return new Date(Date.UTC(year, 2, secondSun, 7)); // 2am EST = 7am UTC
+  })();
+  const dstEnd = (() => {
+    const d = new Date(Date.UTC(year, 10, 1)); // November 1
+    const dow = d.getUTCDay();
+    const firstSun = 1 + (7 - dow) % 7;
+    return new Date(Date.UTC(year, 10, firstSun, 6)); // 2am EDT = 6am UTC
+  })();
+  const isDST = now >= dstStart && now < dstEnd;
+  const offsetHours = isDST ? 4 : 5;
+
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const etMinutes = (utcMinutes - offsetHours * 60 + 1440) % 1440;
+  return etMinutes >= 9 * 60 + 30 && etMinutes < 16 * 60;
 }
 
 export default function Home() {
