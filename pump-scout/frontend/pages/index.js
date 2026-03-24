@@ -207,6 +207,13 @@ export default function Home() {
             <span className={styles.version}>{VERSION}</span>
             <Link href="/how-it-works" className={styles.howLink}>how it works</Link>
             <Link href="/journal" className={styles.howLink}>📔 journal</Link>
+            <button
+              className={styles.eodLogBtn}
+              onClick={() => window.open(`${API_URL}/api/eod-log/latest`, '_blank')}
+              title="Download today's end-of-day log for Claude analysis"
+            >
+              📋 EOD Log
+            </button>
           </div>
           <Scanner
             scanData={scanData}
