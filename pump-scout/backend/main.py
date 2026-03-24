@@ -31,15 +31,20 @@ from database import (
     delete_journal_entry,
     get_ai_portfolio_history,
     get_all_ai_positions,
+    get_candidates_missed,
+    get_candidates_summary,
+    get_deep_analytics,
     get_journal,
     get_journal_entry,
     get_journal_stats,
     get_latest_scan,
     get_open_ai_positions,
     get_portfolio_state,
+    get_position_snapshots,
     get_scan_history,
     get_watchlist,
     init_db,
+    mark_candidate_journaled,
     remove_from_watchlist,
     save_scan,
     update_journal_entry,
@@ -78,7 +83,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Pump Scout API",
     description="Automated small-cap volume anomaly scanner",
-    version="12.0.0",
+    version="13.11",
     lifespan=lifespan,
 )
 
@@ -120,7 +125,7 @@ async def health():
     return {
         "status": "ok",
         "scan_running": _scan_running,
-        "version": "12.0.0",
+        "version": "13.11",
     }
 
 
@@ -271,6 +276,11 @@ async def create_journal_entry(data: Dict[str, Any]):
     if not data.get("symbol") or not data.get("entry_price"):
         raise HTTPException(status_code=400, detail="symbol and entry_price are required")
     entry = await add_journal_entry(data)
+    # Mark today's scan candidate as journaled (non-fatal)
+    try:
+        await mark_candidate_journaled(data["symbol"])
+    except Exception:
+        pass
     return {"status": "added", "entry": entry}
 
 
@@ -347,6 +357,45 @@ async def journal_insights_cumulative():
     return result
 
 
+# Deep analytics cache
+_deep_analytics_cache: dict = {}
+_DEEP_ANALYTICS_TTL = 3600  # 1 hour
+
+import time as _time
+
+@app.get("/api/journal/deep-analytics")
+async def journal_deep_analytics():
+    """Full signal performance breakdown (1h cache)."""
+    now = _time.time()
+    if _deep_analytics_cache.get("result") and now - _deep_analytics_cache.get("ts", 0) < _DEEP_ANALYTICS_TTL:
+        return {**_deep_analytics_cache["result"], "from_cache": True}
+    result = await get_deep_analytics()
+    _deep_analytics_cache["result"] = result
+    _deep_analytics_cache["ts"] = now
+    return result
+
+
+@app.get("/api/journal/snapshots/{entry_id}")
+async def journal_snapshots(entry_id: int):
+    """Return daily position snapshots for a journal entry."""
+    snaps = await get_position_snapshots(entry_id)
+    return {"journal_id": entry_id, "snapshots": snaps}
+
+
+# ─── Scan Candidates routes ────────────────────────────────────────────────────
+
+@app.get("/api/candidates/missed")
+async def candidates_missed():
+    """Return scan candidates not journaled and their forward performance."""
+    return await get_candidates_missed()
+
+
+@app.get("/api/candidates/summary")
+async def candidates_summary():
+    """Return aggregate stats by tier for scan candidates."""
+    return {"summary": await get_candidates_summary()}
+
+
 # ─── AI Portfolio routes ───────────────────────────────────────────────────────
 
 @app.get("/api/ai-portfolio/state")
@@ -375,6 +424,29 @@ async def ai_portfolio_latest_report():
         "total_pnl_pct": state["total_pnl_pct"],
         "report": state.get("daily_report"),
         "decisions": state.get("decisions_json"),
+    }
+
+
+@app.get("/api/ai-portfolio/report/{report_date}")
+async def ai_portfolio_report_by_date(report_date: str):
+    """Return AI portfolio state for a specific date (YYYY-MM-DD)."""
+    from sqlalchemy import select
+    from database import AIPortfolioState, get_session_factory
+    import json as _json
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolioState).where(AIPortfolioState.date == report_date)
+        )
+        state = result.scalar_one_or_none()
+    if not state:
+        raise HTTPException(status_code=404, detail=f"No portfolio data for {report_date}")
+    return {
+        "date": state.date,
+        "total_value": state.total_value,
+        "cash": state.cash,
+        "total_pnl_pct": state.total_pnl_pct or 0,
+        "report": _json.loads(state.daily_report) if state.daily_report else None,
+        "decisions": _json.loads(state.decisions_json) if state.decisions_json else None,
     }
 
 

@@ -12,6 +12,7 @@ from database import save_scan
 from hype_monitor.monitor import run_hype_monitor
 from journal_autoclose import auto_close_journal
 from ai_portfolio import ai_portfolio_decisions, generate_daily_report
+from scan_candidates import fill_candidate_prices
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,18 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # 16:10 ET — Fill historical prices for scan candidates
+    scheduler.add_job(
+        fill_candidate_prices,
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=10, timezone=EASTERN_TZ,
+        ),
+        id="fill_candidate_prices",
+        name="Fill Candidate Prices (4:10 PM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
     # 16:30 ET — AI Portfolio daily report
     scheduler.add_job(
         generate_daily_report,
@@ -140,7 +153,7 @@ def start_scheduler():
     )
 
     scheduler.start()
-    logger.info("Scheduler started — 3 scan jobs + hype monitor + 3 portfolio/journal jobs")
+    logger.info("Scheduler started — 3 scan jobs + hype monitor + 4 portfolio/journal jobs")
 
 
 def stop_scheduler():

@@ -59,6 +59,11 @@ function AIBox({ analysis }) {
   try { parsed = JSON.parse(analysis); } catch { return null; }
   if (!parsed) return null;
 
+  const timingColor = parsed.exit_timing === 'OPTIMAL' ? 'var(--green)'
+    : parsed.exit_timing === 'TOO_EARLY' ? '#ffa500'
+    : parsed.exit_timing === 'TOO_LATE' ? 'var(--red)'
+    : 'var(--text-muted)';
+
   return (
     <div style={{ marginTop: 6, fontSize: 10, background: 'rgba(100,200,255,0.05)', borderRadius: 4, padding: '6px 8px', border: '1px solid rgba(100,200,255,0.12)' }}>
       <div style={{ fontWeight: 700, color: 'var(--cyan)', marginBottom: 3 }}>
@@ -69,6 +74,13 @@ function AIBox({ analysis }) {
       </div>
       {parsed.what_worked && <div>✅ {parsed.what_worked}</div>}
       {parsed.key_lesson && <div style={{ marginTop: 3, color: 'var(--gold)' }}>💡 {parsed.key_lesson}</div>}
+      {parsed.exit_timing && (
+        <div style={{ marginTop: 3 }}>
+          <span style={{ color: 'var(--text-muted)' }}>Exit timing: </span>
+          <span style={{ color: timingColor, fontWeight: 700 }}>{parsed.exit_timing}</span>
+        </div>
+      )}
+      {parsed.alpha_comment && <div style={{ marginTop: 3, color: 'var(--cyan)', opacity: 0.8 }}>α {parsed.alpha_comment}</div>}
       {expanded && (
         <>
           {parsed.what_failed && <div style={{ marginTop: 3, color: 'var(--red)' }}>❌ {parsed.what_failed}</div>}
@@ -87,6 +99,8 @@ export default function Journal() {
   const [editEntry, setEditEntry] = useState(null);
   const [insights, setInsights] = useState(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
+  const [deepAnalytics, setDeepAnalytics] = useState(null);
+  const [deepLoading, setDeepLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -148,6 +162,15 @@ export default function Journal() {
     finally { setInsightsLoading(false); }
   }
 
+  async function loadDeepAnalytics() {
+    setDeepLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/journal/deep-analytics`);
+      if (res.ok) setDeepAnalytics(await res.json());
+    } catch { }
+    finally { setDeepLoading(false); }
+  }
+
   const openCount = entries.filter(e => e.outcome === 'open').length;
   const winCount = entries.filter(e => e.outcome === 'win').length;
   const lossCount = entries.filter(e => e.outcome === 'loss').length;
@@ -207,6 +230,21 @@ export default function Journal() {
                 </div>
               </div>
             )}
+            {stats.avg_alpha_pct != null && (
+              <div className={styles.statCard}>
+                <div className={styles.statLabel}>AVG ALPHA</div>
+                <div className={`${styles.statValue} ${stats.avg_alpha_pct >= 0 ? styles.win : styles.loss}`}>
+                  {stats.avg_alpha_pct >= 0 ? '+' : ''}{stats.avg_alpha_pct?.toFixed(1)}%
+                </div>
+                <div className={styles.statMeta}>vs SPY</div>
+              </div>
+            )}
+            {stats.avg_hold_days != null && (
+              <div className={styles.statCard}>
+                <div className={styles.statLabel}>AVG HOLD</div>
+                <div className={styles.statValue}>{stats.avg_hold_days}d</div>
+              </div>
+            )}
           </div>
         )}
 
@@ -215,7 +253,13 @@ export default function Journal() {
           {FILTER_TABS.map(t => (
             <button key={t}
               className={`${styles.filterTab} ${filter === t ? styles.filterTabActive : ''}`}
-              onClick={() => { setFilter(t); if (t === 'ANALYTICS' && !insights) loadInsights(); }}
+              onClick={() => {
+                setFilter(t);
+                if (t === 'ANALYTICS') {
+                  if (!insights) loadInsights();
+                  if (!deepAnalytics) loadDeepAnalytics();
+                }
+              }}
             >
               {t}
               {t !== 'ANALYTICS' && (
@@ -233,19 +277,25 @@ export default function Journal() {
         {/* Analytics tab */}
         {filter === 'ANALYTICS' && (
           <div style={{ padding: '16px 0' }}>
-            <button className={`${styles.btn} ${styles.btnGold}`} onClick={loadInsights} disabled={insightsLoading} style={{ marginBottom: 16 }}>
-              {insightsLoading ? '⏳ Analyzing…' : '🔄 Refresh Insights'}
-            </button>
-            {insightsLoading && <div className={styles.loading}><span className={styles.spinner} /> Analyzing trades…</div>}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+              <button className={`${styles.btn} ${styles.btnGold}`} onClick={() => { loadInsights(); loadDeepAnalytics(); }} disabled={insightsLoading || deepLoading}>
+                {(insightsLoading || deepLoading) ? '⏳ Analyzing…' : '🔄 Refresh All'}
+              </button>
+            </div>
+
+            {(insightsLoading || deepLoading) && <div className={styles.loading}><span className={styles.spinner} /> Analyzing trades…</div>}
+
+            {/* AI Coaching Insights */}
             {insights && !insights.message && (
-              <div style={{ display: 'grid', gap: 12 }}>
+              <div style={{ display: 'grid', gap: 12, marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>🤖 AI COACHING</div>
                 <div className={styles.statCard} style={{ gridColumn: '1/-1' }}>
                   <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                    <span><b style={{ color: 'var(--green)' }}>Best signal:</b> {insights.best_signal}</span>
-                    <span><b style={{ color: 'var(--red)' }}>Worst signal:</b> {insights.worst_signal}</span>
-                    <span><b style={{ color: 'var(--gold)' }}>Best Wyckoff:</b> {insights.best_wyckoff}</span>
-                    <span><b>Hold time:</b> {insights.optimal_hold_days}</span>
-                    <span><b>Hype sweet spot:</b> {insights.hype_sweet_spot}</span>
+                    {insights.best_signal && <span><b style={{ color: 'var(--green)' }}>Best signal:</b> {insights.best_signal}</span>}
+                    {insights.worst_signal && <span><b style={{ color: 'var(--red)' }}>Worst signal:</b> {insights.worst_signal}</span>}
+                    {insights.best_wyckoff && <span><b style={{ color: 'var(--gold)' }}>Best Wyckoff:</b> {insights.best_wyckoff}</span>}
+                    {insights.optimal_hold_days && <span><b>Hold time:</b> {insights.optimal_hold_days}</span>}
+                    {insights.hype_sweet_spot && <span><b>Hype sweet spot:</b> {insights.hype_sweet_spot}</span>}
                   </div>
                 </div>
                 {insights.top_3_improvements && (
@@ -266,7 +316,159 @@ export default function Journal() {
                 )}
               </div>
             )}
-            {insights?.message && <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{insights.message}</div>}
+            {insights?.message && <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>{insights.message}</div>}
+
+            {/* Deep Analytics */}
+            {deepAnalytics && (
+              <div style={{ display: 'grid', gap: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>📊 SIGNAL PERFORMANCE ({deepAnalytics.total_closed} closed trades)</div>
+
+                {/* By Tier */}
+                {deepAnalytics.signal_performance?.by_tier && Object.keys(deepAnalytics.signal_performance.by_tier).length > 0 && (
+                  <div className={styles.statCard}>
+                    <div className={styles.statLabel} style={{ marginBottom: 8 }}>BY TIER</div>
+                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ color: 'var(--text-muted)', fontSize: 10 }}>
+                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Tier</th>
+                          <th style={{ textAlign: 'right' }}>Trades</th>
+                          <th style={{ textAlign: 'right' }}>Win%</th>
+                          <th style={{ textAlign: 'right' }}>Avg P&L</th>
+                          <th style={{ textAlign: 'right' }}>Avg Alpha</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(deepAnalytics.signal_performance.by_tier).map(([tier, d]) => (
+                          <tr key={tier} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td style={{ padding: '3px 0', fontWeight: 700, color: TIER_COLORS[tier] || 'var(--text-primary)' }}>{tier}</td>
+                            <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{d.count}</td>
+                            <td style={{ textAlign: 'right', color: (d.win_rate || 0) >= 0.5 ? 'var(--green)' : 'var(--red)' }}>{((d.win_rate || 0) * 100).toFixed(0)}%</td>
+                            <td style={{ textAlign: 'right', color: (d.avg_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>{(d.avg_pnl || 0) >= 0 ? '+' : ''}{(d.avg_pnl || 0).toFixed(1)}%</td>
+                            <td style={{ textAlign: 'right', color: (d.avg_alpha || 0) >= 0 ? 'var(--cyan)' : 'var(--red)' }}>{(d.avg_alpha || 0) >= 0 ? '+' : ''}{(d.avg_alpha || 0).toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* By Wyckoff */}
+                {deepAnalytics.signal_performance?.by_wyckoff && Object.keys(deepAnalytics.signal_performance.by_wyckoff).length > 0 && (
+                  <div className={styles.statCard}>
+                    <div className={styles.statLabel} style={{ marginBottom: 8 }}>BY WYCKOFF REGIME</div>
+                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ color: 'var(--text-muted)', fontSize: 10 }}>
+                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Regime</th>
+                          <th style={{ textAlign: 'right' }}>Trades</th>
+                          <th style={{ textAlign: 'right' }}>Win%</th>
+                          <th style={{ textAlign: 'right' }}>Avg P&L</th>
+                          <th style={{ textAlign: 'right' }}>Avg Alpha</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(deepAnalytics.signal_performance.by_wyckoff).map(([regime, d]) => (
+                          <tr key={regime} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td style={{ padding: '3px 0', fontWeight: 700 }}>{regime}</td>
+                            <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{d.count}</td>
+                            <td style={{ textAlign: 'right', color: (d.win_rate || 0) >= 0.5 ? 'var(--green)' : 'var(--red)' }}>{((d.win_rate || 0) * 100).toFixed(0)}%</td>
+                            <td style={{ textAlign: 'right', color: (d.avg_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>{(d.avg_pnl || 0) >= 0 ? '+' : ''}{(d.avg_pnl || 0).toFixed(1)}%</td>
+                            <td style={{ textAlign: 'right', color: (d.avg_alpha || 0) >= 0 ? 'var(--cyan)' : 'var(--red)' }}>{(d.avg_alpha || 0) >= 0 ? '+' : ''}{(d.avg_alpha || 0).toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* By CMF Bucket */}
+                {deepAnalytics.signal_performance?.by_cmf_bucket && Object.keys(deepAnalytics.signal_performance.by_cmf_bucket).length > 0 && (
+                  <div className={styles.statCard}>
+                    <div className={styles.statLabel} style={{ marginBottom: 8 }}>BY CMF PERCENTILE</div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {Object.entries(deepAnalytics.signal_performance.by_cmf_bucket).map(([bucket, d]) => (
+                        <div key={bucket} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '6px 10px', fontSize: 10, textAlign: 'center', minWidth: 80 }}>
+                          <div style={{ fontWeight: 700, marginBottom: 3 }}>{bucket}</div>
+                          <div style={{ color: 'var(--text-muted)' }}>{d.count} trades</div>
+                          <div style={{ color: (d.win_rate || 0) >= 0.5 ? 'var(--green)' : 'var(--red)' }}>{((d.win_rate || 0) * 100).toFixed(0)}% WR</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* By Hype Bucket */}
+                {deepAnalytics.signal_performance?.by_hype_bucket && Object.keys(deepAnalytics.signal_performance.by_hype_bucket).length > 0 && (
+                  <div className={styles.statCard}>
+                    <div className={styles.statLabel} style={{ marginBottom: 8 }}>BY HYPE SCORE</div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {Object.entries(deepAnalytics.signal_performance.by_hype_bucket).map(([bucket, d]) => (
+                        <div key={bucket} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '6px 10px', fontSize: 10, textAlign: 'center', minWidth: 80 }}>
+                          <div style={{ fontWeight: 700, marginBottom: 3 }}>{bucket}</div>
+                          <div style={{ color: 'var(--text-muted)' }}>{d.count} trades</div>
+                          <div style={{ color: (d.win_rate || 0) >= 0.5 ? 'var(--green)' : 'var(--red)' }}>{((d.win_rate || 0) * 100).toFixed(0)}% WR</div>
+                          <div style={{ color: (d.avg_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>{(d.avg_pnl || 0) >= 0 ? '+' : ''}{(d.avg_pnl || 0).toFixed(1)}%</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Timing */}
+                {deepAnalytics.timing && (
+                  <div className={styles.statCard}>
+                    <div className={styles.statLabel} style={{ marginBottom: 8 }}>⏱ EXIT TIMING</div>
+                    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 11 }}>
+                      <span><b style={{ color: 'var(--cyan)' }}>Avg hold:</b> {deepAnalytics.timing.avg_days_held}d</span>
+                      <span><b style={{ color: 'var(--gold)' }}>Peak day:</b> Day {deepAnalytics.timing.avg_max_gain_day || '?'}</span>
+                      {deepAnalytics.timing.suggested_hold_days && <span><b style={{ color: 'var(--green)' }}>Optimal hold:</b> {deepAnalytics.timing.suggested_hold_days}d</span>}
+                      <span><b style={{ color: 'var(--red)' }}>Left on table:</b> {deepAnalytics.timing.avg_missed_exit_pct?.toFixed(1) || 0}%</span>
+                      <span style={{ color: 'var(--text-muted)' }}>Late exits: {deepAnalytics.timing.exit_too_late_count} · Early exits: {deepAnalytics.timing.exit_too_early_count}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Alpha */}
+                {deepAnalytics.alpha && (
+                  <div className={styles.statCard}>
+                    <div className={styles.statLabel} style={{ marginBottom: 8 }}>α ALPHA VS SPY</div>
+                    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 11 }}>
+                      <span>
+                        <b>Avg alpha: </b>
+                        <span style={{ color: (deepAnalytics.alpha.avg_alpha_vs_spy || 0) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
+                          {(deepAnalytics.alpha.avg_alpha_vs_spy || 0) >= 0 ? '+' : ''}{(deepAnalytics.alpha.avg_alpha_vs_spy || 0).toFixed(2)}%
+                        </span>
+                      </span>
+                      <span>
+                        <b>Beat SPY rate: </b>
+                        <span style={{ color: (deepAnalytics.alpha.positive_alpha_rate || 0) >= 0.5 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
+                          {((deepAnalytics.alpha.positive_alpha_rate || 0) * 100).toFixed(0)}%
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Missed Opportunities */}
+                {deepAnalytics.missed_opportunities?.candidates && deepAnalytics.missed_opportunities.candidates.length > 0 && (
+                  <div className={styles.statCard} style={{ border: '1px solid rgba(255,165,0,0.2)' }}>
+                    <div className={styles.statLabel} style={{ color: '#ffa500', marginBottom: 8 }}>🔍 MISSED OPPORTUNITIES (scanned but not journaled)</div>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      {deepAnalytics.missed_opportunities.candidates.slice(0, 8).map((c, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 12, fontSize: 10, alignItems: 'center', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none', paddingTop: i > 0 ? 4 : 0 }}>
+                          <span style={{ fontWeight: 700, minWidth: 50, color: TIER_COLORS[c.tier] || 'var(--text-primary)' }}>{c.symbol}</span>
+                          <span style={{ color: 'var(--text-muted)', minWidth: 40 }}>{c.tier}</span>
+                          {c.ret_5d != null && <span style={{ color: c.ret_5d >= 0 ? 'var(--green)' : 'var(--red)' }}>5d: {c.ret_5d >= 0 ? '+' : ''}{c.ret_5d.toFixed(1)}%</span>}
+                          {c.ret_10d != null && <span style={{ color: c.ret_10d >= 0 ? 'var(--green)' : 'var(--red)' }}>10d: {c.ret_10d >= 0 ? '+' : ''}{c.ret_10d.toFixed(1)}%</span>}
+                          {c.ret_20d != null && <span style={{ color: c.ret_20d >= 0 ? 'var(--green)' : 'var(--red)' }}>20d: {c.ret_20d >= 0 ? '+' : ''}{c.ret_20d.toFixed(1)}%</span>}
+                          <span style={{ color: 'var(--text-muted)', flex: 1, textAlign: 'right' }}>{c.scan_date}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -366,6 +568,24 @@ export default function Journal() {
                     {e.tags?.length > 0 && (
                       <div className={styles.tradeTags}>
                         {e.tags.map(t => <span key={t} className={styles.tradeTag}>{t}</span>)}
+                      </div>
+                    )}
+
+                    {/* Alpha / SPY metrics for closed trades */}
+                    {!isOpen && (e.alpha_pct != null || e.spy_return_pct != null || e.max_gain_day != null || e.missed_exit_pct != null) && (
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 9, marginTop: 4, padding: '3px 6px', background: 'rgba(255,255,255,0.04)', borderRadius: 3 }}>
+                        {e.spy_return_pct != null && (
+                          <span style={{ color: 'var(--text-muted)' }}>SPY: <b style={{ color: e.spy_return_pct >= 0 ? 'var(--green)' : 'var(--red)' }}>{e.spy_return_pct >= 0 ? '+' : ''}{e.spy_return_pct.toFixed(1)}%</b></span>
+                        )}
+                        {e.alpha_pct != null && (
+                          <span style={{ color: 'var(--text-muted)' }}>α: <b style={{ color: e.alpha_pct >= 0 ? 'var(--cyan)' : 'var(--red)' }}>{e.alpha_pct >= 0 ? '+' : ''}{e.alpha_pct.toFixed(1)}%</b></span>
+                        )}
+                        {e.max_gain_day != null && (
+                          <span style={{ color: 'var(--text-muted)' }}>Peak: <b style={{ color: 'var(--gold)' }}>Day {e.max_gain_day}</b></span>
+                        )}
+                        {e.missed_exit_pct != null && e.missed_exit_pct > 0 && (
+                          <span style={{ color: 'var(--text-muted)' }}>Left: <b style={{ color: '#ffa500' }}>{e.missed_exit_pct.toFixed(1)}%</b></span>
+                        )}
                       </div>
                     )}
 
