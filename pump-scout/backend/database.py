@@ -210,6 +210,16 @@ class SectorCache(Base):
     fetched_at = Column(DateTime, default=datetime.utcnow)
 
 
+class EodLog(Base):
+    """End-of-day markdown log — one per trading day."""
+    __tablename__ = "eod_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    log_date = Column(String(10), unique=True, nullable=False, index=True)  # YYYY-MM-DD
+    content = Column(Text, nullable=False)
+    generated_at = Column(DateTime, default=datetime.utcnow)
+
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -1112,3 +1122,44 @@ async def get_deep_analytics() -> dict:
         "missed_opportunities": missed_opp,
         "total_closed": len(closed),
     }
+
+
+# ─── EOD Log ──────────────────────────────────────────────────────────────────
+
+async def save_eod_log(log_date: str, content: str) -> None:
+    """Upsert an end-of-day log for the given date (YYYY-MM-DD)."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(EodLog).where(EodLog.log_date == log_date)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.content = content
+            existing.generated_at = datetime.utcnow()
+        else:
+            session.add(EodLog(log_date=log_date, content=content))
+        await session.commit()
+
+
+async def get_eod_log(log_date: str) -> Optional[dict]:
+    """Return EOD log for a given date, or None."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(EodLog).where(EodLog.log_date == log_date)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return None
+        return {"log_date": row.log_date, "content": row.content, "generated_at": row.generated_at.isoformat()}
+
+
+async def get_latest_eod_log() -> Optional[dict]:
+    """Return the most recent EOD log."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(EodLog).order_by(EodLog.log_date.desc()).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return None
+        return {"log_date": row.log_date, "content": row.content, "generated_at": row.generated_at.isoformat()}
