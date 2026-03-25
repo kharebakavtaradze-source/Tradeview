@@ -220,6 +220,45 @@ class EodLog(Base):
     generated_at = Column(DateTime, default=datetime.utcnow)
 
 
+class MarketRegime(Base):
+    """Daily market regime snapshot (RISK_ON / RISK_OFF / FEAR / ROTATION / NEUTRAL)."""
+    __tablename__ = "market_regime"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, unique=True, nullable=False, index=True)
+    regime = Column(String(30), nullable=False)
+    spy_pct = Column(Float, nullable=True)
+    qqq_pct = Column(Float, nullable=True)
+    xle_pct = Column(Float, nullable=True)
+    xlv_pct = Column(Float, nullable=True)
+    xlu_pct = Column(Float, nullable=True)
+    gld_pct = Column(Float, nullable=True)
+    spy_vs_ema20 = Column(Float, nullable=True)
+    qqq_vs_ema20 = Column(Float, nullable=True)
+    strong_sectors = Column(String(200), nullable=True)   # comma-separated
+    weak_sectors = Column(String(200), nullable=True)     # comma-separated
+    recommendation = Column(Text, nullable=True)
+    etf_details_json = Column(Text, nullable=True)        # JSON
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SectorStrength(Base):
+    """Per-sector aggregate strength for a given scan date."""
+    __tablename__ = "sector_strength"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False, index=True)
+    sector = Column(String(50), nullable=False)
+    avg_score = Column(Float, nullable=True)
+    avg_cmf_pctl = Column(Float, nullable=True)
+    avg_vol_ratio = Column(Float, nullable=True)
+    ticker_count = Column(Integer, nullable=True)
+    leader_symbol = Column(String(10), nullable=True)
+    leader_score = Column(Float, nullable=True)
+    momentum_pct = Column(Float, nullable=True)
+    tickers_json = Column(Text, nullable=True)           # JSON list
+
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -1163,3 +1202,193 @@ async def get_latest_eod_log() -> Optional[dict]:
         if not row:
             return None
         return {"log_date": row.log_date, "content": row.content, "generated_at": row.generated_at.isoformat()}
+
+
+# ─── Market Regime ─────────────────────────────────────────────────────────────
+
+async def save_market_regime(data: dict) -> None:
+    """Upsert today's market regime record."""
+    from datetime import date as _date
+    today = _date.today()
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(MarketRegime).where(MarketRegime.date == today)
+        )
+        row = result.scalar_one_or_none()
+        strong = ",".join(data.get("strong_sectors", []))
+        weak = ",".join(data.get("weak_sectors", []))
+        etf_json = json.dumps(data.get("etf_details", {}))
+
+        if row:
+            row.regime = data["regime"]
+            row.spy_pct = data.get("spy_pct")
+            row.qqq_pct = data.get("qqq_pct")
+            row.xle_pct = data.get("xle_pct")
+            row.xlv_pct = data.get("xlv_pct")
+            row.xlu_pct = data.get("xlu_pct")
+            row.gld_pct = data.get("gld_pct")
+            row.spy_vs_ema20 = data.get("spy_vs_ema20")
+            row.qqq_vs_ema20 = data.get("qqq_vs_ema20")
+            row.strong_sectors = strong
+            row.weak_sectors = weak
+            row.recommendation = data.get("recommendation")
+            row.etf_details_json = etf_json
+        else:
+            session.add(MarketRegime(
+                date=today,
+                regime=data["regime"],
+                spy_pct=data.get("spy_pct"),
+                qqq_pct=data.get("qqq_pct"),
+                xle_pct=data.get("xle_pct"),
+                xlv_pct=data.get("xlv_pct"),
+                xlu_pct=data.get("xlu_pct"),
+                gld_pct=data.get("gld_pct"),
+                spy_vs_ema20=data.get("spy_vs_ema20"),
+                qqq_vs_ema20=data.get("qqq_vs_ema20"),
+                strong_sectors=strong,
+                weak_sectors=weak,
+                recommendation=data.get("recommendation"),
+                etf_details_json=etf_json,
+            ))
+        await session.commit()
+
+
+def _regime_row_to_dict(row: MarketRegime) -> dict:
+    strong = [s for s in (row.strong_sectors or "").split(",") if s]
+    weak = [s for s in (row.weak_sectors or "").split(",") if s]
+    etf = {}
+    try:
+        etf = json.loads(row.etf_details_json or "{}")
+    except Exception:
+        pass
+    return {
+        "date": row.date.isoformat() if row.date else None,
+        "regime": row.regime,
+        "spy_pct": row.spy_pct,
+        "qqq_pct": row.qqq_pct,
+        "xle_pct": row.xle_pct,
+        "xlv_pct": row.xlv_pct,
+        "xlu_pct": row.xlu_pct,
+        "gld_pct": row.gld_pct,
+        "spy_vs_ema20": row.spy_vs_ema20,
+        "qqq_vs_ema20": row.qqq_vs_ema20,
+        "strong_sectors": strong,
+        "weak_sectors": weak,
+        "recommendation": row.recommendation,
+        "etf_details": etf,
+    }
+
+
+async def get_market_regime_latest() -> Optional[dict]:
+    """Return the most recent market regime record."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(MarketRegime).order_by(MarketRegime.date.desc()).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        return _regime_row_to_dict(row) if row else None
+
+
+async def get_market_regime_history(days: int = 30) -> List[dict]:
+    """Return market regime records for the last N days."""
+    from datetime import date as _date, timedelta
+    since = _date.today() - timedelta(days=days)
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(MarketRegime)
+            .where(MarketRegime.date >= since)
+            .order_by(MarketRegime.date.desc())
+        )
+        rows = result.scalars().all()
+        return [_regime_row_to_dict(r) for r in rows]
+
+
+# ─── Sector Strength ───────────────────────────────────────────────────────────
+
+async def save_sector_strength(data: dict) -> None:
+    """Upsert today's sector strength records (one row per sector)."""
+    from datetime import date as _date
+    today = _date.today()
+    async with get_session_factory()() as session:
+        for sector, info in data.items():
+            result = await session.execute(
+                select(SectorStrength).where(
+                    SectorStrength.date == today,
+                    SectorStrength.sector == sector,
+                )
+            )
+            row = result.scalar_one_or_none()
+            tickers_json = json.dumps(info.get("tickers", []))
+            if row:
+                row.avg_score = info.get("avg_score")
+                row.avg_cmf_pctl = info.get("avg_cmf_pctl")
+                row.avg_vol_ratio = info.get("avg_vol_ratio")
+                row.ticker_count = info.get("ticker_count")
+                row.leader_symbol = info.get("leader_symbol")
+                row.leader_score = info.get("leader_score")
+                row.momentum_pct = info.get("momentum_pct")
+                row.tickers_json = tickers_json
+            else:
+                session.add(SectorStrength(
+                    date=today,
+                    sector=sector,
+                    avg_score=info.get("avg_score"),
+                    avg_cmf_pctl=info.get("avg_cmf_pctl"),
+                    avg_vol_ratio=info.get("avg_vol_ratio"),
+                    ticker_count=info.get("ticker_count"),
+                    leader_symbol=info.get("leader_symbol"),
+                    leader_score=info.get("leader_score"),
+                    momentum_pct=info.get("momentum_pct"),
+                    tickers_json=tickers_json,
+                ))
+        await session.commit()
+
+
+def _strength_row_to_dict(row: SectorStrength) -> dict:
+    tickers = []
+    try:
+        tickers = json.loads(row.tickers_json or "[]")
+    except Exception:
+        pass
+    return {
+        "sector": row.sector,
+        "date": row.date.isoformat() if row.date else None,
+        "avg_score": row.avg_score,
+        "avg_cmf_pctl": row.avg_cmf_pctl,
+        "avg_vol_ratio": row.avg_vol_ratio,
+        "ticker_count": row.ticker_count,
+        "leader_symbol": row.leader_symbol,
+        "leader_score": row.leader_score,
+        "momentum_pct": row.momentum_pct,
+        "tickers": tickers,
+    }
+
+
+async def get_sector_strength_latest() -> dict:
+    """Return today's (or most recent) sector strength as {sector: dict}."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(SectorStrength.date).order_by(SectorStrength.date.desc()).limit(1)
+        )
+        latest_date = result.scalar_one_or_none()
+        if not latest_date:
+            return {}
+
+        result2 = await session.execute(
+            select(SectorStrength).where(SectorStrength.date == latest_date)
+        )
+        rows = result2.scalars().all()
+        return {r.sector: _strength_row_to_dict(r) for r in rows}
+
+
+async def get_sector_strength_for_sector(sector: str) -> Optional[dict]:
+    """Return the most recent strength record for a specific sector."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(SectorStrength)
+            .where(SectorStrength.sector == sector)
+            .order_by(SectorStrength.date.desc())
+            .limit(1)
+        )
+        row = result.scalar_one_or_none()
+        return _strength_row_to_dict(row) if row else None

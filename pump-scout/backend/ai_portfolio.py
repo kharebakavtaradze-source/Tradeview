@@ -112,12 +112,45 @@ async def ai_portfolio_decisions():
         for r in candidates
     ]
 
+    # Load market regime and sector strength for context
+    regime_ctx = {}
+    sector_strength_ctx = {}
+    try:
+        from scanner.market_regime import get_latest_regime, get_latest_sector_strength
+        regime_ctx = await get_latest_regime() or {}
+        sector_strength_ctx = await get_latest_sector_strength()
+    except Exception:
+        pass
+
+    strong_sectors = regime_ctx.get("strong_sectors", [])
+    weak_sectors = regime_ctx.get("weak_sectors", [])
+    regime_name = regime_ctx.get("regime", "NEUTRAL")
+    regime_rec = regime_ctx.get("recommendation", "")
+
+    # Build concise sector summary
+    sector_summary = {
+        s: {"avg_score": v.get("avg_score"), "leader": v.get("leader_symbol"), "momentum_pct": v.get("momentum_pct")}
+        for s, v in sector_strength_ctx.items()
+    }
+
     prompt = f"""You are an AI trader managing a $1000 paper trading portfolio.
 Your goal is to maximize returns using Wyckoff accumulation signals.
 
 CURRENT DATE: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
 CASH AVAILABLE: ${cash:.2f}
 TOTAL PORTFOLIO VALUE: ${state['total_value']:.2f}
+
+MARKET REGIME: {regime_name}
+Recommendation: {regime_rec}
+
+SECTOR STRENGTH TODAY:
+{json.dumps(sector_summary, indent=2)}
+
+RULES FOR TODAY:
+Strong sectors: {', '.join(strong_sectors) if strong_sectors else 'All sectors active'}
+Weak sectors: {', '.join(weak_sectors) if weak_sectors else 'None'}
+- Prefer buying tickers from strong sectors.
+- Avoid buying tickers from weak sectors unless signal is extremely strong (FIRE + CMF > 90).
 
 OPEN POSITIONS:
 {json.dumps(portfolio_ctx, indent=2)}
