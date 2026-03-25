@@ -1,4 +1,4 @@
-:root {
+:global(:root) {
   --text-muted: rgba(255,255,255,0.45);
 }
 
