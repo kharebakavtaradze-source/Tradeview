@@ -1,0 +1,86 @@
+.banner {
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.topRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.regimeLabel {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.etfRow {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.sectorsRow {
+  margin-top: 5px;
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.strong {
+  color: #00c864;
+}
+
+.weak {
+  color: #ff8800;
+}
+
+.rec {
+  margin-top: 5px;
+  font-size: 11px;
+  opacity: 0.8;
+  font-style: italic;
+}
+
+/* ── Regime variants ── */
+.riskOn {
+  background: rgba(0, 200, 100, 0.07);
+  border: 1px solid rgba(0, 200, 100, 0.25);
+  color: #d0fde8;
+}
+.riskOn .regimeLabel { color: #00c864; }
+
+.riskOff {
+  background: rgba(255, 136, 0, 0.07);
+  border: 1px solid rgba(255, 136, 0, 0.3);
+  color: #fde8d0;
+}
+.riskOff .regimeLabel { color: #ff8800; }
+
+.fear {
+  background: rgba(255, 68, 102, 0.08);
+  border: 1px solid rgba(255, 68, 102, 0.3);
+  color: #fdd0d8;
+}
+.fear .regimeLabel { color: #ff4466; }
+
+.rotation {
+  background: rgba(68, 136, 255, 0.07);
+  border: 1px solid rgba(68, 136, 255, 0.3);
+  color: #d0e0fd;
+}
+.rotation .regimeLabel { color: #4488ff; }
+
+.neutral {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}
+.neutral .regimeLabel { color: var(--text-muted); }

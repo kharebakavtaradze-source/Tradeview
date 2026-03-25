@@ -15,67 +15,8 @@ _sector_cache: dict = {}
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# ─── Known sector map — zero API calls for these tickers ─────────────────────
-_KNOWN_SECTORS: dict[str, str] = {
-    # Crypto miners
-    "MARA": "Financial Services", "RIOT": "Financial Services", "CLSK": "Financial Services",
-    "HUT": "Financial Services", "BITF": "Financial Services", "WULF": "Financial Services",
-    "BTBT": "Financial Services", "CIFR": "Financial Services", "IREN": "Financial Services",
-    "GREE": "Financial Services",
-    # EV / Automotive
-    "NKLA": "Consumer Cyclical", "FFIE": "Consumer Cyclical", "GOEV": "Consumer Cyclical",
-    "MULN": "Consumer Cyclical", "WKHS": "Industrials", "RIVN": "Consumer Cyclical",
-    "LCID": "Consumer Cyclical", "PTRA": "Industrials", "SOLO": "Consumer Cyclical",
-    "BLNK": "Consumer Cyclical", "EVGO": "Consumer Cyclical", "CHPT": "Consumer Cyclical",
-    "AYRO": "Consumer Cyclical", "IDEX": "Consumer Cyclical",
-    # AI / Tech
-    "BBAI": "Technology", "SOUN": "Technology", "AIXI": "Technology", "AITX": "Technology",
-    "SMCI": "Technology", "IONQ": "Technology", "RGTI": "Technology", "QUBT": "Technology",
-    "QBTS": "Technology", "CXAI": "Technology", "GFAI": "Technology", "TUYA": "Technology",
-    "AIOT": "Technology",
-    # Space / Satellite
-    "ASTS": "Communication Services", "SATL": "Communication Services",
-    "RKLB": "Industrials", "LUNR": "Industrials", "MNTS": "Industrials",
-    "VORB": "Industrials", "ASTRA": "Industrials", "SPIR": "Communication Services",
-    "GSAT": "Communication Services", "VSAT": "Communication Services",
-    "NXST": "Communication Services",
-    # Biotech / Healthcare
-    "BNGO": "Healthcare", "NVAX": "Healthcare", "OCGN": "Healthcare",
-    "SAVA": "Healthcare", "SENS": "Healthcare",
-    "CODX": "Healthcare", "INMB": "Healthcare", "IRWD": "Healthcare",
-    "TPST": "Healthcare", "HALO": "Healthcare", "CAPR": "Healthcare",
-    "DNLI": "Healthcare", "FOLD": "Healthcare", "MIST": "Healthcare",
-    "RCKT": "Healthcare", "RYTM": "Healthcare", "CRVS": "Healthcare",
-    "DERM": "Healthcare", "HUMA": "Healthcare", "INAB": "Healthcare",
-    "ZLAB": "Healthcare", "NRIX": "Healthcare", "VSTM": "Healthcare",
-    "CORT": "Healthcare", "ATAI": "Healthcare", "CLDX": "Healthcare",
-    "VNDA": "Healthcare", "AKBA": "Healthcare", "ADMA": "Healthcare",
-    "BCYC": "Healthcare", "XNCR": "Healthcare", "SANA": "Healthcare",
-    "TGTX": "Healthcare", "TNXP": "Healthcare", "PCVX": "Healthcare",
-    "IMVT": "Healthcare", "BHVN": "Healthcare", "KPTI": "Healthcare",
-    "VRCA": "Healthcare", "IDYA": "Healthcare", "CPRX": "Healthcare",
-    "NRXS": "Healthcare", "STRO": "Healthcare", "PDSB": "Healthcare",
-    "ALLO": "Healthcare", "AMRX": "Healthcare", "ERAS": "Healthcare",
-    "FATE": "Healthcare", "KLTR": "Healthcare", "ITRM": "Healthcare",
-    "CRBU": "Healthcare", "REPL": "Healthcare", "ARRY": "Healthcare",
-    "KYMR": "Healthcare",
-    # Financial Services
-    "EFSC": "Financial Services", "SOFI": "Financial Services",
-    "HOOD": "Financial Services",
-    # Real Estate
-    "NXRT": "Real Estate",
-    # Consumer
-    "CURV": "Consumer Cyclical", "SCHL": "Consumer Defensive",
-    # Industrials
-    "NNBR": "Industrials", "TITN": "Industrials",
-    # Gaming / Media
-    "AMC": "Communication Services", "GME": "Consumer Cyclical",
-    "DKNG": "Consumer Cyclical", "PENN": "Consumer Cyclical",
-    # Cannabis
-    "SNDL": "Consumer Defensive", "TLRY": "Consumer Defensive",
-    "CGC": "Consumer Defensive", "ACB": "Consumer Defensive",
-    "CRON": "Consumer Defensive", "HEXO": "Consumer Defensive",
-}
+# Import canonical sector map; also expose as _KNOWN_SECTORS for backwards compat
+from scanner.sector_map import SECTOR_MAP as _KNOWN_SECTORS
 
 
 async def _fetch_sector_api(ticker: str, client: httpx.AsyncClient) -> str:
@@ -204,29 +145,43 @@ async def get_sectors_batch(tickers: list) -> dict:
 def find_sector_leaders(results: list) -> dict:
     """
     Returns {sector: [leader_dicts]}.
-    Leader = ticker with price_change_pct > 10% AND vol_anomaly > 3x today.
+    Leader = ticker with score > 60 OR (price_change_pct > 10% AND vol > 3x).
     """
     leaders: dict = {}
     for r in results:
-        change = (
-            r.get("price_change_pct")
-            or r.get("indicators", {}).get("price_change_pct", 0)
-            or 0
-        )
+        change = r.get("indicators", {}).get("price_change_pct", 0) or 0
         vol = r.get("indicators", {}).get("anomaly_ratio", 0)
+        score_val = r.get("score", {}).get("total_score", 0)
         sector = r.get("sector", "Unknown")
 
-        if change > 10.0 and vol > 3.0 and sector != "Unknown":
-            leaders.setdefault(sector, []).append(
-                {"symbol": r["symbol"], "change": change, "vol": vol}
-            )
+        if sector == "Unknown":
+            continue
+
+        # Strong leader: high score OR big price move
+        if score_val >= 60 or (change > 10.0 and vol > 3.0):
+            leaders.setdefault(sector, []).append({
+                "symbol": r["symbol"],
+                "change": change,
+                "vol": vol,
+                "score": score_val,
+            })
+
+    # Sort each sector's leaders by score desc
+    for sector in leaders:
+        leaders[sector].sort(key=lambda x: x["score"], reverse=True)
+
     return leaders
 
 
 def calc_sympathy_score(ticker_result: dict, sector_leaders: dict) -> dict:
     """
-    Score sympathy play potential for a ticker given the current sector leaders.
-    Sympathy candidate: same sector as a leader but hasn't moved yet (< 5%).
+    Score sympathy play potential for a ticker given sector leaders.
+
+    New logic (v2):
+    - Leader must have score >= 60
+    - This ticker must lag leader by >= 3% price change
+    - This ticker must have vol >= 1.5x
+    - CMF bonus for accumulation signal
     """
     sector = ticker_result.get("sector", "Unknown")
 
@@ -234,48 +189,70 @@ def calc_sympathy_score(ticker_result: dict, sector_leaders: dict) -> dict:
         return {"is_sympathy": False, "sympathy_score": 0}
 
     leaders = sector_leaders[sector]
-    ticker_change = (
-        ticker_result.get("price_change_pct")
-        or ticker_result.get("indicators", {}).get("price_change_pct", 0)
-        or 0
-    )
-
-    if ticker_change >= 5.0 or not leaders:
+    if not leaders:
         return {"is_sympathy": False, "sympathy_score": 0}
 
-    max_leader_change = max(l["change"] for l in leaders)
-    max_leader_vol = max(l["vol"] for l in leaders)
+    my_symbol = ticker_result.get("symbol", "")
+    # Filter out this ticker from leaders
+    sector_leaders_filtered = [l for l in leaders if l["symbol"] != my_symbol]
+    if not sector_leaders_filtered:
+        return {"is_sympathy": False, "sympathy_score": 0, "is_leader": True}
 
-    sympathy_score = 0
+    best_leader = sector_leaders_filtered[0]
+    leader_score = best_leader["score"]
+    leader_change = best_leader["change"]
 
-    # Leader strength bonus (max 40)
-    if max_leader_change > 50:
-        sympathy_score += 40
-    elif max_leader_change > 30:
-        sympathy_score += 30
-    elif max_leader_change > 15:
-        sympathy_score += 20
-    else:
-        sympathy_score += 10
+    # Leader must be strong
+    if leader_score < 60:
+        return {"is_sympathy": False, "sympathy_score": 0}
 
-    # Volume bonus (max 30)
-    if max_leader_vol > 10:
-        sympathy_score += 30
-    elif max_leader_vol > 5:
-        sympathy_score += 20
-    else:
-        sympathy_score += 10
+    indicators = ticker_result.get("indicators", {})
+    my_change = indicators.get("price_change_pct", 0) or 0
+    my_cmf = indicators.get("cmf_pctl", 50)
+    my_vol = indicators.get("anomaly_ratio", 0)
 
-    # Candidate's own setup bonus (max 30)
-    own_score = ticker_result.get("score", {}).get("total_score", 0)
-    sympathy_score += min(own_score * 0.3, 30)
+    lag = leader_change - my_change
+
+    # Minimum lag and volume requirements
+    if lag < 3.0:
+        return {"is_sympathy": False, "sympathy_score": 0}
+    if my_vol < 1.5:
+        return {"is_sympathy": False, "sympathy_score": 0}
+
+    score = 0
+
+    # Leader strength bonus (max 40pts)
+    score += min(40, leader_score * 0.4)
+
+    # Lag bonus — more lag = more upside potential (max 30pts)
+    score += min(30, lag * 3)
+
+    # CMF bonus — already accumulating (max 20pts)
+    if my_cmf > 70:
+        score += 20
+    elif my_cmf > 50:
+        score += 10
+
+    # Volume bonus (max 10pts)
+    if my_vol > 3:
+        score += 10
+    elif my_vol > 2:
+        score += 5
+
+    score = min(100, round(score))
 
     return {
-        "is_sympathy": True,
-        "sympathy_score": min(int(sympathy_score), 100),
+        "is_sympathy": score >= 50,
+        "sympathy_score": score,
         "sector": sector,
-        "leaders": [l["symbol"] for l in leaders],
-        "leader_change": round(max_leader_change, 1),
-        "candidate_change": round(ticker_change, 2),
+        "leaders": [l["symbol"] for l in sector_leaders_filtered[:3]],
+        "leader": best_leader["symbol"],
+        "leader_score": round(leader_score, 1),
+        "leader_change_pct": round(leader_change, 2),
+        "my_change_pct": round(my_change, 2),
+        "lag_pct": round(lag, 2),
+        # backwards-compat fields
+        "leader_change": round(leader_change, 1),
+        "candidate_change": round(my_change, 2),
         "window": "1-3 days",
     }
