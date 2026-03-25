@@ -986,6 +986,22 @@ async def get_candidates_summary() -> list:
     ]
 
 
+async def get_recent_fire_arm_symbols(days: int = 7) -> list[str]:
+    """Return distinct symbols from FIRE/ARM scan candidates in the last N days
+    where pct_5d is still NULL (outcome not yet known — still worth watching)."""
+    from datetime import date as _date, timedelta
+    since = _date.today() - timedelta(days=days)
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ScanCandidate.symbol)
+            .where(ScanCandidate.scan_date >= since)
+            .where(ScanCandidate.tier.in_(["FIRE", "ARM"]))
+            .where(ScanCandidate.pct_5d.is_(None))
+            .distinct()
+        )
+        return [row[0] for row in result.all()]
+
+
 # ─── Position Snapshots ───────────────────────────────────────────────────────
 
 async def save_position_snapshot(journal_id: int, day_number: int, price: float,
