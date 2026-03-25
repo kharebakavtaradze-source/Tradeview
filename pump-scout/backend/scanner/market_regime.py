@@ -54,6 +54,7 @@ async def detect_market_regime() -> dict:
     """
     Detect the current market regime using ETF data.
     Saves to DB and updates in-memory cache.
+    Falls back to most recent non-zero DB row if all ETF values are 0 or None.
     """
     global _regime_cache, _regime_cache_date
 
@@ -64,6 +65,22 @@ async def detect_market_regime() -> dict:
         data = await fetch_etf_data(sym)
         if data:
             etf_data[sym] = data
+
+    # If all key ETF pct values are zero/missing, fall back to last good DB row
+    spy_pct = etf_data.get("SPY", {}).get("pct_1d", 0)
+    qqq_pct = etf_data.get("QQQ", {}).get("pct_1d", 0)
+    if not etf_data or (spy_pct == 0 and qqq_pct == 0):
+        logger.warning("ETF data appears empty/zero — checking DB for most recent non-zero regime")
+        try:
+            from database import get_market_regime_latest
+            fallback = await get_market_regime_latest()
+            if fallback and (fallback.get("spy_pct") or fallback.get("qqq_pct")):
+                logger.warning(f"Using cached regime from {fallback.get('date')} (ETF fetch returned no data)")
+                _regime_cache = fallback
+                _regime_cache_date = fallback.get("date", date.today().isoformat())
+                return fallback
+        except Exception as e:
+            logger.warning(f"DB fallback for regime failed: {e}")
 
     spy = etf_data.get("SPY", {})
     qqq = etf_data.get("QQQ", {})

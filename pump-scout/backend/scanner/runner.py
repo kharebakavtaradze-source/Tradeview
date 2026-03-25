@@ -15,6 +15,64 @@ from .market_regime import calculate_sector_strength, get_latest_regime
 
 logger = logging.getLogger(__name__)
 
+# ETFs used purely for regime detection — excluded from trading results
+REGIME_ETFS = {"SPY", "QQQ", "XLE", "XLV", "XLU", "GLD", "IWM"}
+
+
+async def get_scan_symbols() -> tuple[list[str], dict]:
+    """
+    Build scan symbol list from 4 dynamic sources. No hardcoded tickers.
+    Returns (symbols, source_counts) where source_counts logs the breakdown.
+    """
+    symbols: set[str] = set()
+
+    # SOURCE 1: Screener (primary — Finviz → Yahoo → static fallback)
+    screener_symbols = await get_tickers()
+    symbols.update(screener_symbols)
+    source_screener = len(screener_symbols)
+
+    # SOURCE 2: Open journal positions — always track what we're holding
+    source_journal = 0
+    try:
+        from database import get_open_journal_entries
+        open_positions = await get_open_journal_entries()
+        journal_syms = [p["symbol"] for p in open_positions if p.get("symbol")]
+        symbols.update(journal_syms)
+        source_journal = len(journal_syms)
+    except Exception as e:
+        logger.warning(f"get_scan_symbols: journal lookup failed: {e}")
+
+    # SOURCE 3: Recent FIRE/ARM candidates (last 7 days, outcome not yet known)
+    source_candidates = 0
+    try:
+        from database import get_recent_fire_arm_symbols
+        recent_syms = await get_recent_fire_arm_symbols(days=7)
+        symbols.update(recent_syms)
+        source_candidates = len(recent_syms)
+    except Exception as e:
+        logger.warning(f"get_scan_symbols: recent candidates lookup failed: {e}")
+
+    # SOURCE 4: Regime ETFs (needed for market regime calculation)
+    symbols.update(REGIME_ETFS)
+
+    total = len(symbols)
+    source_counts = {
+        "screener": source_screener,
+        "journal": source_journal,
+        "recent_candidates": source_candidates,
+        "regime_etfs": len(REGIME_ETFS),
+        "total": total,
+    }
+
+    print(f"Scan symbols breakdown:")
+    print(f"  Screener:          {source_screener}")
+    print(f"  Journal positions: {source_journal}")
+    print(f"  Recent FIRE/ARM:   {source_candidates}")
+    print(f"  Regime ETFs:       {len(REGIME_ETFS)}")
+    print(f"  Total unique:      {total}")
+
+    return list(symbols), source_counts
+
 
 async def run_scan() -> dict:
     """
@@ -31,9 +89,9 @@ async def run_scan() -> dict:
     print("Starting scan...")
     scan_start = datetime.utcnow()
 
-    # Step 1: Get tickers
-    tickers = await get_tickers()
-    print(f"Got {len(tickers)} tickers")
+    # Step 1: Get symbols from all dynamic sources
+    tickers, symbol_sources = await get_scan_symbols()
+    print(f"Got {len(tickers)} symbols total")
 
     # Step 2: Fetch OHLCV data
     all_data = await fetch_batch(tickers)
@@ -91,6 +149,13 @@ async def run_scan() -> dict:
 
     # Step 4: Sort by score descending
     results.sort(key=lambda x: x["score"]["total_score"], reverse=True)
+
+    # Filter regime ETFs out of trading results — they are scanned for regime
+    # detection only and should not appear as trading candidates
+    trading_results = [r for r in results if r["symbol"] not in REGIME_ETFS]
+    etf_results = [r for r in results if r["symbol"] in REGIME_ETFS]
+    print(f"Trading candidates: {len(trading_results)} (filtered {len(etf_results)} regime ETFs)")
+    results = trading_results
 
     # Initialise for the return value (populated inside the if-block below)
     sector_strength: dict = {}
@@ -175,4 +240,5 @@ async def run_scan() -> dict:
         "tier_counts": tier_counts,
         "sector_strength": sector_strength if results else {},
         "market_regime": regime,
+        "symbol_sources": symbol_sources,
     }
