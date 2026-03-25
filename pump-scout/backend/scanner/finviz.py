@@ -32,6 +32,14 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
+# Always-watched tickers — added when Yahoo screener returns < 20 symbols
+# to guarantee a minimum scan universe even when screeners return sparse results.
+ALWAYS_WATCHED_TICKERS = [
+    "LYFT", "GTM", "SATS", "WKHS", "BNGO", "INMB",
+    "ANGI", "VOR", "NXE", "RITM", "GEN", "TUYA",
+    "NNBR", "TILE", "DXYZ", "NTGR", "WT", "LUNR",
+]
+
 # Large static fallback list of known small-cap / mid-cap US stocks
 FALLBACK_TICKERS = [
     # Tech small-caps
@@ -444,6 +452,11 @@ async def get_tickers() -> List[str]:
             logger.info(f"Yahoo screener: {len(yahoo_tickers)} raw → +{added} unique, total={len(all_tickers)}")
         else:
             logger.warning("Yahoo screener also returned 0 tickers")
+
+        if len(yahoo_tickers) < 20:
+            logger.warning(f"Yahoo screener returned only {len(yahoo_tickers)} tickers — injecting always-watched list")
+            added = _add_unique(ALWAYS_WATCHED_TICKERS)
+            logger.info(f"Always-watched tickers: +{added}, total={len(all_tickers)}")
 
     if len(all_tickers) < 50:
         logger.warning(f"Both scrapers failed ({len(all_tickers)}) — using static fallback")
