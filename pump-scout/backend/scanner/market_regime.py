@@ -1,6 +1,7 @@
 """
 Market Regime Detector + Sector Strength Calculator.
-Runs once per day at 8:00 AM ET (scheduled) or on-demand.
+Runs once per day at 16:15 ET (after close) to capture previous-day closing prices.
+If today's data is unavailable, callers fall back to the most recent date in the DB.
 """
 import json
 import logging
@@ -151,7 +152,10 @@ async def detect_market_regime() -> dict:
 
 
 async def get_latest_regime() -> dict | None:
-    """Return today's regime from cache → DB."""
+    """Return today's regime from cache → DB.
+    If today's data is not yet available (regime runs at 16:15),
+    returns the most recent available date from the DB as a fallback.
+    """
     global _regime_cache, _regime_cache_date
 
     today = date.today().isoformat()
@@ -160,10 +164,14 @@ async def get_latest_regime() -> dict | None:
 
     try:
         from database import get_market_regime_latest
+        # get_market_regime_latest() returns the most recent row regardless of date,
+        # so scans run before 16:15 will use the previous trading day's regime.
         regime = await get_market_regime_latest()
         if regime:
             _regime_cache = regime
             _regime_cache_date = regime.get("date", today)
+            if regime.get("date") != today:
+                logger.info(f"Market regime: using most recent available ({regime.get('date')}) — today's not yet saved")
             return regime
     except Exception as e:
         logger.warning(f"get_latest_regime DB lookup failed: {e}")

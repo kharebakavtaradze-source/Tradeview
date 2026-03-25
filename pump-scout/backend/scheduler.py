@@ -55,17 +55,17 @@ async def _run_market_regime():
 def start_scheduler():
     """Register scan jobs and start the scheduler."""
 
-    # 07:55 AM US/Eastern — Market Regime Detection (runs before scans)
+    # 16:15 ET — Market Regime Detection (after close, uses previous-day closing prices)
     scheduler.add_job(
         _run_market_regime,
         trigger=CronTrigger(
             day_of_week="mon-fri",
-            hour=7,
-            minute=55,
+            hour=16,
+            minute=15,
             timezone=EASTERN_TZ,
         ),
-        id="market_regime_0755_est",
-        name="Market Regime Detection (7:55 AM ET)",
+        id="market_regime_1615_est",
+        name="Market Regime Detection (4:15 PM ET)",
         replace_existing=True,
         misfire_grace_time=300,
     )
@@ -191,7 +191,7 @@ def start_scheduler():
     )
 
     scheduler.start()
-    logger.info("Scheduler started — regime + 3 scan jobs + hype monitor + 5 portfolio/journal/EOD jobs")
+    logger.info("Scheduler started — 3 scan jobs + hype monitor + 5 portfolio/journal/EOD jobs + regime at 16:15")
 
 
 def stop_scheduler():
