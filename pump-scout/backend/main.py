@@ -38,10 +38,14 @@ from database import (
     get_journal_entry,
     get_journal_stats,
     get_latest_scan,
+    get_market_regime_history,
+    get_market_regime_latest,
     get_open_ai_positions,
     get_portfolio_state,
     get_position_snapshots,
     get_scan_history,
+    get_sector_strength_for_sector,
+    get_sector_strength_latest,
     get_watchlist,
     init_db,
     mark_candidate_journaled,
@@ -535,6 +539,80 @@ async def alerts_test():
             raise HTTPException(status_code=503, detail="Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
         raise HTTPException(status_code=500, detail="Telegram send failed — check logs")
     return {"status": "sent", "message": "Test alert delivered to Telegram"}
+
+
+# ─── Market Regime routes ──────────────────────────────────────────────────────
+
+@app.get("/api/market-regime")
+async def market_regime_latest():
+    """Return the latest market regime with ETF details."""
+    regime = await get_market_regime_latest()
+    if not regime:
+        # No saved regime yet — try to detect on-the-fly
+        try:
+            from scanner.market_regime import detect_market_regime
+            regime = await detect_market_regime()
+        except Exception as e:
+            logger.warning(f"On-the-fly regime detection failed: {e}")
+            return {"regime": "NEUTRAL", "recommendation": "No data yet.", "strong_sectors": [], "weak_sectors": [], "etf_details": {}}
+    return regime
+
+
+@app.get("/api/market-regime/history")
+async def market_regime_history():
+    """Return the last 30 days of market regime data."""
+    return await get_market_regime_history(days=30)
+
+
+@app.post("/api/market-regime/refresh")
+async def market_regime_refresh(background_tasks: BackgroundTasks):
+    """Manually trigger market regime detection (runs in background)."""
+    from scanner.market_regime import detect_market_regime
+    background_tasks.add_task(detect_market_regime)
+    return {"status": "started", "message": "Market regime detection started in background"}
+
+
+@app.get("/api/sector-strength")
+async def sector_strength_latest():
+    """Return today's sector strength table sorted by avg_score."""
+    data = await get_sector_strength_latest()
+    # If empty, try to get from latest scan
+    if not data:
+        scan = await get_latest_scan()
+        if scan and scan.get("sector_strength"):
+            data = scan["sector_strength"]
+    sectors = sorted(data.values(), key=lambda x: x.get("avg_score", 0), reverse=True)
+    return {"sectors": sectors}
+
+
+@app.get("/api/sector-strength/{sector}")
+async def sector_strength_by_sector(sector: str):
+    """Return tickers in a specific sector with their scores."""
+    data = await get_sector_strength_for_sector(sector)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"No data for sector: {sector}")
+
+    # Enrich with latest scan data for each ticker
+    scan = await get_latest_scan()
+    tickers_detail = []
+    if scan:
+        results_by_symbol = {r["symbol"]: r for r in scan.get("results", [])}
+        for sym in data.get("tickers", []):
+            r = results_by_symbol.get(sym)
+            if r:
+                tickers_detail.append({
+                    "symbol": sym,
+                    "tier": r.get("score", {}).get("tier"),
+                    "score": round(r.get("score", {}).get("total_score", 0), 1),
+                    "price": r.get("price"),
+                    "price_change_pct": r.get("indicators", {}).get("price_change_pct", 0),
+                    "cmf_pctl": r.get("indicators", {}).get("cmf_pctl", 0),
+                    "vol_ratio": r.get("indicators", {}).get("anomaly_ratio", 0),
+                    "sympathy": r.get("sympathy", {}),
+                })
+    tickers_detail.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    return {**data, "tickers_detail": tickers_detail}
 
 
 # ─── EOD Log routes ────────────────────────────────────────────────────────────

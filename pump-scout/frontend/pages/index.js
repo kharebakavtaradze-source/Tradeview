@@ -3,11 +3,13 @@ import Head from 'next/head';
 import Link from 'next/link';
 import TickerCard from '../components/TickerCard';
 import Scanner from '../components/Scanner';
+import MarketRegimeBanner from '../components/MarketRegimeBanner';
+import SectorStrengthBar from '../components/SectorStrengthBar';
 import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v14.0';
+const VERSION = 'v16.0';
 const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'SYMPATHY', 'FLOW', 'SILENT', 'HYPE', 'WATCH'];
 const TIER_LABELS = {
   FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH',
@@ -109,6 +111,9 @@ export default function Home() {
   const [scanning, setScanning] = useState(false);
   const [marketOpen, setMarketOpen] = useState(true);
   const [marketTimer, setMarketTimer] = useState({ open: true, label: '00:00:00' });
+  const [marketRegime, setMarketRegime] = useState(null);
+  const [sectorStrength, setSectorStrength] = useState([]);
+  const [sectorFilter, setSectorFilter] = useState(null);
   const [hypeStatus, setHypeStatus] = useState(null);
   const [hypeResults, setHypeResults] = useState([]);
   const [hypeRunning, setHypeRunning] = useState(false);
@@ -143,19 +148,37 @@ export default function Home() {
     }
   }, []);
 
+  const fetchRegime = useCallback(async () => {
+    try {
+      const [regimeRes, strengthRes] = await Promise.all([
+        fetch(`${API_URL}/api/market-regime`),
+        fetch(`${API_URL}/api/sector-strength`),
+      ]);
+      if (regimeRes.ok) setMarketRegime(await regimeRes.json());
+      if (strengthRes.ok) {
+        const d = await strengthRes.json();
+        setSectorStrength(d.sectors || []);
+      }
+    } catch {
+      // regime is optional — silent fail
+    }
+  }, []);
+
   useEffect(() => {
     fetchLatest();
     fetchHype();
+    fetchRegime();
     setMarketOpen(isMarketOpen());
 
     const interval = setInterval(() => {
       fetchLatest();
       fetchHype();
+      fetchRegime();
       setMarketOpen(isMarketOpen());
     }, REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [fetchLatest, fetchHype]);
+  }, [fetchLatest, fetchHype, fetchRegime]);
 
   useEffect(() => {
     const tick = () => {
@@ -225,12 +248,16 @@ export default function Home() {
     return h?.divergences?.some((d) => d.type === 'PEAK_FADING');
   });
 
-  const filtered =
+  const filteredBase =
     activeTab === 'SYMPATHY' ? sympathyResults
     : activeTab === 'FLOW' ? flowResults
     : activeTab === 'SILENT' ? silentVolumeResults
     : activeTab === 'HYPE' ? hypeNoVolumeResults
     : results.filter((r) => r.score?.tier === activeTab);
+
+  const filtered = sectorFilter
+    ? filteredBase.filter((r) => r.sector === sectorFilter)
+    : filteredBase;
 
   // Auto-select first non-empty tab
   useEffect(() => {
@@ -284,6 +311,7 @@ export default function Home() {
             <span className={styles.version}>{VERSION}</span>
             <Link href="/how-it-works" className={styles.howLink}>how it works</Link>
             <Link href="/journal" className={styles.howLink}>📔 journal</Link>
+            <Link href="/sectors" className={styles.howLink}>🗂 sectors</Link>
             <button
               className={styles.eodLogBtn}
               onClick={() => window.open(`${API_URL}/api/eod-log/latest`, '_blank')}
@@ -306,6 +334,18 @@ export default function Home() {
             ? `MARKET OPEN — Closes in ${marketTimer.label}`
             : `MARKET CLOSED — Opens in ${marketTimer.label}. Showing last scan data.`}
         </div>
+
+        {/* Market Regime Banner */}
+        {marketRegime && <MarketRegimeBanner regime={marketRegime} />}
+
+        {/* Sector Strength Bar */}
+        {sectorStrength.length > 0 && (
+          <SectorStrengthBar
+            sectors={sectorStrength}
+            onSectorClick={setSectorFilter}
+            activeFilter={sectorFilter}
+          />
+        )}
 
         {/* Scanning progress banner */}
         {scanning && (
@@ -442,13 +482,47 @@ export default function Home() {
               )}
             </div>
 
-            {/* Grid */}
+            {/* Grid — Sympathy tab shows grouped by sector */}
             {filtered.length > 0 ? (
+              activeTab === 'SYMPATHY' ? (
+                <div className="fade-in">
+                  {Object.entries(
+                    filtered.reduce((acc, r) => {
+                      const s = r.sector || 'Unknown';
+                      if (!acc[s]) acc[s] = [];
+                      acc[s].push(r);
+                      return acc;
+                    }, {})
+                  )
+                  .sort(([, a], [, b]) => b[0].sympathy?.sympathy_score - a[0].sympathy?.sympathy_score)
+                  .map(([sector, tickers]) => {
+                    const leader = tickers[0]?.sympathy?.leader || tickers[0]?.sympathy?.leaders?.[0];
+                    const leaderScore = tickers[0]?.sympathy?.leader_score;
+                    const leaderChange = tickers[0]?.sympathy?.leader_change_pct ?? tickers[0]?.sympathy?.leader_change;
+                    return (
+                      <div key={sector} style={{ marginBottom: 20 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#4488ff', padding: '6px 0 4px', borderBottom: '1px solid rgba(68,136,255,0.2)', marginBottom: 8 }}>
+                          {sector}
+                          {leader && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 10 }}>
+                            Лидер: {leader}{leaderScore != null ? ` · score ${leaderScore.toFixed(0)}` : ''}{leaderChange != null ? ` · ${leaderChange >= 0 ? '+' : ''}${leaderChange.toFixed(1)}%` : ''}
+                          </span>}
+                        </div>
+                        <div className={styles.grid}>
+                          {tickers.map(ticker => (
+                            <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
               <div className={`${styles.grid} fade-in`}>
                 {filtered.map((ticker) => (
                   <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} />
                 ))}
               </div>
+              )
             ) : (
               <div className={styles.empty}>
                 <span className={styles.emptyIcon}>📭</span>

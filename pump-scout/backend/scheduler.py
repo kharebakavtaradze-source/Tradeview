@@ -14,6 +14,7 @@ from journal_autoclose import auto_close_journal
 from ai_portfolio import ai_portfolio_decisions, generate_daily_report
 from scan_candidates import fill_candidate_prices
 from eod_log import run_eod_log
+from scanner.market_regime import detect_market_regime
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,32 @@ async def _run_hype_monitor():
         logger.error(f"Hype monitor failed: {e}", exc_info=True)
 
 
+async def _run_market_regime():
+    """Detect and persist today's market regime."""
+    try:
+        logger.info("Market regime detection starting...")
+        await detect_market_regime()
+    except Exception as e:
+        logger.error(f"Market regime detection failed: {e}", exc_info=True)
+
+
 def start_scheduler():
     """Register scan jobs and start the scheduler."""
+
+    # 07:55 AM US/Eastern — Market Regime Detection (runs before scans)
+    scheduler.add_job(
+        _run_market_regime,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=7,
+            minute=55,
+            timezone=EASTERN_TZ,
+        ),
+        id="market_regime_0755_est",
+        name="Market Regime Detection (7:55 AM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
 
     # 08:00 AM US/Eastern (handles EST/EDT automatically)
     scheduler.add_job(
@@ -166,7 +191,7 @@ def start_scheduler():
     )
 
     scheduler.start()
-    logger.info("Scheduler started — 3 scan jobs + hype monitor + 5 portfolio/journal/EOD jobs")
+    logger.info("Scheduler started — regime + 3 scan jobs + hype monitor + 5 portfolio/journal/EOD jobs")
 
 
 def stop_scheduler():

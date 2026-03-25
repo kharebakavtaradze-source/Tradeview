@@ -11,6 +11,7 @@ from .wyckoff import detect_regime
 from .scoring import score_ticker
 from .ai_analyst import analyze_batch
 from .sector_sympathy import get_sectors_batch, find_sector_leaders, calc_sympathy_score
+from .market_regime import calculate_sector_strength, get_latest_regime
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,10 @@ async def run_scan() -> dict:
     # Step 4: Sort by score descending
     results.sort(key=lambda x: x["score"]["total_score"], reverse=True)
 
+    # Initialise for the return value (populated inside the if-block below)
+    sector_strength: dict = {}
+    regime = await get_latest_regime()
+
     # Step 4.5: Sector sympathy
     if results:
         print(f"Fetching sectors for {len(results)} tickers...")
@@ -111,6 +116,15 @@ async def run_scan() -> dict:
                         r["score"]["tier"] = "SYMPATHY"
                 elif sympathy["sympathy_score"] >= 40 and current_tier == "SKIP":
                     r["score"]["tier"] = "WATCH"
+
+        # Calculate sector strength (saves to DB internally)
+        print("Calculating sector strength...")
+        sector_strength = await calculate_sector_strength(results)
+
+        # Add regime_warning flag to each result
+        weak_sectors = set(regime.get("weak_sectors", [])) if regime else set()
+        for r in results:
+            r["regime_warning"] = r.get("sector", "Unknown") in weak_sectors
 
     # Step 5: Pre-market data for all scored tickers
     scored_symbols = [r["symbol"] for r in results]
@@ -159,4 +173,6 @@ async def run_scan() -> dict:
         "total": len(final),
         "duration_secs": round(duration_secs, 1),
         "tier_counts": tier_counts,
+        "sector_strength": sector_strength if results else {},
+        "market_regime": regime,
     }

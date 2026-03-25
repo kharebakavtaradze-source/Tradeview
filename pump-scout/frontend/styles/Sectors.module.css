@@ -1,0 +1,228 @@
+:root {
+  --text-muted: rgba(255,255,255,0.45);
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px 12px 40px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: #e0e0e0;
+  min-height: 100vh;
+  background: #0a0a0f;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 12px;
+}
+
+.back {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+.back:hover { color: #fff; }
+
+.title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+/* ── ETF Heatmap ── */
+.etfGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+@media (max-width: 600px) {
+  .etfGrid { grid-template-columns: repeat(3, 1fr); }
+}
+
+.etfBox {
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.etfSymbol {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.etfPct {
+  display: block;
+  font-size: 14px;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+/* ── Sector Table ── */
+.loading, .empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px;
+  font-size: 12px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.table th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  vertical-align: middle;
+}
+
+.row {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.row:hover { background: rgba(255,255,255,0.03); }
+.rowSelected { background: rgba(68,136,255,0.06); }
+
+.sectorName {
+  font-weight: 700;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.strongTag {
+  margin-left: 6px;
+  font-size: 11px;
+}
+.weakTag {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #ff8800;
+}
+
+.scoreCell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scoreBar {
+  height: 6px;
+  background: linear-gradient(90deg, #4488ff, #00c8ff);
+  border-radius: 3px;
+  min-width: 4px;
+  flex-shrink: 0;
+}
+
+.leader {
+  font-weight: 700;
+  color: #4488ff;
+}
+
+/* ── Detail expand ── */
+.detailCell {
+  padding: 8px 14px 14px;
+  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.detailLoading {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tickerGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tickerRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  flex-wrap: wrap;
+}
+
+.tickerSym {
+  font-weight: 800;
+  font-size: 12px;
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.tickerTier {
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--text-muted);
+}
+
+.tickerScore {
+  font-size: 11px;
+  font-weight: 700;
+  color: #4488ff;
+}
+
+.sympathyTag {
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(0,229,255,0.08);
+  border: 1px solid rgba(0,229,255,0.2);
+  color: #00e5ff;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ── Footer ── */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.refreshBtn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #fff;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.refreshBtn:hover { background: rgba(255,255,255,0.12); }
+
+.footerNote {
+  font-size: 10px;
+  color: var(--text-muted);
+}

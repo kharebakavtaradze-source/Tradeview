@@ -53,7 +53,7 @@ export default function TickerCard({ data, hypeData }) {
   const [hypeDetail, setHypeDetail] = useState(null);
   const [fetchingHype, setFetchingHype] = useState(false);
 
-  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector } = data;
+  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector, regime_warning } = data;
 
   const tier = score.tier || 'WATCH';
   const totalScore = score.total_score || 0;
@@ -231,13 +231,39 @@ export default function TickerCard({ data, hypeData }) {
 
       </div>
 
+      {/* Sector + regime warning badges */}
+      {(sector || regime_warning) && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '4px 10px 0' }}>
+          {sector && sector !== 'Unknown' && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              background: 'rgba(68,136,255,0.1)', border: '1px solid rgba(68,136,255,0.25)',
+              color: '#4488ff', borderRadius: 3, padding: '1px 6px',
+            }}>
+              {sector}
+            </span>
+          )}
+          {regime_warning && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              background: 'rgba(255,136,0,0.1)', border: '1px solid rgba(255,136,0,0.3)',
+              color: '#ff8800', borderRadius: 3, padding: '1px 6px',
+            }}>
+              ⚠ Слабый сектор
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Sympathy banner */}
       {sympathy?.is_sympathy && (
         <div className={styles.sympathyBanner}>
           <span className={styles.sympathyLabel}>🔗 SYMPATHY</span>
-          <span>Following: {sympathy.leaders?.join(', ')}</span>
-          {sector && <span>{sector}</span>}
-          <span>Leader +{sympathy.leader_change?.toFixed(0)}%</span>
+          {sympathy.leader
+            ? <span>лидер: {sympathy.leader} +{sympathy.leader_change_pct?.toFixed(1) ?? sympathy.leader_change?.toFixed(0)}%</span>
+            : sympathy.leaders?.length > 0 && <span>Following: {sympathy.leaders.slice(0, 2).join(', ')}</span>
+          }
+          {sympathy.lag_pct != null && <span>lag {sympathy.lag_pct.toFixed(1)}%</span>}
           <span>Score: {sympathy.sympathy_score}/100</span>
           <span style={{ opacity: 0.6 }}>{sympathy.window}</span>
         </div>
