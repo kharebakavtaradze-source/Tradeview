@@ -15,6 +15,8 @@ from ai_portfolio import ai_portfolio_decisions, generate_daily_report
 from scan_candidates import fill_candidate_prices
 from eod_log import run_eod_log
 from scanner.market_regime import detect_market_regime
+from notifications.morning_brief import send_morning_brief
+from notifications.price_alerts import check_price_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -130,16 +132,43 @@ def start_scheduler():
         misfire_grace_time=120,
     )
 
-    # 09:00 AM ET — AI Portfolio decisions
+    # 09:00 AM ET — Morning Brief (Telegram summary)
     scheduler.add_job(
-        ai_portfolio_decisions,
+        send_morning_brief,
         trigger=CronTrigger(
             day_of_week="mon-fri", hour=9, minute=0, timezone=EASTERN_TZ,
         ),
-        id="ai_portfolio_decisions",
-        name="AI Portfolio Decisions (9:00 AM ET)",
+        id="morning_brief",
+        name="Morning Brief Telegram (9:00 AM ET)",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+
+    # 09:00 AM ET — AI Portfolio decisions (runs after morning brief)
+    scheduler.add_job(
+        ai_portfolio_decisions,
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=9, minute=2, timezone=EASTERN_TZ,
+        ),
+        id="ai_portfolio_decisions",
+        name="AI Portfolio Decisions (9:02 AM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # Price alerts: every 30 min, Mon–Fri, 9:30–16:00 ET
+    scheduler.add_job(
+        check_price_alerts,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-15",
+            minute="30,0",
+            timezone=EASTERN_TZ,
+        ),
+        id="price_alerts_30min",
+        name="Price Alerts Near Stop/Target (every 30min)",
+        replace_existing=True,
+        misfire_grace_time=120,
     )
 
     # 16:05 ET — Auto-close journal entries
@@ -191,7 +220,10 @@ def start_scheduler():
     )
 
     scheduler.start()
-    logger.info("Scheduler started — 3 scan jobs + hype monitor + 5 portfolio/journal/EOD jobs + regime at 16:15")
+    logger.info(
+        "Scheduler started — 3 scan jobs + hype monitor + morning brief + price alerts "
+        "+ 5 portfolio/journal/EOD jobs + regime at 16:15"
+    )
 
 
 def stop_scheduler():

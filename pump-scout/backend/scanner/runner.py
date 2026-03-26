@@ -232,6 +232,13 @@ async def run_scan() -> dict:
     except Exception as e:
         logger.warning(f"save_scan_candidates failed (non-fatal): {e}")
 
+    # Update pattern streaks (ARM+ multi-day accumulation tracking)
+    try:
+        from scanner.pattern_streaks import update_pattern_streaks
+        await update_pattern_streaks(final)
+    except Exception as e:
+        logger.warning(f"update_pattern_streaks failed (non-fatal): {e}")
+
     return {
         "results": final,
         "scanned_at": scan_start.isoformat(),
