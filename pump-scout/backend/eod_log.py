@@ -6,6 +6,8 @@ Produces a Markdown file you can upload directly to Claude chat for analysis.
 import logging
 from datetime import datetime, timezone, timedelta
 
+import httpx
+
 from database import (
     get_journal,
     get_journal_stats,
@@ -15,11 +17,37 @@ from database import (
     get_open_ai_positions,
     get_candidates_missed,
     save_eod_log,
+    update_journal_entry,
 )
 
 logger = logging.getLogger(__name__)
 
 EASTERN = timezone(timedelta(hours=-4))  # EDT; scheduler handles DST via timezone name
+
+_YAHOO_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
+
+
+async def _fetch_price(symbol: str) -> float | None:
+    """Fetch current market price from Yahoo Finance."""
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url,
+                params={"symbols": symbol.upper(), "fields": "regularMarketPrice"},
+                headers=_YAHOO_HEADERS,
+            )
+            if resp.status_code == 200:
+                quotes = resp.json().get("quoteResponse", {}).get("result", [])
+                if quotes:
+                    return quotes[0].get("regularMarketPrice")
+    except Exception as e:
+        logger.warning(f"EOD price fetch failed for {symbol}: {e}")
+    return None
 
 
 def _pct(val) -> str:
@@ -88,6 +116,24 @@ async def generate_eod_log() -> str:
         journal = await get_journal()
         open_pos = [e for e in journal if e.get("outcome") == "open"]
         if open_pos:
+            # Positions added after 16:05 (auto-close window) have no current_price yet.
+            # Fetch and persist prices for them so the report shows live data.
+            for e in open_pos:
+                if e.get("current_price") is None and e.get("entry_price"):
+                    price = await _fetch_price(e["symbol"])
+                    if price:
+                        entry_price = e["entry_price"]
+                        pct = round((price - entry_price) / entry_price * 100, 2)
+                        e["current_price"] = price
+                        e["current_pct"] = pct
+                        try:
+                            await update_journal_entry(e["id"], {
+                                "current_price": price,
+                                "current_pct": pct,
+                            })
+                        except Exception as upd_err:
+                            logger.warning(f"EOD price persist failed for {e['symbol']}: {upd_err}")
+
             lines.append("| Symbol | Tier | Entry | Current | P&L % | Days | Stop | Target |")
             lines.append("|--------|------|-------|---------|-------|------|------|--------|")
             for e in sorted(open_pos, key=lambda x: x.get("current_pct") or 0, reverse=True):
