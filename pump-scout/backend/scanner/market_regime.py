@@ -7,9 +7,18 @@ import json
 import logging
 from datetime import date, datetime
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 REGIME_ETFS = ["SPY", "QQQ", "XLE", "XLV", "XLU", "GLD"]
+
+_YAHOO_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.5",
+}
 
 # ── In-memory cache ──────────────────────────────────────────────────────────
 _regime_cache: dict | None = None
@@ -19,32 +28,48 @@ _sector_strength_cache_date: str | None = None
 
 
 async def fetch_etf_data(symbol: str) -> dict | None:
-    """Fetch 1-day change, 5-day change and EMA20 for an ETF via yfinance."""
+    """Fetch 1-day change, 5-day change and EMA20 for an ETF via Yahoo Finance API."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}"
     try:
-        import yfinance as yf
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="30d")
-        if hist.empty or len(hist) < 6:
-            return None
+        async with httpx.AsyncClient(timeout=15.0, headers=_YAHOO_HEADERS) as client:
+            resp = await client.get(url, params={"interval": "1d", "range": "60d"})
+            if resp.status_code != 200:
+                logger.warning(f"fetch_etf_data {symbol}: HTTP {resp.status_code}")
+                return None
 
-        current = float(hist["Close"].iloc[-1])
-        prev = float(hist["Close"].iloc[-2])
-        pct_1d = (current - prev) / prev * 100
+            chart = resp.json().get("chart", {})
+            result = chart.get("result") or []
+            if not result:
+                return None
 
-        prev_5 = float(hist["Close"].iloc[-6])
-        pct_5d = (current - prev_5) / prev_5 * 100
+            closes = result[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            closes = [float(c) for c in closes if c is not None]
+            if len(closes) < 6:
+                return None
 
-        ema20 = float(hist["Close"].ewm(span=20).mean().iloc[-1])
-        vs_ema20 = (current - ema20) / ema20 * 100
+            current = closes[-1]
+            prev    = closes[-2]
+            prev_5  = closes[-6]
 
-        return {
-            "symbol": symbol,
-            "price": round(current, 2),
-            "pct_1d": round(pct_1d, 2),
-            "pct_5d": round(pct_5d, 2),
-            "vs_ema20": round(vs_ema20, 2),
-            "above_ema20": current > ema20,
-        }
+            pct_1d = (current - prev) / prev * 100
+            pct_5d = (current - prev_5) / prev_5 * 100
+
+            # EMA20 (exponential moving average, alpha = 2/21)
+            alpha = 2.0 / 21.0
+            ema = closes[0]
+            for p in closes[1:]:
+                ema = alpha * p + (1.0 - alpha) * ema
+            ema20 = ema
+            vs_ema20 = (current - ema20) / ema20 * 100
+
+            return {
+                "symbol": symbol,
+                "price": round(current, 2),
+                "pct_1d": round(pct_1d, 2),
+                "pct_5d": round(pct_5d, 2),
+                "vs_ema20": round(vs_ema20, 2),
+                "above_ema20": current > ema20,
+            }
     except Exception as e:
         logger.warning(f"fetch_etf_data failed for {symbol}: {e}")
         return None
