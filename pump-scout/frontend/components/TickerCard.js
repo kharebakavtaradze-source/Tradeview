@@ -432,9 +432,11 @@ export default function TickerCard({ data, hypeData }) {
             entry_cmf_pctl: indicators.cmf_pctl ? Math.round(indicators.cmf_pctl) : '',
             entry_vol_ratio: indicators.anomaly_ratio ? indicators.anomaly_ratio.toFixed(1) : '',
             entry_hype: hypeScore?.hype_index ? Math.round(hypeScore.hype_index) : 0,
+            entry_rsi: indicators.rsi?.value ? Math.round(indicators.rsi.value) : '',
             catalyst: hypeDivergences[0]?.type || 'MANUAL',
-            stop_loss: regime.tr_low ? regime.tr_low.toFixed(2) : '',
-            target_price: regime.tr_high ? regime.tr_high.toFixed(2) : '',
+            // TR-based values intentionally left blank — modal fetches ATR suggestion
+            stop_loss: '',
+            target_price: '',
             indicators_snapshot: {
               bb_sqz_bars: indicators.bb_sqz_bars,
               cmf_pctl: indicators.cmf_pctl,
