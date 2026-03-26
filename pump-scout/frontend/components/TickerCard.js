@@ -46,7 +46,7 @@ function getCardClass(tier) {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export default function TickerCard({ data, hypeData }) {
+export default function TickerCard({ data, hypeData, streakDays }) {
   const [expanded, setExpanded] = useState(false);
   const [showJournal, setShowJournal] = useState(false);
   const [showHype, setShowHype] = useState(false);
@@ -154,6 +154,24 @@ export default function TickerCard({ data, hypeData }) {
               {hypeScore.hype_tier === 'VIRAL' ? '🔥' : hypeScore.hype_tier === 'HOT' ? '🚀' : hypeScore.hype_tier === 'WARM' ? '📈' : ''}
               {hypeScore.hype_index.toFixed(0)}
             </button>
+          )}
+          {streakDays >= 2 && (
+            <span
+              title={`${streakDays}-day streak — ARM+ signal appearing consistently`}
+              style={{
+                fontSize: 9, fontWeight: 700,
+                color: streakDays >= 5 ? '#ff4466' : streakDays >= 3 ? '#ffd700' : '#00c853',
+                background: streakDays >= 5
+                  ? 'rgba(255,68,102,0.12)'
+                  : streakDays >= 3
+                  ? 'rgba(255,215,0,0.10)'
+                  : 'rgba(0,200,83,0.10)',
+                border: `1px solid ${streakDays >= 5 ? 'rgba(255,68,102,0.35)' : streakDays >= 3 ? 'rgba(255,215,0,0.35)' : 'rgba(0,200,83,0.3)'}`,
+                borderRadius: 3, padding: '1px 4px', whiteSpace: 'nowrap',
+              }}
+            >
+              🔁{streakDays}d
+            </span>
           )}
           <button
             onClick={e => { e.stopPropagation(); setShowJournal(true); }}

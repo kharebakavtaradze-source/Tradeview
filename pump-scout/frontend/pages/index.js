@@ -9,7 +9,7 @@ import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v16.0';
+const VERSION = 'v17.0';
 const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'SYMPATHY', 'FLOW', 'SILENT', 'HYPE', 'WATCH'];
 const TIER_LABELS = {
   FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH',
@@ -117,6 +117,7 @@ export default function Home() {
   const [hypeStatus, setHypeStatus] = useState(null);
   const [hypeResults, setHypeResults] = useState([]);
   const [hypeRunning, setHypeRunning] = useState(false);
+  const [streaks, setStreaks] = useState([]);
 
   const fetchLatest = useCallback(async () => {
     try {
@@ -164,21 +165,35 @@ export default function Home() {
     }
   }, []);
 
+  const fetchStreaks = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/streaks/active?min_days=2`);
+      if (res.ok) {
+        const d = await res.json();
+        setStreaks(d.streaks || []);
+      }
+    } catch {
+      // streaks are optional — silent fail
+    }
+  }, []);
+
   useEffect(() => {
     fetchLatest();
     fetchHype();
     fetchRegime();
+    fetchStreaks();
     setMarketOpen(isMarketOpen());
 
     const interval = setInterval(() => {
       fetchLatest();
       fetchHype();
       fetchRegime();
+      fetchStreaks();
       setMarketOpen(isMarketOpen());
     }, REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [fetchLatest, fetchHype, fetchRegime]);
+  }, [fetchLatest, fetchHype, fetchRegime, fetchStreaks]);
 
   useEffect(() => {
     const tick = () => {
@@ -234,6 +249,10 @@ export default function Home() {
 
   // Hype divergence filters (based on hype monitor results)
   const hypeByTicker = Object.fromEntries(hypeResults.map((r) => [r.ticker, r]));
+
+  // Streak lookup by symbol
+  const streakBySymbol = Object.fromEntries(streaks.map((s) => [s.symbol, s.streak_days]));
+  const highStreakResults = streaks.filter((s) => s.streak_days >= 3);
   const silentVolumeResults = results.filter((r) => {
     const h = hypeByTicker[r.symbol];
     return h?.divergences?.some((d) => d.type === 'SILENT_VOLUME');
@@ -451,6 +470,39 @@ export default function Home() {
           </div>
         )}
 
+        {/* Pattern Streaks banner */}
+        {!loading && highStreakResults.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            padding: '6px 12px', marginBottom: 4,
+            background: 'rgba(255,215,0,0.05)',
+            border: '1px solid rgba(255,215,0,0.18)',
+            borderRadius: 6, fontSize: 11,
+          }}>
+            <span style={{ fontWeight: 700, color: '#ffd700', whiteSpace: 'nowrap' }}>
+              🔁 STREAKS
+            </span>
+            {highStreakResults.map((s) => (
+              <span
+                key={s.symbol}
+                title={`${s.streak_days}-day streak | avg score ${s.avg_score} | ${s.tier}`}
+                style={{
+                  color: s.streak_days >= 5 ? '#ff4466' : '#ffd700',
+                  fontWeight: 700, cursor: 'default',
+                }}
+              >
+                {s.symbol}
+                <span style={{ color: 'rgba(255,255,255,0.4)', fontWeight: 400, marginLeft: 2 }}>
+                  ×{s.streak_days}
+                </span>
+              </span>
+            ))}
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginLeft: 4 }}>
+              ARM+ сигнал несколько дней подряд
+            </span>
+          </div>
+        )}
+
         {/* Tabs */}
         {!loading && (
           <>
@@ -509,7 +561,7 @@ export default function Home() {
                         </div>
                         <div className={styles.grid}>
                           {tickers.map(ticker => (
-                            <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} />
+                            <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} streakDays={streakBySymbol[ticker.symbol] || 0} />
                           ))}
                         </div>
                       </div>
@@ -519,7 +571,7 @@ export default function Home() {
               ) : (
               <div className={`${styles.grid} fade-in`}>
                 {filtered.map((ticker) => (
-                  <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} />
+                  <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} streakDays={streakBySymbol[ticker.symbol] || 0} />
                 ))}
               </div>
               )

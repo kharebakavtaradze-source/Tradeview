@@ -29,6 +29,7 @@ from database import (
     add_to_watchlist,
     close_ai_position,
     delete_journal_entry,
+    get_active_streaks,
     get_ai_portfolio_history,
     get_all_ai_positions,
     get_candidates_missed,
@@ -744,3 +745,34 @@ async def eod_log_generate_now(background_tasks: BackgroundTasks):
     from eod_log import run_eod_log
     background_tasks.add_task(run_eod_log)
     return {"status": "started", "message": "EOD log generation started in background"}
+
+
+# ─── Pattern Streak routes ─────────────────────────────────────────────────────
+
+@app.get("/api/streaks/active")
+async def active_streaks(min_days: int = 2):
+    """Return active pattern streaks — tickers that appeared in ARM+ scans consecutively."""
+    streaks = await get_active_streaks(min_days=min_days)
+    return {"streaks": streaks, "count": len(streaks)}
+
+
+# ─── Notification test routes ──────────────────────────────────────────────────
+
+@app.get("/api/notifications/test-morning-brief")
+async def test_morning_brief():
+    """Send a test morning brief to Telegram immediately."""
+    from notifications.morning_brief import send_morning_brief
+    ok = await send_morning_brief()
+    if not ok:
+        raise HTTPException(status_code=500, detail="Morning brief send failed — check Telegram config and logs")
+    return {"status": "sent", "message": "Morning brief delivered to Telegram"}
+
+
+@app.get("/api/notifications/test-price-alert")
+async def test_price_alert():
+    """Run a price alert check immediately (ignores cooldown)."""
+    from notifications.price_alerts import check_price_alerts, ALERT_COOLDOWN
+    # Clear cooldowns so the test actually sends
+    ALERT_COOLDOWN.clear()
+    result = await check_price_alerts()
+    return {"status": "done", **result}
