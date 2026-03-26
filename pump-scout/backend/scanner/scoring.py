@@ -96,7 +96,23 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
     if stealth.get("is_stealth") and total_score < 25:
         total_score = 25
 
-    total_score = round(total_score, 2)
+    # --- RSI overbought penalty ---
+    rsi_value = rsi_data.get("value", 50) or 50
+    if rsi_value > 70:
+        total_score *= 0.7   # overbought — significantly reduce
+    elif rsi_value > 65:
+        total_score *= 0.85  # approaching overbought
+
+    # --- Weak money-flow penalty ---
+    if cmf_pctl < 20:
+        total_score *= 0.8
+
+    # --- Distribution penalty ---
+    # Stocks in distribution are being sold by smart money — heavy penalty
+    if regime.get("in_dist"):
+        total_score *= 0.6
+
+    total_score = round(min(total_score, 100), 2)
 
     # --- Tier ---
     # Step 1: score-based tier
@@ -135,6 +151,14 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         and inst.get("flow_score", 0) >= 70
         and tier in ("BASE", "WATCH")
     ):
+        tier = "ARM"
+
+    # Step 4: Hard caps from penalty conditions
+    # Distribution stocks can never be FIRE
+    if regime.get("in_dist") and tier == "FIRE":
+        tier = "ARM"
+    # Overbought stocks (RSI > 70) can never be FIRE
+    if rsi_value > 70 and tier == "FIRE":
         tier = "ARM"
 
     return {

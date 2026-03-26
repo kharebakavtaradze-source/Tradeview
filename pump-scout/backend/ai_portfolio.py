@@ -49,10 +49,55 @@ async def _fetch_price(symbol: str) -> float | None:
     return None
 
 
+def _filter_ai_candidates(scan_results: list) -> list:
+    """
+    Hard pre-filter before AI sees candidates.
+    AI only receives high-quality setups — code-level, cannot be overridden by prompt.
+    """
+    qualified = []
+    for r in scan_results:
+        tier = r.get("score", {}).get("tier", "")
+        indicators = r.get("indicators", {})
+        cmf = indicators.get("cmf_pctl", 0)
+        rsi = (indicators.get("rsi") or {}).get("value", 50) or 50
+        wyckoff = r.get("regime", {}).get("state", "NONE")
+        hype = (r.get("hype_score") or {}).get("hype_index", 0) or 0
+        price_chg = abs(indicators.get("price_change_pct", 0))
+
+        # Never chase: already moved >5% today
+        if price_chg > 5:
+            continue
+
+        if tier == "FIRE":
+            qualified.append(r)
+        elif tier == "ARM":
+            # ARM needs additional confirmation
+            if (cmf > 70
+                    and rsi < 65
+                    and hype < 40
+                    and wyckoff not in ("NONE", "DISTRIBUTION")):
+                qualified.append(r)
+
+    return qualified
+
+
+def _atr_position_size(portfolio_value: float, entry: float, atr: float,
+                       stop_mult: float = 1.5) -> float:
+    """Risk 2% of portfolio per trade, ATR-based. Returns position size in USD."""
+    risk_per_trade = portfolio_value * 0.02
+    risk_per_share = atr * stop_mult
+    if risk_per_share <= 0:
+        return 50.0
+    shares = risk_per_trade / risk_per_share
+    size = shares * entry
+    return round(max(50.0, min(300.0, size)), 2)
+
+
 async def ai_portfolio_decisions():
     """
     Runs at 9:00 AM ET weekdays.
     AI reviews scan results and open positions, makes BUY/SELL/HOLD/SKIP decisions.
+    Hard candidate filter runs before AI call to prevent bad trades.
     """
     logger.info("AI portfolio decisions starting...")
 
@@ -72,10 +117,33 @@ async def ai_portfolio_decisions():
         logger.warning("No scan data available for portfolio decisions")
         return
 
-    candidates = [
+    all_fire_arm = [
         r for r in (scan.get("results") or [])
         if r.get("score", {}).get("tier") in ("FIRE", "ARM")
-    ][:10]
+    ]
+
+    # Hard code-level filter — AI only sees pre-qualified candidates
+    qualified = _filter_ai_candidates(all_fire_arm)
+
+    # No qualified candidates → hold cash, skip API call
+    if not qualified:
+        no_trade = {
+            "decisions": [],
+            "portfolio_note": (
+                "Нет качественных сигналов сегодня. "
+                "Держу cash. Лучшая сделка = никакой сделки при плохом рынке."
+            ),
+            "no_trade_reason": "no_qualified_candidates",
+        }
+        await update_portfolio_state(
+            cash=cash,
+            total_value=state["total_value"],
+            invested=state["total_value"] - cash,
+            total_pnl_pct=state.get("total_pnl_pct", 0),
+            decisions=no_trade,
+        )
+        logger.info("No qualified candidates — holding cash, skipped AI call")
+        return
 
     # Get user watchlist symbols for context
     from database import get_open_journal_entries
@@ -105,11 +173,12 @@ async def ai_portfolio_decisions():
             "score": round(r["score"]["total_score"], 1),
             "wyckoff": r.get("regime", {}).get("state", "NONE"),
             "cmf_pctl": r.get("indicators", {}).get("cmf_pctl", 0),
+            "rsi": (r.get("indicators", {}).get("rsi") or {}).get("value"),
             "vol_ratio": r.get("indicators", {}).get("anomaly_ratio", 0),
-            "bb_squeeze": r.get("indicators", {}).get("bb_squeeze", False),
-            "rsi": r.get("indicators", {}).get("rsi", {}).get("value"),
+            "atr": r.get("indicators", {}).get("atr", 0),
+            "hype": (r.get("hype_score") or {}).get("hype_index", 0),
         }
-        for r in candidates
+        for r in qualified[:10]
     ]
 
     # Load market regime and sector strength for context
@@ -127,7 +196,6 @@ async def ai_portfolio_decisions():
     regime_name = regime_ctx.get("regime", "NEUTRAL")
     regime_rec = regime_ctx.get("recommendation", "")
 
-    # Build concise sector summary
     sector_summary = {
         s: {"avg_score": v.get("avg_score"), "leader": v.get("leader_symbol"), "momentum_pct": v.get("momentum_pct")}
         for s, v in sector_strength_ctx.items()
@@ -146,29 +214,40 @@ Recommendation: {regime_rec}
 SECTOR STRENGTH TODAY:
 {json.dumps(sector_summary, indent=2)}
 
-RULES FOR TODAY:
 Strong sectors: {', '.join(strong_sectors) if strong_sectors else 'All sectors active'}
 Weak sectors: {', '.join(weak_sectors) if weak_sectors else 'None'}
-- Prefer buying tickers from strong sectors.
-- Avoid buying tickers from weak sectors unless signal is extremely strong (FIRE + CMF > 90).
 
 OPEN POSITIONS:
 {json.dumps(portfolio_ctx, indent=2)}
 
-TODAY'S SCAN CANDIDATES (FIRE + ARM only):
+PRE-QUALIFIED CANDIDATES (already filtered for quality):
 {json.dumps(scan_ctx, indent=2)}
 
-USER WATCHLIST SYMBOLS (high-priority):
+USER WATCHLIST (high-priority context):
 {watchlist_symbols}
 
-RULES:
-- Maximum 5 open positions at once (currently {len(open_positions)})
-- Minimum position size: $50, Maximum: $300
-- FIRE tier = allocate more, ARM = allocate less
-- Never buy if CMF < 20th percentile
-- Never buy if hype index > 60
-- Sell if position held > 14 days without 10% gain
-- Consider user watchlist as high-priority candidates
+STRICT BUYING RULES (cannot be overridden):
+1. Only buy FIRE tier OR ARM with CMF > 70%ile (pre-filtered already)
+2. Never buy if RSI > 65 (overbought)
+3. Never buy if hype > 40 (retail already in)
+4. Never buy if Wyckoff = NONE or DISTRIBUTION
+5. Minimum R/R = 2:1 (use ATR * 1.5 for stop, ATR * 3.75 for target)
+6. If no candidates meet ALL rules → HOLD CASH, write reason in portfolio_note
+7. Never chase: skip if price already moved >5% today
+
+POSITION SIZING:
+- Risk max 2% of portfolio per trade using ATR
+- position_size = (portfolio_value * 0.02) / (atr * 1.5) * entry_price
+- Cap at $300 max, min $50
+
+WHEN TO SELL:
+- Position held > 14 days without 10% progress → SELL
+- Hype crosses 70 → SELL (retail is in)
+- Wyckoff changes to DISTRIBUTION → SELL
+
+CASH IS A POSITION:
+Maximum 5 open positions (currently {len(open_positions)}).
+Prefer quality over quantity. Hold cash if uncertain.
 
 Respond in Russian. Return JSON only:
 {{
@@ -184,11 +263,6 @@ Respond in Russian. Return JSON only:
       "symbol": "TICK2",
       "action": "SELL",
       "price": 15.20,
-      "reason": "краткое объяснение"
-    }},
-    {{
-      "symbol": "TICK3",
-      "action": "SKIP",
       "reason": "краткое объяснение"
     }}
   ],
@@ -218,12 +292,25 @@ Respond in Russian. Return JSON only:
         reason = d.get("reason", "")
 
         if action == "BUY":
-            amount = d.get("amount_usd", 100)
             price = d.get("price", 0)
             if not price:
                 price = await _fetch_price(symbol) or 0
-            if price <= 0 or cash < amount or len(open_positions) >= 5:
+            if price <= 0 or len(open_positions) >= 5:
                 continue
+
+            # ATR-based position sizing
+            r_data = next((r for r in scan_ctx if r["symbol"] == symbol), {})
+            atr = r_data.get("atr") or 0
+            if atr and atr > 0:
+                amount = _atr_position_size(state["total_value"], price, atr)
+            else:
+                amount = d.get("amount_usd", 100)
+
+            if cash < amount:
+                amount = min(amount, cash)
+            if amount < 50:
+                continue
+
             shares = amount / price
             await insert_ai_position(
                 symbol=symbol,
@@ -231,11 +318,11 @@ Respond in Russian. Return JSON only:
                 shares=shares,
                 invested_usd=amount,
                 reason=reason,
-                scan_data=next((r for r in scan_ctx if r["symbol"] == symbol), None),
+                scan_data={**r_data, "atr": atr},
             )
             cash -= amount
             executed_buys += 1
-            open_positions = await get_open_ai_positions()  # refresh count
+            open_positions = await get_open_ai_positions()
 
         elif action == "SELL":
             price = d.get("price", 0)
@@ -288,7 +375,7 @@ async def generate_daily_report():
     state = await get_portfolio_state()
     positions = await get_open_ai_positions()
 
-    # Update all position values with closing prices
+    # Update all position values with closing prices + ATR stop check
     total_value = state["cash"]
     pos_ctx = []
     for pos in positions:
@@ -296,6 +383,20 @@ async def generate_daily_report():
         if price:
             await update_ai_position_price(pos["id"], price)
             value = price * (pos.get("shares") or 0)
+
+            # ATR-based stop check (P4): close if price fell below ATR stop
+            scan_data = pos.get("scan_data") or {}
+            atr = scan_data.get("atr") or 0
+            if atr and atr > 0 and pos.get("entry_price"):
+                atr_stop = pos["entry_price"] - (atr * 1.5)
+                if price <= atr_stop:
+                    closed = await close_ai_position(pos["symbol"], price, "ATR_STOP_HIT")
+                    if closed:
+                        total_value += price * (pos.get("shares") or 0)
+                        logger.info(f"AI portfolio: {pos['symbol']} ATR-stopped at ${price:.2f} "
+                                    f"(stop=${atr_stop:.2f}, entry=${pos['entry_price']:.2f})")
+                    continue  # don't add to pos_ctx — now closed
+
             total_value += value
             pnl = (price - pos["entry_price"]) / pos["entry_price"] * 100 if pos["entry_price"] else 0
             pos_ctx.append({
