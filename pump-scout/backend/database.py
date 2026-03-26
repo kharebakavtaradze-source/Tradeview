@@ -259,6 +259,24 @@ class SectorStrength(Base):
     tickers_json = Column(Text, nullable=True)           # JSON list
 
 
+class PatternStreak(Base):
+    """Multi-day pattern streaks — tracks consecutive scan appearances for ARM+ tickers."""
+    __tablename__ = "pattern_streaks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, unique=True, index=True)
+    streak_start = Column(Date, nullable=False)
+    streak_days = Column(Integer, default=1)
+    avg_score = Column(Float, default=0)
+    avg_cmf_pctl = Column(Float, default=0)
+    avg_vol_ratio = Column(Float, default=0)
+    avg_hype = Column(Integer, default=0)
+    tier = Column(String(20), nullable=True)
+    wyckoff = Column(String(30), nullable=True)
+    last_seen = Column(Date, nullable=False)
+    alerted = Column(Integer, default=0)   # bitmask: bit0=day3 sent, bit1=day5 sent
+
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -1408,3 +1426,40 @@ async def get_sector_strength_for_sector(sector: str) -> Optional[dict]:
         )
         row = result.scalar_one_or_none()
         return _strength_row_to_dict(row) if row else None
+
+
+# ─── Pattern Streaks ──────────────────────────────────────────────────────────
+
+async def get_active_streaks(min_days: int = 2) -> List[dict]:
+    """
+    Return active pattern streaks seen today or yesterday with at least min_days length.
+    Ordered by streak_days desc, then avg_score desc.
+    """
+    from datetime import date as _date, timedelta
+    today = _date.today()
+    yesterday = today - timedelta(days=1)
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PatternStreak)
+            .where(
+                PatternStreak.last_seen >= yesterday,
+                PatternStreak.streak_days >= min_days,
+            )
+            .order_by(PatternStreak.streak_days.desc(), PatternStreak.avg_score.desc())
+        )
+        streaks = result.scalars().all()
+    return [
+        {
+            "symbol": s.symbol,
+            "streak_days": s.streak_days,
+            "streak_start": s.streak_start.isoformat() if s.streak_start else None,
+            "avg_score": round(s.avg_score or 0, 1),
+            "avg_cmf_pctl": round(s.avg_cmf_pctl or 0, 1),
+            "avg_vol_ratio": round(s.avg_vol_ratio or 0, 2),
+            "avg_hype": s.avg_hype or 0,
+            "tier": s.tier,
+            "wyckoff": s.wyckoff,
+            "last_seen": s.last_seen.isoformat() if s.last_seen else None,
+        }
+        for s in streaks
+    ]
