@@ -269,6 +269,83 @@ async def journal_stats():
     return await get_journal_stats()
 
 
+# ── ATR / R/R helpers ──────────────────────────────────────────────────────────
+
+def _calculate_suggested_levels(entry_price: float, atr: float, tier: str) -> dict:
+    """ATR-based stop and target. Guarantees minimum 2.5:1 R/R."""
+    stop_multipliers = {
+        "FIRE": 1.2, "ARM": 1.5, "BASE": 2.0,
+        "STEALTH": 1.5, "SYMPATHY": 1.5, "WATCH": 2.0,
+    }
+    stop_mult = stop_multipliers.get(tier.upper(), 1.5)
+    target_mult = stop_mult * 2.5  # always 2.5x stop distance → 2.5:1 R/R
+
+    stop = round(entry_price - atr * stop_mult, 2)
+    target = round(entry_price + atr * target_mult, 2)
+    stop_pct = round((stop - entry_price) / entry_price * 100, 1)
+    target_pct = round((target - entry_price) / entry_price * 100, 1)
+    rr_ratio = round(abs(target_pct / stop_pct), 2) if stop_pct != 0 else 0
+
+    return {
+        "stop": stop, "target": target,
+        "stop_pct": stop_pct, "target_pct": target_pct,
+        "rr_ratio": rr_ratio, "atr_used": round(atr, 4),
+        "stop_mult": stop_mult, "target_mult": target_mult,
+    }
+
+
+def _validate_risk_reward(entry: float, stop: float, target: float) -> dict:
+    """Validate R/R ratio. Returns level: OK / WARN / BLOCK."""
+    if stop >= entry:
+        return {"valid": False, "level": "BLOCK",
+                "error": "Stop должен быть ниже цены входа"}
+    if target <= entry:
+        return {"valid": False, "level": "BLOCK",
+                "error": "Target должен быть выше цены входа"}
+    risk = entry - stop
+    reward = target - entry
+    ratio = round(reward / risk, 2)
+    if ratio < 1.0:
+        return {"valid": False, "level": "BLOCK", "ratio": ratio,
+                "error": f"R/R {ratio:.2f}:1 слишком плохой. Минимум 1:1"}
+    if ratio < 2.0:
+        return {"valid": True, "level": "WARN", "ratio": ratio,
+                "warning": f"R/R {ratio:.2f}:1 — лучше искать минимум 2:1"}
+    return {"valid": True, "level": "OK", "ratio": ratio}
+
+
+@app.get("/api/journal/suggest-levels")
+async def suggest_levels(symbol: str, entry: float, tier: str = "ARM"):
+    """Return ATR-based suggested stop and target for a symbol."""
+    symbol = symbol.upper()
+    atr = None
+
+    # Look up ATR from the latest scan result for this symbol
+    try:
+        scan = await get_latest_scan()
+        if scan:
+            for r in scan.get("results", []):
+                if r.get("symbol") == symbol:
+                    atr = r.get("indicators", {}).get("atr")
+                    break
+    except Exception:
+        pass
+
+    if not atr or atr <= 0:
+        # Fallback: estimate ATR as 3% of entry price
+        atr = round(entry * 0.03, 4)
+
+    levels = _calculate_suggested_levels(entry, atr, tier)
+    return {"symbol": symbol, "entry": entry, "tier": tier, **levels}
+
+
+@app.get("/api/journal/adaptive-weights")
+async def adaptive_weights_endpoint():
+    """Return adaptive scoring weights based on closed journal trades."""
+    from scanner.adaptive_weights import get_adaptive_weights
+    return await get_adaptive_weights()
+
+
 @app.get("/api/journal/{entry_id}")
 async def get_single_journal_entry(entry_id: int):
     entry = await get_journal_entry(entry_id)
@@ -281,13 +358,29 @@ async def get_single_journal_entry(entry_id: int):
 async def create_journal_entry(data: Dict[str, Any]):
     if not data.get("symbol") or not data.get("entry_price"):
         raise HTTPException(status_code=400, detail="symbol and entry_price are required")
+
+    # R/R validation — block entries with ratio < 1.0 unless user explicitly overrides
+    entry_p = float(data["entry_price"])
+    stop_p = data.get("stop_loss")
+    target_p = data.get("target_price")
+    rr_result = None
+    if stop_p and target_p:
+        rr_result = _validate_risk_reward(entry_p, float(stop_p), float(target_p))
+        if rr_result["level"] == "BLOCK" and not data.get("override_rr"):
+            raise HTTPException(status_code=400, detail=rr_result["error"])
+
     entry = await add_journal_entry(data)
     # Mark today's scan candidate as journaled (non-fatal)
     try:
         await mark_candidate_journaled(data["symbol"])
     except Exception:
         pass
-    return {"status": "added", "entry": entry}
+
+    response: dict = {"status": "added", "entry": entry}
+    if rr_result and rr_result.get("level") == "WARN":
+        response["warning"] = rr_result.get("warning")
+        response["rr_ratio"] = rr_result.get("ratio")
+    return response
 
 
 @app.put("/api/journal/{entry_id}")
