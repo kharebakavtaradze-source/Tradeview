@@ -776,3 +776,54 @@ async def test_price_alert():
     ALERT_COOLDOWN.clear()
     result = await check_price_alerts()
     return {"status": "done", **result}
+
+
+# ─── Earnings routes ───────────────────────────────────────────────────────────
+
+@app.get("/api/earnings/upcoming")
+async def earnings_upcoming(days: int = 14):
+    """
+    Return upcoming earnings for tracked symbols (recent scan + open journal).
+    Sorted by days_until. Returns all calendar symbols if no tracked set available.
+    """
+    from data.finnhub_provider import get_earnings_calendar, is_configured
+    if not is_configured():
+        return {"earnings": [], "count": 0, "note": "FINNHUB_API_KEY not configured"}
+
+    calendar = await get_earnings_calendar(days_ahead=days)
+    if not calendar:
+        return {"earnings": [], "count": 0}
+
+    # Tracked = recent scan results + open journal positions
+    tracked: set = set()
+    open_symbols: set = set()
+    try:
+        scan = await get_latest_scan()
+        if scan:
+            tracked.update(r["symbol"] for r in scan.get("results", []))
+    except Exception:
+        pass
+    try:
+        from database import get_open_journal_entries
+        positions = await get_open_journal_entries()
+        open_symbols = {p["symbol"] for p in positions}
+        tracked.update(open_symbols)
+    except Exception:
+        pass
+
+    earnings = [
+        {"symbol": sym, "in_journal": sym in open_symbols, **info}
+        for sym, info in calendar.items()
+        if not tracked or sym in tracked
+    ]
+    earnings.sort(key=lambda x: x["days_until"])
+    return {"earnings": earnings, "count": len(earnings)}
+
+
+@app.get("/api/earnings/{symbol}")
+async def earnings_for_symbol(symbol: str):
+    """Return next earnings date/info for a specific symbol."""
+    from data.finnhub_provider import get_earnings_for_symbol, is_configured
+    if not is_configured():
+        return {"has_earnings": False, "note": "FINNHUB_API_KEY not configured"}
+    return await get_earnings_for_symbol(symbol.upper())

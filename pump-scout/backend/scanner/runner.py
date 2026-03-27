@@ -239,6 +239,19 @@ async def run_scan() -> dict:
     except Exception as e:
         logger.warning(f"update_pattern_streaks failed (non-fatal): {e}")
 
+    # Enrich results with earnings data (one Finnhub API call for full calendar)
+    try:
+        from data.finnhub_provider import get_earnings_calendar
+        earnings_cal = await get_earnings_calendar(days_ahead=14)
+        if earnings_cal:
+            for r in final:
+                info = earnings_cal.get(r["symbol"], {"has_earnings": False})
+                r["earnings"] = info
+                r["earnings_risk"] = info.get("risk", "NONE") if info.get("has_earnings") else "NONE"
+            logger.info(f"Earnings enrichment complete — {len(earnings_cal)} symbols in calendar")
+    except Exception as e:
+        logger.warning(f"Earnings enrichment failed (non-fatal): {e}")
+
     return {
         "results": final,
         "scanned_at": scan_start.isoformat(),

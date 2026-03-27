@@ -68,6 +68,10 @@ def _filter_ai_candidates(scan_results: list) -> list:
         if price_chg > 5:
             continue
 
+        # Skip if earnings in ≤3 days — gap risk too high
+        if r.get("earnings_risk") == "HIGH":
+            continue
+
         if tier == "FIRE":
             qualified.append(r)
         elif tier == "ARM":
