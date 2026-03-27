@@ -31,6 +31,15 @@ def _get_db_url() -> str:
 DATABASE_URL = _get_db_url()
 _IS_SQLITE = "sqlite" in DATABASE_URL
 
+if _IS_SQLITE:
+    logger.warning(
+        "⚠️  DATABASE_URL not set — using SQLite fallback (pump_scout.db). "
+        "ALL DATA WILL BE LOST ON RESTART/DEPLOY. "
+        "Set DATABASE_URL to a PostgreSQL connection string for persistence."
+    )
+else:
+    logger.info("Database: PostgreSQL (persistent)")
+
 # Engine creation — defer to first use
 _engine = None
 _async_session = None
