@@ -5,6 +5,7 @@ Railway provides DATABASE_URL automatically.
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -32,6 +33,14 @@ DATABASE_URL = _get_db_url()
 _IS_SQLITE = "sqlite" in DATABASE_URL
 
 if _IS_SQLITE:
+    # Hard-fail in Railway/production environments — SQLite loses all data on restart
+    if os.getenv("RAILWAY_ENVIRONMENT"):
+        logger.critical(
+            "FATAL: Running on Railway without DATABASE_URL set. "
+            "Add a PostgreSQL plugin or set DATABASE_URL in Railway Variables. "
+            "Refusing to start with SQLite on a deployed environment."
+        )
+        sys.exit(1)
     logger.warning(
         "⚠️  DATABASE_URL not set — using SQLite fallback (pump_scout.db). "
         "ALL DATA WILL BE LOST ON RESTART/DEPLOY. "
@@ -157,6 +166,10 @@ class ScanCandidate(Base):
     pct_10d = Column(Float, nullable=True)
     price_20d = Column(Float, nullable=True)
     pct_20d = Column(Float, nullable=True)
+    vol_score = Column(Float, nullable=True)
+    accum_score = Column(Float, nullable=True)
+    quiet_factor = Column(Float, nullable=True)
+    inst_bonus = Column(Float, nullable=True)
 
 
 class PositionSnapshot(Base):
@@ -286,6 +299,13 @@ class PatternStreak(Base):
     alerted = Column(Integer, default=0)   # bitmask: bit0=day3 sent, bit1=day5 sent
 
 
+_SCAN_CANDIDATE_MIGRATIONS = [
+    ("vol_score",    "FLOAT"),
+    ("accum_score",  "FLOAT"),
+    ("quiet_factor", "FLOAT"),
+    ("inst_bonus",   "FLOAT"),
+]
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -325,6 +345,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE journal ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass  # column already exists
+        for col, coltype in _SCAN_CANDIDATE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE scan_candidates ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass  # column already exists
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -333,6 +358,13 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration {col} failed (non-fatal): {e}")
+        for col, coltype in _SCAN_CANDIDATE_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE scan_candidates ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration scan_candidates.{col} failed (non-fatal): {e}")
 
 
 async def init_db():
@@ -925,18 +957,23 @@ async def save_scan_candidates(scan_results: list) -> int:
                 if existing.scalar_one_or_none():
                     continue
                 divs = ",".join(d["type"] for d in r.get("divergences", []))
+                score_data = r.get("score", {})
                 cand = ScanCandidate(
                     scan_date=today,
                     symbol=r["symbol"],
                     price=r.get("price"),
-                    tier=r["score"]["tier"],
-                    score=r["score"].get("total_score"),
+                    tier=score_data["tier"],
+                    score=score_data.get("total_score"),
                     wyckoff=r.get("regime", {}).get("state"),
                     cmf_pctl=r.get("indicators", {}).get("cmf_pctl"),
                     vol_ratio=r.get("indicators", {}).get("anomaly_ratio"),
                     hype=r.get("hype_score", {}).get("hype_index", 0),
                     divergences=divs or None,
                     was_journaled=False,
+                    vol_score=score_data.get("vol_score"),
+                    accum_score=score_data.get("accum_score"),
+                    quiet_factor=score_data.get("quiet_factor"),
+                    inst_bonus=score_data.get("inst_bonus"),
                 )
                 session.add(cand)
                 saved += 1
