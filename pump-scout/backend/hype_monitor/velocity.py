@@ -2,8 +2,11 @@
 Hype Monitor — Velocity Calculator
 Measures the acceleration of social mentions over time windows.
 """
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _count_in_window(mentions: list[dict], hours: float) -> int:
@@ -42,6 +45,23 @@ def calc_velocity(raw_data: dict[str, Any]) -> dict[str, Any]:
     reddit = by_source.get("reddit", [])
     news = by_source.get("news", [])
     all_mentions = raw_data.get("mentions", [])
+
+    # Debug: log first few StockTwits timestamps so Railway logs show what's happening
+    now = datetime.now(timezone.utc)
+    two_hours_ago = now - timedelta(hours=2)
+    six_hours_ago = now - timedelta(hours=6)
+    ticker = raw_data.get("ticker", "?")
+    if twits:
+        logger.info(f"[velocity] {ticker} StockTwits: {len(twits)} messages, now={now.strftime('%H:%M:%S')} UTC")
+        for m in twits[:3]:
+            ts = m.get("ts")
+            if ts:
+                logger.info(
+                    f"[velocity]   ts={ts.strftime('%Y-%m-%dT%H:%M:%S%z')}  "
+                    f"in_2h={ts >= two_hours_ago}  in_6h={ts >= six_hours_ago}"
+                )
+    else:
+        logger.info(f"[velocity] {ticker} StockTwits: 0 messages (empty or rate-limited)")
 
     # Overall counts
     count_2h = _count_in_window(all_mentions, 2)
