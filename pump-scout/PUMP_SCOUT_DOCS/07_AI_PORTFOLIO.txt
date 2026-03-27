@@ -1,0 +1,196 @@
+================================================================================
+PUMP SCOUT — AI PORTFOLIO SYSTEM (ai_portfolio.py)
+Part 7 of 10
+================================================================================
+
+OVERVIEW
+---------
+A virtual $1000 paper trading account managed by Claude AI (Haiku model).
+AI makes BUY/SELL/HOLD decisions each morning based on scan results.
+Purpose: demonstrate and test the system's signals in a realistic trading context.
+All trades are paper (simulated) — no real money involved.
+
+IMPORTANT: AI decisions are constrained by hard code-level pre-filters.
+The AI CANNOT override safety rules — they are enforced in Python before the AI call.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MORNING DECISIONS (ai_portfolio_decisions)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Runs at: 09:02 ET, Mon–Fri (after morning brief)
+Requires: ANTHROPIC_API_KEY env var
+
+STEP 1: Get current state
+  - get_portfolio_state() → cash, total_value
+  - get_open_ai_positions() → current holdings
+  - get_latest_scan() → most recent scan results
+
+STEP 2: Hard pre-filter (_filter_ai_candidates)
+  Filters ALL FIRE/ARM tickers through code-level rules:
+  Rule 1: Skip if price_change_pct > 5% today (no chasing)
+  Rule 2: Skip if earnings_risk == "HIGH" (earnings ≤ 3 days away — gap risk)
+  Rule 3: FIRE tier → always passes
+  Rule 4: ARM tier → must have ALL of: cmf_pctl>70, rsi<65, hype<40,
+                     wyckoff not in (NONE, DISTRIBUTION)
+
+  If no qualified candidates → skip AI call entirely, save "no_trade" note,
+  hold cash. This saves API costs and prevents bad trades.
+
+STEP 3: Build context for AI
+  - Live prices for all open positions (Yahoo Finance v7)
+  - Portfolio PnL per open position
+  - Qualified candidates (max 10 shown to AI):
+    {symbol, price, tier, score, wyckoff, cmf_pctl, rsi, vol_ratio, atr, hype}
+  - Market regime name + recommendation
+  - Sector strength summary (avg_score, leader, momentum per sector)
+  - Strong/weak sectors
+  - User watchlist symbols
+
+STEP 4: AI prompt (Claude Haiku-4.5)
+  Budget: max_tokens=1000, timeout=30s
+  AI is given STRICT BUYING RULES (in prompt, cannot be overridden):
+    1. Only FIRE or ARM with CMF>70 (already pre-filtered)
+    2. RSI never > 65
+    3. Hype never > 40
+    4. Wyckoff never NONE or DISTRIBUTION
+    5. Minimum R/R 2:1 (ATR*1.5 stop, ATR*3.75 target)
+    6. If nothing qualifies → HOLD CASH, explain in portfolio_note
+    7. Never chase (already filtered)
+
+  POSITION SIZING FORMULA (in prompt):
+    position_size = (portfolio_value * 0.02) / (atr * 1.5) * entry_price
+    Cap: $50 minimum, $300 maximum
+
+  SELL CONDITIONS (in prompt):
+    - Held > 14 days without 10% progress
+    - Hype crosses 70 (retail entered)
+    - Wyckoff changes to DISTRIBUTION
+
+  Max positions: 5 (enforced in code)
+  AI responds in Russian with JSON only.
+
+STEP 5: Execute decisions
+  For each BUY decision:
+    - Fetch live price if not in AI response
+    - Apply ATR position sizing (overrides AI's amount_usd suggestion)
+    - Enforce max 5 positions (hard limit)
+    - Enforce minimum $50 position
+    - Enforce cash availability
+    - insert_ai_position() → DB
+
+  For each SELL decision:
+    - Fetch live price
+    - close_ai_position() → update DB record, calculate PnL
+    - Cash returned to portfolio
+
+STEP 6: Update portfolio state
+  - Fetch live prices for all remaining open positions
+  - total_value = cash + sum(price * shares)
+  - pnl_pct = (total_value - 1000) / 1000 * 100
+  - update_portfolio_state() → ai_portfolio_state table
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DAILY REPORT (generate_daily_report)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Runs at: 16:30 ET, Mon–Fri
+Model: claude-haiku-4-5-20251001
+Budget: max_tokens=600
+
+ATR STOP CHECK (runs during daily report):
+  For each open position:
+    atr_stop = entry_price - (atr * 1.5)
+    If current_price ≤ atr_stop → auto-close position (ATR_STOP_HIT)
+
+  This is the code-level stop loss enforcement — AI does not need to
+  explicitly say SELL for stop-hit positions.
+
+REPORT CONTENT (AI generates in Russian):
+  - summary: 2-3 sentence portfolio assessment
+  - best_position: symbol and reason to hold
+  - concern: what worries AI or null
+  - tomorrow_plan: planned actions
+  - portfolio_health: STRONG / NEUTRAL / WEAK
+
+TELEGRAM MESSAGE:
+  📊 AI Portfolio Daily Report
+  {date}
+  💰 Value: ${total_value} ({pnl:+.1f}%)
+  💵 Cash: ${cash}
+  {AI summary, best position, concern, tomorrow plan}
+  {health emoji} Health: {STRONG/NEUTRAL/WEAK}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+POSITION SIZING DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_atr_position_size(portfolio_value, entry, atr, stop_mult=1.5) → USD amount
+
+Formula:
+  risk_per_trade  = portfolio_value * 0.02     (2% risk per trade)
+  risk_per_share  = atr * 1.5                  (stop = 1.5 ATR below entry)
+  shares          = risk_per_trade / risk_per_share
+  position_usd    = shares * entry_price
+
+  Capped: max($300), min($50)
+
+Example: $1000 portfolio, AAPL at $15.00, ATR = $0.50
+  risk_per_trade  = $20
+  risk_per_share  = $0.75
+  shares          = 26.7
+  position_usd    = $400 → capped at $300
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RISK MANAGEMENT RULES (code-enforced, cannot be overridden by AI)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Pre-filter (before AI sees candidates):
+  ✗ No chasing (price moved >5% today)
+  ✗ No earnings risk (earnings ≤ 3 days away)
+  ✗ ARM tier without CMF>70 + RSI<65 + hype<40 + Wyckoff confirmation
+
+Execution (after AI responds):
+  ✗ Max 5 positions (hard coded)
+  ✗ Min $50 per position
+  ✗ Cannot exceed available cash
+  ✗ ATR sizing overrides AI's suggested amount
+
+Daily report (16:30 ET):
+  ✗ ATR stop auto-close (entry - 1.5*ATR = automatic exit)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DATA PERSISTENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+All AI portfolio data stored in PostgreSQL:
+  - ai_portfolio table: individual position records
+  - ai_portfolio_state table: daily state snapshots (one per day)
+
+Data survives Railway redeploys (PostgreSQL is persistent).
+Requires DATABASE_URL env var to be set (see Part 10 — Deployment).
+
+The CRITICAL fix for data loss:
+  railway.toml previously had: DATABASE_URL = ""
+  This overrode Railway's PostgreSQL plugin injection with empty string,
+  causing SQLite fallback and wiping all data on every deploy.
+  FIXED: Removed that line from railway.toml entirely.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HOW TO CHECK IF AI PORTFOLIO IS WORKING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. GET /api/ai-portfolio/state
+   → Should show total_value close to 1000, decisions_json with today's decisions
+
+2. GET /api/ai-portfolio/positions
+   → Open positions (empty if holding cash)
+
+3. Railway logs at 09:02 ET:
+   "AI portfolio decisions starting..."
+   "Portfolio decisions done: X buys, Y sells. Value: $1000.xx (+0.x%)"
+   OR: "No qualified candidates — holding cash, skipped AI call"
+
+================================================================================

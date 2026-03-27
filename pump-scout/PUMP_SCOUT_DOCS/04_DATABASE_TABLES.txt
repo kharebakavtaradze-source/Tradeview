@@ -1,0 +1,275 @@
+================================================================================
+PUMP SCOUT — DATABASE TABLES
+Part 4 of 10
+================================================================================
+
+ENGINE: SQLAlchemy async ORM
+PRIMARY DB: PostgreSQL (asyncpg driver) via Railway plugin
+FALLBACK: SQLite (aiosqlite) — local dev only — DATA LOST ON RESTART
+
+DB URL detection (database.py):
+  DATABASE_URL env var → use PostgreSQL
+  Not set             → SQLite fallback + WARNING logged at startup
+  "postgresql://"     → auto-converted to "postgresql+asyncpg://"
+
+IMPORTANT: Never set DATABASE_URL = "" in railway.toml — this overrides the
+Railway plugin injection and causes SQLite fallback on every deploy.
+
+Startup: init_db() → create_all tables + run_migrations (safe ALTER TABLE)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: scans
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Stores full scan results as JSON.
+
+  id              INTEGER PK
+  scanned_at      DATETIME  (indexed)
+  total_tickers   INTEGER
+  results_json    TEXT      (full scan result dict as JSON string)
+
+Notes:
+  - results_json includes ALL ticker data including indicators, candles (100 bars)
+  - API strips candles from list response to reduce payload size
+  - GET /api/ticker/{symbol} fetches fresh candles from Yahoo on demand
+  - Only latest scan is typically needed — history for trend analysis
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: watchlist
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+User's personal watchlist.
+
+  id        INTEGER PK
+  symbol    VARCHAR(10) UNIQUE  (indexed)
+  added_at  DATETIME
+  notes     TEXT nullable
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: journal
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Trade journal — user's manual paper/real trades.
+This is the PRIMARY data source for adaptive scoring and performance tracking.
+
+  id                  INTEGER PK
+  symbol              VARCHAR(10)  (indexed)
+  added_at            DATETIME
+  updated_at          DATETIME
+  entry_price         FLOAT NOT NULL
+  entry_date          VARCHAR(20)
+  exit_price          FLOAT nullable
+  exit_date           VARCHAR(20) nullable
+  direction           VARCHAR(10)  default="LONG"
+  tier                VARCHAR(20) nullable   (FIRE/ARM/BASE/etc at entry)
+  score               FLOAT nullable
+  notes               TEXT nullable
+  outcome             VARCHAR(20)  default="open"  (win/loss/open/skip)
+  gain_pct            FLOAT nullable   (auto-calculated on save)
+  indicators_snapshot TEXT nullable   (JSON — snapshot of indicators at entry)
+  ai_analysis         TEXT nullable
+  tags                TEXT nullable   (JSON array)
+  -- Extended fields (v10+):
+  entry_wyckoff       VARCHAR(30) nullable
+  entry_cmf_pctl      FLOAT nullable
+  entry_vol_ratio     FLOAT nullable
+  entry_hype          INTEGER default=0
+  catalyst            VARCHAR(50) nullable
+  stop_loss           FLOAT nullable
+  target_price        FLOAT nullable
+  current_price       FLOAT nullable
+  current_pct         FLOAT nullable
+  days_held           INTEGER default=0
+  max_gain_pct        FLOAT default=0
+  max_loss_pct        FLOAT default=0
+  status              VARCHAR(10)  default="OPEN"  (OPEN/CLOSED/STOPPED)
+  exit_reason         VARCHAR(20) nullable   (TARGET_HIT/STOP_HIT/MANUAL)
+  final_pnl_pct       FLOAT nullable
+  -- Alpha tracking (v13+):
+  spy_return_pct      FLOAT nullable   (SPY cumulative % during hold period)
+  alpha_pct           FLOAT nullable   (final_pnl_pct - spy_return_pct)
+  max_gain_day        INTEGER nullable  (day number when max gain was reached)
+  missed_exit_pct     FLOAT nullable   (max_gain_pct - final_pnl_pct)
+  last_updated        DATETIME nullable
+
+Notes:
+  - Open positions (status=OPEN) tracked in scanner symbol sourcing
+  - journal_autoclose.py fills current_price, current_pct, days_held daily
+  - Closed trades drive adaptive_weights.py scoring adjustments
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: scan_candidates
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Control group — every FIRE/ARM ticker from every scan.
+Used to measure system performance (did signals actually move?).
+
+  id            INTEGER PK
+  scan_date     DATE  (indexed)
+  symbol        VARCHAR(10)  (indexed)
+  price         FLOAT nullable   (price at signal)
+  tier          VARCHAR(10) nullable
+  score         FLOAT nullable
+  wyckoff       VARCHAR(30) nullable
+  cmf_pctl      FLOAT nullable
+  vol_ratio     FLOAT nullable
+  hype          INTEGER default=0
+  divergences   VARCHAR(200) nullable
+  was_journaled BOOLEAN default=False
+  -- Outcome tracking (filled by fill_candidate_prices at 16:10 ET):
+  price_5d      FLOAT nullable
+  pct_5d        FLOAT nullable
+  price_10d     FLOAT nullable
+  pct_10d       FLOAT nullable
+  price_20d     FLOAT nullable
+  pct_20d       FLOAT nullable
+
+Notes:
+  - fill_candidate_prices job fills price_Nd columns for candidates 5/10/20 days old
+  - Enables win rate analytics: of all FIRE signals, what % moved up 5%+ in 5 days?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: position_snapshots
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Daily EOD snapshot of each open journal entry — for trade replay / analysis.
+
+  id             INTEGER PK
+  journal_id     INTEGER  (FK to journal, indexed)
+  snapshot_date  DATE
+  day_number     INTEGER  (1 = first day after entry)
+  price          FLOAT nullable
+  pct_from_entry FLOAT nullable
+  cmf_pctl       FLOAT nullable
+  vol_ratio      FLOAT nullable
+  hype           INTEGER nullable
+  wyckoff        VARCHAR(30) nullable
+  spy_daily_pct  FLOAT nullable   (SPY return on this day for alpha calc)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: ai_portfolio
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Individual AI portfolio positions (buy/sell records).
+
+  id             INTEGER PK
+  symbol         VARCHAR(10)  (indexed)
+  action         VARCHAR(10)   (BUY/SELL/HOLD)
+  decision_date  DATETIME
+  entry_price    FLOAT nullable
+  exit_price     FLOAT nullable
+  shares         FLOAT nullable
+  invested_usd   FLOAT default=0
+  current_value  FLOAT nullable
+  pnl_usd        FLOAT default=0
+  pnl_pct        FLOAT default=0
+  status         VARCHAR(10)  default="OPEN"  (OPEN/CLOSED)
+  reason         TEXT nullable   (AI's explanation in Russian)
+  scan_data      TEXT nullable   (JSON — scan context at decision time)
+  exit_date      DATETIME nullable
+  days_held      INTEGER default=0
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: ai_portfolio_state
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Daily portfolio state snapshot (one row per trading day).
+
+  id              INTEGER PK
+  date            VARCHAR(10) UNIQUE   (YYYY-MM-DD, indexed)
+  total_value     FLOAT default=1000.0
+  cash            FLOAT default=1000.0
+  invested        FLOAT default=0
+  total_pnl_pct   FLOAT default=0
+  decisions_json  TEXT nullable   (JSON — all AI decisions for the day)
+  daily_report    TEXT nullable   (JSON — AI narrative report)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: sector_cache
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Persistent cache of ticker → sector mapping to avoid repeated Yahoo API calls.
+
+  symbol      VARCHAR(20) PK  (indexed)
+  sector      VARCHAR(100) NOT NULL
+  fetched_at  DATETIME
+
+Notes:
+  - Most tickers have known sector in scanner/sector_map.py (no DB lookup needed)
+  - Unknown tickers fetched from Yahoo Finance assetProfile API once, cached here
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: eod_logs
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+End-of-day markdown log, one per trading day.
+
+  id            INTEGER PK
+  log_date      VARCHAR(10) UNIQUE  (YYYY-MM-DD, indexed)
+  content       TEXT NOT NULL   (full markdown log)
+  generated_at  DATETIME
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: market_regime
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Daily market regime snapshot.
+
+  id                INTEGER PK
+  date              DATE UNIQUE  (indexed)
+  regime            VARCHAR(30) NOT NULL   (RISK_ON/RISK_OFF/FEAR/etc.)
+  spy_pct           FLOAT nullable   (5-day % change)
+  qqq_pct           FLOAT nullable
+  xle_pct           FLOAT nullable
+  xlv_pct           FLOAT nullable
+  xlu_pct           FLOAT nullable
+  gld_pct           FLOAT nullable
+  spy_vs_ema20      FLOAT nullable   (% above/below EMA20)
+  qqq_vs_ema20      FLOAT nullable
+  strong_sectors    VARCHAR(200) nullable  (comma-separated)
+  weak_sectors      VARCHAR(200) nullable  (comma-separated)
+  recommendation    TEXT nullable
+  etf_details_json  TEXT nullable   (full ETF data as JSON)
+  created_at        DATETIME
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: sector_strength
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Per-sector aggregate strength per scan date.
+
+  id             INTEGER PK
+  date           DATE  (indexed)
+  sector         VARCHAR(50)
+  avg_score      FLOAT nullable
+  avg_cmf_pctl   FLOAT nullable
+  avg_vol_ratio  FLOAT nullable
+  ticker_count   INTEGER nullable
+  leader_symbol  VARCHAR(10) nullable
+  leader_score   FLOAT nullable
+  momentum_pct   FLOAT nullable   (avg price change % of sector tickers)
+  tickers_json   TEXT nullable   (JSON list of tickers in sector)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: pattern_streaks
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Tracks consecutive scan appearances for ARM+ tickers.
+
+  id             INTEGER PK
+  symbol         VARCHAR(10) UNIQUE  (indexed)
+  streak_start   DATE NOT NULL
+  streak_days    INTEGER default=1
+  avg_score      FLOAT default=0
+  avg_cmf_pctl   FLOAT default=0
+  avg_vol_ratio  FLOAT default=0
+  avg_hype       INTEGER default=0
+  tier           VARCHAR(20) nullable   (best tier seen in streak)
+  wyckoff        VARCHAR(30) nullable   (Wyckoff state)
+  last_seen      DATE NOT NULL
+  alerted        INTEGER default=0   (bitmask: bit0=day3 sent, bit1=day5 sent)
+
+Notes:
+  - One row per symbol (upserted each scan via update_pattern_streaks)
+  - Streak resets if symbol disappears for 2+ days (last_seen gap > 1 day)
+  - Rolling averages: avg = (prev_avg * (days-1) + today) / days
+  - Telegram alerts sent at day 3 (bit0) and day 5 (bit1) milestones
+  - Once bit is set, alert not re-sent (prevents spam)
+
+
+MIGRATIONS
+----------
+Safe ALTER TABLE migrations run on startup (_run_migrations in database.py):
+  - All ALTER TABLE IF NOT EXISTS patterns (idempotent)
+  - Used for columns added after initial deployment (v10+, v13+)
+  - Never drops columns or tables
+
+================================================================================

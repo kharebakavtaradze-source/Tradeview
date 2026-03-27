@@ -1,0 +1,235 @@
+================================================================================
+PUMP SCOUT — API ENDPOINTS (main.py)
+Part 5 of 10
+================================================================================
+
+BASE URL: https://backend.railway.app  (or localhost:8000 in dev)
+All endpoints return JSON. CORS: allow all origins.
+App startup: init_db() + start_scheduler()
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HEALTH & STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/health
+  Returns: {status, scan_running, version}
+
+GET /api/telegram/status
+  Returns: {configured, last_sent}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCAN RESULTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/scan/latest
+  Returns most recent scan results.
+  Strips "candles" field from results list (use /ticker/{symbol} for candles).
+  Response: {results[], scanned_at, total, tier_counts, sector_strength,
+             market_regime, symbol_sources, ...}
+
+GET /api/scan/history?days=30
+  Returns scan summary for last N days (max 90).
+  Response: {history[], days}
+
+GET /api/scan/run  (also POST /api/scan/run)
+  Manually triggers a scan in background.
+  Returns immediately: {status, message}
+  Prevents double runs via _scan_running flag.
+
+GET /api/ticker/{symbol}
+  Returns full detail for one ticker from latest scan, including candles (100 bars).
+  If not in scan: fetches live data from Yahoo Finance on-demand.
+  Returns: full ticker dict with candles[], source ("scan" or "live")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WATCHLIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET    /api/watchlist              → list all watchlist items
+POST   /api/watchlist/{symbol}     → add symbol (query param: notes=)
+DELETE /api/watchlist/{symbol}     → remove symbol (404 if not found)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+JOURNAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET  /api/journal
+  Returns all journal entries.
+  Response: {entries[]}
+
+GET  /api/journal/stats
+  Returns performance stats (win rate, avg gain/loss, by tier, by Wyckoff, etc.)
+
+GET  /api/journal/suggest-levels?symbol=AAPL&entry=15.50&tier=ARM
+  Returns ATR-based suggested stop and target.
+  Stop multipliers by tier: FIRE=1.2x, ARM=1.5x, BASE=2.0x, STEALTH=1.5x
+  Target = stop_distance * 2.5 (guarantees 2.5:1 R/R)
+  Falls back to 3% of entry if ATR not available.
+  Response: {symbol, entry, stop, target, stop_pct, target_pct, rr_ratio,
+             atr_used, stop_mult, target_mult}
+
+GET  /api/journal/adaptive-weights
+  Returns current adaptive scoring weights derived from closed trades.
+  Response: {cmf_weight, wyckoff_weight, vol_weight, hype_weight, count, ...}
+
+GET  /api/journal/{id}
+  Returns single journal entry by ID.
+
+POST /api/journal
+  Create new journal entry.
+  Body: {symbol, entry_price, entry_date, tier, stop_loss?, target_price?,
+         notes?, entry_wyckoff?, entry_cmf_pctl?, entry_vol_ratio?,
+         entry_hype?, catalyst?, tags?}
+  Validates R/R ratio if stop_loss + target_price provided:
+    BLOCK if stop >= entry or target <= entry
+    BLOCK if R/R < 1.0
+    WARN  if R/R < 2.0 (still saved, warning returned)
+
+PUT  /api/journal/{id}
+  Update journal entry (any field).
+  Recalculates gain_pct on save.
+
+DELETE /api/journal/{id}
+  Delete journal entry.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ANALYTICS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/analytics/deep
+  Deep analytics across all closed journal trades and scan candidates.
+  Includes: win rate, avg alpha, best/worst Wyckoff states, sector performance,
+            optimal entry conditions (CMF, vol_ratio, hype ranges)
+
+GET /api/analytics/candidates?days=30
+  Summary of scan candidates vs outcome.
+  Returns: hit rate by tier (FIRE/ARM), avg 5/10/20d returns
+
+GET /api/analytics/candidates/missed
+  Candidates that moved significantly but were NOT journaled (missed opportunities).
+
+GET /api/analytics/position-snapshots/{journal_id}
+  Daily snapshots for a journal position (for trade replay chart).
+
+GET /api/market-regime/latest
+  Latest market regime.
+  Response: {regime, spy_pct, qqq_pct, strong_sectors, weak_sectors,
+             recommendation, date, ...}
+
+GET /api/market-regime/history?days=30
+  Market regime history.
+
+GET /api/sector-strength/latest
+  Latest sector strength by sector.
+  Response: {SectorName: {avg_score, leader_symbol, avg_cmf_pctl, ...}, ...}
+
+GET /api/sector-strength/{sector}
+  Strength history for a specific sector.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PATTERN STREAKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/streaks/active?min_days=2
+  Returns active pattern streaks (seen today or yesterday, ≥ min_days consecutive).
+  Ordered by streak_days descending.
+  Response: {streaks[], count}
+  Used by frontend to show STREAKS banner and streak badges on ticker cards.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AI PORTFOLIO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/ai-portfolio/state
+  Current portfolio state (total value, cash, PnL, latest decisions).
+  Response: {total_value, cash, invested, total_pnl_pct, decisions_json,
+             daily_report, date}
+
+GET /api/ai-portfolio/positions
+  All open AI positions with live prices.
+
+GET /api/ai-portfolio/history?limit=50
+  All AI portfolio transactions (open + closed).
+
+POST /api/ai-portfolio/close/{symbol}?price=15.50&reason=MANUAL
+  Manually close an AI position.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HYPE MONITOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/hype/latest
+  Latest hype scores for all tracked symbols.
+
+GET /api/hype/{symbol}
+  Hype data for a specific ticker.
+  Returns: {hype_index, velocity, divergence_type, sources, ...}
+
+GET /api/hype/alerts
+  Recent hype alert history.
+
+GET /api/hype/status
+  Hype monitor status (configured, last_run).
+
+GET /api/hype/run
+  Manually trigger one hype monitor cycle.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EARNINGS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/earnings/upcoming?days=14
+  All upcoming earnings in next N days from Finnhub calendar.
+  Returns full {SYMBOL: earnings_info} dict.
+  Requires FINNHUB_API_KEY env var.
+
+GET /api/earnings/{symbol}
+  Earnings info for a specific symbol.
+  Response: {has_earnings, date, days_until, hour, hour_label,
+             eps_estimate, risk}  or  {has_earnings: false}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTIFICATIONS (TEST ENDPOINTS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/telegram/test
+  Sends a test Telegram message to verify bot configuration.
+
+GET /api/notifications/test-morning-brief
+  Immediately triggers a morning brief (does not wait for 09:00 schedule).
+  Returns: {status, message}
+
+GET /api/notifications/test-price-alert
+  Immediately runs price alert check (clears cooldown first for testing).
+  Returns: {status, message}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EOD LOG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/eod-log/latest
+  Latest end-of-day log (markdown text).
+
+GET /api/eod-log/{date}
+  EOD log for a specific date (YYYY-MM-DD).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET /api/journal/export/csv
+  Downloads journal as CSV file (StreamingResponse).
+  Includes all fields: symbol, entry_price, exit_price, gain_pct, tier,
+  wyckoff, cmf_pctl, stop_loss, target_price, alpha_pct, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AI TICKER ANALYSIS (on-demand)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+POST /api/analyze/{symbol}
+  On-demand Claude AI analysis for a specific ticker.
+  Uses claude-haiku-4-5-20251001.
+  Input: latest scan data for the symbol.
+  Returns: {symbol, analysis (Russian text)}
+
+================================================================================

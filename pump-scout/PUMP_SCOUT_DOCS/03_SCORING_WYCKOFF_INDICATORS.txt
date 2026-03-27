@@ -1,0 +1,294 @@
+================================================================================
+PUMP SCOUT — SCORING, WYCKOFF & INDICATORS
+Part 3 of 10
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION A: TECHNICAL INDICATORS (scanner/indicators.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+calc_all(candles) → single flat dict with ALL indicators below.
+
+MOVING AVERAGES
+  sma(values, period)     — simple moving average
+  ema(values, period)     — exponential MA (alpha = 2/(period+1))
+  EMA 20 / 50 / 200 calculated from close prices
+
+BOLLINGER BANDS (period=20, multiplier=2.0)
+  basis = SMA(20)
+  upper = basis + 2 * stdev(20)
+  lower = basis - 2 * stdev(20)
+  bb_width = (upper - lower) / basis
+  bb_squeeze = True if bb_width_percentile < 25 (BB very narrow = compression)
+  bb_sqz_bars = consecutive bars in squeeze state
+  Squeeze implies energy is building → breakout likely
+
+CHAIKIN MONEY FLOW (period=20)
+  MFM (money flow multiplier) = ((close - low) - (high - close)) / (high - low)
+  MFV (money flow volume)     = MFM * volume
+  CMF = SUM(MFV, 20) / SUM(volume, 20)
+  Range: -1.0 to +1.0
+  cmf_pctl = percentile rank vs last 100 bars (0–100)
+  > 0 = buying pressure, < 0 = selling pressure
+
+VOLUME ANOMALY
+  avg_vol_20   = SMA(volume, 20)
+  anomaly_ratio = today_vol / avg_vol_20   (e.g. 3.5 = 3.5x average)
+  vol_z        = (today_vol - avg_vol_20) / stdev(volume, 20)
+  price_change_pct = (close_today - close_prev) / close_prev * 100
+  quiet        = anomaly_ratio > 2.0 AND abs(price_change_pct) < 3.0
+                 (large volume but small price move → stealth accumulation)
+
+ATR — Average True Range (period=14)
+  TR = max(high-low, abs(high-prev_close), abs(low-prev_close))
+  ATR = EMA(TR, 14)
+  atr_ratio = atr / SMA(atr, 50)   (current ATR vs historical average)
+  atr_pct   = atr / close * 100    (ATR as % of price)
+
+RSI (period=14)
+  Standard Wilder RSI formula
+  Bullish Divergence detection (30–35 bar window):
+    - Find previous significant low (price) in window
+    - Find corresponding RSI low at same bar
+    - Divergence = current_price < prev_price_low AND current_rsi > prev_rsi_low
+    - Indicates hidden strength: price drops but momentum rising
+
+GAP DETECTION
+  gap_pct  = (open_today - close_prev) / close_prev * 100
+  GAP_UP_STRONG  if gap_pct >= 5%
+  GAP_UP         if gap_pct >= 2%
+  GAP_DOWN_STRONG if gap_pct <= -5%
+  GAP_DOWN        if gap_pct <= -2%
+  FLAT            otherwise
+
+STEALTH ACCUMULATION (calc_stealth)
+  Criteria (all must be true):
+    vol_ratio (today vs yesterday)  >= 2.0
+    vol_vs_avg (today vs 20d avg)   >= 1.5
+    price_change_pct                <= 7%
+  Scoring (0–100):
+    vol_ratio contribution:  min(40, (vol_ratio - 2) * 10 + 20)
+    vol_vs_avg contribution: min(30, (vol_vs_avg - 1.5) * 15 + 15)
+    low_price_move (max 30): 30 if price_chg < 1%, 20 if < 3%, 10 if < 5%
+    bullish_close bonus:     +10 if close > open
+    PENALTY: 50% reduction if close < open (bearish candle)
+  is_stealth = stealth_score >= 40 AND vol_ratio >= 2.0
+
+INSTITUTIONAL FLOW (calc_institutional_flow)
+  Wraps multi-factor institutional accumulation detection:
+    - Large volume + small price change (institutions distributing carefully)
+    - CMF strongly positive while price consolidates
+    - Below EMA50 accumulation (smart money buying dips)
+  flow_score: 0–100
+  is_institutional = flow_score >= 50
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION B: WYCKOFF REGIME DETECTION (scanner/wyckoff.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+detect_regime(candles, precomputed=None) → dict
+
+SELLING CLIMAX (SC) DETECTION
+  Condition (all must be true):
+    - Current bar's volume is highest in last 60 bars
+    - Current bar is bearish (close < open)
+    - Current close is near 60-bar low (within 10%)
+  SC signals institutional buying at capitulation lows
+
+BUYING CLIMAX (BC) DETECTION
+  Condition (all must be true):
+    - Current bar's volume is highest in last 60 bars
+    - Current bar is bullish (close > open)
+    - Current close is near 60-bar high (within 10%)
+  BC signals distribution at price peaks
+
+TRADING RANGE (TR)
+  Window: last 40 bars
+  tr_high = max(high, 40 bars)
+  tr_low  = min(low, 40 bars)
+  tr_mid  = (tr_high + tr_low) / 2
+  tr_range = tr_high - tr_low
+  Used as proxy for accumulation/distribution zone
+
+ACCUMULATION DETECTION (in_acc)
+  Method 1 — Explicit: sc_detected AND price in range for 5+ bars
+    price_in_range = tr_low ≤ current_close ≤ tr_high
+    consolidating  = counting consecutive bars where price_in_range
+  Method 2 — Heuristic: price near multi-week bottom
+    vs_low = (close - 60bar_low) / (60bar_high - 60bar_low)
+    in_acc = vs_low < 0.40 AND volume contracting (below 20d average)
+
+DISTRIBUTION DETECTION (in_dist)
+  bc_detected AND price consolidating near range highs for 5+ bars
+  near_highs = close > tr_high * 0.95
+
+TR POSITION (0–100%)
+  tr_pos = (close - tr_low) / tr_range * 100
+  0% = at range bottom, 100% = at range top
+
+STATE MACHINE (when in_acc = True)
+  FIRE        — Breakout + momentum
+    Conditions: close > 20-bar high AND vol_z > 1.0 AND squeeze_bars ≥ 3
+  ARM         — Pre-breakout (near top of range)
+    Conditions: tr_pos ≥ 65% AND squeeze_bars ≥ 3 AND cmf > 0
+  STEALTH_ARM — Stealth + ARM signals
+    Conditions: ARM criteria + stealth_score ≥ 50
+  BASE        — In accumulation, squeeze forming
+    Conditions: squeeze_bars ≥ 2 AND cmf > 0 AND in_acc
+  STEALTH_BASE — Stealth + BASE signals
+  STEALTH     — Stealth score high but not in accumulation
+    Conditions: stealth_score ≥ 50
+
+STATE MACHINE (when in_dist = True)
+  DISTRIBUTION → applies 40% penalty in scoring
+
+CONFIDENCE SCORING
+  +30 if SC detected
+  +30 if in explicit accumulation
+  +20 if in heuristic accumulation
+  +20 if squeeze ≥ 3 bars
+  +20 if CMF > 30th percentile
+  Max: 100
+
+RETURN DICT KEYS
+  state, tr_high, tr_low, tr_mid, tr_pos, in_acc, in_dist,
+  sc_detected, bc_detected, confidence, squeeze_bars, cmf,
+  is_breakout, vol_z, stealth_score
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION C: SCORING ALGORITHM (scanner/scoring.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+score_ticker(indicators, regime) → {total_score, tier, ...}
+
+COMPONENT 1: VOLUME SCORE (0–100)
+  anomaly_ratio thresholds:
+    ratio ≥ 10   → 100
+    ratio ≥ 7    → 90
+    ratio ≥ 5    → 80
+    ratio ≥ 4    → 70
+    ratio ≥ 3    → 60
+    ratio ≥ 2    → 40
+    else         → 20
+
+  Gap adjustments:
+    GAP_UP_STRONG  → vol_score *= 0.7   (volume partly explained by gap)
+    GAP_UP         → vol_score *= 0.85
+    GAP_DOWN_STRONG → vol_score *= 0.5
+    GAP_DOWN       → vol_score *= 0.7
+
+  RSI divergence bonus: +20 (if bullish divergence detected)
+
+COMPONENT 2: ACCUMULATION SCORE (0–100)
+  Base from CMF percentile:
+    cmf_pctl ≥ 90 → 100
+    cmf_pctl ≥ 75 → 85
+    cmf_pctl ≥ 60 → 70
+    cmf_pctl ≥ 50 → 55
+    cmf_pctl ≥ 40 → 40
+    else          → 20
+
+  BB squeeze bonus:
+    squeeze_bars ≥ 5 → +20
+    squeeze_bars ≥ 3 → +15
+    squeeze_bars ≥ 2 → +10
+    squeeze = True   → +5
+
+  Wyckoff bonus:
+    FIRE state  → +30
+    ARM state   → +20
+    BASE state  → +10
+    STEALTH*    → +15
+
+COMPONENT 3: STEALTH BONUS
+  stealth_bonus = stealth_score * 0.30   (up to 30 points)
+
+QUIET FACTOR MULTIPLIER
+  Applied when: anomaly_ratio > 3.0 AND abs(price_change_pct) < 1.0
+  quiet_factor = 1.5
+  This is the key "smart money" signal: high volume + almost no price move
+  Otherwise: quiet_factor = 1.0
+
+INSTITUTIONAL FLOW BONUS
+  inst_bonus = flow_score * 0.20   (up to 20 points)
+
+COMPOSITE FORMULA
+  raw_score = (vol_score * 0.4 + accum_score * 0.3 + stealth_bonus * 0.3)
+              * quiet_factor + inst_bonus
+
+PENALTY CONDITIONS (applied to raw_score)
+  RSI > 70         → * 0.70  (overbought — risky chase)
+  cmf_pctl < 20    → * 0.80  (weak money flow)
+  Wyckoff=DIST     → * 0.60  (smart money is selling)
+
+ADAPTIVE WEIGHTS (scanner/adaptive_weights.py)
+  After 5+ closed journal trades with known outcomes, weights adapt:
+  - cmf_weight:    1.2 if avg winning trade CMF > 70, else 0.8
+  - wyckoff_weight: 1.3 (always reward Wyckoff confirmation)
+  - vol_weight:    1.0 (baseline)
+  - hype_weight:   1.1
+  Cache TTL: 1 hour
+
+
+TIER ASSIGNMENT
+  Score > 80  → FIRE    (strongest — act immediately)
+  Score > 60  → ARM     (strong — prepare to enter)
+  Score > 40  → BASE    (solid — watch closely)
+  Score ≤ 25  → SKIP    (filtered out)
+
+  Override rules (Wyckoff state can upgrade tier):
+  - FIRE Wyckoff state guarantees minimum FIRE tier
+  - ARM Wyckoff state guarantees minimum ARM tier
+  - STEALTH* states can yield STEALTH tier even with lower score
+  - Strong institutional flow (flow_score > 70) upgrades BASE/WATCH to ARM
+
+  Sector sympathy can further upgrade (see Part 2, Step 4.5):
+  - SYMPATHY tier added if ticker lags its sector leader by 3%+ with volume
+
+TIER DEFINITIONS (for reference)
+  FIRE     — All conditions aligned: volume, accumulation, Wyckoff breakout
+  ARM      — Strong signal, about to break out
+  BASE     — Building up, not yet breaking out
+  STEALTH  — Hidden accumulation — institutional buying without retail notice
+  SYMPATHY — Lagging a sector leader — likely to follow
+  WATCH    — Marginal signal — monitor only
+  SKIP     — Not tradeable today
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION D: MARKET REGIME (scanner/market_regime.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+detect_market_regime() — runs at 16:15 ET via scheduler
+Uses 5-day % change of ETFs: SPY, QQQ, XLE, XLV, XLU, GLD
+
+REGIME STATES (priority order):
+  FEAR              — GLD +2% AND SPY -2% (5d) → defensive flight
+  RISK_OFF          — SPY below EMA20 AND Utilities > Tech (5d)
+  ROTATION_ENERGY   — XLE outperforms SPY by 3%+ (5d)
+  ROTATION_DEFENSIVE — Healthcare or Utilities outperform Tech by 2%+ (5d)
+  RISK_ON           — SPY + QQQ above EMA20 AND QQQ positive (5d)
+  NEUTRAL           — Default (no pattern matches)
+
+STRONG/WEAK SECTORS per regime:
+  RISK_ON:    strong=[Tech, Consumer Discretionary, Industrials]
+              weak=[Utilities, Consumer Staples]
+  RISK_OFF:   strong=[Utilities, Consumer Staples, Healthcare]
+              weak=[Tech, Consumer Discretionary]
+  FEAR:       strong=[Materials, Utilities, Healthcare]
+              weak=[Tech, Financials, Consumer Discretionary]
+  ROTATION_*: appropriate sectors marked strong/weak
+
+DB STORAGE: market_regime table (one row per trading day)
+
+REGIME EMOJI MAP:
+  RISK_ON            → 🟢
+  NEUTRAL            → 🟡
+  RISK_OFF           → 🔴
+  FEAR               → 💀
+  ROTATION_ENERGY    → ⛽
+  ROTATION_DEFENSIVE → 🏥
+
+================================================================================

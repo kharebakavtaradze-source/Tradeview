@@ -1,0 +1,157 @@
+================================================================================
+PUMP SCOUT — SCHEDULER & ALL AUTOMATED JOBS (scheduler.py)
+Part 8 of 10
+================================================================================
+
+FRAMEWORK: APScheduler 3.x with AsyncIOScheduler
+TIMEZONE: America/New_York (handles EST/EDT automatically — no manual UTC offset)
+DAYS: Mon–Fri only (day_of_week="mon-fri")
+misfire_grace_time: 120–300 seconds (if server wakes late, job still runs)
+
+Scheduler starts at app startup via lifespan event.
+All jobs are async functions running in the FastAPI event loop.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FULL SCHEDULE TABLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Time (ET)  | Job ID                    | Function                | Grace
+-----------+---------------------------+-------------------------+------
+08:00      | scan_0800_est             | run_scan + save_scan    | 300s
+           |                           | + send_scan_alert       |
+09:00      | morning_brief             | send_morning_brief      | 300s
+09:02      | ai_portfolio_decisions    | ai_portfolio_decisions  | 300s
+09:30      | scan_0930_est             | run_scan + save_scan    | 300s
+12:00      | scan_1200_est             | run_scan + save_scan    | 300s
+16:05      | journal_autoclose         | auto_close_journal      | 300s
+16:10      | fill_candidate_prices     | fill_candidate_prices   | 300s
+16:15      | market_regime_1615_est    | detect_market_regime    | 300s
+16:30      | ai_portfolio_report       | generate_daily_report   | 300s
+16:35      | eod_log                   | run_eod_log             | 300s
+every 30m  | hype_monitor_30min        | run_hype_monitor        | 120s
+(8:00-17:00)|                          |                         |
+every 30m  | price_alerts_30min        | check_price_alerts      | 120s
+(9:30-16:00)|                          |                         |
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+JOB DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+08:00 — PRE-MARKET SCAN
+  Function: _run_and_save()
+  Pipeline: get_scan_symbols → fetch_batch → indicators → wyckoff → scoring
+            → sector sympathy → premarket → AI analysis → pattern_streaks
+            → earnings enrichment → save_scan → send_scan_alert
+  Duration: typically 60–120 seconds
+  Purpose: Catch overnight gaps and early morning setups before market open
+
+09:00 — MORNING BRIEF (Telegram)
+  Function: send_morning_brief()
+  Content: regime, FIRE/ARM signals, open positions warnings, AI portfolio,
+           top 2 sectors, earnings today/tomorrow
+  Duration: < 5 seconds
+  Purpose: Single summary message to start the trading day
+
+09:02 — AI PORTFOLIO DECISIONS
+  Function: ai_portfolio_decisions()
+  Runs 2 minutes after morning brief to ensure Telegram delivery ordering
+  Duration: 10–30 seconds (includes live price fetches + Anthropic API call)
+  Purpose: AI reviews overnight data and makes buy/sell decisions
+
+09:30 — MARKET OPEN SCAN
+  Function: _run_and_save()
+  Same full pipeline as 08:00 scan
+  Purpose: Fresh data at market open — pre-market moves now reflected
+
+12:00 — MIDDAY SCAN
+  Function: _run_and_save()
+  Same full pipeline
+  Purpose: Catches intraday momentum shifts and new setups forming
+
+16:05 — JOURNAL AUTO-CLOSE (journal_autoclose.py)
+  Function: auto_close_journal()
+  Purpose: Update all open journal positions with closing prices,
+           calculate current_pct, days_held, max_gain_pct, max_loss_pct,
+           check if stop_loss or target_price was hit today,
+           create daily position_snapshot
+  Marks positions STOPPED or TARGET_HIT if threshold crossed
+
+16:10 — FILL CANDIDATE PRICES (scan_candidates.py)
+  Function: fill_candidate_prices()
+  Purpose: Find scan_candidates where scan_date is exactly 5, 10, or 20 days ago
+           and fill price_5d/pct_5d (or 10d/20d) with today's closing price
+           → enables win rate analytics (did FIRE signals actually move?)
+
+16:15 — MARKET REGIME DETECTION (scanner/market_regime.py)
+  Function: detect_market_regime()
+  Purpose: Fetch closing prices for SPY/QQQ/XLE/XLV/XLU/GLD,
+           calculate 5-day % changes + EMA20 comparisons,
+           determine regime (RISK_ON/RISK_OFF/FEAR/ROTATION/NEUTRAL),
+           identify strong/weak sectors,
+           save to market_regime table
+  Used by: next day's scans (loaded at start of each scan), morning brief,
+           AI portfolio decisions
+
+16:30 — AI PORTFOLIO DAILY REPORT
+  Function: generate_daily_report()
+  Purpose: AI generates Russian-language portfolio narrative,
+           runs ATR stop checks (auto-closes position if ATR stop hit),
+           sends Telegram report message
+  Model: claude-haiku-4-5-20251001, max_tokens=600
+
+16:35 — EOD LOG (eod_log.py)
+  Function: run_eod_log()
+  Purpose: Generate end-of-day markdown report covering:
+           - All FIRE/ARM signals from today's scans
+           - Journal position updates
+           - AI portfolio decisions
+           - Market regime
+           - Hype monitor alerts
+           Saves to eod_logs table (one row per day)
+  Available at: GET /api/eod-log/latest
+
+EVERY 30 MIN (8:00–17:00) — HYPE MONITOR (hype_monitor/monitor.py)
+  Function: run_hype_monitor()
+  Purpose: For each FIRE/ARM ticker in latest scan:
+           - Fetch Reddit/StockTwits/news mentions (fetcher.py)
+           - Calculate mention velocity (velocity.py)
+           - Compute hype score 0–100 (hype_score.py)
+           - Detect divergences (divergence.py)
+  Divergence types:
+    SILENT_VOLUME: high volume, low hype (stealth before big move)
+    HYPE_NO_VOLUME: high hype, low volume (retail pump without smart money)
+    PEAK_FADING: hype declining from peak (possible distribution)
+  Hype scores stored in-memory and available via /api/hype/latest
+
+EVERY 30 MIN (9:30–16:00) — PRICE ALERTS
+  Function: check_price_alerts()
+  Purpose: Check all open journal positions against stop_loss and target_price
+           Send Telegram alerts when within 2%/5% of stop or 3% of target
+           4-hour cooldown per symbol prevents spam
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ERROR HANDLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+All scheduler jobs wrapped in try/except:
+  - Error logged with exc_info=True (full traceback)
+  - Job failure does NOT crash the scheduler or app
+  - Next scheduled run proceeds normally
+  - misfire_grace_time allows late-starting jobs (e.g. after deploy)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PREVENTING DOUBLE SCANS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Global _scan_running flag in main.py:
+  - Set to True when scan starts
+  - Set to False in finally block (always)
+  - Manual scan API: returns "already_running" if flag is True
+  - Scheduler jobs: check the same flag via _run_and_save wrapper
+
+Note: Each Railway container instance has its own _scan_running flag.
+If multiple instances run (horizontal scaling), scans could overlap.
+Current deployment: single instance only.
+
+================================================================================

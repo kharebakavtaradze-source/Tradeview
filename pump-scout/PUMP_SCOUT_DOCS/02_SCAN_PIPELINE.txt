@@ -1,0 +1,229 @@
+================================================================================
+PUMP SCOUT — SCAN PIPELINE (scanner/runner.py)
+Part 2 of 10
+================================================================================
+
+OVERVIEW
+---------
+The scan pipeline is the core of Pump Scout. It runs Monday–Friday at 08:00,
+09:30, and 12:00 ET. A manual trigger is also available via API.
+
+Entry point: scanner/runner.py → run_scan() → returns dict
+
+
+STEP 0: SYMBOL SOURCING (get_scan_symbols)
+-------------------------------------------
+Builds the symbol list from 4 dynamic sources. No hardcoded tickers.
+
+SOURCE 1 — Finviz Screener (primary)
+  - Fetches small-cap and micro-cap US stocks via Finviz HTML scraper
+  - 3 passes: small-cap (cap_smallunder, $1–$50, vol>300K),
+               micro-cap (cap_microunder, $0.50–$20, vol>100K),
+               gainers (small-cap, vol>200K, change up to 15%)
+  - Fallback 1: Yahoo Finance POST screener (if Finviz < 100 results)
+  - Fallback 2: Yahoo predefined screens (small_cap_gainers, most_actives,
+                undervalued_growth_stocks, aggressive_small_caps)
+  - Fallback 3: 115+ static hardcoded tickers (biotech, AI, energy, memes)
+  - Max output: ~800 unique tickers
+
+SOURCE 2 — Open Journal Positions
+  - Always tracks currently held positions regardless of screener output
+  - Query: get_open_journal_entries() from DB
+
+SOURCE 3 — Recent FIRE/ARM Candidates (last 7 days)
+  - Symbols that scored FIRE or ARM in the last 7 scans but outcome unknown
+  - Query: get_recent_fire_arm_symbols(days=7) from scan_candidates table
+
+SOURCE 4 — Regime ETFs (always included)
+  - {SPY, QQQ, XLE, XLV, XLU, GLD, IWM}
+  - Used for market regime calculation, filtered OUT of trading results
+
+Total typical symbol count: 400–900 tickers
+Source breakdown is logged and included in scan result as "symbol_sources"
+
+
+STEP 1: OHLCV DATA FETCH (scanner/yahoo.py → fetch_batch)
+-----------------------------------------------------------
+Downloads daily OHLCV candles for all symbols concurrently.
+
+  - API: Yahoo Finance v8 chart endpoint
+  - Period: 1 year of daily bars
+  - Headers: Chrome 120 User-Agent (spoofing to avoid blocks)
+  - Concurrency: asyncio semaphore = 5 (max 5 parallel requests)
+  - Delay: 0.2 seconds between batches
+  - Retries: 3 attempts on HTTP 429 (rate limit)
+  - Candle format: {t, o, h, l, c, v} (timestamp, OHLCV)
+
+Pre-market data (fetch_premarket_batch):
+  - Yahoo Finance v7 quote endpoint
+  - Fetches preMarketPrice, preMarketChangePercent
+  - Returns: {has_premarket, premarket_pct, session}
+
+
+STEP 2: INDICATOR CALCULATION (scanner/indicators.py → calc_all)
+-----------------------------------------------------------------
+Runs for each ticker with ≥60 candles. Returns flat dict of all indicators.
+
+FILTERS (applied before scoring):
+  - Skip if candles < 60
+  - Skip if today_vol < 200,000 (illiquid)
+  - Skip if anomaly_ratio < 2.0 (less than 2x average volume)
+
+Indicators calculated (see Part 3 for full detail):
+  - EMA 20, 50, 200
+  - Bollinger Bands (20-period, 2σ): width, squeeze, squeeze_bars
+  - Chaikin Money Flow (20-period): cmf, cmf_pctl (percentile rank)
+  - Volume anomaly: anomaly_ratio, vol_z, today_vol, avg_vol_20
+  - ATR (14-period): atr, atr_ratio, atr_pct
+  - RSI (14-period): value, bullish_divergence flag
+  - Gap detection: gap_pct, gap_type
+  - Stealth accumulation: stealth_score, is_stealth, vol_ratio
+  - Institutional flow: flow_score, is_institutional
+  - Price relationships: vs_ema20, vs_ema50, vs_ema200, price_change_pct
+
+
+STEP 3: WYCKOFF REGIME DETECTION (scanner/wyckoff.py → detect_regime)
+----------------------------------------------------------------------
+Detects Wyckoff accumulation/distribution state for each ticker.
+Returns: {state, tr_high, tr_low, tr_mid, in_acc, in_dist, sc_detected,
+          bc_detected, confidence, squeeze_bars, cmf, is_breakout, vol_z}
+
+States:
+  FIRE         — Breakout from accumulation (strongest)
+  ARM          — Near top of trading range, about to break out
+  BASE         — In accumulation, squeeze forming
+  STEALTH      — Hidden accumulation (stealth score ≥ 50)
+  STEALTH_ARM  — Combined stealth + ARM signals
+  STEALTH_BASE — Combined stealth + BASE signals
+  DISTRIBUTION — Smart money selling (penalty applied)
+  NONE         — No pattern detected
+
+See Part 3 for full Wyckoff detection logic.
+
+
+STEP 4: SCORING (scanner/scoring.py → score_ticker)
+-----------------------------------------------------
+Combines all indicators + Wyckoff state into a single 0–100 score.
+Returns: {total_score, tier, vol_score, accum_score, ...}
+
+After scoring:
+  - Sort by total_score descending
+  - Filter out REGIME_ETFS from trading results
+  - SKIP tier filtered from results
+
+See Part 3 for full scoring algorithm.
+
+
+STEP 4.5: SECTOR SYMPATHY (scanner/sector_sympathy.py)
+-------------------------------------------------------
+Identifies tickers likely to follow their sector leader's move.
+
+  1. get_sectors_batch(symbols) — resolves sector for each ticker
+     Priority: known_map → memory cache → DB cache → Yahoo Finance API
+
+  2. find_sector_leaders(results) — leader = score>60 OR (price_change>10% AND vol>3x)
+
+  3. calc_sympathy_score(ticker, leaders) — for each ticker vs its sector leader
+     Requires: leader_score≥60 + lag≥3% + own_vol≥1.5x
+     Score formula:
+       leader_strength = min(40, leader_score * 0.4)
+       lag_bonus       = min(30, lag_pct * 3)
+       cmf_bonus       = 20 if cmf>70, else 10 if cmf>50
+       vol_bonus       = 10 if vol>3x, else 5 if vol>2x
+     is_sympathy = score ≥ 50
+
+  4. Tier upgrades (if is_sympathy):
+     sympathy_score ≥ 60 → upgrade to SYMPATHY (if higher than current tier)
+     sympathy_score ≥ 40 AND current=SKIP → upgrade to WATCH
+
+  5. calculate_sector_strength(results) — saves sector averages to DB
+     Per sector: avg_score, avg_cmf_pctl, avg_vol_ratio, leader_symbol, momentum_pct
+
+  6. regime_warning flag added to each result (sector in weak_sectors list)
+
+
+STEP 5: PRE-MARKET DATA
+------------------------
+  - fetch_premarket_batch for all scored tickers
+  - Adds premarket dict: {has_premarket, premarket_pct, session}
+  - session: "pre" / "post" / null
+
+
+STEP 6: AI ANALYSIS (scanner/ai_analyst.py → analyze_batch)
+------------------------------------------------------------
+  - Runs on top 20 tickers by score
+  - Model: claude-haiku-4-5-20251001 (fast, cheap)
+  - Input per ticker: all indicators, Wyckoff state, score, premarket, hype
+  - Output: brief analysis text in Russian
+  - Merged back into full results list
+  - Non-top-20 tickers get ai_analysis = null
+
+
+POST-SCAN STEPS
+----------------
+After scan completion (all happen in runner.py):
+
+1. save_scan_candidates(final)
+   - Saves every FIRE/ARM ticker to scan_candidates table (control group)
+   - Used later for 5/10/20-day outcome tracking
+
+2. update_pattern_streaks(final)
+   - Upserts pattern_streaks table for all ARM+ tickers seen today
+   - Sends Telegram alerts at streak day 3 and day 5 milestones
+
+3. Earnings enrichment (data/finnhub_provider.py)
+   - ONE batch call to Finnhub calendar/earnings endpoint
+   - Covers all symbols for next 14 days
+   - Adds to each result:
+     earnings = {has_earnings, date, days_until, hour, hour_label, eps_estimate, risk}
+     earnings_risk = "HIGH" / "MEDIUM" / "LOW" / "NONE"
+   - Cached 4 hours in memory
+
+4. Market regime (get_latest_regime)
+   - Loaded from DB (saved by 16:15 job from previous trading day)
+   - Included in scan result as "market_regime"
+
+
+SCAN RESULT STRUCTURE
+----------------------
+{
+  "results": [          # List of ticker dicts, sorted by score desc
+    {
+      "symbol": "AAPL",
+      "price": 195.50,
+      "volume_today": 1200000,
+      "indicators": { ... },
+      "regime": { ... },         # Wyckoff state
+      "score": {
+        "total_score": 82.5,
+        "tier": "FIRE",
+        ...
+      },
+      "sector": "Technology",
+      "sympathy": { ... },
+      "premarket": { ... },
+      "ai_analysis": "текст анализа...",
+      "earnings": { ... },
+      "earnings_risk": "HIGH",
+      "regime_warning": false,
+      "candles": [ ... ],        # Last 100 daily bars
+      "scanned_at": "2024-01-15T09:30:00"
+    },
+    ...
+  ],
+  "scanned_at": "2024-01-15T09:30:00",
+  "total": 42,
+  "duration_secs": 87.3,
+  "tier_counts": {"FIRE": 3, "ARM": 8, "BASE": 12, ...},
+  "sector_strength": { ... },
+  "market_regime": { ... },
+  "symbol_sources": {
+    "screener": 720,
+    "journal": 3,
+    "recent_candidates": 15,
+    "regime_etfs": 7,
+    "total": 745
+  }
+}
+
+================================================================================
