@@ -78,6 +78,9 @@ export default function TickerCard({ data, hypeData, streakDays }) {
   const hasSec = propNews.has_sec_filing || false;
   const rsiData = indicators.rsi || {};
   const gapData = indicators.gap || {};
+  const obvData = indicators.obv || {};
+  const obvStrength = obvData.obv_strength || null;
+  const obvDivergence = obvData.obv_divergence || false;
   const earningsDays = earnings?.has_earnings ? earnings.days_until : null;
   const earningsLabel = earningsDays === 0 ? 'сегодня' : earningsDays === 1 ? 'завтра' : earningsDays != null ? `${earningsDays}д` : null;
   const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
@@ -237,6 +240,24 @@ export default function TickerCard({ data, hypeData, streakDays }) {
               {rsiData.has_divergence && <span className={styles.divDot} title="Bullish RSI Divergence">↗</span>}
             </span>
           </div>
+          {obvStrength && (
+            <div className={styles.metric}>
+              <span className={styles.metricLabel}>OBV</span>
+              <span
+                className={styles.metricValue}
+                title={obvDivergence ? 'OBV rising while price flat — stealth accumulation' : `OBV: ${obvStrength}`}
+                style={{
+                  color: obvStrength === 'STRONG' ? '#00c853'
+                    : obvStrength === 'MEDIUM' ? '#ffd700'
+                    : obvStrength === 'NEGATIVE' ? '#ff4466'
+                    : 'var(--text-muted)',
+                }}
+              >
+                {obvStrength === 'STRONG' ? '▲▲' : obvStrength === 'MEDIUM' ? '▲' : obvStrength === 'NEGATIVE' ? '▼' : '—'}
+                {obvDivergence && <span title="OBV divergence: price flat but OBV rising" style={{ marginLeft: 2 }}>↑</span>}
+              </span>
+            </div>
+          )}
           <div className={styles.metric}>
             <span className={styles.metricLabel}>STATE</span>
             <span className={`${styles.metricValue} ${isStealth ? styles.metricStealth : styles.metricHighlight}`}>{state}</span>
@@ -244,8 +265,18 @@ export default function TickerCard({ data, hypeData, streakDays }) {
         </div>
 
         {/* Signal badges row */}
-        {(rsiData.has_divergence || hasGap || isStealth) && (
+        {(rsiData.has_divergence || hasGap || isStealth || obvDivergence) && (
           <div className={styles.signalsRow}>
+            {obvDivergence && (
+              <span style={{
+                fontSize: 9, fontWeight: 700, color: '#00c853',
+                background: 'rgba(0,200,83,0.10)',
+                border: '1px solid rgba(0,200,83,0.3)',
+                borderRadius: 3, padding: '1px 4px',
+              }} title="OBV rising while price flat — smart money accumulating">
+                OBV↑
+              </span>
+            )}
             {rsiData.has_divergence && (
               <span className={styles.badgeDiv}>↗ RSI DIV</span>
             )}
