@@ -1,0 +1,141 @@
+================================================================================
+PUMP SCOUT — SYSTEM OVERVIEW & ARCHITECTURE
+Part 1 of 10
+================================================================================
+
+WHAT IS PUMP SCOUT?
+-------------------
+Pump Scout is an automated small-cap US stock scanner that detects early-stage
+volume anomalies and Wyckoff accumulation patterns — signals that precede
+significant price moves ("pumps"). It runs on Railway as a full-stack web app.
+
+VERSION: 20.0
+LANGUAGE: Python 3.11 (backend), JavaScript/React (frontend)
+DEPLOYMENT: Railway (cloud PaaS)
+
+
+HIGH-LEVEL ARCHITECTURE
+------------------------
+
+  [Finviz Screener]    [Yahoo Finance API]    [Finnhub API]
+         |                     |                    |
+         v                     v                    v
+  ┌─────────────────────────────────────────────────────┐
+  │              BACKEND (FastAPI + APScheduler)         │
+  │                                                     │
+  │  Scanner Pipeline:                                  │
+  │    get_tickers → fetch_batch → calc_all             │
+  │    → detect_regime → score_ticker                   │
+  │    → sector_sympathy → premarket → AI analysis      │
+  │    → pattern_streaks → earnings enrichment          │
+  │                                                     │
+  │  Scheduled Jobs (Mon-Fri, America/New_York):        │
+  │    08:00 — Pre-market scan                         │
+  │    09:00 — Morning Brief (Telegram)                │
+  │    09:02 — AI Portfolio decisions                  │
+  │    09:30 — Market open scan                        │
+  │    12:00 — Midday scan                             │
+  │    16:05 — Journal auto-close                      │
+  │    16:10 — Fill candidate prices                   │
+  │    16:15 — Market regime detection                 │
+  │    16:30 — AI Portfolio daily report               │
+  │    16:35 — EOD log generation                      │
+  │    every 30min (8-17) — Hype monitor               │
+  │    every 30min (9:30-16) — Price alerts            │
+  │                                                     │
+  │  Storage: PostgreSQL (Railway plugin)               │
+  │  Notifications: Telegram Bot API                   │
+  │  AI: Anthropic Claude Haiku-4.5                    │
+  └─────────────────────────────────────────────────────┘
+         |
+         v (REST API)
+  ┌─────────────────────────────────────────────────────┐
+  │              FRONTEND (Next.js 14)                  │
+  │                                                     │
+  │  Pages: Dashboard, Journal, AI Portfolio, EOD Log  │
+  │  Auto-refresh: 60 seconds                          │
+  │  CSS Modules, no external UI library               │
+  └─────────────────────────────────────────────────────┘
+
+
+DIRECTORY STRUCTURE
+--------------------
+pump-scout/
+├── backend/
+│   ├── main.py                  # FastAPI app, all REST endpoints
+│   ├── database.py              # SQLAlchemy ORM, all DB operations
+│   ├── scheduler.py             # APScheduler job registration
+│   ├── ai_portfolio.py          # AI paper trading ($1000 virtual account)
+│   ├── journal_autoclose.py     # Auto-close journal positions at EOD
+│   ├── eod_log.py               # End-of-day markdown log generator
+│   ├── scan_candidates.py       # Control group price fill (5/10/20d)
+│   ├── requirements.txt
+│   ├── scanner/
+│   │   ├── runner.py            # Main scan orchestrator
+│   │   ├── finviz.py            # Ticker sourcing (Finviz + Yahoo fallback)
+│   │   ├── yahoo.py             # OHLCV data fetcher (Yahoo Finance v7/v8)
+│   │   ├── indicators.py        # Technical indicators (BB, CMF, ATR, RSI, etc.)
+│   │   ├── wyckoff.py           # Wyckoff accumulation/distribution detector
+│   │   ├── scoring.py           # Composite score → tier assignment
+│   │   ├── ai_analyst.py        # Claude AI analysis for top 20 tickers
+│   │   ├── sector_sympathy.py   # Sector sympathy scanner
+│   │   ├── market_regime.py     # Market regime detector (ETF-based)
+│   │   ├── adaptive_weights.py  # Dynamic scoring weights from journal history
+│   │   ├── pattern_streaks.py   # Multi-day streak tracker (ARM+ tickers)
+│   │   └── sector_map.py        # Known sector assignments
+│   ├── hype_monitor/
+│   │   ├── monitor.py           # Main hype monitor orchestrator
+│   │   ├── fetcher.py           # Reddit/Twitter/news fetcher
+│   │   ├── velocity.py          # Mention velocity calculator
+│   │   ├── hype_score.py        # Composite hype score (0-100)
+│   │   └── divergence.py        # Hype/price divergence detector
+│   ├── notifications/
+│   │   ├── morning_brief.py     # 09:00 ET Telegram daily summary
+│   │   └── price_alerts.py      # Stop/target proximity alerts
+│   ├── alerts/
+│   │   └── telegram.py          # Telegram Bot API client
+│   └── data/
+│       └── finnhub_provider.py  # Earnings calendar (Finnhub batch API)
+└── frontend/
+    ├── pages/
+    │   ├── index.js             # Main dashboard
+    │   └── ...
+    ├── components/
+    │   ├── TickerCard.js        # Individual ticker result card
+    │   └── ...
+    └── styles/
+
+
+KEY DESIGN DECISIONS
+---------------------
+1. NO hardcoded ticker lists — symbols come from 4 dynamic sources every scan
+2. Yahoo Finance only — no paid data subscriptions required (free tier)
+3. Finnhub for earnings — one batch call covers ALL symbols (no per-ticker calls)
+4. PostgreSQL required for persistence — SQLite fallback = data loss on redeploy
+5. All scheduler jobs use America/New_York timezone — auto-handles EST/EDT
+6. AI (Claude Haiku) is used for analysis commentary, NOT for signal generation
+   (signals come from deterministic indicators and scoring)
+7. Hard pre-filter before AI portfolio calls — AI cannot override code-level rules
+8. Telegram alerts are optional — system fully works without them
+
+
+TECH STACK VERSIONS
+--------------------
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+apscheduler>=3.10.4
+httpx>=0.27.0
+aiohttp>=3.9.0
+pandas>=2.2.0
+numpy>=1.26.0
+beautifulsoup4>=4.12.0
+lxml>=5.1.0
+anthropic>=0.25.0
+python-dotenv>=1.0.0
+asyncpg>=0.29.0
+aiosqlite>=0.20.0
+sqlalchemy[asyncio]>=2.0.0
+pytz>=2024.1
+finnhub-python>=2.4.20
+
+================================================================================
