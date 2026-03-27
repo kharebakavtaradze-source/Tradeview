@@ -53,7 +53,7 @@ export default function TickerCard({ data, hypeData, streakDays }) {
   const [hypeDetail, setHypeDetail] = useState(null);
   const [fetchingHype, setFetchingHype] = useState(false);
 
-  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector, regime_warning } = data;
+  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector, regime_warning, earnings } = data;
 
   const tier = score.tier || 'WATCH';
   const totalScore = score.total_score || 0;
@@ -78,6 +78,8 @@ export default function TickerCard({ data, hypeData, streakDays }) {
   const hasSec = propNews.has_sec_filing || false;
   const rsiData = indicators.rsi || {};
   const gapData = indicators.gap || {};
+  const earningsDays = earnings?.has_earnings ? earnings.days_until : null;
+  const earningsLabel = earningsDays === 0 ? 'сегодня' : earningsDays === 1 ? 'завтра' : earningsDays != null ? `${earningsDays}д` : null;
   const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
   const hasPremarket = premarket?.has_premarket && Math.abs(premarket.premarket_pct || 0) >= 1.0;
 
@@ -154,6 +156,20 @@ export default function TickerCard({ data, hypeData, streakDays }) {
               {hypeScore.hype_tier === 'VIRAL' ? '🔥' : hypeScore.hype_tier === 'HOT' ? '🚀' : hypeScore.hype_tier === 'WARM' ? '📈' : ''}
               {hypeScore.hype_index.toFixed(0)}
             </button>
+          )}
+          {earningsLabel && earningsDays <= 14 && (
+            <span
+              title={`Earnings ${earningsLabel} — ${earnings.hour_label || ''}`}
+              style={{
+                fontSize: 9, fontWeight: 700,
+                color: earningsDays <= 3 ? '#ff4466' : earningsDays <= 7 ? '#ffd700' : 'rgba(255,255,255,0.5)',
+                background: earningsDays <= 3 ? 'rgba(255,68,102,0.12)' : earningsDays <= 7 ? 'rgba(255,215,0,0.10)' : 'rgba(255,255,255,0.06)',
+                border: `1px solid ${earningsDays <= 3 ? 'rgba(255,68,102,0.4)' : earningsDays <= 7 ? 'rgba(255,215,0,0.3)' : 'rgba(255,255,255,0.12)'}`,
+                borderRadius: 3, padding: '1px 4px', whiteSpace: 'nowrap',
+              }}
+            >
+              📅 {earningsLabel}
+            </span>
           )}
           {streakDays >= 2 && (
             <span

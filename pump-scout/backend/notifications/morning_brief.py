@@ -162,6 +162,51 @@ async def send_morning_brief() -> bool:
     except Exception as e:
         logger.warning(f"morning_brief: sector lookup failed: {e}")
 
+    # ── 6. Upcoming earnings for tracked symbols ──────────────────────────────
+    try:
+        from data.finnhub_provider import get_earnings_calendar
+        earnings_cal = await get_earnings_calendar(days_ahead=2)
+        if earnings_cal:
+            # Only show today (0) and tomorrow (1)
+            scan_symbols: set = set()
+            open_symbols: set = set()
+            try:
+                from database import get_latest_scan, get_open_journal_entries
+                scan = await get_latest_scan()
+                if scan:
+                    scan_symbols = {r["symbol"] for r in scan.get("results", [])}
+                positions = await get_open_journal_entries()
+                open_symbols = {p["symbol"] for p in positions}
+            except Exception:
+                pass
+
+            today_earnings = [
+                (sym, info) for sym, info in earnings_cal.items()
+                if info["days_until"] == 0
+                and (sym in scan_symbols or sym in open_symbols)
+            ]
+            tomorrow_earnings = [
+                (sym, info) for sym, info in earnings_cal.items()
+                if info["days_until"] == 1
+                and (sym in scan_symbols or sym in open_symbols)
+            ]
+
+            if today_earnings or tomorrow_earnings:
+                lines.append("<b>📅 EARNINGS:</b>")
+                for sym, info in sorted(today_earnings, key=lambda x: x[0]):
+                    tag = " 📔" if sym in open_symbols else ""
+                    lines.append(
+                        f"  🔴 <code>{sym}</code> СЕГОДНЯ {info['hour_label']}{tag}"
+                    )
+                for sym, info in sorted(tomorrow_earnings, key=lambda x: x[0]):
+                    tag = " 📔⚠️" if sym in open_symbols else ""
+                    lines.append(
+                        f"  🟡 <code>{sym}</code> завтра {info['hour_label']}{tag}"
+                    )
+                lines.append("")
+    except Exception as e:
+        logger.warning(f"morning_brief: earnings lookup failed: {e}")
+
     lines.append(f"<i>Удачного дня! 🎯 {date.today().isoformat()}</i>")
 
     msg = "\n".join(lines)
