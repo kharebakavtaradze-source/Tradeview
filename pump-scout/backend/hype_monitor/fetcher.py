@@ -79,14 +79,60 @@ def _now_utc() -> datetime:
 
 
 def _parse_ts(ts_str: str | None) -> datetime | None:
+    """
+    Parse a timestamp string into a timezone-aware UTC datetime.
+
+    Handles:
+      - ISO 8601 with Z: "2024-03-24T15:30:20Z"
+      - ISO 8601 with millis+Z: "2024-03-24T15:30:20.000Z"
+      - ISO 8601 with +0000: "2024-03-24T15:30:20+0000"
+      - ISO 8601 with offset: "2024-03-24T11:30:20-04:00"  ← BUG WAS HERE
+      - Space-separated: "2024-03-24 15:30:20+0000"
+      - Slash-separated (StockTwits legacy): "2024/03/24 15:30:20 +0000"
+
+    BUG FIXED: previously used ts_str[:19] which silently stripped the timezone
+    offset, then force-applied UTC. A message timestamped "11:30-04:00" (ET)
+    was treated as "11:30 UTC" instead of "15:30 UTC" — making it appear 4 hours
+    older, pushing recent mentions outside the 2h/6h velocity windows.
+    """
     if not ts_str:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S+0000", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+    ts_str = ts_str.strip()
+
+    # ── Step 1: Extract timezone offset before stripping it ──────────────────
+    import re as _re
+    tz_offset_secs = 0  # default to UTC
+
+    # Match trailing "+HH:MM", "+HHMM", "-HH:MM", "-HHMM"
+    tz_match = _re.search(r'([+-])(\d{2}):?(\d{2})$', ts_str)
+    if tz_match:
+        sign = 1 if tz_match.group(1) == '+' else -1
+        h, m = int(tz_match.group(2)), int(tz_match.group(3))
+        tz_offset_secs = sign * (h * 3600 + m * 60)
+        ts_str = ts_str[:tz_match.start()]
+    elif ts_str.endswith('Z'):
+        ts_str = ts_str[:-1]   # strip Z — UTC, offset = 0
+
+    # ── Step 2: Strip milliseconds if present ────────────────────────────────
+    dot_pos = ts_str.find('.', 10)   # only look after the date part
+    if dot_pos != -1:
+        ts_str = ts_str[:dot_pos]
+
+    # ── Step 3: Strip any trailing space leftover (legacy "... +0000" format) ─
+    ts_str = ts_str.rstrip()
+
+    # ── Step 4: Parse the clean datetime string ───────────────────────────────
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
         try:
-            dt = datetime.strptime(ts_str[:19], fmt[:len(fmt)])
-            return dt.replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(ts_str, fmt)
+            # Convert local-time to UTC by subtracting the extracted offset
+            # e.g. "-04:00" → tz_offset_secs = -14400
+            #      local 11:30 - (-14400s) = 11:30 + 4h = 15:30 UTC
+            dt_utc = dt - timedelta(seconds=tz_offset_secs)
+            return dt_utc.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
+
     return None
 
 
