@@ -10,9 +10,8 @@
 
   [[services.variables]]
     ANTHROPIC_API_KEY = ""  # set in Railway dashboard
-
-  [[services.variables]]
-    DATABASE_URL = ""  # auto-set by Railway PostgreSQL plugin
+    # DATABASE_URL is injected automatically by the Railway PostgreSQL plugin —
+    # do NOT set it here or it will override the plugin value with an empty string.
 
 [[services]]
   name = "frontend"
