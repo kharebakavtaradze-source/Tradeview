@@ -1,0 +1,208 @@
+================================================================================
+PUMP SCOUT — NOTIFICATIONS & ALERTS SYSTEM
+Part 6 of 10
+================================================================================
+
+All notifications use Telegram Bot API via httpx (no extra library).
+Required env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+Parse mode: HTML (supports <b>, <i>, <code> tags)
+
+If Telegram is not configured, all notifications are silently skipped —
+the system works fully without them.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. TELEGRAM CLIENT (alerts/telegram.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+is_configured()
+  Checks TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID both present.
+
+send_message(text) → bool
+  POST to https://api.telegram.org/bot{TOKEN}/sendMessage
+  Payload: {chat_id, text, parse_mode: "HTML"}
+  Timeout: 10s
+  Logs _last_sent timestamp on success
+
+send_scan_alert(scan_result) → bool
+  Called after every scan (manual and scheduled).
+  Builds summary message:
+    - Header with scan time
+    - FIRE tickers (max 5): price, squeeze bars, vol, score
+    - ARM tickers (max 5)
+    - STEALTH tickers (max 5): shows vol_ratio vs yesterday
+    - SYMPATHY tickers (max 5)
+    - PERFECT STORM: tickers with ≥2 of: stealth + institutional + sympathy + Wyckoff
+  Skips silently if no FIRE/ARM/STEALTH found.
+
+send_test_alert()
+  Confirmation message: "Pump Scout connected!"
+
+get_status()
+  Returns {configured, last_sent}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. MORNING BRIEF (notifications/morning_brief.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Runs at: 09:00 ET, Mon–Fri
+Function: send_morning_brief()
+Trigger: APScheduler cron job (id: "morning_brief")
+
+Each section is wrapped in try/except — if one section fails, others still run.
+This ensures partial delivery rather than no delivery.
+
+SECTION 1 — Market Regime
+  Source: get_market_regime_latest() from DB
+  Format: "{emoji} Режим: {REGIME} | SPY {spy_pct:+.1f}% QQQ {qqq_pct:+.1f}%"
+  Shows recommendation text if present
+  Emoji map: RISK_ON=🟢 NEUTRAL=🟡 RISK_OFF=🔴 FEAR=💀 ROTATION_ENERGY=⛽ ROTATION_DEFENSIVE=🏥
+
+SECTION 2 — FIRE/ARM Signals from latest scan
+  Source: get_latest_scan() → results
+  Shows top 5 FIRE and top 5 ARM tickers
+  Per ticker: {symbol} ${price} | vol:{anomaly_ratio:.1f}x | cmf:{cmf_pctl:.0f}%ile | score:{total_score:.0f}
+
+SECTION 3 — Open Journal Positions with proximity warnings
+  Source: get_open_journal_entries() from DB
+  Per position: symbol, entry price, current price, % gain/loss
+  Stop proximity warnings:
+    dist_to_stop ≤ 2% → "🚨 СТОП {dist_to_stop:.1f}%!"   (CRITICAL)
+    dist_to_stop ≤ 5% → "⚠ стоп {dist_to_stop:.1f}%"    (WARNING)
+  Target proximity:
+    dist_to_target ≤ 3% → "🎯 ЦЕЛЬ {dist_to_target:.1f}%!"
+
+SECTION 4 — AI Portfolio State
+  Source: get_portfolio_state() from DB
+  Shows: total_value, cash, total_pnl_pct
+
+SECTION 5 — Top 2 Sectors by Strength
+  Source: get_sector_strength_latest() from DB
+  Sorted by avg_score desc, shows top 2
+  Format: "📊 Сильные секторы: {sector} ({avg_score:.0f})  {sector} ({avg_score:.0f})"
+
+SECTION 6 — Earnings Today/Tomorrow (for tracked symbols)
+  Source: get_earnings_calendar(days_ahead=2) from Finnhub (cached 4h)
+  Only shows symbols in latest scan OR open journal positions
+  Today: 🔴 {symbol} СЕГОДНЯ {hour_label}  [+ 📔 if in journal]
+  Tomorrow: 🟡 {symbol} завтра {hour_label}  [+ 📔⚠️ if in journal]
+
+Footer: "Удачного дня! 🎯 {today_date}"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. PRICE ALERTS (notifications/price_alerts.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Runs at: every 30 min, 9:30–16:00 ET, Mon–Fri
+Function: check_price_alerts()
+Trigger: APScheduler cron job (id: "price_alerts_30min", hour="9-15", minute="30,0")
+
+COOLDOWN
+  In-memory dict: ALERT_COOLDOWN = {symbol: last_alert_datetime}
+  Per-symbol cooldown: 4 hours
+  Prevents spam for positions that stay near stop/target all day
+
+PRICE FETCH
+  _fetch_price(symbol) — Yahoo Finance v7 quote API
+  Returns regularMarketPrice float or None
+
+ALERT LOGIC
+  For each open journal position with stop_loss or target_price:
+    1. Skip if symbol in cooldown (last alert < 4 hours ago)
+    2. Fetch current price from Yahoo Finance
+    3. Calculate distances:
+       dist_to_stop   = (current_price - stop_loss) / current_price * 100
+       dist_to_target = (target_price - current_price) / current_price * 100
+
+  CRITICAL STOP ALERT (dist_to_stop ≤ 2%):
+    "🚨 CRITICAL — {symbol} @ ${curr:.2f}
+     Stop {stop:.2f} distance: {dist:.1f}% — РАССМОТРИ ВЫХОД!"
+
+  WARNING STOP ALERT (dist_to_stop ≤ 5%):
+    "⚠️ WARNING — {symbol} @ ${curr:.2f}
+     Stop {stop:.2f} distance: {dist:.1f}%"
+
+  TARGET ALERT (dist_to_target ≤ 3%):
+    "🎯 TARGET — {symbol} @ ${curr:.2f}
+     Target {target:.2f} distance: {dist:.1f}% — РАССМОТРИ ФИКСАЦИЮ!"
+
+  After each alert: set ALERT_COOLDOWN[symbol] = now()
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. PATTERN STREAK ALERTS (scanner/pattern_streaks.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Called from: runner.py after each scan (update_pattern_streaks)
+No independent schedule — runs as part of scan pipeline.
+
+Minimum tier for tracking: ARM (tier rank ≥ 4)
+_TIER_RANK = {SKIP:0, WATCH:1, STEALTH:2, SYMPATHY:3, BASE:3, ARM:4, FIRE:5}
+_MIN_TIER_RANK = 4  (ARM or better)
+
+STREAK UPDATE LOGIC
+  For each ARM+ ticker in scan results:
+    Upsert pattern_streaks row:
+      - If no row exists: create with streak_days=1, streak_start=today
+      - If last_seen == yesterday: streak_days += 1 (consecutive)
+      - If last_seen < yesterday: reset (streak_days=1, streak_start=today)
+      - Update rolling averages: avg = (prev * (days-1) + today) / days
+      - Update last_seen = today
+
+  For tickers NOT in today's scan: leave their streak row unchanged
+  (streak will be reset on their next appearance if gap > 1 day)
+
+MILESTONE ALERTS (Telegram)
+  Day 3 alert (bit0 of alerted not set):
+    "🔁 STREAK DAY 3 — {symbol} x3 consecutive scans!"
+    Sets bit0 in alerted field
+  Day 5 alert (bit1 of alerted not set):
+    "🔥 STREAK DAY 5 — {symbol} x5 consecutive scans! Watching for breakout..."
+    Sets bit1 in alerted field
+  Once a milestone bit is set, alert not re-sent even if streak continues
+  (prevents daily spam for long-running streaks)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. SCAN ALERT (alerts/telegram.py → send_scan_alert)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Called after every scan (scheduled and manual).
+Sends FIRE/ARM/STEALTH/SYMPATHY summary to Telegram.
+Only sent if at least one FIRE, ARM, or STEALTH ticker found.
+
+PERFECT STORM detection:
+  A ticker has "Perfect Storm" if ≥ 2 of these are true:
+    - stealth accumulation detected (is_stealth)
+    - institutional flow detected (is_institutional)
+    - sector sympathy detected (is_sympathy)
+    - Wyckoff state in [ARM, FIRE, STEALTH_ARM]
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. AI PORTFOLIO DAILY REPORT (ai_portfolio.py → generate_daily_report)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Runs at: 16:30 ET, Mon–Fri
+Sends Telegram message with:
+  - Portfolio value, total P&L %
+  - Cash available
+  - AI-generated summary (Russian)
+  - Best position, concern, tomorrow plan
+  - Portfolio health: 💚 STRONG / 🟡 NEUTRAL / 🔴 WEAK
+
+ALERT SUMMARY TABLE
+-------------------------------------
+Alert Type       | Schedule          | Cooldown | Source
+-------------------------------------
+Morning Brief    | 09:00 ET daily    | n/a      | morning_brief.py
+Price Alert Stop | every 30min 9:30-16:00 | 4h  | price_alerts.py
+Price Alert Target | every 30min    | 4h       | price_alerts.py
+Streak Day 3     | after each scan   | once ever | pattern_streaks.py
+Streak Day 5     | after each scan   | once ever | pattern_streaks.py
+Scan Summary     | after each scan   | n/a      | telegram.py
+AI Daily Report  | 16:30 ET daily    | n/a      | ai_portfolio.py
+-------------------------------------
+
+================================================================================

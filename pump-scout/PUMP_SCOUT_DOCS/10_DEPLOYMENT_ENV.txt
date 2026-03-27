@@ -1,0 +1,254 @@
+================================================================================
+PUMP SCOUT — DEPLOYMENT & ENVIRONMENT VARIABLES
+Part 10 of 10
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENVIRONMENT VARIABLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REQUIRED:
+  DATABASE_URL
+    PostgreSQL connection string.
+    Format: postgresql://user:pass@host:5432/dbname
+    Railway: Injected automatically by the PostgreSQL plugin.
+             Available as ${{Postgres.DATABASE_URL}} in Railway variables.
+    DO NOT set this in railway.toml — it will override the plugin injection.
+    If missing → SQLite fallback, ALL data lost on every deploy.
+
+  ANTHROPIC_API_KEY
+    Claude API key (get from console.anthropic.com).
+    Required for: AI ticker analysis, AI portfolio decisions, daily report.
+    If missing → AI analysis skipped, AI portfolio disabled.
+    Set in Railway dashboard > Backend service > Variables.
+
+OPTIONAL (notifications):
+  TELEGRAM_BOT_TOKEN
+    Bot token from @BotFather on Telegram.
+    Format: 1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
+    If missing → all Telegram notifications silently skipped.
+
+  TELEGRAM_CHAT_ID
+    Target chat/channel ID for notifications.
+    Get by messaging your bot and checking:
+    https://api.telegram.org/bot{TOKEN}/getUpdates
+    Can be a personal chat ID (positive number) or channel ID (negative number).
+
+OPTIONAL (earnings calendar):
+  FINNHUB_API_KEY
+    Free API key from finnhub.io (free tier: 60 req/min).
+    Required for: earnings calendar enrichment in scans,
+                  earnings section in morning brief,
+                  GET /api/earnings/* endpoints.
+    If missing → earnings data unavailable, earnings enrichment silently skipped.
+    Free key covers Pump Scout's usage (1 batch call per scan, cached 4 hours).
+
+FRONTEND:
+  NEXT_PUBLIC_API_URL
+    Backend URL for frontend API calls.
+    Example: https://pump-scout-backend.railway.app
+    Set in Railway dashboard > Frontend service > Variables.
+    In railway.toml: NEXT_PUBLIC_API_URL = "https://backend.railway.app"
+
+NOT NEEDED (Railway auto-provides):
+  PORT  — Railway injects $PORT automatically, used in uvicorn start command
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RAILWAY DEPLOYMENT (railway.toml)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[build]
+  builder = "nixpacks"
+
+[[services]]
+  name = "backend"
+  source = "backend"
+  [services.deploy]
+    startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+  [[services.variables]]
+    ANTHROPIC_API_KEY = ""  # set in Railway dashboard
+    # DATABASE_URL — DO NOT set here, injected by PostgreSQL plugin
+
+[[services]]
+  name = "frontend"
+  source = "frontend"
+  [services.deploy]
+    startCommand = "npm start"
+  [[services.variables]]
+    NEXT_PUBLIC_API_URL = "https://backend.railway.app"
+
+CRITICAL NOTE on DATABASE_URL:
+  NEVER add DATABASE_URL = "" or DATABASE_URL = "anything" to railway.toml.
+  Even DATABASE_URL = "" explicitly sets the env var to empty string,
+  overriding Railway's PostgreSQL plugin auto-injection.
+  Result: SQLite fallback activates → ALL data wiped on every deploy.
+  Fix: Leave DATABASE_URL out of railway.toml entirely.
+       Set it manually in Railway dashboard if needed, or let plugin inject it.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RAILWAY ARCHITECTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Railway Project
+  ├── backend service     (FastAPI + APScheduler)
+  │   Internal URL: pump-scout-backend.railway.internal
+  │   Public URL:   https://pump-scout-backend.railway.app
+  │
+  ├── frontend service    (Next.js)
+  │   Public URL:   https://pump-scout-frontend.railway.app
+  │
+  └── PostgreSQL plugin   (Railway-managed)
+      Internal URL: postgres.railway.internal:5432/railway
+      External URL: postgres.railway.app:PORT/railway (for local access)
+      Volume: postgres-volume (persistent disk)
+
+Containers are ephemeral — restart on deploy.
+Only PostgreSQL data (on the volume) survives redeploys.
+In-memory data (ALERT_COOLDOWN, _cache dicts, hype data) resets on deploy.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LOCAL DEVELOPMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Backend:
+  cd pump-scout/backend
+  pip install -r requirements.txt
+  cp .env.example .env   # fill in API keys
+  uvicorn main:app --reload --port 8000
+
+  Without DATABASE_URL → SQLite used (pump_scout.db created locally)
+  Startup warning logged: "⚠️ DATABASE_URL not set — using SQLite fallback..."
+
+Frontend:
+  cd pump-scout/frontend
+  npm install
+  NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+
+.env file (local):
+  DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/pump_scout
+  ANTHROPIC_API_KEY=sk-ant-...
+  TELEGRAM_BOT_TOKEN=1234567890:ABC...
+  TELEGRAM_CHAT_ID=123456789
+  FINNHUB_API_KEY=abc123...
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DATABASE STARTUP SEQUENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+On every startup (lifespan event in main.py):
+  1. _get_db_url() — detect PostgreSQL or fall back to SQLite
+  2. Log: "Database: PostgreSQL (persistent)" or SQLite warning
+  3. init_db():
+     a. create_all(engine) — creates all tables if not exist
+     b. _run_migrations(conn) — safe ALTER TABLE for any new columns
+        (idempotent — fails silently if column already exists)
+  4. start_scheduler() — register all cron jobs
+
+No DROP TABLE, TRUNCATE, or DELETE FROM at startup.
+Tables persist across deploys (PostgreSQL).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXTERNAL API DEPENDENCIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Yahoo Finance (no API key required):
+  - OHLCV data: https://query2.finance.yahoo.com/v8/finance/chart/{symbol}
+  - Quote data: https://query1.finance.yahoo.com/v7/finance/quote
+  - Sector info: https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}
+  - Screener:   https://query2.finance.yahoo.com/v1/finance/screener
+  Rate limit: unofficial, uses Chrome UA header to avoid blocks
+  Concurrency: semaphore=5, 0.2s delay, 3 retries on 429
+
+Finviz (no API key required):
+  - Screener: https://finviz.com/screener.ashx
+  Rate limit: unofficial, 1s delay between pages, block detection
+
+Finnhub (free key required):
+  - Earnings: https://finnhub.io/api/v1/calendar/earnings
+  Rate limit: 60 req/min (free tier)
+  Usage: 1 call per scan (cached 4 hours) — well within limits
+
+Anthropic Claude API (paid, API key required):
+  - Model: claude-haiku-4-5-20251001
+  - Usage: AI analysis (top 20 per scan), portfolio decisions, daily report
+  - Cost: Haiku is cheapest Claude model (suitable for high-frequency calls)
+
+Telegram Bot API (free, bot token required):
+  - API: https://api.telegram.org/bot{TOKEN}/sendMessage
+  - Rate limit: 30 messages/second per bot (never approached)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHECKING SYSTEM HEALTH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Basic health check:
+   GET /api/health
+   Expected: {"status": "ok", "scan_running": false, "version": "14.0"}
+
+2. Verify PostgreSQL connected (not SQLite):
+   Railway logs at startup:
+   ✓ "Database: PostgreSQL (persistent)"
+   ✗ "⚠️ DATABASE_URL not set — using SQLite fallback..."
+
+3. Verify earnings working:
+   GET /api/earnings/upcoming?days=7
+   ✓ Returns dict with symbol keys
+   ✗ Returns {} → FINNHUB_API_KEY not set or API error
+
+4. Verify Telegram working:
+   GET /api/telegram/test
+   ✓ Returns {"sent": true} + message appears in Telegram
+
+5. Verify AI working:
+   Railway logs at 09:02 ET:
+   ✓ "Portfolio decisions done: X buys, Y sells"
+   ✗ "ANTHROPIC_API_KEY not set — skipping portfolio decisions"
+
+6. Verify scheduler running:
+   Railway logs at 08:00 ET:
+   ✓ "Scheduled scan starting..."
+   ✓ "Scheduled scan complete — saved as scan #N"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KNOWN LIMITATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Yahoo Finance unofficial API — could break without notice.
+   Mitigation: multiple fallback endpoints, retry logic, Chrome UA header.
+
+2. Finviz scraping — could be blocked by CAPTCHA.
+   Mitigation: Yahoo Finance screener fallback, static ticker list fallback.
+
+3. In-memory caches (hype, alert cooldown) reset on Railway deploy.
+   Impact: price alerts might fire immediately after deploy (cooldown lost).
+   Impact: hype data not available until next 30-min cycle.
+
+4. Single Railway container — no horizontal scaling.
+   Impact: _scan_running flag works correctly (no race conditions).
+   Limitation: if container goes down mid-scan, scan is lost.
+
+5. All times in America/New_York — DST handled automatically by APScheduler.
+   No manual UTC offset calculations needed.
+
+================================================================================
+END OF PUMP SCOUT DOCUMENTATION
+================================================================================
+
+FILES IN THIS DOCUMENTATION:
+  01_OVERVIEW_ARCHITECTURE.txt   — System overview, stack, directory structure
+  02_SCAN_PIPELINE.txt           — Complete scan pipeline step by step
+  03_SCORING_WYCKOFF_INDICATORS.txt — All indicators, Wyckoff logic, scoring algorithm
+  04_DATABASE_TABLES.txt         — All 12 DB tables with all columns
+  05_API_ENDPOINTS.txt           — All REST API endpoints
+  06_NOTIFICATIONS_ALERTS.txt    — All Telegram notifications and alert types
+  07_AI_PORTFOLIO.txt            — AI paper trading portfolio system
+  08_SCHEDULER_JOBS.txt          — All scheduled jobs with times and purposes
+  09_FRONTEND.txt                — Next.js frontend architecture
+  10_DEPLOYMENT_ENV.txt          — Deployment, env vars, Railway config (this file)

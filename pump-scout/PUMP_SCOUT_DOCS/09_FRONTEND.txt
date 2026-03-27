@@ -1,0 +1,200 @@
+================================================================================
+PUMP SCOUT — FRONTEND (Next.js 14)
+Part 9 of 10
+================================================================================
+
+STACK: Next.js 14, React, CSS Modules
+No external UI component library — all styles are custom.
+Auto-refresh: 60 seconds (setInterval in useEffect)
+API base: NEXT_PUBLIC_API_URL env var (set to backend Railway URL)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MAIN DASHBOARD (pages/index.js)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STATE
+  results          — scan results array
+  scanMeta         — {scanned_at, total, tier_counts, symbol_sources, duration}
+  watchlist        — user's watchlist symbols
+  journal          — journal entries
+  journalStats     — performance stats
+  aiPortfolio      — AI portfolio state
+  hypeData         — hype scores by symbol
+  streaks          — active pattern streaks
+  marketRegime     — current regime
+  sectorStrength   — sector strength dict
+  activeTab        — "FIRE" / "ARM" / "BASE" / "ALL" / etc.
+  isScanning       — manual scan in progress
+  lastUpdated      — display timestamp
+
+DATA FETCHING
+  All fetches via fetchData() callback, called:
+    - On mount (initial load)
+    - Every 60 seconds (auto-refresh interval)
+    - On manual "Scan Now" button click
+
+  Parallel fetches:
+    /api/scan/latest
+    /api/watchlist
+    /api/journal
+    /api/journal/stats
+    /api/ai-portfolio/state
+    /api/hype/latest
+    /api/streaks/active?min_days=2
+    /api/market-regime/latest
+
+DERIVED DATA
+  streakBySymbol   — {symbol: streak_days} lookup dict from streaks array
+  highStreakResults — results where streakBySymbol[symbol] >= 3
+
+LAYOUT SECTIONS (top to bottom)
+
+1. HEADER
+   - "PUMP SCOUT" title with version (v20.0)
+   - Market regime badge (emoji + name, colored by type)
+   - Last scan time, scan duration
+   - "Scan Now" button (calls /api/scan/run)
+
+2. STATS BAR
+   - FIRE count, ARM count, total tickers scanned, PERFECT STORM count
+   - Symbol sources breakdown (screener/journal/candidates/ETFs)
+
+3. PERFECT STORM BANNER (if any perfect storm tickers)
+   Yellow banner: "⚡ PERFECT STORM: TICK1, TICK2, ..."
+   Perfect storm = ticker with ≥2 of: stealth, institutional, sympathy, Wyckoff ARM/FIRE
+
+4. STREAKS BANNER (if any streaks ≥ 3 days)
+   Yellow banner: "🔁 MULTI-DAY STREAKS:"
+   Shows each streak symbol with ×N day count
+   Links to streaks data
+
+5. TABS
+   FIRE | ARM | BASE | STEALTH | SYMPATHY | WATCH | ALL
+   Each tab filters results by tier
+
+6. TICKER CARDS (for active tab)
+   One TickerCard component per result in filtered list
+
+7. SIDE PANELS (collapsible)
+   - AI Portfolio panel
+   - Market Regime panel
+   - Sector Strength panel
+   - Journal summary panel
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TICKER CARD (components/TickerCard.js)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Props:
+  data        — full ticker result dict from scan
+  onAdd       — callback to add to watchlist
+  onJournal   — callback to open journal entry form
+  streakDays  — integer (0 if no streak)
+
+SECTIONS DISPLAYED
+
+Header row:
+  - Symbol (large, bold)
+  - Price (with % change)
+  - Tier badge (color-coded: FIRE=red, ARM=orange, BASE=yellow, STEALTH=purple,
+                SYMPATHY=blue, WATCH=gray)
+  - Earnings badge (📅 Nd): shown if has_earnings
+    red ≤ 3 days, yellow ≤ 7 days, muted ≤ 14 days
+  - Streak badge (🔁 Nd): shown if streakDays ≥ 2
+    green = 2d, yellow = 3d, red ≥ 5d
+
+Score bar:
+  - Visual score bar (0–100 range)
+  - Score number
+  - Wyckoff state label
+
+Key metrics row:
+  - Volume: today_vol with anomaly_ratio (e.g. "1.2M (3.5x)")
+  - CMF: cmf_pctl formatted as percentile
+  - BB Squeeze: squeeze_bars count
+  - RSI: value with divergence indicator if present
+
+Pre-market row (if has_premarket):
+  - Pre-market price + % change
+  - Session label (pre/post)
+
+Earnings row (if has_earnings):
+  - Date, days until, before/after market label
+  - EPS estimate if available
+
+Sympathy row (if is_sympathy):
+  - Leader symbol + leader score
+  - Lag % (how far behind the leader)
+
+Regime warning (if regime_warning):
+  - "⚠ Weak sector" warning badge
+
+AI Analysis (if ai_analysis present):
+  - Expandable panel with Claude's analysis text (Russian)
+
+Action buttons:
+  - "+ Watchlist" button
+  - "+ Journal" button (opens entry form with pre-filled data)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+JOURNAL ENTRY FORM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Opens as modal when clicking "+ Journal" on a ticker card.
+Pre-fills: symbol, entry_price (current price), tier, entry_wyckoff,
+           entry_cmf_pctl, entry_vol_ratio, entry_hype
+
+Fields:
+  - Symbol (read-only)
+  - Entry price
+  - Stop loss — triggers ATR suggestion fetch (/api/journal/suggest-levels)
+  - Target price
+  - R/R validation display (live recalculation)
+  - Notes
+  - Catalyst (dropdown: EARNINGS, CATALYST, SECTOR_PLAY, WYCKOFF_BREAK, etc.)
+  - Tags (multi-select)
+
+R/R validation:
+  Real-time as user types stop/target
+  Shows ratio: "2.5:1 ✓" in green, "1.3:1 ⚠" in yellow, "BLOCK" in red
+  Prevents submission if R/R < 1.0
+
+"Suggest Levels" button:
+  Calls /api/journal/suggest-levels with current symbol + entry + tier
+  Auto-fills stop_loss and target_price fields
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OTHER PAGES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Journal page:
+  - Full journal table with all entries
+  - Win/loss stats by tier, by Wyckoff state
+  - Performance metrics: avg gain, avg loss, win rate, avg alpha vs SPY
+  - Closed position charts (entry, exit, max gain)
+  - CSV export button
+
+AI Portfolio page:
+  - Portfolio value over time chart
+  - Open positions with live prices
+  - Transaction history
+  - Daily AI reports feed
+
+EOD Log page:
+  - Calendar of trading days
+  - Markdown-rendered daily logs
+  - Date navigation
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AUTO-REFRESH BEHAVIOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+60-second interval re-fetches all data from the API.
+If a scan is running (scan_running=true from /api/health), frontend shows
+a loading indicator on the scan timestamp.
+
+No WebSocket — pure polling. Sufficient given scan frequency (3x/day).
+
+================================================================================
