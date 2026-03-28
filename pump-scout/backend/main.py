@@ -270,6 +270,50 @@ async def journal_stats():
     return await get_journal_stats()
 
 
+@app.get("/api/journal/live-prices")
+async def journal_live_prices():
+    """
+    Return live market prices for all open journal positions.
+    Single batched Yahoo Finance request — called by frontend every 60s during market hours.
+    """
+    import httpx
+    from database import get_open_journal_entries
+
+    entries = await get_open_journal_entries()
+    if not entries:
+        return {}
+
+    symbols = [e["symbol"] for e in entries]
+    entry_map = {e["symbol"]: e["entry_price"] for e in entries}
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
+    result = {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://query1.finance.yahoo.com/v7/finance/quote",
+                params={"symbols": ",".join(symbols), "fields": "regularMarketPrice"},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                quotes = resp.json().get("quoteResponse", {}).get("result", [])
+                for q in quotes:
+                    sym = q.get("symbol")
+                    price = q.get("regularMarketPrice")
+                    if sym and price:
+                        entry_price = entry_map.get(sym, 0)
+                        pct = round((price - entry_price) / entry_price * 100, 2) if entry_price else 0
+                        result[sym] = {"price": round(price, 4), "pct": pct}
+    except Exception as e:
+        logger.warning(f"live-prices fetch failed: {e}")
+
+    return result
+
+
 # ── ATR / R/R helpers ──────────────────────────────────────────────────────────
 
 def _calculate_suggested_levels(entry_price: float, atr: float, tier: str) -> dict:
