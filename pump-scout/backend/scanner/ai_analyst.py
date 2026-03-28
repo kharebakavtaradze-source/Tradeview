@@ -36,6 +36,7 @@ async def analyze_ticker(
     stealth = indicators.get("stealth", {})
     rsi_data = indicators.get("rsi", {})
     gap_data = indicators.get("gap", {})
+    obv_data = indicators.get("obv", {})
 
     data_summary = {
         "symbol": symbol,
@@ -60,6 +61,9 @@ async def analyze_ticker(
         "stealth_detected": stealth.get("is_stealth"),
         "stealth_score": stealth.get("stealth_score"),
         "stealth_vol_ratio": stealth.get("vol_ratio"),
+        "obv_strength": obv_data.get("obv_strength"),
+        "obv_divergence": obv_data.get("obv_divergence"),
+        "obv_slope_5d": obv_data.get("obv_slope_5d"),
         "wyckoff_state": regime.get("state"),
         "tr_high": regime.get("tr_high"),
         "tr_low": regime.get("tr_low"),

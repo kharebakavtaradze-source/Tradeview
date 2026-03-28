@@ -1,6 +1,6 @@
 """
 Adaptive scoring weights derived from closed journal trades.
-Activates after 5+ closed trades with known outcome.
+Activates after 30+ closed trades with known outcome.
 """
 import logging
 import time
@@ -35,7 +35,7 @@ async def get_adaptive_weights() -> dict:
         logger.warning(f"adaptive_weights: DB lookup failed: {e}")
         return _default_weights(0)
 
-    if len(closed) < 5:
+    if len(closed) < 30:
         result = _default_weights(len(closed))
         _cache = result
         _cache_ts = now
@@ -63,6 +63,7 @@ async def get_adaptive_weights() -> dict:
     )
 
     result = {
+        "active": True,
         "win_rate": round(len(wins) / len(closed), 3),
         "data_points": len(closed),
         "best_wyckoff": best_wyckoff,
@@ -82,6 +83,7 @@ async def get_adaptive_weights() -> dict:
 
 def _default_weights(data_points: int) -> dict:
     return {
+        "active": False,
         "win_rate": None,
         "data_points": data_points,
         "best_wyckoff": None,
@@ -91,5 +93,5 @@ def _default_weights(data_points: int) -> dict:
         "wyckoff_weight": 1.0,
         "vol_weight": 1.0,
         "hype_weight": 1.0,
-        "note": f"Нужно минимум 5 закрытых сделок для адаптации (сейчас {data_points})",
+        "note": f"Нужно минимум 30 закрытых сделок для адаптации (сейчас {data_points})",
     }

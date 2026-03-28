@@ -364,6 +364,82 @@ def calc_stealth(candles: list) -> dict:
     }
 
 
+def calc_obv(candles: list) -> dict:
+    """
+    On-Balance Volume — cumulative volume direction indicator.
+
+    OBV rises when price closes up, falls when price closes down.
+    Key signal: OBV rising while price flat = stealth accumulation (smart money buying quietly).
+
+    Returns:
+      obv_current:     latest OBV value (cumulative)
+      obv_slope_5d:    OBV change over last 5 days (positive = buying pressure)
+      obv_slope_20d:   OBV change over last 20 days
+      obv_divergence:  True when OBV rising but price flat/falling (bullish hidden strength)
+      obv_strength:    STRONG / MEDIUM / WEAK / NEGATIVE
+      normalized_slope: obv_slope_5d normalised by avg daily volume
+    """
+    if len(candles) < 20:
+        return {
+            "obv_current": 0,
+            "obv_slope_5d": 0,
+            "obv_slope_20d": 0,
+            "obv_divergence": False,
+            "obv_strength": "WEAK",
+            "normalized_slope": 0.0,
+        }
+
+    # Build cumulative OBV series
+    obv_series = [0]
+    for i in range(1, len(candles)):
+        prev = obv_series[-1]
+        if candles[i]["c"] > candles[i - 1]["c"]:
+            obv_series.append(prev + candles[i]["v"])
+        elif candles[i]["c"] < candles[i - 1]["c"]:
+            obv_series.append(prev - candles[i]["v"])
+        else:
+            obv_series.append(prev)
+
+    current_obv  = obv_series[-1]
+    obv_5d_ago   = obv_series[-6]  if len(obv_series) >= 6  else obv_series[0]
+    obv_20d_ago  = obv_series[-21] if len(obv_series) >= 21 else obv_series[0]
+    obv_slope_5d  = current_obv - obv_5d_ago
+    obv_slope_20d = current_obv - obv_20d_ago
+
+    # Price movement over last 5 days (for divergence detection)
+    price_now    = candles[-1]["c"]
+    price_5d_ago = candles[-6]["c"] if len(candles) >= 6 else candles[0]["c"]
+    price_slope_5d = price_now - price_5d_ago
+
+    # Bullish divergence: OBV rising while price is flat (within ±2%) or falling
+    obv_divergence = (
+        obv_slope_5d > 0
+        and abs(price_slope_5d) <= price_now * 0.02
+    )
+
+    # Normalise slope by average daily volume over last 20 bars
+    avg_vol = sum(c["v"] for c in candles[-20:]) / 20
+    normalized_slope = round(obv_slope_5d / (avg_vol * 5), 3) if avg_vol > 0 else 0.0
+
+    if normalized_slope > 0.3:
+        obv_strength = "STRONG"
+    elif normalized_slope > 0.1:
+        obv_strength = "MEDIUM"
+    elif normalized_slope > 0:
+        obv_strength = "WEAK"
+    else:
+        obv_strength = "NEGATIVE"
+
+    return {
+        "obv_current":      round(current_obv),
+        "obv_slope_5d":     round(obv_slope_5d),
+        "obv_slope_20d":    round(obv_slope_20d),
+        "obv_divergence":   obv_divergence,
+        "obv_strength":     obv_strength,
+        "normalized_slope": normalized_slope,
+    }
+
+
 def calc_all(candles: list) -> dict:
     if len(candles) < 20:
         return {}
@@ -379,6 +455,7 @@ def calc_all(candles: list) -> dict:
     rsi_data = calc_rsi(candles)
     gap = calc_gap(candles)
     inst_flow = calc_institutional_flow(candles)
+    obv = calc_obv(candles)
 
     ema20_val = ema(closes, 20)
     ema50_val = ema(closes, 50)
@@ -425,4 +502,6 @@ def calc_all(candles: list) -> dict:
         "gap": gap,
         # Institutional Flow
         "institutional_flow": inst_flow,
+        # OBV
+        "obv": obv,
     }
