@@ -154,14 +154,14 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
-    # 09:00 AM ET — AI Portfolio decisions (runs after morning brief)
+    # 09:45 AM ET — AI Portfolio decisions (after market-open scan settles)
     scheduler.add_job(
         ai_portfolio_decisions,
         trigger=CronTrigger(
-            day_of_week="mon-fri", hour=9, minute=2, timezone=EASTERN_TZ,
+            day_of_week="mon-fri", hour=9, minute=45, timezone=EASTERN_TZ,
         ),
         id="ai_portfolio_decisions",
-        name="AI Portfolio Decisions (9:02 AM ET)",
+        name="AI Portfolio Decisions (9:45 AM ET)",
         replace_existing=True,
         misfire_grace_time=300,
     )
