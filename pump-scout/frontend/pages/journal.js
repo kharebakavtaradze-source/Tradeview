@@ -91,6 +91,17 @@ function AIBox({ analysis }) {
   );
 }
 
+function isMarketHours() {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  // Convert to ET (UTC-4 EDT / UTC-5 EST) — approximate with UTC-4 (handles EDT)
+  const etHour = (now.getUTCHours() - 4 + 24) % 24;
+  const etMin = now.getUTCMinutes();
+  const etTotal = etHour * 60 + etMin;
+  return etTotal >= 9 * 60 + 30 && etTotal < 16 * 60; // 9:30–16:00 ET
+}
+
 export default function Journal() {
   const [entries, setEntries] = useState([]);
   const [stats, setStats] = useState(null);
@@ -101,6 +112,7 @@ export default function Journal() {
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [deepAnalytics, setDeepAnalytics] = useState(null);
   const [deepLoading, setDeepLoading] = useState(false);
+  const [livePrices, setLivePrices] = useState({});
 
   const loadData = useCallback(async () => {
     try {
@@ -115,7 +127,22 @@ export default function Journal() {
     }
   }, []);
 
+  const loadLivePrices = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/journal/live-prices`);
+      if (res.ok) setLivePrices(await res.json());
+    } catch { }
+  }, []);
+
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Poll live prices every 60s during market hours
+  useEffect(() => {
+    if (!isMarketHours()) return;
+    loadLivePrices();
+    const interval = setInterval(loadLivePrices, 60_000);
+    return () => clearInterval(interval);
+  }, [loadLivePrices]);
 
   const filtered = entries.filter(e => {
     if (filter === 'ALL' || filter === 'ANALYTICS') return true;
@@ -484,7 +511,11 @@ export default function Journal() {
               const isWin = e.outcome === 'win';
               const isLoss = e.outcome === 'loss';
               const pnl = e.final_pnl_pct ?? e.gain_pct;
-              const displayPct = isOpen ? e.current_pct : pnl;
+              const live = isOpen ? livePrices[e.symbol] : null;
+              const livePrice = live?.price ?? e.current_price;
+              const livePct = live?.pct ?? e.current_pct;
+              const displayPct = isOpen ? livePct : pnl;
+              const isLive = isOpen && !!live;
 
               const cardStyle = isWin
                 ? { borderLeft: '3px solid var(--green)' }
@@ -536,8 +567,14 @@ export default function Journal() {
                       <span>
                         <span className={styles.tradeLabel}>Entry </span>
                         ${e.entry_price?.toFixed(2)}
-                        {isOpen && e.current_price && (
-                          <span style={{ color: 'var(--text-muted)' }}> → <b style={{ color: displayPct >= 0 ? 'var(--green)' : 'var(--red)' }}>${e.current_price?.toFixed(2)}</b></span>
+                        {isOpen && livePrice && (
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            {' → '}
+                            <b style={{ color: displayPct >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                              ${livePrice?.toFixed(2)}
+                            </b>
+                            {isLive && <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 3 }}>●</span>}
+                          </span>
                         )}
                         {!isOpen && e.exit_price && (
                           <span style={{ color: 'var(--text-muted)' }}> → ${e.exit_price?.toFixed(2)}</span>
@@ -552,7 +589,7 @@ export default function Journal() {
 
                     {/* Progress bar for open trades */}
                     {isOpen && (e.target_price || e.stop_loss) && (
-                      <ProgressBar current={e.current_price} entry={e.entry_price}
+                      <ProgressBar current={livePrice} entry={e.entry_price}
                         target={e.target_price} stop={e.stop_loss} />
                     )}
 

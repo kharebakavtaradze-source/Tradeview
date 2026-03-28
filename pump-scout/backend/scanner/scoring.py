@@ -59,6 +59,19 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         rsi_bonus = 20 if div_strength >= 10 else 15 if div_strength >= 5 else 10
         accum_score = min(accum_score + rsi_bonus, 100)
 
+    # --- OBV bonus (max +25 to accum_score) ---
+    # OBV confirms accumulation: rising OBV = smart money buying
+    # OBV divergence (OBV up, price flat) = our key stealth pattern
+    obv = indicators.get("obv", {})
+    obv_strength = obv.get("obv_strength", "WEAK")
+    obv_divergence = obv.get("obv_divergence", False)
+    if obv_strength == "STRONG":
+        accum_score = min(accum_score + 15, 100)
+    elif obv_strength == "MEDIUM":
+        accum_score = min(accum_score + 8, 100)
+    if obv_divergence:
+        accum_score = min(accum_score + 10, 100)
+
     # --- Gap bonus (up to +15 to vol_score, penalty for gap down) ---
     gap = indicators.get("gap", {})
     gap_type = gap.get("gap_type", "NONE")
@@ -83,6 +96,10 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
         quiet_factor = 1.2
     else:
         quiet_factor = 1.0
+
+    # OBV divergence nudge: when quiet_factor is already elevated, push it a bit more
+    if obv_divergence and quiet_factor > 1.0:
+        quiet_factor = min(1.5, quiet_factor + 0.1)
 
     # --- Institutional Flow Bonus ---
     inst = indicators.get("institutional_flow", {})
@@ -111,6 +128,10 @@ def score_ticker(indicators: dict, regime: dict) -> dict:
     # Stocks in distribution are being sold by smart money — heavy penalty
     if regime.get("in_dist"):
         total_score *= 0.6
+
+    # --- OBV NEGATIVE penalty (secondary signal, lighter than CMF) ---
+    if obv_strength == "NEGATIVE":
+        total_score *= 0.85
 
     total_score = round(min(total_score, 100), 2)
 
