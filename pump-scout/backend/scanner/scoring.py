@@ -185,16 +185,21 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
     if rsi_value > 70 and tier == "FIRE":
         tier = "ARM"
 
+    # Snapshot before quality downgrades (for analytics)
     original_tier = tier
+    original_score = total_score
 
-    # Step 5: CEF/ETN downgrade
-    # Volume signals in closed-end funds / ETNs are driven by NAV/distribution
-    # mechanics, not institutional accumulation — cap at WATCH
+    # Step 5 & 6: Quality downgrades — mutually exclusive, CEF takes priority
     cef_warning = False
     cef_note = None
+    score_conflict = False
+    score_conflict_note = None
+    primary_downgrade = None
+
     if symbol:
         from scanner.sector_map import NON_STOCK_SECURITIES
         if symbol.upper() in NON_STOCK_SECURITIES:
+            # CEF/ETN — FINAL, no further downgrades applied after this
             cef_warning = True
             cef_note = (
                 "Closed-end fund or ETN — volume signals may reflect "
@@ -203,30 +208,43 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
             if tier in ("FIRE", "ARM"):
                 tier = "WATCH"
                 total_score = round(total_score * 0.6, 2)
-                logger.info(
-                    f"CEF downgrade: {symbol} {original_tier}→{tier} "
-                    f"score {total_score:.1f}"
-                )
-
-    # Step 6: Score vs Wyckoff confidence conflict
-    # High score with low structure confidence = volume-driven, not confirmed
-    wyckoff_confidence = regime.get("confidence", 0)
-    score_conflict = False
-    score_conflict_note = None
-    if total_score >= 75 and wyckoff_confidence < 50:
-        score_conflict = True
-        score_conflict_note = (
-            f"Score {total_score:.0f} driven by volume/stealth but Wyckoff "
-            f"confidence only {wyckoff_confidence}% — structure not fully "
-            f"confirmed, treat as ARM."
-        )
-        if tier == "FIRE":
-            tier = "ARM"
-            total_score = round(total_score * 0.88, 2)
+            primary_downgrade = "NON_STOCK_SECURITY"
             logger.info(
-                f"Conflict downgrade: {symbol} {original_tier}→{tier} "
-                f"score {total_score:.1f} confidence {wyckoff_confidence}%"
+                f"CEF downgrade: {symbol} {original_tier}→{tier} "
+                f"score {total_score:.1f}"
             )
+        else:
+            # Only check confidence conflict for real stocks (not CEFs)
+            wyckoff_confidence = regime.get("confidence", 0)
+            if total_score >= 75 and wyckoff_confidence < 50:
+                score_conflict = True
+                score_conflict_note = (
+                    f"Score {total_score:.0f} driven by volume/stealth but Wyckoff "
+                    f"confidence only {wyckoff_confidence}% — structure not fully "
+                    f"confirmed, treat as ARM."
+                )
+                if tier == "FIRE":
+                    tier = "ARM"
+                    total_score = round(total_score * 0.88, 2)
+                primary_downgrade = "LOW_CONFIDENCE"
+                logger.info(
+                    f"Conflict downgrade: {symbol} {original_tier}→{tier} "
+                    f"score {total_score:.1f} confidence {wyckoff_confidence}%"
+                )
+    else:
+        # No symbol provided — still run confidence check
+        wyckoff_confidence = regime.get("confidence", 0)
+        if total_score >= 75 and wyckoff_confidence < 50:
+            score_conflict = True
+            score_conflict_note = (
+                f"Score {total_score:.0f} driven by volume/stealth but Wyckoff "
+                f"confidence only {wyckoff_confidence}% — structure not fully "
+                f"confirmed, treat as ARM."
+            )
+            if tier == "FIRE":
+                tier = "ARM"
+                total_score = round(total_score * 0.88, 2)
+            primary_downgrade = "LOW_CONFIDENCE"
 
     return {
         "total_score": total_score,
@@ -236,6 +254,9 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
         "inst_bonus": round(inst_bonus, 2),
         "quiet_factor": quiet_factor,
         "tier": tier,
+        "original_tier": original_tier,
+        "original_score": original_score,
+        "primary_downgrade": primary_downgrade,
         "cef_warning": cef_warning,
         "cef_note": cef_note,
         "score_conflict": score_conflict,
