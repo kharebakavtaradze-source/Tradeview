@@ -170,6 +170,9 @@ class ScanCandidate(Base):
     accum_score = Column(Float, nullable=True)
     quiet_factor = Column(Float, nullable=True)
     inst_bonus = Column(Float, nullable=True)
+    original_score = Column(Float, nullable=True)
+    original_tier = Column(String(10), nullable=True)
+    downgrade_reason = Column(String(30), nullable=True)
 
 
 class PositionSnapshot(Base):
@@ -300,10 +303,13 @@ class PatternStreak(Base):
 
 
 _SCAN_CANDIDATE_MIGRATIONS = [
-    ("vol_score",    "FLOAT"),
-    ("accum_score",  "FLOAT"),
-    ("quiet_factor", "FLOAT"),
-    ("inst_bonus",   "FLOAT"),
+    ("vol_score",       "FLOAT"),
+    ("accum_score",     "FLOAT"),
+    ("quiet_factor",    "FLOAT"),
+    ("inst_bonus",      "FLOAT"),
+    ("original_score",  "FLOAT"),
+    ("original_tier",   "VARCHAR(10)"),
+    ("downgrade_reason","VARCHAR(30)"),
 ]
 
 _JOURNAL_MIGRATIONS = [
@@ -974,6 +980,9 @@ async def save_scan_candidates(scan_results: list) -> int:
                     accum_score=score_data.get("accum_score"),
                     quiet_factor=score_data.get("quiet_factor"),
                     inst_bonus=score_data.get("inst_bonus"),
+                    original_score=score_data.get("original_score"),
+                    original_tier=score_data.get("original_tier"),
+                    downgrade_reason=score_data.get("primary_downgrade"),
                 )
                 session.add(cand)
                 saved += 1

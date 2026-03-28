@@ -81,6 +81,8 @@ export default function TickerCard({ data, hypeData, streakDays }) {
   const obvData = indicators.obv || {};
   const obvStrength = obvData.obv_strength || null;
   const obvDivergence = obvData.obv_divergence || false;
+  const cefWarning = score.cef_warning || false;
+  const scoreConflict = score.score_conflict || false;
   const earningsDays = earnings?.has_earnings ? earnings.days_until : null;
   const earningsLabel = earningsDays === 0 ? 'сегодня' : earningsDays === 1 ? 'завтра' : earningsDays != null ? `${earningsDays}д` : null;
   const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
@@ -297,7 +299,7 @@ export default function TickerCard({ data, hypeData, streakDays }) {
       </div>
 
       {/* Sector + regime warning badges */}
-      {(sector || regime_warning) && (
+      {(sector || regime_warning || cefWarning || scoreConflict) && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '4px 10px 0' }}>
           {sector && sector !== 'Unknown' && (
             <span style={{
@@ -315,6 +317,33 @@ export default function TickerCard({ data, hypeData, streakDays }) {
               color: '#ff8800', borderRadius: 3, padding: '1px 6px',
             }}>
               ⚠ Слабый сектор
+            </span>
+          )}
+          {cefWarning && scoreConflict && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              background: 'rgba(255,100,0,0.12)', border: '1px solid rgba(255,100,0,0.4)',
+              color: '#ff6400', borderRadius: 3, padding: '1px 6px',
+            }} title="Closed-end fund/ETN + unconfirmed Wyckoff structure">
+              ⚠ CEF + unconfirmed structure — high caution
+            </span>
+          )}
+          {cefWarning && !scoreConflict && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              background: 'rgba(255,136,0,0.1)', border: '1px solid rgba(255,136,0,0.3)',
+              color: '#ff8800', borderRadius: 3, padding: '1px 6px',
+            }} title={score.cef_note}>
+              ⚠ CEF — signals may be distorted
+            </span>
+          )}
+          {scoreConflict && !cefWarning && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              background: 'rgba(255,214,0,0.1)', border: '1px solid rgba(255,214,0,0.3)',
+              color: '#ffd600', borderRadius: 3, padding: '1px 6px',
+            }} title={score.score_conflict_note}>
+              ⚠ Score driven by volume — structure unconfirmed
             </span>
           )}
         </div>
