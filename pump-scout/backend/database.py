@@ -1509,3 +1509,62 @@ async def get_active_streaks(min_days: int = 2) -> List[dict]:
         }
         for s in streaks
     ]
+
+
+# ─── Data Rotation ─────────────────────────────────────────────────────────────
+
+async def rotate_old_data() -> dict:
+    """
+    Delete old rows to prevent DB bloat.
+    Called weekly by the scheduler and available via admin endpoint.
+
+    Retention policy:
+      scans              — 30 days  (candles are large; 7-scan cap in save_scan is primary)
+      scan_candidates    — 60 days  (covers 20d outcome tracking window with room to spare)
+      position_snapshots — 60 days
+      eod_logs           — 90 days
+
+    Never deleted: journal, ai_portfolio, market_regime,
+                   sector_strength, pattern_streaks, watchlist
+    """
+    from datetime import date, timedelta, datetime as dt
+
+    today = date.today()
+    cutoff_scans      = dt.combine(today - timedelta(days=30), dt.min.time())
+    cutoff_candidates = today - timedelta(days=60)
+    cutoff_snapshots  = today - timedelta(days=60)
+    cutoff_eod        = (today - timedelta(days=90)).isoformat()  # stored as string
+
+    deleted = {}
+
+    async with get_engine().begin() as conn:
+        r = await conn.execute(
+            text("DELETE FROM scans WHERE scanned_at < :cutoff"),
+            {"cutoff": cutoff_scans},
+        )
+        deleted["scans"] = r.rowcount
+
+        r = await conn.execute(
+            text("DELETE FROM scan_candidates WHERE scan_date < :cutoff"),
+            {"cutoff": cutoff_candidates},
+        )
+        deleted["scan_candidates"] = r.rowcount
+
+        r = await conn.execute(
+            text("DELETE FROM position_snapshots WHERE snapshot_date < :cutoff"),
+            {"cutoff": cutoff_snapshots},
+        )
+        deleted["position_snapshots"] = r.rowcount
+
+        r = await conn.execute(
+            text("DELETE FROM eod_logs WHERE log_date < :cutoff"),
+            {"cutoff": cutoff_eod},
+        )
+        deleted["eod_logs"] = r.rowcount
+
+    total = sum(deleted.values())
+    logger.info(
+        f"Data rotation complete — {total} rows removed: "
+        + ", ".join(f"{tbl}={n}" for tbl, n in deleted.items())
+    )
+    return deleted

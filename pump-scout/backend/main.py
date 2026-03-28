@@ -827,3 +827,14 @@ async def earnings_for_symbol(symbol: str):
     if not is_configured():
         return {"has_earnings": False, "note": "FINNHUB_API_KEY not configured"}
     return await get_earnings_for_symbol(symbol.upper())
+
+
+# ─── Admin ─────────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/rotate-data")
+async def admin_rotate_data():
+    """Manually trigger data rotation (same logic as the weekly Sunday job)."""
+    from database import rotate_old_data
+    deleted = await rotate_old_data()
+    total = sum(deleted.values())
+    return {"ok": True, "total_deleted": total, "breakdown": deleted}

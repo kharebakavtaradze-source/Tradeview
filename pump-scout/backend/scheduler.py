@@ -8,7 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from scanner.runner import run_scan
-from database import save_scan
+from database import save_scan, rotate_old_data
 from hype_monitor.monitor import run_hype_monitor
 from journal_autoclose import auto_close_journal
 from ai_portfolio import ai_portfolio_decisions, generate_daily_report
@@ -52,6 +52,16 @@ async def _run_market_regime():
         await detect_market_regime()
     except Exception as e:
         logger.error(f"Market regime detection failed: {e}", exc_info=True)
+
+
+async def _run_data_rotation():
+    """Weekly data rotation — remove old rows to prevent DB bloat."""
+    try:
+        logger.info("Data rotation starting...")
+        deleted = await rotate_old_data()
+        logger.info(f"Data rotation finished: {deleted}")
+    except Exception as e:
+        logger.error(f"Data rotation failed: {e}", exc_info=True)
 
 
 def start_scheduler():
@@ -219,10 +229,25 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # Sunday 02:00 ET — Weekly data rotation
+    scheduler.add_job(
+        _run_data_rotation,
+        trigger=CronTrigger(
+            day_of_week="sun",
+            hour=2,
+            minute=0,
+            timezone=EASTERN_TZ,
+        ),
+        id="weekly_data_rotation",
+        name="Weekly Data Rotation (Sun 2:00 AM ET)",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     scheduler.start()
     logger.info(
         "Scheduler started — 3 scan jobs + hype monitor + morning brief + price alerts "
-        "+ 5 portfolio/journal/EOD jobs + regime at 16:15"
+        "+ 5 portfolio/journal/EOD jobs + regime at 16:15 + weekly data rotation"
     )
 
 
