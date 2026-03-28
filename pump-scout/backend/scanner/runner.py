@@ -123,7 +123,7 @@ async def run_scan() -> dict:
                 continue
 
             regime = detect_regime(candles, precomputed=indicators)
-            score = score_ticker(indicators, regime)
+            score = score_ticker(indicators, regime, symbol=symbol)
 
             if score["tier"] == "SKIP":
                 skipped += 1

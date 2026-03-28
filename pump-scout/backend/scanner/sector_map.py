@@ -142,3 +142,72 @@ SECTOR_MAP: dict[str, str] = {
 def get_sector_sync(symbol: str) -> str:
     """Synchronous sector lookup — checks SECTOR_MAP only."""
     return SECTOR_MAP.get(symbol.upper(), "Unknown")
+
+
+# ── Non-stock securities ───────────────────────────────────────────────────────
+# Volume anomalies in these instruments are often driven by NAV discounts,
+# distribution mechanics, or fund events — not institutional accumulation.
+
+# Known closed-end funds (CEFs)
+CLOSED_END_FUNDS: set[str] = {
+    'BRW', 'ARDC', 'AWF', 'ACP', 'BCX',
+    'BGB', 'BGH', 'BGT', 'BGX', 'BHK',
+    'BIT', 'BKT', 'BLW', 'BME', 'BNA',
+    'BOE', 'BPK', 'BRA', 'BRB', 'BSL',
+    'BTZ', 'BUI', 'CEM', 'CHI', 'CHW',
+    'CHY', 'CIK', 'CIZ', 'CLM', 'CRF',
+    'CSQ', 'CXE', 'CXH', 'DHY', 'DFP',
+    'DMO', 'DSM', 'DSU', 'DUC', 'EAD',
+    'EDD', 'EFR', 'EFT', 'EHI', 'EIM',
+    'EMD', 'EMF', 'EMI', 'ERC', 'ETB',
+    'ETG', 'ETJ', 'ETW', 'ETX', 'ETV',
+    'EVG', 'EVN', 'EVT', 'EXG', 'FAX',
+    'FFA', 'FFC', 'FHY', 'FIF', 'FLC',
+    'FMN', 'FMO', 'FMY', 'FNF', 'FPF',
+    'FRA', 'FRD', 'FSK', 'GAB', 'GDL',
+    'GDO', 'GGM', 'GGT', 'GGZ', 'GLO',
+    'GLQ', 'GLU', 'GLV', 'GNT', 'GOF',
+    'GPM', 'GRX', 'HNW', 'HPI', 'HPF',
+    'HPS', 'HTD', 'HTM', 'HYB', 'HYI',
+    'HYT', 'IGA', 'IGD', 'IGI', 'IGR',
+    'JCE', 'JDD', 'JEQ', 'JFR', 'JGH',
+    'JHB', 'JHD', 'JHS', 'JMT', 'JPC',
+    'JPT', 'JQC', 'JRS', 'JSD', 'JSM',
+    'JTD', 'KIO', 'KMF', 'LDP', 'MCR',
+    'MHD', 'MHF', 'MHI', 'MHN', 'MIE',
+    'MIN', 'MMD', 'MMT', 'MNP', 'MPA',
+    'MPV', 'MQT', 'MQY', 'MSD', 'MSF',
+    'MVF', 'MYC', 'MYD', 'MYF', 'MYI',
+    'MYJ', 'MYN', 'NBB', 'NBD', 'NBH',
+    'NBO', 'NBW', 'NEA', 'NID', 'NIE',
+    'NIM', 'NIO', 'NKX', 'NMI', 'NMO',
+    'NMT', 'NMZ', 'NPF', 'NPM', 'NPP',
+    'NPT', 'NQP', 'NRK', 'NSL', 'NUO',
+    'NUW', 'NVG', 'NXC', 'NXE', 'NXJ',
+    'NXP', 'NXQ', 'NXR', 'NXZ', 'NYV',
+    'OIA', 'PCF', 'PCK', 'PCN', 'PCQ',
+    'PCI', 'PDI', 'PDO', 'PFD', 'PFN',
+    'PHD', 'PHK', 'PHT', 'PKO', 'PMF',
+    'PML', 'PMM', 'PMO', 'PMX', 'PNI',
+    'PPT', 'PTA', 'PTY', 'PXF', 'PYN',
+    'RCS', 'RFI', 'RFM', 'RIF', 'RMT',
+    'RSF', 'RVT', 'SAF', 'SBI', 'SCM',
+    'SCD', 'SCZ', 'SDF', 'SDHY', 'SRH',
+    'STK', 'SZC', 'TDF', 'TFI', 'THQ',
+    'THW', 'TPZ', 'TYG', 'USA',
+    'UTF', 'UTG', 'VBF', 'VFL', 'VGI',
+    'VGM', 'VHI', 'VMO', 'VPV', 'VSC',
+    'WDI', 'WIA', 'WIW', 'WMC',
+    'XAI', 'ZTR',
+    # SABA funds
+    'SABA', 'BRWN',
+}
+
+# Exchange-traded notes (ETNs — not stocks)
+EXCHANGE_TRADED_NOTES: set[str] = {
+    'TVIX', 'UVXY', 'VXX', 'SVXY',
+    'VIXY', 'VIXM', 'ZIV', 'XIV',
+}
+
+# Combined lookup set
+NON_STOCK_SECURITIES: set[str] = CLOSED_END_FUNDS | EXCHANGE_TRADED_NOTES
