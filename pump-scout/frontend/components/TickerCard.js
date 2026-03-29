@@ -83,6 +83,9 @@ export default function TickerCard({ data, hypeData, streakDays }) {
   const obvDivergence = obvData.obv_divergence || false;
   const cefWarning = score.cef_warning || false;
   const scoreConflict = score.score_conflict || false;
+  const rsScore = score.rs_score ?? indicators.rs_score ?? null;
+  const rsStrong = rsScore != null && rsScore > 10;
+  const rsOutperform = rsScore != null && rsScore > 5 && !rsStrong;
   const earningsDays = earnings?.has_earnings ? earnings.days_until : null;
   const earningsLabel = earningsDays === 0 ? 'сегодня' : earningsDays === 1 ? 'завтра' : earningsDays != null ? `${earningsDays}д` : null;
   const hasGap = gapData.gap_type && gapData.gap_type !== 'NONE';
@@ -299,7 +302,7 @@ export default function TickerCard({ data, hypeData, streakDays }) {
       </div>
 
       {/* Sector + regime warning badges */}
-      {(sector || regime_warning || cefWarning || scoreConflict) && (
+      {(sector || regime_warning || cefWarning || scoreConflict || rsStrong || rsOutperform) && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '4px 10px 0' }}>
           {sector && sector !== 'Unknown' && (
             <span style={{
@@ -344,6 +347,24 @@ export default function TickerCard({ data, hypeData, streakDays }) {
               color: '#ffd600', borderRadius: 3, padding: '1px 6px',
             }} title={score.score_conflict_note}>
               ⚠ Score driven by volume — structure unconfirmed
+            </span>
+          )}
+          {rsStrong && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              background: 'rgba(255,80,0,0.12)', border: '1px solid rgba(255,80,0,0.4)',
+              color: '#ff6030', borderRadius: 3, padding: '1px 6px',
+            }} title={`RS vs SPY (5d): +${rsScore?.toFixed(1)}%`}>
+              🔥 Strong RS — sector rotation
+            </span>
+          )}
+          {rsOutperform && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              background: 'rgba(0,200,100,0.1)', border: '1px solid rgba(0,200,100,0.3)',
+              color: '#00c864', borderRadius: 3, padding: '1px 6px',
+            }} title={`RS vs SPY (5d): +${rsScore?.toFixed(1)}%`}>
+              💪 Outperforms market
             </span>
           )}
         </div>

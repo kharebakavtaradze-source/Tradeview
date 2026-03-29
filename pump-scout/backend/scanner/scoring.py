@@ -104,13 +104,23 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
     if obv_divergence and quiet_factor > 1.0:
         quiet_factor = min(1.5, quiet_factor + 0.1)
 
+    # --- Relative Strength vs SPY (5-day) ---
+    rs_score = indicators.get("rs_score", 0)
+    rs_bonus = 0
+    if rs_score > 10:
+        rs_bonus = 15
+    elif rs_score > 5 and state in ("RISK_OFF", "FEAR"):
+        rs_bonus = 15
+    elif rs_score > 5:
+        rs_bonus = 8
+
     # --- Institutional Flow Bonus ---
     inst = indicators.get("institutional_flow", {})
     inst_bonus = inst.get("flow_score", 0) * 0.2 if inst.get("is_institutional") else 0
 
     # --- Composite Score ---
     total_score = (vol_score * 0.4 + accum_score * 0.3 + stealth_bonus * 0.3) * quiet_factor
-    total_score = min(total_score + inst_bonus, 100)
+    total_score = min(total_score + inst_bonus + rs_bonus, 100)
 
     # Stealth floor: stealth signal always at least WATCH
     if stealth.get("is_stealth") and total_score < 25:
@@ -252,6 +262,8 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
         "accum_score": accum_score,
         "stealth_bonus": round(stealth_bonus, 2),
         "inst_bonus": round(inst_bonus, 2),
+        "rs_score": round(rs_score, 2),
+        "rs_bonus": rs_bonus,
         "quiet_factor": quiet_factor,
         "tier": tier,
         "original_tier": original_tier,

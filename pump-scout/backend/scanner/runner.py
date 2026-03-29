@@ -101,6 +101,15 @@ async def run_scan() -> dict:
     results = []
     skipped = 0
 
+    # Pre-compute SPY 5-day return for relative strength comparison
+    spy_pct_5d = 0.0
+    spy_candles = all_data.get("SPY", [])
+    if len(spy_candles) >= 6:
+        spy_close_now = spy_candles[-1]["c"]
+        spy_close_5d = spy_candles[-6]["c"]
+        if spy_close_5d > 0:
+            spy_pct_5d = (spy_close_now - spy_close_5d) / spy_close_5d * 100
+
     for symbol, candles in all_data.items():
         if len(candles) < 60:
             skipped += 1
@@ -121,6 +130,10 @@ async def run_scan() -> dict:
             if indicators.get("anomaly_ratio", 0) < 2.0:
                 skipped += 1
                 continue
+
+            # Relative Strength vs SPY (5-day)
+            ticker_pct_5d = indicators.get("price_change_pct_5d", 0.0)
+            indicators["rs_score"] = round(ticker_pct_5d - spy_pct_5d, 2)
 
             regime = detect_regime(candles, precomputed=indicators)
             score = score_ticker(indicators, regime, symbol=symbol)
