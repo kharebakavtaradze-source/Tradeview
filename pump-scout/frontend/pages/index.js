@@ -333,6 +333,7 @@ export default function Home() {
             PUMP SCOUT
             <span className={styles.version}>{VERSION}</span>
             <Link href="/how-it-works" className={styles.howLink}>how it works</Link>
+            <Link href="/ribbon" className={styles.howLink}>🎀 ribbon</Link>
             <Link href="/journal" className={styles.howLink}>📔 journal</Link>
             <Link href="/sectors" className={styles.howLink}>🗂 sectors</Link>
             <button
