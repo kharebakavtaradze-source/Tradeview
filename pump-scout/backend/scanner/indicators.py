@@ -155,6 +155,9 @@ def calc_volume_anomaly(candles: list) -> dict:
     close_prev = closes[-2] if len(closes) >= 2 else closes[-1]
     price_change_pct = (close_today - close_prev) / close_prev * 100 if close_prev > 0 else 0.0
 
+    close_5d_ago = closes[-6] if len(closes) >= 6 else closes[0]
+    price_change_pct_5d = (close_today - close_5d_ago) / close_5d_ago * 100 if close_5d_ago > 0 else 0.0
+
     is_quiet = anomaly_ratio > 2.0 and abs(price_change_pct) < 3.0
 
     return {
@@ -164,6 +167,7 @@ def calc_volume_anomaly(candles: list) -> dict:
         "anomaly_ratio": round(anomaly_ratio, 2),
         "vol_z": round(vol_z, 2),
         "price_change_pct": round(price_change_pct, 2),
+        "price_change_pct_5d": round(price_change_pct_5d, 2),
         "is_quiet": is_quiet,
     }
 
@@ -489,6 +493,7 @@ def calc_all(candles: list) -> dict:
         "anomaly_ratio": vol_anomaly["anomaly_ratio"],
         "vol_z": vol_anomaly["vol_z"],
         "price_change_pct": vol_anomaly["price_change_pct"],
+        "price_change_pct_5d": vol_anomaly["price_change_pct_5d"],
         "is_quiet": vol_anomaly["is_quiet"],
         # ATR
         "atr": atr["value"],
