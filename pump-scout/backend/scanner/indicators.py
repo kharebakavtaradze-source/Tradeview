@@ -468,6 +468,81 @@ def calc_all(candles: list) -> dict:
     price = closes[-1]
     vol_today = volumes[-1]
 
+    # ── EMA Ribbon (Fibonacci set) ────────────────────────────────────────────
+    ema8_val  = ema(closes, 8)   if len(closes) >= 10  else None
+    ema13_val = ema(closes, 13)  if len(closes) >= 15  else None
+    ema21_val = ema(closes, 21)  if len(closes) >= 25  else None
+    ema34_val = ema(closes, 34)  if len(closes) >= 40  else None
+    ema55_val = ema(closes, 55)  if len(closes) >= 65  else None
+    ema89_val = ema(closes, 89)  if len(closes) >= 100 else None
+    # ema200_val already computed above
+
+    ribbon_map = {}
+    for period, val in [
+        (8, ema8_val), (13, ema13_val), (21, ema21_val),
+        (34, ema34_val), (55, ema55_val), (89, ema89_val),
+        (200, ema200_val),
+    ]:
+        if val is not None:
+            ribbon_map[period] = val
+
+    ribbon_values = list(ribbon_map.values())  # ordered ascending by period
+
+    if len(ribbon_values) >= 3 and price > 0:
+        ema_max = max(ribbon_values)
+        ema_min = min(ribbon_values)
+        ema_spread_pct = round((ema_max - ema_min) / price * 100, 3)
+
+        if ema_spread_pct < 1.0:
+            ribbon_compression = "STRONG"
+        elif ema_spread_pct < 2.5:
+            ribbon_compression = "MEDIUM"
+        elif ema_spread_pct < 5.0:
+            ribbon_compression = "WEAK"
+        else:
+            ribbon_compression = "NONE"
+
+        # Bullish stack: price > EMA8 > EMA13 > ... > EMA200
+        price_above_fastest = price > ribbon_values[0]
+        emas_in_bull_order = all(
+            ribbon_values[i] > ribbon_values[i + 1]
+            for i in range(len(ribbon_values) - 1)
+        )
+        bullish_stack = price_above_fastest and emas_in_bull_order
+
+        # Bearish stack: price < all EMAs AND EMAs in ascending order by period
+        price_below_all = all(price < v for v in ribbon_values)
+        emas_in_bear_order = all(
+            ribbon_values[i] < ribbon_values[i + 1]
+            for i in range(len(ribbon_values) - 1)
+        )
+        bearish_stack = price_below_all and emas_in_bear_order
+
+        compression_and_bullish = ribbon_compression != "NONE" and bullish_stack
+
+        ribbon_position = (
+            round((price - ema_min) / (ema_max - ema_min) * 100, 1)
+            if ema_max != ema_min else 50.0
+        )
+
+        ema8_slope = "FLAT"
+        if ema8_val is not None and len(closes) >= 15:
+            ema8_5d_ago = ema(closes[:-5], 8)
+            if ema8_5d_ago and ema8_5d_ago > 0:
+                slope_pct = (ema8_val - ema8_5d_ago) / ema8_5d_ago * 100
+                if slope_pct > 0.3:
+                    ema8_slope = "RISING"
+                elif slope_pct < -0.3:
+                    ema8_slope = "FALLING"
+    else:
+        ema_spread_pct = 999.0
+        ribbon_compression = "NONE"
+        bullish_stack = False
+        bearish_stack = False
+        compression_and_bullish = False
+        ribbon_position = 50.0
+        ema8_slope = "FLAT"
+
     return {
         "price": round(price, 4),
         "ema20": round(ema20_val, 4),
@@ -509,4 +584,19 @@ def calc_all(candles: list) -> dict:
         "institutional_flow": inst_flow,
         # OBV
         "obv": obv,
+        # EMA Ribbon (Fibonacci set)
+        "ema8":  round(ema8_val,  4) if ema8_val  is not None else None,
+        "ema13": round(ema13_val, 4) if ema13_val is not None else None,
+        "ema21": round(ema21_val, 4) if ema21_val is not None else None,
+        "ema34": round(ema34_val, 4) if ema34_val is not None else None,
+        "ema55": round(ema55_val, 4) if ema55_val is not None else None,
+        "ema89": round(ema89_val, 4) if ema89_val is not None else None,
+        "ema_spread_pct":          ema_spread_pct,
+        "ribbon_compression":      ribbon_compression,
+        "bullish_stack":           bullish_stack,
+        "bearish_stack":           bearish_stack,
+        "compression_and_bullish": compression_and_bullish,
+        "ribbon_position":         ribbon_position,
+        "ema8_slope":              ema8_slope,
+        "ribbon_periods_count":    len(ribbon_map),
     }

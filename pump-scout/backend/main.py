@@ -723,6 +723,165 @@ async def sector_strength_latest():
     return {"sectors": sectors}
 
 
+@app.get("/api/scan/ribbon")
+async def get_ribbon_scanner(
+    mode: str = "all",
+    max_spread: float = 5.0,
+    min_volume: int = 200000,
+    bullish_only: bool = False,
+):
+    """
+    EMA Ribbon Scanner — read-only, no new scan triggered.
+    Reads the latest scan and applies ribbon analysis.
+
+    mode: 'all' | 'compression' | 'breakout' | 'stack'
+    """
+    scan = await get_latest_scan()
+    if not scan:
+        return {"results": [], "count": 0, "summary": {}, "error": "No scan data"}
+
+    _SIG_POINTS = {
+        "COMPRESSION_BREAKOUT": 30,
+        "COMPRESSION_ALIGNED":  20,
+        "BULLISH_STACK":        20,
+        "COMPRESSION_WATCH":    10,
+        "NEUTRAL":               0,
+        "BEARISH_STACK":         0,
+    }
+
+    filtered = []
+    for r in scan.get("results", []):
+        ind = r.get("indicators", {})
+        score_data = r.get("score", {})
+
+        spread    = ind.get("ema_spread_pct", 999.0)
+        vol       = ind.get("today_vol", 0)
+        comp      = ind.get("ribbon_compression", "NONE")
+        bullish   = ind.get("bullish_stack", False)
+        bearish   = ind.get("bearish_stack", False)
+        cb        = ind.get("compression_and_bullish", False)
+        anomaly   = ind.get("anomaly_ratio", 0)
+
+        if vol < min_volume:
+            continue
+        if spread > max_spread:
+            continue
+        if bullish_only and not bullish:
+            continue
+
+        if mode == "compression" and comp == "NONE":
+            continue
+        elif mode == "breakout" and (not cb or anomaly < 1.8):
+            continue
+        elif mode == "stack" and not bullish:
+            continue
+
+        # Determine signal label
+        if cb and anomaly >= 1.8:
+            ribbon_signal = "COMPRESSION_BREAKOUT"
+        elif cb and anomaly < 1.8:
+            ribbon_signal = "COMPRESSION_ALIGNED"
+        elif bullish:
+            ribbon_signal = "BULLISH_STACK"
+        elif bearish:
+            ribbon_signal = "BEARISH_STACK"
+        elif comp != "NONE":
+            ribbon_signal = "COMPRESSION_WATCH"
+        else:
+            ribbon_signal = "NEUTRAL"
+
+        # Quality score 0-100
+        quality = 0
+        if spread < 1.0:   quality += 35
+        elif spread < 2.0: quality += 25
+        elif spread < 3.0: quality += 15
+        elif spread < 5.0: quality += 5
+
+        quality += _SIG_POINTS.get(ribbon_signal, 0)
+
+        cmf_pctl  = ind.get("cmf_pctl", 0)
+        bb_squeeze = ind.get("bb_squeeze", False)
+        bb_bars   = ind.get("bb_sqz_bars", 0)
+        rs        = ind.get("rs_score", 0)
+
+        if cmf_pctl > 70:   quality += 10
+        elif cmf_pctl > 50: quality += 5
+        if bb_squeeze:       quality += 7
+        if bb_bars >= 5:     quality += 5
+        if rs > 5:           quality += 5
+        if anomaly >= 3.0:   quality += 5
+
+        obv_data = ind.get("obv", {}) or {}
+        obv_str  = obv_data.get("obv_strength", "WEAK")
+        if obv_str == "STRONG":   quality += 8
+        elif obv_str == "MEDIUM": quality += 4
+
+        quality = min(100, quality)
+        if quality < 5:
+            continue
+
+        filtered.append({
+            "symbol":       r["symbol"],
+            "price":        r["price"],
+            "sector":       r.get("sector", "Unknown"),
+            "tier":         score_data.get("tier"),
+            "total_score":  score_data.get("total_score"),
+            "ribbon_signal":          ribbon_signal,
+            "ribbon_quality":         quality,
+            "ema_spread_pct":         spread,
+            "ribbon_compression":     comp,
+            "bullish_stack":          bullish,
+            "bearish_stack":          bearish,
+            "compression_and_bullish": cb,
+            "ribbon_position":        ind.get("ribbon_position"),
+            "ema8_slope":             ind.get("ema8_slope"),
+            "ribbon_periods_count":   ind.get("ribbon_periods_count"),
+            "ema8":   ind.get("ema8"),
+            "ema13":  ind.get("ema13"),
+            "ema20":  ind.get("ema20"),
+            "ema21":  ind.get("ema21"),
+            "ema34":  ind.get("ema34"),
+            "ema50":  ind.get("ema50"),
+            "ema55":  ind.get("ema55"),
+            "ema89":  ind.get("ema89"),
+            "ema200": ind.get("ema200"),
+            "cmf_pctl":      cmf_pctl,
+            "anomaly_ratio": anomaly,
+            "bb_squeeze":    bb_squeeze,
+            "bb_sqz_bars":   bb_bars,
+            "rs_score":      rs,
+            "rsi":           (ind.get("rsi") or {}).get("value"),
+            "obv_strength":  obv_data.get("obv_strength") if obv_data else None,
+            "obv_divergence": obv_data.get("obv_divergence") if obv_data else None,
+            "earnings_risk": r.get("earnings_risk", "NONE"),
+            "ai_analysis":   r.get("ai_analysis"),
+        })
+
+    filtered.sort(key=lambda x: x["ribbon_quality"], reverse=True)
+
+    summary = {
+        "total":       len(filtered),
+        "breakouts":   sum(1 for x in filtered if x["ribbon_signal"] == "COMPRESSION_BREAKOUT"),
+        "aligned":     sum(1 for x in filtered if x["ribbon_signal"] == "COMPRESSION_ALIGNED"),
+        "stacks":      sum(1 for x in filtered if x["bullish_stack"]),
+        "compression": sum(1 for x in filtered if x["ribbon_compression"] != "NONE"),
+        "bearish":     sum(1 for x in filtered if x["bearish_stack"]),
+    }
+
+    return {
+        "results":    filtered,
+        "count":      len(filtered),
+        "summary":    summary,
+        "scanned_at": scan.get("scanned_at"),
+        "filter": {
+            "mode":         mode,
+            "max_spread":   max_spread,
+            "min_volume":   min_volume,
+            "bullish_only": bullish_only,
+        },
+    }
+
+
 @app.get("/api/sector-performance/latest")
 async def sector_performance_latest():
     """Return live Finviz sector performance (daily change%). Cached up to 4 hours."""
