@@ -180,6 +180,26 @@ async def detect_market_regime() -> dict:
         "etf_details": etf_data,
     }
 
+    # Enrich strong/weak sectors with live Finviz data (more granular than ETF proxies)
+    try:
+        from scanner.sector_performance import (
+            fetch_sector_performance,
+            get_strong_sectors,
+            get_weak_sectors,
+        )
+        sector_perf = await fetch_sector_performance()
+        if sector_perf:
+            result["sector_performance"] = sector_perf
+            result["strong_sectors"] = get_strong_sectors(sector_perf)
+            result["weak_sectors"] = get_weak_sectors(sector_perf)
+            logger.info(
+                f"Sector performance enriched: "
+                f"{len(result['strong_sectors'])} strong, "
+                f"{len(result['weak_sectors'])} weak"
+            )
+    except Exception as e:
+        logger.warning(f"Finviz sector enrichment failed (non-fatal): {e}")
+
     # Persist to DB
     try:
         from database import save_market_regime

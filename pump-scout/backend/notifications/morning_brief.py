@@ -142,7 +142,32 @@ async def send_morning_brief() -> bool:
     except Exception as e:
         logger.warning(f"morning_brief: ai portfolio lookup failed: {e}")
 
-    # ── 5. Top 2 sectors by strength ──────────────────────────────────────────
+    # ── 5. Sector flow (Finviz live) + top 2 by scan strength ────────────────
+    try:
+        from scanner.sector_performance import fetch_sector_performance
+        sector_perf = await fetch_sector_performance()
+        if sector_perf:
+            strong = [
+                f"{k} {v['change_pct']:+.1f}%"
+                for k, v in sorted(sector_perf.items(), key=lambda x: -x[1]["change_pct"])
+                if v["change_pct"] > 0.3
+            ]
+            weak = [
+                f"{k} {v['change_pct']:+.1f}%"
+                for k, v in sorted(sector_perf.items(), key=lambda x: x[1]["change_pct"])
+                if v["change_pct"] < -1.5
+            ]
+            if strong:
+                lines.append("💚 <b>Sector rotation IN:</b>")
+                lines.append("  " + "  |  ".join(strong[:5]))
+                lines.append("")
+            if weak:
+                lines.append("🔴 <b>Sector rotation OUT:</b>")
+                lines.append("  " + "  |  ".join(weak[:5]))
+                lines.append("")
+    except Exception as e:
+        logger.warning(f"morning_brief: Finviz sector fetch failed: {e}")
+
     try:
         from database import get_sector_strength_latest
         sectors_data = await get_sector_strength_latest()
@@ -157,7 +182,7 @@ async def send_morning_brief() -> bool:
                 sectors_str = "  ".join(
                     f"{s['sector']} ({s.get('avg_score', 0):.0f})" for s in top2
                 )
-                lines.append(f"<b>📊 Сильные секторы:</b> {sectors_str}")
+                lines.append(f"<b>📊 Сильные секторы (scan):</b> {sectors_str}")
                 lines.append("")
     except Exception as e:
         logger.warning(f"morning_brief: sector lookup failed: {e}")

@@ -122,6 +122,9 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
     total_score = (vol_score * 0.4 + accum_score * 0.3 + stealth_bonus * 0.3) * quiet_factor
     total_score = min(total_score + inst_bonus + rs_bonus, 100)
 
+    # sector_rs_bonus is applied post-scoring in runner.py (after sector is resolved)
+    sector_rs_bonus = 0
+
     # Stealth floor: stealth signal always at least WATCH
     if stealth.get("is_stealth") and total_score < 25:
         total_score = 25
@@ -264,6 +267,7 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
         "inst_bonus": round(inst_bonus, 2),
         "rs_score": round(rs_score, 2),
         "rs_bonus": rs_bonus,
+        "sector_rs_bonus": sector_rs_bonus,
         "quiet_factor": quiet_factor,
         "tier": tier,
         "original_tier": original_tier,

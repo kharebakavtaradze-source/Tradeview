@@ -97,6 +97,14 @@ async def run_scan() -> dict:
     all_data = await fetch_batch(tickers)
     print(f"Loaded data for {len(all_data)} tickers")
 
+    # Fetch Finviz sector performance once (cached, non-blocking)
+    sector_perf: dict = {}
+    try:
+        from scanner.sector_performance import fetch_sector_performance
+        sector_perf = await fetch_sector_performance()
+    except Exception as e:
+        logger.warning(f"sector_performance fetch failed (non-fatal): {e}")
+
     # Step 3: Calculate indicators for each
     results = []
     skipped = 0
@@ -204,6 +212,27 @@ async def run_scan() -> dict:
         for r in results:
             r["regime_warning"] = r.get("sector", "Unknown") in weak_sectors
 
+        # Sector alignment bonus/penalty using Finviz live data (applied post-sector-resolution)
+        if sector_perf:
+            _TIER_RANK = {"SKIP": 0, "WATCH": 1, "STEALTH": 2, "SYMPATHY": 3, "BASE": 3, "ARM": 4, "FIRE": 5}
+            for r in results:
+                sector = r.get("sector", "Unknown")
+                sp = sector_perf.get(sector)
+                if not sp:
+                    continue
+                sc = r["score"]
+                if sp["change_pct"] > 0.5:
+                    sc["total_score"] = min(round(sc["total_score"] + 5, 2), 100)
+                    sc["sector_rs_bonus"] = 5
+                elif sp["change_pct"] < -1.5:
+                    sc["total_score"] = round(sc["total_score"] * 0.90, 2)
+                    sc["sector_rs_bonus"] = -10
+                    # Downgrade tier if score dropped below threshold
+                    score_now = sc["total_score"]
+                    current_tier = sc["tier"]
+                    if score_now <= 60 and _TIER_RANK.get(current_tier, 0) >= _TIER_RANK["FIRE"]:
+                        sc["tier"] = "ARM"
+
     # Step 5: Pre-market data for all scored tickers
     scored_symbols = [r["symbol"] for r in results]
     if scored_symbols:
@@ -272,6 +301,7 @@ async def run_scan() -> dict:
         "duration_secs": round(duration_secs, 1),
         "tier_counts": tier_counts,
         "sector_strength": sector_strength if results else {},
+        "sector_performance": sector_perf,
         "market_regime": regime,
         "symbol_sources": symbol_sources,
     }

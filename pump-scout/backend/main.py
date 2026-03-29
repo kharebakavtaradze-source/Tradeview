@@ -723,6 +723,17 @@ async def sector_strength_latest():
     return {"sectors": sectors}
 
 
+@app.get("/api/sector-performance/latest")
+async def sector_performance_latest():
+    """Return live Finviz sector performance (daily change%). Cached up to 4 hours."""
+    from scanner.sector_performance import fetch_sector_performance
+    data = await fetch_sector_performance()
+    sorted_data = dict(
+        sorted(data.items(), key=lambda x: x[1].get("change_pct", 0), reverse=True)
+    )
+    return sorted_data
+
+
 @app.get("/api/sector-strength/{sector}")
 async def sector_strength_by_sector(sector: str):
     """Return tickers in a specific sector with their scores."""

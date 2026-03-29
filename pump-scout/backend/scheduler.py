@@ -15,6 +15,7 @@ from ai_portfolio import ai_portfolio_decisions, generate_daily_report
 from scan_candidates import fill_candidate_prices
 from eod_log import run_eod_log
 from scanner.market_regime import detect_market_regime
+from scanner.sector_performance import fetch_sector_performance
 from notifications.morning_brief import send_morning_brief
 from notifications.price_alerts import check_price_alerts
 
@@ -64,8 +65,36 @@ async def _run_data_rotation():
         logger.error(f"Data rotation failed: {e}", exc_info=True)
 
 
+async def _run_sector_performance():
+    """Refresh Finviz sector performance cache (clears stale 4-hour window)."""
+    try:
+        from scanner import sector_performance as _sp
+        import scanner.sector_performance as _sp_mod
+        # Force cache bypass by resetting cache time
+        _sp_mod._sector_cache_time = None
+        data = await fetch_sector_performance()
+        logger.info(f"Sector performance refreshed: {len(data)} sectors")
+    except Exception as e:
+        logger.error(f"Sector performance refresh failed: {e}", exc_info=True)
+
+
 def start_scheduler():
     """Register scan jobs and start the scheduler."""
+
+    # 16:20 ET — Finviz sector performance refresh (after close)
+    scheduler.add_job(
+        _run_sector_performance,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=16,
+            minute=20,
+            timezone=EASTERN_TZ,
+        ),
+        id="sector_performance_1620_et",
+        name="Finviz Sector Performance (4:20 PM ET)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
 
     # 16:15 ET — Market Regime Detection (after close, uses previous-day closing prices)
     scheduler.add_job(
@@ -247,7 +276,7 @@ def start_scheduler():
     scheduler.start()
     logger.info(
         "Scheduler started — 3 scan jobs + hype monitor + morning brief + price alerts "
-        "+ 5 portfolio/journal/EOD jobs + regime at 16:15 + weekly data rotation"
+        "+ 5 portfolio/journal/EOD jobs + regime at 16:15 + sector perf at 16:20 + weekly data rotation"
     )
 
 

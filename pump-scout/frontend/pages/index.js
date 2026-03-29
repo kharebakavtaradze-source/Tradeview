@@ -5,6 +5,7 @@ import TickerCard from '../components/TickerCard';
 import Scanner from '../components/Scanner';
 import MarketRegimeBanner from '../components/MarketRegimeBanner';
 import SectorStrengthBar from '../components/SectorStrengthBar';
+import SectorBar from '../components/SectorBar';
 import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -118,6 +119,7 @@ export default function Home() {
   const [hypeResults, setHypeResults] = useState([]);
   const [hypeRunning, setHypeRunning] = useState(false);
   const [streaks, setStreaks] = useState([]);
+  const [sectorPerf, setSectorPerf] = useState({});
 
   const fetchLatest = useCallback(async () => {
     try {
@@ -151,15 +153,17 @@ export default function Home() {
 
   const fetchRegime = useCallback(async () => {
     try {
-      const [regimeRes, strengthRes] = await Promise.all([
+      const [regimeRes, strengthRes, perfRes] = await Promise.all([
         fetch(`${API_URL}/api/market-regime`),
         fetch(`${API_URL}/api/sector-strength`),
+        fetch(`${API_URL}/api/sector-performance/latest`),
       ]);
       if (regimeRes.ok) setMarketRegime(await regimeRes.json());
       if (strengthRes.ok) {
         const d = await strengthRes.json();
         setSectorStrength(d.sectors || []);
       }
+      if (perfRes.ok) setSectorPerf(await perfRes.json());
     } catch {
       // regime is optional — silent fail
     }
@@ -357,7 +361,10 @@ export default function Home() {
         {/* Market Regime Banner */}
         {marketRegime && <MarketRegimeBanner regime={marketRegime} />}
 
-        {/* Sector Strength Bar */}
+        {/* Live Sector Performance Bar (Finviz) */}
+        {Object.keys(sectorPerf).length > 0 && <SectorBar data={sectorPerf} />}
+
+        {/* Sector Strength Bar (scan-based) */}
         {sectorStrength.length > 0 && (
           <SectorStrengthBar
             sectors={sectorStrength}
