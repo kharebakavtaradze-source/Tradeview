@@ -723,6 +723,131 @@ async def sector_strength_latest():
     return {"sectors": sectors}
 
 
+# ── EMA Ribbon Scanner helpers ────────────────────────────────────────────────
+
+def _passes_mode(mode: str, compression: str, bullish: bool, cb: bool, anomaly: float) -> bool:
+    if mode == "compression":
+        return compression != "NONE"
+    if mode == "breakout":
+        return bool(cb) and anomaly >= 1.8
+    if mode == "stack":
+        return bool(bullish)
+    return True  # "all"
+
+
+def _ribbon_signal(cb: bool, bullish: bool, bearish: bool, compression: str, anomaly: float) -> str:
+    if cb and anomaly >= 1.8:
+        return "COMPRESSION_BREAKOUT"
+    if cb:
+        return "COMPRESSION_ALIGNED"
+    if bullish:
+        return "BULLISH_STACK"
+    if bearish:
+        return "BEARISH_STACK"
+    if compression != "NONE":
+        return "COMPRESSION_WATCH"
+    return "NEUTRAL"
+
+
+def _ribbon_quality(spread: float, signal: str, ind: dict) -> int:
+    q = 0
+    if spread < 1.0:   q += 35
+    elif spread < 2.0: q += 25
+    elif spread < 3.0: q += 15
+    elif spread < 5.0: q += 5
+    q += {"COMPRESSION_BREAKOUT": 30, "COMPRESSION_ALIGNED": 20,
+          "BULLISH_STACK": 20, "COMPRESSION_WATCH": 10}.get(signal, 0)
+    cmf = ind.get("cmf_pctl", 0) or 0
+    if cmf > 70:   q += 10
+    elif cmf > 50: q += 5
+    if ind.get("bb_squeeze"):         q += 7
+    if (ind.get("bb_sqz_bars") or 0) >= 5: q += 5
+    if (ind.get("rs_score") or 0) > 5:     q += 5
+    # OBV — handle both sources (scan has nested obv dict; DB row has obv_strength directly)
+    obv_str = (
+        ind.get("obv", {}).get("obv_strength")
+        if isinstance(ind.get("obv"), dict)
+        else ind.get("obv_strength")
+    )
+    if obv_str == "STRONG":   q += 8
+    elif obv_str == "MEDIUM": q += 4
+    return min(100, q)
+
+
+def _ribbon_item_from_scan(r: dict, ind: dict, score_data: dict, signal: str, quality: int) -> dict:
+    obv_data = ind.get("obv") or {}
+    return {
+        "symbol":       r["symbol"],
+        "price":        r["price"],
+        "sector":       r.get("sector", "Unknown"),
+        "tier":         score_data.get("tier"),
+        "total_score":  score_data.get("total_score"),
+        "source":       "main_scan",
+        "ribbon_signal":          signal,
+        "ribbon_quality":         quality,
+        "ema_spread_pct":         ind.get("ema_spread_pct"),
+        "ribbon_compression":     ind.get("ribbon_compression", "NONE"),
+        "bullish_stack":          ind.get("bullish_stack", False),
+        "bearish_stack":          ind.get("bearish_stack", False),
+        "compression_and_bullish": ind.get("compression_and_bullish", False),
+        "ribbon_position":        ind.get("ribbon_position"),
+        "ema8_slope":             ind.get("ema8_slope"),
+        "ribbon_periods_count":   ind.get("ribbon_periods_count"),
+        "ema8":   ind.get("ema8"),   "ema13": ind.get("ema13"),
+        "ema20":  ind.get("ema20"),  "ema21": ind.get("ema21"),
+        "ema34":  ind.get("ema34"),  "ema50": ind.get("ema50"),
+        "ema55":  ind.get("ema55"),  "ema89": ind.get("ema89"),
+        "ema200": ind.get("ema200"),
+        "cmf_pctl":      ind.get("cmf_pctl", 0),
+        "anomaly_ratio": ind.get("anomaly_ratio", 0),
+        "bb_squeeze":    ind.get("bb_squeeze", False),
+        "bb_sqz_bars":   ind.get("bb_sqz_bars", 0),
+        "rs_score":      ind.get("rs_score", 0),
+        "rsi":           (ind.get("rsi") or {}).get("value"),
+        "obv_strength":  obv_data.get("obv_strength") if obv_data else None,
+        "obv_divergence": obv_data.get("obv_divergence") if obv_data else None,
+        "earnings_risk": r.get("earnings_risk", "NONE"),
+        "ai_analysis":   r.get("ai_analysis"),
+    }
+
+
+def _ribbon_item_from_db(row: dict, signal: str, quality: int) -> dict:
+    # row is already a plain dict (converted via .mappings().all())
+    return {
+        "symbol":       row["symbol"],
+        "price":        row.get("price"),
+        "sector":       row.get("sector", "Unknown"),
+        "tier":         None,
+        "total_score":  None,
+        "source":       "ribbon_pass",
+        "ribbon_signal":          signal,
+        "ribbon_quality":         quality,
+        "ema_spread_pct":         row.get("ema_spread_pct"),
+        "ribbon_compression":     row.get("ribbon_compression", "NONE"),
+        "bullish_stack":          row.get("bullish_stack", False),
+        "bearish_stack":          row.get("bearish_stack", False),
+        "compression_and_bullish": row.get("compression_and_bullish", False),
+        "ribbon_position":        row.get("ribbon_position"),
+        "ema8_slope":             row.get("ema8_slope"),
+        "ribbon_periods_count":   7,
+        "ema8":   row.get("ema8"),   "ema13": row.get("ema13"),
+        "ema20":  row.get("ema20"),  "ema21": row.get("ema21"),
+        "ema34":  row.get("ema34"),  "ema50": row.get("ema50"),
+        "ema55":  row.get("ema55"),  "ema89": row.get("ema89"),
+        "ema200": row.get("ema200"),
+        "cmf_pctl":      row.get("cmf_pctl", 0),
+        "anomaly_ratio": row.get("anomaly_ratio", 0),
+        "bb_squeeze":    row.get("bb_squeeze", False),
+        "bb_sqz_bars":   row.get("bb_sqz_bars", 0),
+        "rs_score":      row.get("rs_score", 0),
+        "rsi":           row.get("rsi"),
+        "obv_strength":  row.get("obv_strength"),
+        "obv_divergence": None,
+        "earnings_risk": "NONE",
+        "ai_analysis":   None,
+    }
+
+
 @app.get("/api/scan/ribbon")
 async def get_ribbon_scanner(
     mode: str = "all",
@@ -732,147 +857,93 @@ async def get_ribbon_scanner(
 ):
     """
     EMA Ribbon Scanner — read-only, no new scan triggered.
-    Reads the latest scan and applies ribbon analysis.
+    Merges two sources:
+      1. Main scan results (tickers with anomaly_ratio >= 2x)
+      2. ribbon_candidates table (compression setups, anomaly_ratio < 2x)
 
     mode: 'all' | 'compression' | 'breakout' | 'stack'
     """
+    from database import get_ribbon_candidates
+
     scan = await get_latest_scan()
-    if not scan:
-        return {"results": [], "count": 0, "summary": {}, "error": "No scan data"}
+    main_results = scan.get("results", []) if scan else []
 
-    _SIG_POINTS = {
-        "COMPRESSION_BREAKOUT": 30,
-        "COMPRESSION_ALIGNED":  20,
-        "BULLISH_STACK":        20,
-        "COMPRESSION_WATCH":    10,
-        "NEUTRAL":               0,
-        "BEARISH_STACK":         0,
-    }
+    # SOURCE 2: ribbon candidates table (last 1 day)
+    ribbon_rows = await get_ribbon_candidates(days_back=1)
 
-    filtered = []
-    for r in scan.get("results", []):
-        ind = r.get("indicators", {})
+    seen: set = set()
+    all_items: list = []
+
+    # Process main scan results
+    for r in main_results:
+        ind        = r.get("indicators", {})
         score_data = r.get("score", {})
+        symbol     = r["symbol"]
 
-        spread    = ind.get("ema_spread_pct", 999.0)
-        vol       = ind.get("today_vol", 0)
-        comp      = ind.get("ribbon_compression", "NONE")
-        bullish   = ind.get("bullish_stack", False)
-        bearish   = ind.get("bearish_stack", False)
-        cb        = ind.get("compression_and_bullish", False)
-        anomaly   = ind.get("anomaly_ratio", 0)
+        spread  = ind.get("ema_spread_pct", 999.0)
+        vol     = ind.get("today_vol", 0)
+        comp    = ind.get("ribbon_compression", "NONE")
+        bullish = ind.get("bullish_stack", False)
+        bearish = ind.get("bearish_stack", False)
+        cb      = ind.get("compression_and_bullish", False)
+        anomaly = ind.get("anomaly_ratio", 0)
 
-        if vol < min_volume:
-            continue
-        if spread > max_spread:
-            continue
-        if bullish_only and not bullish:
-            continue
+        if vol < min_volume:      continue
+        if spread > max_spread:   continue
+        if bullish_only and not bullish: continue
+        if not _passes_mode(mode, comp, bullish, cb, anomaly): continue
 
-        if mode == "compression" and comp == "NONE":
-            continue
-        elif mode == "breakout" and (not cb or anomaly < 1.8):
-            continue
-        elif mode == "stack" and not bullish:
-            continue
+        signal  = _ribbon_signal(cb, bullish, bearish, comp, anomaly)
+        quality = _ribbon_quality(spread, signal, ind)
+        if quality < 5:           continue
 
-        # Determine signal label
-        if cb and anomaly >= 1.8:
-            ribbon_signal = "COMPRESSION_BREAKOUT"
-        elif cb and anomaly < 1.8:
-            ribbon_signal = "COMPRESSION_ALIGNED"
-        elif bullish:
-            ribbon_signal = "BULLISH_STACK"
-        elif bearish:
-            ribbon_signal = "BEARISH_STACK"
-        elif comp != "NONE":
-            ribbon_signal = "COMPRESSION_WATCH"
-        else:
-            ribbon_signal = "NEUTRAL"
+        seen.add(symbol)
+        all_items.append(_ribbon_item_from_scan(r, ind, score_data, signal, quality))
 
-        # Quality score 0-100
-        quality = 0
-        if spread < 1.0:   quality += 35
-        elif spread < 2.0: quality += 25
-        elif spread < 3.0: quality += 15
-        elif spread < 5.0: quality += 5
-
-        quality += _SIG_POINTS.get(ribbon_signal, 0)
-
-        cmf_pctl  = ind.get("cmf_pctl", 0)
-        bb_squeeze = ind.get("bb_squeeze", False)
-        bb_bars   = ind.get("bb_sqz_bars", 0)
-        rs        = ind.get("rs_score", 0)
-
-        if cmf_pctl > 70:   quality += 10
-        elif cmf_pctl > 50: quality += 5
-        if bb_squeeze:       quality += 7
-        if bb_bars >= 5:     quality += 5
-        if rs > 5:           quality += 5
-        if anomaly >= 3.0:   quality += 5
-
-        obv_data = ind.get("obv", {}) or {}
-        obv_str  = obv_data.get("obv_strength", "WEAK")
-        if obv_str == "STRONG":   quality += 8
-        elif obv_str == "MEDIUM": quality += 4
-
-        quality = min(100, quality)
-        if quality < 5:
+    # Process ribbon_candidates (secondary pass — no volume spike)
+    for row in ribbon_rows:
+        symbol = row["symbol"]
+        if symbol in seen:
             continue
 
-        filtered.append({
-            "symbol":       r["symbol"],
-            "price":        r["price"],
-            "sector":       r.get("sector", "Unknown"),
-            "tier":         score_data.get("tier"),
-            "total_score":  score_data.get("total_score"),
-            "ribbon_signal":          ribbon_signal,
-            "ribbon_quality":         quality,
-            "ema_spread_pct":         spread,
-            "ribbon_compression":     comp,
-            "bullish_stack":          bullish,
-            "bearish_stack":          bearish,
-            "compression_and_bullish": cb,
-            "ribbon_position":        ind.get("ribbon_position"),
-            "ema8_slope":             ind.get("ema8_slope"),
-            "ribbon_periods_count":   ind.get("ribbon_periods_count"),
-            "ema8":   ind.get("ema8"),
-            "ema13":  ind.get("ema13"),
-            "ema20":  ind.get("ema20"),
-            "ema21":  ind.get("ema21"),
-            "ema34":  ind.get("ema34"),
-            "ema50":  ind.get("ema50"),
-            "ema55":  ind.get("ema55"),
-            "ema89":  ind.get("ema89"),
-            "ema200": ind.get("ema200"),
-            "cmf_pctl":      cmf_pctl,
-            "anomaly_ratio": anomaly,
-            "bb_squeeze":    bb_squeeze,
-            "bb_sqz_bars":   bb_bars,
-            "rs_score":      rs,
-            "rsi":           (ind.get("rsi") or {}).get("value"),
-            "obv_strength":  obv_data.get("obv_strength") if obv_data else None,
-            "obv_divergence": obv_data.get("obv_divergence") if obv_data else None,
-            "earnings_risk": r.get("earnings_risk", "NONE"),
-            "ai_analysis":   r.get("ai_analysis"),
-        })
+        spread  = row.get("ema_spread_pct", 999.0) or 999.0
+        vol     = row.get("today_vol", 0) or 0
+        comp    = row.get("ribbon_compression", "NONE") or "NONE"
+        bullish = bool(row.get("bullish_stack", False))
+        bearish = bool(row.get("bearish_stack", False))
+        cb      = bool(row.get("compression_and_bullish", False))
+        anomaly = row.get("anomaly_ratio", 0) or 0
 
-    filtered.sort(key=lambda x: x["ribbon_quality"], reverse=True)
+        if vol < min_volume:      continue
+        if spread > max_spread:   continue
+        if bullish_only and not bullish: continue
+        if not _passes_mode(mode, comp, bullish, cb, anomaly): continue
+
+        signal  = _ribbon_signal(cb, bullish, bearish, comp, anomaly)
+        quality = _ribbon_quality(spread, signal, row)
+        if quality < 5:           continue
+
+        seen.add(symbol)
+        all_items.append(_ribbon_item_from_db(row, signal, quality))
+
+    all_items.sort(key=lambda x: x["ribbon_quality"], reverse=True)
 
     summary = {
-        "total":       len(filtered),
-        "breakouts":   sum(1 for x in filtered if x["ribbon_signal"] == "COMPRESSION_BREAKOUT"),
-        "aligned":     sum(1 for x in filtered if x["ribbon_signal"] == "COMPRESSION_ALIGNED"),
-        "stacks":      sum(1 for x in filtered if x["bullish_stack"]),
-        "compression": sum(1 for x in filtered if x["ribbon_compression"] != "NONE"),
-        "bearish":     sum(1 for x in filtered if x["bearish_stack"]),
+        "total":       len(all_items),
+        "from_main":   sum(1 for x in all_items if x["source"] == "main_scan"),
+        "from_ribbon": sum(1 for x in all_items if x["source"] == "ribbon_pass"),
+        "breakouts":   sum(1 for x in all_items if x["ribbon_signal"] == "COMPRESSION_BREAKOUT"),
+        "aligned":     sum(1 for x in all_items if x["ribbon_signal"] == "COMPRESSION_ALIGNED"),
+        "stacks":      sum(1 for x in all_items if x.get("bullish_stack")),
+        "compression": sum(1 for x in all_items if x.get("ribbon_compression") != "NONE"),
+        "bearish":     sum(1 for x in all_items if x.get("bearish_stack")),
     }
 
     return {
-        "results":    filtered,
-        "count":      len(filtered),
+        "results":    all_items,
+        "count":      len(all_items),
         "summary":    summary,
-        "scanned_at": scan.get("scanned_at"),
+        "scanned_at": scan.get("scanned_at") if scan else None,
         "filter": {
             "mode":         mode,
             "max_spread":   max_spread,
