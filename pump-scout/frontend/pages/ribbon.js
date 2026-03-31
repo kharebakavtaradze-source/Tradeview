@@ -192,7 +192,15 @@ function TickerCard({ ticker, apiUrl }) {
           <span className={styles.price}>${ticker.price?.toFixed(2)}</span>
         </div>
         <div className={styles.badgesBlock}>
-          {ticker.tier && (
+          {ticker.source === 'ribbon_pass' && (
+            <span
+              className={styles.sourceBadge}
+              title="Найден EMA compression pass (без volume аномалии)"
+            >
+              🔍 EMA scan
+            </span>
+          )}
+          {ticker.tier && ticker.source !== 'ribbon_pass' && (
             <span className={styles.tierBadge} style={{ borderColor: tierColor, color: tierColor }}>
               {ticker.tier}
             </span>
@@ -338,6 +346,11 @@ export default function RibbonPage() {
             <span className={styles.summaryIcon}>⚠️</span>
             <span className={styles.summaryNum}>{summary.bearish ?? 0}</span>
             <span className={styles.summaryLabel}>Медвежьи</span>
+          </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryIcon}>🔍</span>
+            <span className={styles.summaryNum}>{summary.from_ribbon ?? 0}</span>
+            <span className={styles.summaryLabel}>EMA pass</span>
           </div>
         </div>
 
