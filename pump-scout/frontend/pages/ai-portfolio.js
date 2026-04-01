@@ -153,6 +153,19 @@ export default function AIPortfolio() {
           </div>
         )}
 
+        {/* AI decision reasoning (portfolio_note from last run) */}
+        {state?.decisions?.portfolio_note && (
+          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '10px 14px', marginBottom: 16, fontSize: 11, color: 'rgba(255,255,255,0.7)', lineHeight: 1.6 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4 }}>🤖 AI REASONING</div>
+            {state.decisions.portfolio_note}
+            {state.decisions.no_trade_reason && (
+              <div style={{ marginTop: 4, fontSize: 10, color: '#ffa500' }}>
+                Cause: {state.decisions.no_trade_reason}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Open positions */}
         <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.05em' }}>
           OPEN POSITIONS ({positions.length})
@@ -177,7 +190,7 @@ export default function AIPortfolio() {
                 <span>Day {p.days_held}</span>
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4, fontStyle: 'italic' }}>
-                {p.reason?.slice(0, 80)}{p.reason?.length > 80 ? '…' : ''}
+                {p.reason || '—'}
               </div>
             </div>
           ))}

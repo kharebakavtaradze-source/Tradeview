@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from scanner.runner import run_scan
 from database import save_scan, rotate_old_data
 from hype_monitor.monitor import run_hype_monitor
-from journal_autoclose import auto_close_journal
+from journal_autoclose import auto_close_journal, update_journal_prices_intraday
 from ai_portfolio import ai_portfolio_decisions, generate_daily_report
 from scan_candidates import fill_candidate_prices
 from eod_log import run_eod_log
@@ -206,6 +206,21 @@ def start_scheduler():
         ),
         id="price_alerts_30min",
         name="Price Alerts Near Stop/Target (every 30min)",
+        replace_existing=True,
+        misfire_grace_time=120,
+    )
+
+    # Every 5 min, 9:30–16:00 ET — persist live prices to journal DB
+    scheduler.add_job(
+        update_journal_prices_intraday,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-15",
+            minute="*/5",
+            timezone=EASTERN_TZ,
+        ),
+        id="journal_live_prices_5min",
+        name="Journal Live Price Update (every 5min, market hours)",
         replace_existing=True,
         misfire_grace_time=120,
     )

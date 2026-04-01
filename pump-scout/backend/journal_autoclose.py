@@ -120,6 +120,49 @@ Return this JSON:
         return ""
 
 
+async def update_journal_prices_intraday():
+    """
+    Runs every 5 minutes during market hours (9:30–16:00 ET).
+    Fetches live prices for all open journal entries and persists
+    current_price + current_pct to DB so the journal shows live P&L
+    even between page loads and outside market hours.
+    """
+    entries = await get_open_journal_entries()
+    if not entries:
+        return
+
+    symbols = list({e["symbol"] for e in entries})
+    entry_map = {e["symbol"]: e for e in entries}
+
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url,
+                params={"symbols": ",".join(symbols), "fields": "regularMarketPrice"},
+                headers=YAHOO_HEADERS,
+            )
+            if resp.status_code != 200:
+                return
+            quotes = resp.json().get("quoteResponse", {}).get("result", [])
+            for q in quotes:
+                sym = q.get("symbol")
+                price = q.get("regularMarketPrice")
+                if not sym or not price:
+                    continue
+                entry = entry_map.get(sym)
+                if not entry:
+                    continue
+                entry_price = entry.get("entry_price", 0)
+                pct = round((price - entry_price) / entry_price * 100, 2) if entry_price else 0
+                await update_journal_entry(entry["id"], {
+                    "current_price": round(price, 4),
+                    "current_pct": pct,
+                })
+    except Exception as e:
+        logger.warning(f"Intraday price update failed: {e}")
+
+
 async def auto_close_journal():
     """
     Runs at 16:05 EST weekdays.
@@ -307,7 +350,7 @@ async def get_cumulative_insights() -> dict:
     stats = await get_journal_stats()
     wins = [e for e in closed if e["outcome"] == "win"]
     losses = [e for e in closed if e["outcome"] == "loss"]
-    avg_return = sum(e.get("gain_pct") or 0 for e in closed) / len(closed)
+    avg_return = sum(e.get("final_pnl_pct") or e.get("gain_pct") or 0 for e in closed) / len(closed)
     avg_alpha = sum(e.get("alpha_pct") or 0 for e in closed) / len(closed)
     avg_hold = sum(e.get("days_held") or 0 for e in closed) / len(closed)
     avg_max_gain_day = sum(e.get("max_gain_day") or 0 for e in closed) / len(closed)
