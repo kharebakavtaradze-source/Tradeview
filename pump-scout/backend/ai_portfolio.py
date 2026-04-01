@@ -20,6 +20,7 @@ from database import (
     insert_ai_position,
     update_ai_position_price,
     update_portfolio_state,
+    update_portfolio_value_from_positions,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,11 +104,100 @@ def _atr_position_size(portfolio_value: float, entry: float, atr: float,
     return round(max(50.0, min(300.0, size)), 2)
 
 
+async def update_ai_positions_intraday():
+    """
+    Runs every 5 minutes during market hours (9:30–16:00 ET).
+    - Batch-fetches live prices for all open AI positions
+    - Updates current_price, pnl_pct, max_gain_pct, max_loss_pct, days_held
+    - Auto-closes positions that hit ATR stop or target price
+    - Force-sells CEF/ETN positions (should not be in portfolio)
+    - Recalculates total portfolio value
+    """
+    from scanner.sector_map import NON_STOCK_SECURITIES
+
+    positions = await get_open_ai_positions()
+    if not positions:
+        return
+
+    symbols = [p["symbol"] for p in positions]
+    symbol_to_pos = {p["symbol"]: p for p in positions}
+
+    # Batch fetch all prices at once
+    prices: dict[str, float] = {}
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                url,
+                params={"symbols": ",".join(symbols), "fields": "regularMarketPrice"},
+                headers=YAHOO_HEADERS,
+            )
+            if resp.status_code == 200:
+                for q in resp.json().get("quoteResponse", {}).get("result", []):
+                    sym = q.get("symbol")
+                    price = q.get("regularMarketPrice")
+                    if sym and price:
+                        prices[sym] = price
+    except Exception as e:
+        logger.warning(f"Intraday AI price batch fetch failed: {e}")
+        return
+
+    state = await get_portfolio_state()
+    cash = state["cash"]
+
+    for pos in positions:
+        sym = pos["symbol"]
+        price = prices.get(sym)
+        if not price:
+            continue
+
+        # Force-sell CEFs/ETNs that slipped through
+        if sym in NON_STOCK_SECURITIES:
+            closed = await close_ai_position(sym, price, "CEF/ETN filter — not a stock",
+                                             exit_reason="CEF_FILTER")
+            if closed:
+                cash += closed.get("current_value", 0)
+                logger.info(f"AI portfolio: force-sold CEF/ETN {sym} at ${price:.2f}")
+            continue
+
+        entry = pos.get("entry_price") or 0
+        shares = pos.get("shares") or 0
+        atr_stop = pos.get("stop_loss")
+        target = pos.get("target_price")
+
+        # Auto-close on ATR stop hit
+        if atr_stop and price <= atr_stop:
+            closed = await close_ai_position(sym, price, f"ATR stop hit ${atr_stop:.2f}",
+                                             exit_reason="ATR_STOP")
+            if closed:
+                cash += price * shares
+                logger.info(f"AI portfolio: {sym} ATR-stopped at ${price:.2f} "
+                            f"(stop=${atr_stop:.2f})")
+            continue
+
+        # Auto-close on target hit
+        if target and price >= target:
+            closed = await close_ai_position(sym, price, f"Target hit ${target:.2f}",
+                                             exit_reason="TARGET_HIT")
+            if closed:
+                cash += price * shares
+                logger.info(f"AI portfolio: {sym} target hit at ${price:.2f}")
+            continue
+
+        # Update price, P&L, days_held
+        await update_ai_position_price(pos["id"], price)
+
+    # Recalculate portfolio value with updated prices
+    await update_portfolio_value_from_positions()
+    logger.debug(f"AI intraday update done: {len(prices)} prices fetched")
+
+
 async def ai_portfolio_decisions():
     """
-    Runs at 9:00 AM ET weekdays.
-    AI reviews scan results and open positions, makes BUY/SELL/HOLD/SKIP decisions.
+    Runs at 9:45 AM ET weekdays.
+    AI reviews scan results and open positions, makes BUY/SELL/HOLD decisions.
     Hard candidate filter runs before AI call to prevent bad trades.
+    CEF/ETN positions are force-sold before AI runs.
     """
     logger.info("AI portfolio decisions starting...")
 
@@ -118,6 +208,18 @@ async def ai_portfolio_decisions():
 
     state = await get_portfolio_state()
     cash = state["cash"]
+    open_positions = await get_open_ai_positions()
+
+    # ── Force-sell any CEF/ETN positions immediately ──────────────────────────
+    from scanner.sector_map import NON_STOCK_SECURITIES
+    for pos in list(open_positions):
+        if pos["symbol"] in NON_STOCK_SECURITIES:
+            price = await _fetch_price(pos["symbol"]) or pos.get("entry_price", 0)
+            closed = await close_ai_position(pos["symbol"], price,
+                                             "CEF/ETN — not a stock", exit_reason="CEF_FILTER")
+            if closed:
+                cash += price * (pos.get("shares") or 0)
+                logger.warning(f"Force-sold CEF/ETN {pos['symbol']} at ${price:.2f}")
     open_positions = await get_open_ai_positions()
 
     # Get latest scan results
@@ -160,20 +262,37 @@ async def ai_portfolio_decisions():
     watchlist_entries = await get_open_journal_entries()
     watchlist_symbols = [e["symbol"] for e in watchlist_entries]
 
-    # Build portfolio context with live prices
+    # Build portfolio context with live prices + risk metrics
     portfolio_ctx = []
     for pos in open_positions:
         price = await _fetch_price(pos["symbol"])
-        if price:
-            pnl = (price - pos["entry_price"]) / pos["entry_price"] * 100 if pos["entry_price"] else 0
-            portfolio_ctx.append({
-                "symbol": pos["symbol"],
-                "entry_price": pos["entry_price"],
-                "current_price": price,
-                "pnl_pct": round(pnl, 2),
-                "days_held": pos["days_held"],
-                "invested_usd": pos["invested_usd"],
-            })
+        if not price:
+            price = pos.get("current_price") or pos.get("entry_price") or 0
+        if price and pos.get("entry_price"):
+            await update_ai_position_price(pos["id"], price)
+        entry = pos.get("entry_price") or 0
+        pnl = round((price - entry) / entry * 100, 2) if entry else 0
+        stop = pos.get("stop_loss")
+        target = pos.get("target_price")
+        dist_to_stop = round((price - stop) / stop * 100, 1) if stop and price else None
+        dist_to_target = round((target - price) / price * 100, 1) if target and price else None
+        risk_flag = "NEAR_STOP" if dist_to_stop is not None and dist_to_stop < 3 else (
+                    "OVER_TARGET" if dist_to_target is not None and dist_to_target <= 0 else "OK")
+        portfolio_ctx.append({
+            "symbol": pos["symbol"],
+            "entry_price": entry,
+            "current_price": price,
+            "pnl_pct": pnl,
+            "max_gain_pct": pos.get("max_gain_pct", 0),
+            "max_loss_pct": pos.get("max_loss_pct", 0),
+            "days_held": pos.get("days_held", 0),
+            "invested_usd": pos.get("invested_usd", 0),
+            "stop_loss": stop,
+            "target_price": target,
+            "dist_to_stop_pct": dist_to_stop,
+            "dist_to_target_pct": dist_to_target,
+            "risk_flag": risk_flag,
+        })
 
     scan_ctx = [
         {
@@ -187,6 +306,8 @@ async def ai_portfolio_decisions():
             "vol_ratio": r.get("indicators", {}).get("anomaly_ratio", 0),
             "atr": r.get("indicators", {}).get("atr", 0),
             "hype": (r.get("hype_score") or {}).get("hype_index", 0),
+            "rs_score": r.get("indicators", {}).get("rs_score", 0),
+            "sector": r.get("sector", ""),
         }
         for r in qualified[:10]
     ]
@@ -206,58 +327,51 @@ async def ai_portfolio_decisions():
     regime_name = regime_ctx.get("regime", "NEUTRAL")
     regime_rec = regime_ctx.get("recommendation", "")
 
-    sector_summary = {
-        s: {"avg_score": v.get("avg_score"), "leader": v.get("leader_symbol"), "momentum_pct": v.get("momentum_pct")}
-        for s, v in sector_strength_ctx.items()
-    }
+    # Portfolio risk summary
+    losing_positions = [p for p in portfolio_ctx if p["pnl_pct"] < -3]
+    near_stop_positions = [p for p in portfolio_ctx if p.get("risk_flag") == "NEAR_STOP"]
+    total_invested = sum(p["invested_usd"] for p in portfolio_ctx)
+    portfolio_drawdown = round((state["total_value"] - 1000) / 1000 * 100, 2)
 
     prompt = f"""You are an AI trader managing a $1000 paper trading portfolio.
-Your goal is to maximize returns using Wyckoff accumulation signals.
+Your goal is to maximize risk-adjusted returns using Wyckoff accumulation signals.
 
 CURRENT DATE: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
-CASH AVAILABLE: ${cash:.2f}
-TOTAL PORTFOLIO VALUE: ${state['total_value']:.2f}
+CASH: ${cash:.2f} | INVESTED: ${total_invested:.2f} | TOTAL VALUE: ${state['total_value']:.2f}
+PORTFOLIO P&L: {portfolio_drawdown:+.1f}%
 
 MARKET REGIME: {regime_name}
 Recommendation: {regime_rec}
+Strong sectors: {', '.join(strong_sectors) if strong_sectors else 'none'}
+Weak sectors: {', '.join(weak_sectors) if weak_sectors else 'none'}
 
-SECTOR STRENGTH TODAY:
-{json.dumps(sector_summary, indent=2)}
+Strong sectors: {', '.join(strong_sectors) if strong_sectors else 'none'}
+Weak sectors: {', '.join(weak_sectors) if weak_sectors else 'none'}
 
-Strong sectors: {', '.join(strong_sectors) if strong_sectors else 'All sectors active'}
-Weak sectors: {', '.join(weak_sectors) if weak_sectors else 'None'}
-
-OPEN POSITIONS:
+OPEN POSITIONS ({len(portfolio_ctx)} total, {len(near_stop_positions)} near stop, {len(losing_positions)} losing >3%):
 {json.dumps(portfolio_ctx, indent=2)}
 
-PRE-QUALIFIED CANDIDATES (already filtered for quality):
+PRE-QUALIFIED CANDIDATES (hard-filtered, only quality setups):
 {json.dumps(scan_ctx, indent=2)}
 
-USER WATCHLIST (high-priority context):
+USER WATCHLIST (manual trades for context):
 {watchlist_symbols}
 
-STRICT BUYING RULES (cannot be overridden):
-1. Only buy FIRE tier OR ARM with CMF > 70%ile (pre-filtered already)
-2. Never buy if RSI > 65 (overbought)
-3. Never buy if hype > 40 (retail already in)
-4. Never buy if Wyckoff = NONE or DISTRIBUTION
-5. Minimum R/R = 2:1 (use ATR * 1.5 for stop, ATR * 3.75 for target)
-6. If no candidates meet ALL rules → HOLD CASH, write reason in portfolio_note
-7. Never chase: skip if price already moved >5% today
+RISK FLAGS:
+- Near stop (within 3%): {[p['symbol'] for p in near_stop_positions] or 'none'}
+- Losing >3%: {[p['symbol'] for p in losing_positions] or 'none'}
+- Slots used: {len(open_positions)}/5
 
-POSITION SIZING:
-- Risk max 2% of portfolio per trade using ATR
-- position_size = (portfolio_value * 0.02) / (atr * 1.5) * entry_price
-- Cap at $300 max, min $50
+STRICT RULES (not negotiable):
+1. Only buy FIRE tier OR ARM with CMF > 70%ile (pre-filtered)
+2. Never buy RSI > 65, hype > 40, Wyckoff = NONE/DISTRIBUTION
+3. R/R minimum 2.5:1: stop = entry - (ATR × 1.5), target = entry + (ATR × 3.75)
+4. Risk 2% of portfolio per trade via ATR sizing (min $50, max $300)
+5. Max 5 positions — prefer cash in RISK_OFF/FEAR regime
+6. SELL if: held > 14d without 10% gain, hype > 70, dist_to_stop < 3%, Wyckoff→DISTRIBUTION
+7. Never chase: skip if moved >5% today, sector in weak_sectors list
 
-WHEN TO SELL:
-- Position held > 14 days without 10% progress → SELL
-- Hype crosses 70 → SELL (retail is in)
-- Wyckoff changes to DISTRIBUTION → SELL
-
-CASH IS A POSITION:
-Maximum 5 open positions (currently {len(open_positions)}).
-Prefer quality over quantity. Hold cash if uncertain.
+For each BUY include exact stop_loss and target_price in the JSON.
 
 Respond in Russian. Return JSON only:
 {{
@@ -266,17 +380,18 @@ Respond in Russian. Return JSON only:
       "symbol": "TICK",
       "action": "BUY",
       "price": 13.47,
-      "amount_usd": 200,
-      "reason": "краткое объяснение на русском"
+      "stop_loss": 12.20,
+      "target_price": 18.50,
+      "reason": "подробное объяснение: почему этот тикер, что подтверждает сигнал, ключевые метрики"
     }},
     {{
       "symbol": "TICK2",
       "action": "SELL",
-      "price": 15.20,
-      "reason": "краткое объяснение"
+      "reason": "почему продаём: стоп пробит / цель достигнута / сигнал ослаб / держали слишком долго"
     }}
   ],
-  "portfolio_note": "общий комментарий о состоянии портфеля"
+  "risk_assessment": "оценка рисков портфеля одним предложением",
+  "portfolio_note": "общий комментарий: рыночный контекст и логика решений"
 }}"""
 
     try:
@@ -321,6 +436,14 @@ Respond in Russian. Return JSON only:
             if amount < 50:
                 continue
 
+            # Compute stop/target from AI decision (preferred) or ATR fallback
+            stop_loss = d.get("stop_loss")
+            target_price = d.get("target_price")
+            if not stop_loss and atr:
+                stop_loss = round(price - atr * 1.5, 4)
+            if not target_price and atr:
+                target_price = round(price + atr * 3.75, 4)
+
             shares = amount / price
             await insert_ai_position(
                 symbol=symbol,
@@ -329,6 +452,8 @@ Respond in Russian. Return JSON only:
                 invested_usd=amount,
                 reason=reason,
                 scan_data={**r_data, "atr": atr},
+                stop_loss=stop_loss,
+                target_price=target_price,
             )
             cash -= amount
             executed_buys += 1
@@ -340,7 +465,7 @@ Respond in Russian. Return JSON only:
                 price = await _fetch_price(symbol) or 0
             if price <= 0:
                 continue
-            closed = await close_ai_position(symbol, price, reason)
+            closed = await close_ai_position(symbol, price, reason, exit_reason="AI_SELL")
             if closed:
                 cash += closed.get("current_value", 0)
                 executed_sells += 1
@@ -446,14 +571,14 @@ CLOSED TODAY:
 Return JSON:
 {{
   "summary": "2-3 предложения о состоянии портфеля",
-  "best_position": "символ и почему держать",
+  "best_position": "символ и почему держать или null",
   "concern": "что беспокоит или null",
   "tomorrow_plan": "что планирую делать завтра",
-  "portfolio_health": "STRONG"
+  "portfolio_health": "STRONG|NEUTRAL|WEAK"
 }}"""
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key, timeout=20.0)
+        client = anthropic.AsyncAnthropic(api_key=api_key, timeout=25.0)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -463,7 +588,10 @@ Return JSON:
         report = json.loads(text)
     except Exception as e:
         logger.error(f"Daily report AI call failed: {e}")
-        report = {"summary": "Report generation failed.", "portfolio_health": "NEUTRAL"}
+        report = {
+            "summary": f"Не удалось сгенерировать отчёт: {e}",
+            "portfolio_health": "NEUTRAL",
+        }
 
     await update_portfolio_state(
         cash=state["cash"],

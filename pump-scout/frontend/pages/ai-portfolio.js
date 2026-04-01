@@ -6,24 +6,66 @@ import styles from '../styles/Journal.module.css';
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 function HealthBadge({ health }) {
-  const colors = {
+  const cfg = {
     STRONG: { bg: 'rgba(0,200,100,0.12)', color: '#00c864', border: 'rgba(0,200,100,0.3)' },
     NEUTRAL: { bg: 'rgba(255,200,0,0.1)', color: '#ffc800', border: 'rgba(255,200,0,0.3)' },
     WEAK: { bg: 'rgba(255,68,68,0.1)', color: '#ff4444', border: 'rgba(255,68,68,0.3)' },
   }[health] || { bg: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', border: 'rgba(255,255,255,0.1)' };
   return (
-    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 3, background: colors.bg, color: colors.color, border: `1px solid ${colors.border}` }}>
+    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 3, background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}>
       {health || '—'}
     </span>
   );
 }
 
-function PnlBadge({ pct }) {
+function PnlBadge({ pct, size = 14 }) {
   if (pct == null) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
   return (
-    <span style={{ fontWeight: 700, color: pct >= 0 ? 'var(--green)' : 'var(--red)' }}>
-      {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
+    <span style={{ fontWeight: 700, fontSize: size, color: pct >= 0 ? 'var(--green)' : 'var(--red)' }}>
+      {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
     </span>
+  );
+}
+
+function RiskBadge({ pos }) {
+  const pnl = pos.pnl_pct || 0;
+  const stop = pos.stop_loss;
+  const price = pos.current_price || pos.entry_price;
+  if (stop && price) {
+    const distToStop = ((price - stop) / stop * 100);
+    if (distToStop < 2) return <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 2, background: 'rgba(255,68,68,0.2)', color: 'var(--red)' }}>⚠️ NEAR STOP</span>;
+  }
+  if (pnl >= 10) return <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 2, background: 'rgba(0,200,100,0.15)', color: 'var(--green)' }}>🎯 NEAR TARGET</span>;
+  if (pnl <= -5) return <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 2, background: 'rgba(255,68,68,0.12)', color: '#ff6666' }}>📉 LOSING</span>;
+  return null;
+}
+
+function PositionProgressBar({ pos }) {
+  const stop = pos.stop_loss;
+  const target = pos.target_price;
+  const price = pos.current_price || pos.entry_price;
+  if (!stop || !target || !price) return null;
+  const range = target - stop;
+  if (range <= 0) return null;
+  const progress = Math.max(0, Math.min(100, (price - stop) / range * 100));
+  const pnl = pos.pnl_pct || 0;
+  return (
+    <div style={{ margin: '6px 0 4px' }}>
+      <div style={{ height: 4, background: 'rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{
+          height: '100%', width: `${progress}%`, borderRadius: 2,
+          background: pnl >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
+          transition: 'width 0.3s',
+        }} />
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginTop: 2, color: 'var(--text-muted)' }}>
+        <span style={{ color: 'var(--red)' }}>Stop ${stop.toFixed(2)}</span>
+        <span style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
+          {price.toFixed(2)} ({pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}%)
+        </span>
+        <span style={{ color: 'var(--green)' }}>Target ${target.toFixed(2)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -62,19 +104,39 @@ export default function AIPortfolio() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-refresh every 60s during market hours
+  useEffect(() => {
+    const interval = setInterval(load, 60_000);
+    return () => clearInterval(interval);
+  }, [load]);
+
   async function runNow() {
     setRunning(true);
     await fetch(`${API_URL}/api/ai-portfolio/run-now`, { method: 'POST' });
-    setTimeout(async () => { await load(); setRunning(false); }, 10000);
+    setTimeout(async () => { await load(); setRunning(false); }, 12000);
   }
 
-  const closedPositions = (history.positions || []).filter(p => p.status === 'CLOSED').slice(0, 10);
+  const allPositions = history.positions || [];
+  const closedPositions = allPositions.filter(p => p.status === 'CLOSED').slice(0, 15);
   const portfolioHistory = history.history || [];
 
   const totalValue = state?.total_value || 1000;
   const totalPnl = state?.total_pnl_pct || 0;
   const cash = state?.cash || 0;
   const invested = state?.invested || 0;
+
+  // AI portfolio closed trade stats
+  const closedPnls = closedPositions.map(p => p.pnl_pct || 0);
+  const aiWins = closedPositions.filter(p => (p.pnl_pct || 0) > 0);
+  const aiLosses = closedPositions.filter(p => (p.pnl_pct || 0) <= 0);
+  const aiWinRate = closedPositions.length > 0 ? Math.round(aiWins.length / closedPositions.length * 100) : null;
+  const aiAvgPnl = closedPnls.length > 0 ? (closedPnls.reduce((a, b) => a + b, 0) / closedPnls.length).toFixed(1) : null;
+
+  // Risk summary
+  const nearStopCount = positions.filter(p => {
+    const stop = p.stop_loss; const price = p.current_price || p.entry_price;
+    return stop && price && ((price - stop) / stop * 100) < 2;
+  }).length;
 
   return (
     <>
@@ -99,29 +161,36 @@ export default function AIPortfolio() {
 
         {/* Portfolio value card */}
         {state && (
-          <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '16px 20px', marginBottom: 16 }}>
+          <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '16px 20px', marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>PORTFOLIO VALUE</div>
                 <div style={{ fontSize: 28, fontWeight: 700 }}>${totalValue.toFixed(2)}</div>
               </div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>
-                <PnlBadge pct={totalPnl} />
+                <PnlBadge pct={totalPnl} size={20} />
               </div>
               {report?.report && <HealthBadge health={report.report.portfolio_health} />}
+              {nearStopCount > 0 && (
+                <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, background: 'rgba(255,68,68,0.15)', color: 'var(--red)', fontWeight: 700 }}>
+                  ⚠️ {nearStopCount} near stop
+                </span>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: 20, marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', gap: 20, marginTop: 8, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
               <span>💵 Cash: <b style={{ color: 'var(--text-primary)' }}>${cash.toFixed(2)}</b></span>
               <span>📈 Invested: <b style={{ color: 'var(--text-primary)' }}>${invested.toFixed(2)}</b></span>
               <span>Started: <b>$1,000.00</b></span>
+              {aiWinRate !== null && <span>AI WR: <b style={{ color: aiWinRate >= 50 ? 'var(--green)' : 'var(--red)' }}>{aiWinRate}%</b> ({aiWins.length}W/{aiLosses.length}L)</span>}
+              {aiAvgPnl !== null && <span>Avg trade: <b style={{ color: parseFloat(aiAvgPnl) >= 0 ? 'var(--green)' : 'var(--red)' }}>{parseFloat(aiAvgPnl) >= 0 ? '+' : ''}{aiAvgPnl}%</b></span>}
             </div>
 
-            {/* Value history bar */}
+            {/* Value history sparkline */}
             {portfolioHistory.length > 1 && (
               <div style={{ marginTop: 10, display: 'flex', gap: 2, alignItems: 'flex-end', height: 32 }}>
                 {portfolioHistory.map((h, i) => {
                   const pct = (h.total_value - 1000) / 1000;
-                  const height = Math.max(4, Math.abs(pct) * 200 + 4);
+                  const height = Math.max(4, Math.abs(pct) * 300 + 4);
                   return (
                     <div key={i} title={`${h.date}: $${h.total_value.toFixed(0)} (${h.total_pnl_pct >= 0 ? '+' : ''}${h.total_pnl_pct.toFixed(1)}%)`}
                       style={{
@@ -138,10 +207,10 @@ export default function AIPortfolio() {
 
         {/* Daily report */}
         {report?.report && (
-          <div style={{ background: 'rgba(100,200,255,0.04)', border: '1px solid rgba(100,200,255,0.12)', borderRadius: 6, padding: '12px 16px', marginBottom: 16, fontSize: 12 }}>
+          <div style={{ background: 'rgba(100,200,255,0.04)', border: '1px solid rgba(100,200,255,0.12)', borderRadius: 6, padding: '12px 16px', marginBottom: 12, fontSize: 12 }}>
             <div style={{ fontWeight: 700, color: 'var(--cyan)', marginBottom: 6 }}>📋 Today's Report</div>
-            <div style={{ lineHeight: 1.5 }}>{report.report.summary}</div>
-            {report.report.best_position && (
+            <div style={{ lineHeight: 1.6 }}>{report.report.summary}</div>
+            {report.report.best_position && report.report.best_position !== 'null' && (
               <div style={{ marginTop: 6, color: 'var(--green)' }}>🏆 {report.report.best_position}</div>
             )}
             {report.report.concern && report.report.concern !== 'null' && (
@@ -153,14 +222,19 @@ export default function AIPortfolio() {
           </div>
         )}
 
-        {/* AI decision reasoning (portfolio_note from last run) */}
-        {state?.decisions?.portfolio_note && (
-          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '10px 14px', marginBottom: 16, fontSize: 11, color: 'rgba(255,255,255,0.7)', lineHeight: 1.6 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4 }}>🤖 AI REASONING</div>
-            {state.decisions.portfolio_note}
+        {/* AI decision reasoning */}
+        {state?.decisions && (state.decisions.portfolio_note || state.decisions.risk_assessment) && (
+          <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 6, padding: '10px 14px', marginBottom: 12, fontSize: 11, lineHeight: 1.6 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 5 }}>🤖 LAST AI DECISION</div>
+            {state.decisions.risk_assessment && (
+              <div style={{ color: '#ffa500', marginBottom: 4 }}>⚖️ {state.decisions.risk_assessment}</div>
+            )}
+            {state.decisions.portfolio_note && (
+              <div style={{ color: 'rgba(255,255,255,0.75)' }}>{state.decisions.portfolio_note}</div>
+            )}
             {state.decisions.no_trade_reason && (
-              <div style={{ marginTop: 4, fontSize: 10, color: '#ffa500' }}>
-                Cause: {state.decisions.no_trade_reason}
+              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>
+                Причина: {state.decisions.no_trade_reason}
               </div>
             )}
           </div>
@@ -168,58 +242,96 @@ export default function AIPortfolio() {
 
         {/* Open positions */}
         <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.05em' }}>
-          OPEN POSITIONS ({positions.length})
+          OPEN POSITIONS ({positions.length}/5)
         </div>
         {positions.length === 0 && !loading && (
-          <div className={styles.empty} style={{ marginBottom: 16 }}>No open positions. Click "Run Now" to let AI make decisions.</div>
+          <div className={styles.empty} style={{ marginBottom: 16 }}>
+            Нет открытых позиций. Нажмите "Run Now" для запуска AI-решений.
+          </div>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10, marginBottom: 20 }}>
-          {positions.map(p => (
-            <div key={p.id} style={{
-              background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
-              borderLeft: `3px solid ${(p.pnl_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)'}`,
-              borderRadius: 6, padding: '10px 12px',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{p.symbol}</span>
-                <PnlBadge pct={p.pnl_pct} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10, marginBottom: 20 }}>
+          {positions.map(p => {
+            const pnl = p.pnl_pct || 0;
+            const borderColor = pnl > 5 ? 'var(--green)' : pnl < -3 ? 'var(--red)' : 'rgba(255,255,255,0.15)';
+            return (
+              <div key={p.id} style={{
+                background: 'rgba(255,255,255,0.03)',
+                border: `1px solid rgba(255,255,255,0.08)`,
+                borderLeft: `3px solid ${borderColor}`,
+                borderRadius: 6, padding: '10px 12px',
+              }}>
+                {/* Header row */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>{p.symbol}</span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <RiskBadge pos={p} />
+                    <PnlBadge pct={pnl} size={14} />
+                  </div>
+                </div>
+
+                {/* Price row */}
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', gap: 10, marginBottom: 2, flexWrap: 'wrap' }}>
+                  <span>Entry <b style={{ color: 'var(--text-primary)' }}>${p.entry_price?.toFixed(2)}</b></span>
+                  {p.current_price && p.current_price !== p.entry_price && (
+                    <span>Now <b style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>${p.current_price?.toFixed(2)}</b></span>
+                  )}
+                  <span>Invested <b>${p.invested_usd?.toFixed(0)}</b></span>
+                  <span>Day <b>{p.days_held}</b></span>
+                </div>
+
+                {/* Peak/trough */}
+                {(p.max_gain_pct !== 0 || p.max_loss_pct !== 0) && (
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', display: 'flex', gap: 8, marginBottom: 2 }}>
+                    <span>Peak: <b style={{ color: 'var(--green)' }}>{p.max_gain_pct >= 0 ? '+' : ''}{(p.max_gain_pct || 0).toFixed(1)}%</b></span>
+                    <span>Low: <b style={{ color: 'var(--red)' }}>{(p.max_loss_pct || 0).toFixed(1)}%</b></span>
+                  </div>
+                )}
+
+                {/* Progress bar: stop → current → target */}
+                <PositionProgressBar pos={p} />
+
+                {/* Exit reason badge if any */}
+                {p.exit_reason && (
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 4 }}>
+                    Exit: {p.exit_reason}
+                  </div>
+                )}
+
+                {/* AI reasoning */}
+                {p.reason && (
+                  <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.5, fontStyle: 'italic', marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    {p.reason}
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', gap: 10, marginBottom: 6 }}>
-                <span>Entry ${p.entry_price?.toFixed(2)}</span>
-                <span>Invested ${p.invested_usd?.toFixed(0)}</span>
-                <span>Day {p.days_held}</span>
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4, fontStyle: 'italic' }}>
-                {p.reason || '—'}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Closed positions */}
         {closedPositions.length > 0 && (
           <>
             <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.05em' }}>
-              CLOSED POSITIONS (last 10)
+              CLOSED POSITIONS ({closedPositions.length})
             </div>
-            <div style={{ display: 'grid', gap: 6 }}>
+            <div style={{ display: 'grid', gap: 4, marginBottom: 20 }}>
               {closedPositions.map(p => (
                 <div key={p.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
-                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px',
+                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
+                  borderLeft: `3px solid ${(p.pnl_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)'}`,
                   borderRadius: 4, fontSize: 11,
                 }}>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, minWidth: 30,
-                    color: (p.pnl_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)',
-                  }}>
-                    {(p.pnl_pct || 0) >= 0 ? '✅' : '❌'}
-                  </span>
                   <span style={{ fontWeight: 700, minWidth: 50 }}>{p.symbol}</span>
-                  <PnlBadge pct={p.pnl_pct} />
-                  <span style={{ color: 'var(--text-muted)' }}>{p.days_held}d</span>
-                  <span style={{ color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {p.reason?.slice(0, 60)}
+                  <PnlBadge pct={p.pnl_pct} size={11} />
+                  <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{p.days_held}d</span>
+                  {p.exit_reason && (
+                    <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 2, background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>
+                      {p.exit_reason}
+                    </span>
+                  )}
+                  <span style={{ color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10 }}>
+                    {p.reason}
                   </span>
                 </div>
               ))}
@@ -227,11 +339,11 @@ export default function AIPortfolio() {
           </>
         )}
 
-        {/* Comparison: Your Journal vs AI Portfolio vs SPY */}
-        <div style={{ marginTop: 20, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '14px 16px' }}>
+        {/* Comparison: Journal vs AI vs SPY */}
+        <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '14px 16px' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', marginBottom: 12 }}>📊 YOUR JOURNAL vs AI PORTFOLIO vs SPY</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
-            {/* Your Journal */}
+            {/* Journal */}
             <div style={{ background: 'rgba(0,200,100,0.06)', border: '1px solid rgba(0,200,100,0.15)', borderRadius: 6, padding: '10px 12px' }}>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>📔 YOUR JOURNAL</div>
               {journalStats ? (
@@ -244,13 +356,13 @@ export default function AIPortfolio() {
                   </div>
                   {deepAnalytics?.alpha?.avg_alpha_vs_spy != null && (
                     <div style={{ fontSize: 10, marginTop: 2 }}>
-                      α vs SPY: <span style={{ color: deepAnalytics.alpha.avg_alpha_vs_spy >= 0 ? 'var(--cyan)' : 'var(--red)', fontWeight: 700 }}>
+                      α SPY: <b style={{ color: deepAnalytics.alpha.avg_alpha_vs_spy >= 0 ? 'var(--cyan)' : 'var(--red)' }}>
                         {deepAnalytics.alpha.avg_alpha_vs_spy >= 0 ? '+' : ''}{deepAnalytics.alpha.avg_alpha_vs_spy.toFixed(1)}%
-                      </span>
+                      </b>
                     </div>
                   )}
                 </>
-              ) : <div style={{ color: 'var(--text-muted)', fontSize: 10 }}>No data</div>}
+              ) : <div style={{ color: 'var(--text-muted)', fontSize: 10 }}>Нет закрытых сделок</div>}
             </div>
 
             {/* AI Portfolio */}
@@ -259,31 +371,30 @@ export default function AIPortfolio() {
               <div style={{ fontSize: 18, fontWeight: 700, color: totalPnl >= 0 ? 'var(--cyan)' : 'var(--red)' }}>
                 {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(1)}%
               </div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-                ${totalValue.toFixed(0)} value
-              </div>
-              <div style={{ fontSize: 10, marginTop: 2, color: 'var(--text-muted)' }}>
-                {positions.length} open pos.
-              </div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>${totalValue.toFixed(0)} value</div>
+              {aiWinRate !== null && (
+                <div style={{ fontSize: 10, marginTop: 2 }}>
+                  WR: <b style={{ color: aiWinRate >= 50 ? 'var(--green)' : 'var(--red)' }}>{aiWinRate}%</b> · {closedPositions.length} closed
+                </div>
+              )}
             </div>
 
-            {/* SPY baseline */}
+            {/* SPY */}
             <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '10px 12px' }}>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>📈 SPY (BASELINE)</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
-                Alpha shown in journal cards and analytics tab.
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.5 }}>
+                Альфа vs SPY показывается в карточках журнала и во вкладке Analytics.
               </div>
             </div>
           </div>
 
-          {/* Who's winning */}
-          {journalStats && (
+          {journalStats && journalStats.closed_trades > 0 && (
             <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
               {(journalStats.total_pnl_pct || 0) > totalPnl
-                ? <span>🏆 <b style={{ color: 'var(--green)' }}>Your journal</b> is beating the AI portfolio by <b>{((journalStats.total_pnl_pct || 0) - totalPnl).toFixed(1)}%</b></span>
+                ? <span>🏆 <b style={{ color: 'var(--green)' }}>Ваш журнал</b> опережает AI портфель на <b>{((journalStats.total_pnl_pct || 0) - totalPnl).toFixed(1)}%</b></span>
                 : (journalStats.total_pnl_pct || 0) < totalPnl
-                ? <span>🤖 <b style={{ color: 'var(--cyan)' }}>AI portfolio</b> is ahead of your journal by <b>{(totalPnl - (journalStats.total_pnl_pct || 0)).toFixed(1)}%</b></span>
-                : <span>Tied between journal and AI portfolio.</span>
+                ? <span>🤖 <b style={{ color: 'var(--cyan)' }}>AI портфель</b> опережает ваш журнал на <b>{(totalPnl - (journalStats.total_pnl_pct || 0)).toFixed(1)}%</b></span>
+                : <span>Ничья между журналом и AI портфелем.</span>
               }
             </div>
           )}
