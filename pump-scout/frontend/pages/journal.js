@@ -136,10 +136,10 @@ export default function Journal() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Poll live prices every 60s during market hours
+  // Load live prices on mount always; poll every 60s only during market hours
   useEffect(() => {
-    if (!isMarketHours()) return;
     loadLivePrices();
+    if (!isMarketHours()) return;
     const interval = setInterval(loadLivePrices, 60_000);
     return () => clearInterval(interval);
   }, [loadLivePrices]);
@@ -228,27 +228,35 @@ export default function Journal() {
               <div className={styles.statValue}>{stats.total_trades}</div>
               <div className={styles.statMeta}>{openCount} open · {stats.closed_trades} closed</div>
             </div>
-            <div className={styles.statCard}>
-              <div className={styles.statLabel}>WIN RATE</div>
-              <div className={`${styles.statValue} ${stats.win_rate_pct >= 50 ? styles.win : styles.neutral}`}>
-                {stats.win_rate_pct}%
+            {stats.closed_trades === 0 ? (
+              <div className={styles.statCard} style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+                Нет закрытых сделок — закройте позицию чтобы увидеть статистику
               </div>
-              <div className={styles.statMeta}>{winCount}W / {lossCount}L</div>
-            </div>
-            <div className={styles.statCard}>
-              <div className={styles.statLabel}>AVG WIN</div>
-              <div className={`${styles.statValue} ${styles.win}`}>{stats.avg_gain_winners > 0 ? '+' : ''}{stats.avg_gain_winners}%</div>
-            </div>
-            <div className={styles.statCard}>
-              <div className={styles.statLabel}>AVG LOSS</div>
-              <div className={`${styles.statValue} ${styles.loss}`}>{(stats.avg_loss_losers || 0).toFixed(1)}%</div>
-            </div>
-            <div className={styles.statCard}>
-              <div className={styles.statLabel}>TOTAL PnL</div>
-              <div className={`${styles.statValue} ${stats.total_pnl_pct >= 0 ? styles.win : styles.loss}`}>
-                {stats.total_pnl_pct >= 0 ? '+' : ''}{stats.total_pnl_pct}%
-              </div>
-            </div>
+            ) : (
+              <>
+                <div className={styles.statCard}>
+                  <div className={styles.statLabel}>WIN RATE</div>
+                  <div className={`${styles.statValue} ${stats.win_rate_pct >= 50 ? styles.win : styles.neutral}`}>
+                    {stats.win_rate_pct}%
+                  </div>
+                  <div className={styles.statMeta}>{winCount}W / {lossCount}L</div>
+                </div>
+                <div className={styles.statCard}>
+                  <div className={styles.statLabel}>AVG WIN</div>
+                  <div className={`${styles.statValue} ${styles.win}`}>{stats.avg_gain_winners > 0 ? '+' : ''}{stats.avg_gain_winners}%</div>
+                </div>
+                <div className={styles.statCard}>
+                  <div className={styles.statLabel}>AVG LOSS</div>
+                  <div className={`${styles.statValue} ${styles.loss}`}>{(stats.avg_loss_losers || 0).toFixed(1)}%</div>
+                </div>
+                <div className={styles.statCard}>
+                  <div className={styles.statLabel}>TOTAL PnL</div>
+                  <div className={`${styles.statValue} ${stats.total_pnl_pct >= 0 ? styles.win : styles.loss}`}>
+                    {stats.total_pnl_pct >= 0 ? '+' : ''}{stats.total_pnl_pct}%
+                  </div>
+                </div>
+              </>
+            )}
             {stats.best_tier && (
               <div className={styles.statCard}>
                 <div className={styles.statLabel}>BEST TIER</div>
