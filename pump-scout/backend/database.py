@@ -204,9 +204,15 @@ class AIPortfolio(Base):
     shares = Column(Float, nullable=True)
     invested_usd = Column(Float, default=0)
     current_value = Column(Float, nullable=True)
+    current_price = Column(Float, nullable=True)     # latest fetched price
     pnl_usd = Column(Float, default=0)
     pnl_pct = Column(Float, default=0)
+    max_gain_pct = Column(Float, default=0)          # peak P&L since entry
+    max_loss_pct = Column(Float, default=0)          # worst P&L since entry
+    stop_loss = Column(Float, nullable=True)         # ATR-based stop price
+    target_price = Column(Float, nullable=True)      # ATR-based target price
     status = Column(String(10), default="OPEN")      # OPEN / CLOSED
+    exit_reason = Column(String(20), nullable=True)  # ATR_STOP / TARGET_HIT / AI_SELL / CEF_FILTER
     reason = Column(Text, nullable=True)
     scan_data = Column(Text, nullable=True)          # JSON
     exit_date = Column(DateTime, nullable=True)
@@ -354,6 +360,15 @@ _SCAN_CANDIDATE_MIGRATIONS = [
     ("downgrade_reason","VARCHAR(30)"),
 ]
 
+_AI_PORTFOLIO_MIGRATIONS = [
+    ("current_price",  "FLOAT"),
+    ("max_gain_pct",   "FLOAT DEFAULT 0"),
+    ("max_loss_pct",   "FLOAT DEFAULT 0"),
+    ("stop_loss",      "FLOAT"),
+    ("target_price",   "FLOAT"),
+    ("exit_reason",    "VARCHAR(20)"),
+]
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -392,12 +407,17 @@ async def _run_migrations(conn):
             try:
                 await conn.execute(text(f"ALTER TABLE journal ADD COLUMN {col} {coltype}"))
             except Exception:
-                pass  # column already exists
+                pass
         for col, coltype in _SCAN_CANDIDATE_MIGRATIONS:
             try:
                 await conn.execute(text(f"ALTER TABLE scan_candidates ADD COLUMN {col} {coltype}"))
             except Exception:
-                pass  # column already exists
+                pass
+        for col, coltype in _AI_PORTFOLIO_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE ai_portfolio ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -405,7 +425,7 @@ async def _run_migrations(conn):
                     f"ALTER TABLE journal ADD COLUMN IF NOT EXISTS {col} {coltype}"
                 ))
             except Exception as e:
-                logger.warning(f"Migration {col} failed (non-fatal): {e}")
+                logger.warning(f"Migration journal.{col} failed (non-fatal): {e}")
         for col, coltype in _SCAN_CANDIDATE_MIGRATIONS:
             try:
                 await conn.execute(text(
@@ -413,6 +433,13 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration scan_candidates.{col} failed (non-fatal): {e}")
+        for col, coltype in _AI_PORTFOLIO_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE ai_portfolio ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration ai_portfolio.{col} failed (non-fatal): {e}")
 
 
 async def init_db():
@@ -811,9 +838,15 @@ def _portfolio_to_dict(p: AIPortfolio) -> dict:
         "shares": p.shares,
         "invested_usd": p.invested_usd,
         "current_value": p.current_value,
+        "current_price": p.current_price,
         "pnl_usd": p.pnl_usd or 0,
         "pnl_pct": p.pnl_pct or 0,
+        "max_gain_pct": p.max_gain_pct or 0,
+        "max_loss_pct": p.max_loss_pct or 0,
+        "stop_loss": p.stop_loss,
+        "target_price": p.target_price,
         "status": p.status,
+        "exit_reason": p.exit_reason,
         "reason": p.reason,
         "days_held": p.days_held or 0,
         "scan_data": json.loads(p.scan_data) if p.scan_data else None,
@@ -887,7 +920,9 @@ async def get_all_ai_positions(limit: int = 50) -> List[dict]:
 
 async def insert_ai_position(symbol: str, entry_price: float, shares: float,
                               invested_usd: float, reason: str,
-                              scan_data: dict | None = None) -> dict:
+                              scan_data: dict | None = None,
+                              stop_loss: float | None = None,
+                              target_price: float | None = None) -> dict:
     async with get_session_factory()() as session:
         pos = AIPortfolio(
             symbol=symbol.upper(),
@@ -897,6 +932,9 @@ async def insert_ai_position(symbol: str, entry_price: float, shares: float,
             shares=shares,
             invested_usd=invested_usd,
             current_value=invested_usd,
+            current_price=entry_price,
+            stop_loss=stop_loss,
+            target_price=target_price,
             status="OPEN",
             reason=reason,
             scan_data=json.dumps(scan_data) if scan_data else None,
@@ -907,7 +945,8 @@ async def insert_ai_position(symbol: str, entry_price: float, shares: float,
     return _portfolio_to_dict(pos)
 
 
-async def close_ai_position(symbol: str, exit_price: float, reason: str) -> Optional[dict]:
+async def close_ai_position(symbol: str, exit_price: float, reason: str,
+                             exit_reason: str | None = None) -> Optional[dict]:
     async with get_session_factory()() as session:
         result = await session.execute(
             select(AIPortfolio).where(
@@ -921,6 +960,7 @@ async def close_ai_position(symbol: str, exit_price: float, reason: str) -> Opti
         pos.status = "CLOSED"
         pos.exit_price = exit_price
         pos.exit_date = datetime.utcnow()
+        pos.exit_reason = exit_reason or reason[:20] if reason else None
         if pos.entry_price and pos.entry_price > 0:
             pos.pnl_pct = round((exit_price - pos.entry_price) / pos.entry_price * 100, 2)
             pos.pnl_usd = round((exit_price - pos.entry_price) * (pos.shares or 0), 2)
@@ -936,13 +976,32 @@ async def update_ai_position_price(position_id: int, current_price: float) -> No
         pos = result.scalar_one_or_none()
         if not pos:
             return
+        pos.current_price = current_price
         pos.current_value = current_price * (pos.shares or 0)
         if pos.entry_price and pos.entry_price > 0:
-            pos.pnl_pct = round((current_price - pos.entry_price) / pos.entry_price * 100, 2)
+            pnl = round((current_price - pos.entry_price) / pos.entry_price * 100, 2)
+            pos.pnl_pct = pnl
             pos.pnl_usd = round((current_price - pos.entry_price) * (pos.shares or 0), 2)
+            pos.max_gain_pct = round(max(pos.max_gain_pct or 0, pnl), 2)
+            pos.max_loss_pct = round(min(pos.max_loss_pct or 0, pnl), 2)
         days = (datetime.utcnow() - pos.decision_date).days if pos.decision_date else 0
         pos.days_held = days
         await session.commit()
+
+
+async def update_portfolio_value_from_positions() -> None:
+    """Recalculate total_value and invested from live position prices. Called intraday."""
+    positions = await get_open_ai_positions()
+    state = await get_portfolio_state()
+    invested = sum(p.get("current_value") or p.get("invested_usd") or 0 for p in positions)
+    total_value = state["cash"] + invested
+    total_pnl_pct = round((total_value - 1000) / 1000 * 100, 2)
+    await update_portfolio_state(
+        cash=state["cash"],
+        total_value=total_value,
+        invested=invested,
+        total_pnl_pct=total_pnl_pct,
+    )
 
 
 async def get_ai_portfolio_history(limit: int = 10) -> List[dict]:
