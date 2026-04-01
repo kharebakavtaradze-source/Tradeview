@@ -54,8 +54,14 @@ def _filter_ai_candidates(scan_results: list) -> list:
     Hard pre-filter before AI sees candidates.
     AI only receives high-quality setups — code-level, cannot be overridden by prompt.
     """
+    from scanner.sector_map import NON_STOCK_SECURITIES
+
     qualified = []
     for r in scan_results:
+        # Skip CEFs, ETNs, and other non-stock securities
+        if r.get("symbol", "") in NON_STOCK_SECURITIES:
+            continue
+
         tier = r.get("score", {}).get("tier", "")
         indicators = r.get("indicators", {})
         cmf = indicators.get("cmf_pctl", 0)

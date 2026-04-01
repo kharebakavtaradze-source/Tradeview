@@ -749,10 +749,13 @@ async def get_journal_stats() -> dict:
     losses = [e for e in entries if e["outcome"] == "loss"]
     open_trades = [e for e in entries if e["outcome"] == "open"]
 
+    def _trade_pnl(e):
+        return e.get("final_pnl_pct") or e.get("gain_pct") or 0
+
     win_rate = round(len(wins) / len(closed) * 100, 1) if closed else 0
-    avg_win = round(sum(e["gain_pct"] or 0 for e in wins) / len(wins), 2) if wins else 0
-    avg_loss = round(sum(e["gain_pct"] or 0 for e in losses) / len(losses), 2) if losses else 0
-    total_pnl = round(sum(e["gain_pct"] or 0 for e in closed), 2)
+    avg_win = round(sum(_trade_pnl(e) for e in wins) / len(wins), 2) if wins else 0
+    avg_loss = round(sum(_trade_pnl(e) for e in losses) / len(losses), 2) if losses else 0
+    total_pnl = round(sum(_trade_pnl(e) for e in closed), 2)
 
     # Best tier by win rate
     tier_stats: dict = {}
