@@ -129,10 +129,17 @@ Data:
 
 async def analyze_batch(results: List[dict]) -> List[dict]:
     """
-    Analyze top 20 tickers by score concurrently (max 3 at a time).
+    Analyze top FIRE/ARM/STEALTH tickers (max 8) concurrently (max 3 at a time).
     Adds ai_analysis field to each result dict.
     """
-    top20 = results[:20]
+    fire_arm_stealth = [
+        r for r in results
+        if r.get("score", {}).get("tier") in ("FIRE", "ARM", "STEALTH")
+    ]
+    top20 = fire_arm_stealth[:8]
+    if not top20:
+        logger.info("No FIRE/ARM/STEALTH tickers — skipping AI analysis")
+        return []
     semaphore = asyncio.Semaphore(3)
 
     async def analyze_one(result: dict):

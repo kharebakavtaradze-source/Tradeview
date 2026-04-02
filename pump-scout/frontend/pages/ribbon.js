@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import styles from '../styles/Ribbon.module.css';
+import JournalModal from '../components/JournalModal';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000;
@@ -180,8 +181,19 @@ function Confirmations({ ticker }) {
 
 function TickerCard({ ticker, apiUrl }) {
   const [aiOpen, setAiOpen] = useState(false);
+  const [showJournal, setShowJournal] = useState(false);
   const sig = SIGNAL_CONFIG[ticker.ribbon_signal] || SIGNAL_CONFIG.NEUTRAL;
   const tierColor = TIER_COLORS[ticker.tier] || '#888';
+
+  const journalPrefill = {
+    symbol: ticker.symbol,
+    entry_price: ticker.price,
+    tier: ticker.tier || undefined,
+    entry_wyckoff: ticker.wyckoff_phase || undefined,
+    entry_cmf_pctl: ticker.cmf_pctl || undefined,
+    entry_vol_ratio: ticker.anomaly_ratio || undefined,
+    notes: `Источник: EMA Ribbon | Сигнал: ${sig.label} | Spread: ${ticker.ema_spread_pct?.toFixed(2) || '?'}%`,
+  };
 
   return (
     <div className={styles.card}>
@@ -237,18 +249,26 @@ function TickerCard({ ticker, apiUrl }) {
 
       {/* ROW 7 — Actions */}
       <div className={styles.actions}>
-        <a
-          href={`/journal?add=${ticker.symbol}&price=${ticker.price}`}
+        <button
           className={styles.journalBtn}
+          onClick={() => setShowJournal(true)}
         >
           + Journal
-        </a>
+        </button>
         {ticker.ai_analysis && (
           <button className={styles.aiBtn} onClick={() => setAiOpen(v => !v)}>
             AI Анализ {aiOpen ? '▲' : '▼'}
           </button>
         )}
       </div>
+
+      {showJournal && (
+        <JournalModal
+          prefill={journalPrefill}
+          onClose={() => setShowJournal(false)}
+          onSaved={() => setShowJournal(false)}
+        />
+      )}
 
       {aiOpen && ticker.ai_analysis && (
         <div className={styles.aiPanel}>
