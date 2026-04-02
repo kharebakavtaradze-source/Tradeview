@@ -156,19 +156,19 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
-    # Hype monitor: every 30 min, Mon–Fri, 08:00–17:00 ET
+    # Hype monitor: 3x daily at 9:00, 12:00, 15:00 ET (Mon–Fri)
     scheduler.add_job(
         _run_hype_monitor,
         trigger=CronTrigger(
             day_of_week="mon-fri",
-            hour="8-16",
-            minute="0,30",
+            hour="9,12,15",
+            minute="0",
             timezone=EASTERN_TZ,
         ),
-        id="hype_monitor_30min",
-        name="Hype Monitor (every 30min, market hours)",
+        id="hype_monitor_3x_daily",
+        name="Hype Monitor (3x daily: 9 AM, 12 PM, 3 PM ET)",
         replace_existing=True,
-        misfire_grace_time=120,
+        misfire_grace_time=300,
     )
 
     # 09:00 AM ET — Morning Brief (Telegram summary)
@@ -305,7 +305,7 @@ def start_scheduler():
 
     scheduler.start()
     logger.info(
-        "Scheduler started — 3 scan jobs + hype monitor + morning brief + price alerts "
+        "Scheduler started — 3 scan jobs + hype monitor (3x daily) + morning brief + price alerts "
         "+ 5 portfolio/journal/EOD jobs + regime at 16:15 + sector perf at 16:20 + weekly data rotation"
     )
 

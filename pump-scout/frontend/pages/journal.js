@@ -6,33 +6,172 @@ import styles from '../styles/Journal.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-const FILTER_TABS = ['ALL', 'OPEN', 'CLOSED', 'WIN', 'LOSS', 'ANALYTICS'];
+const FILTER_TABS = ['ALL', 'OPEN', 'CLOSED', 'WIN', 'LOSS', 'CALENDAR', 'ANALYTICS'];
 
 const TIER_COLORS = {
   FIRE: '#ffd700', ARM: '#00e5ff', BASE: '#00c853', STEALTH: '#cc44ff',
   SYMPATHY: '#00e5ff', WATCH: '#ff8800',
 };
 
+function CalendarView({ entries, calendarYear, calendarMonth, onPrevMonth, onNextMonth }) {
+  const year = calendarYear;
+  const month = calendarMonth; // 0-indexed
+
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  // Build a map: date string -> array of entries
+  const dateMap = {};
+  for (const e of entries) {
+    const entryDate = e.entry_date ? e.entry_date.slice(0, 10) : null;
+    const exitDate = e.exit_date ? e.exit_date.slice(0, 10) : null;
+    if (entryDate) {
+      if (!dateMap[entryDate]) dateMap[entryDate] = [];
+      dateMap[entryDate].push({ ...e, _dateRole: 'entry' });
+    }
+    if (exitDate && exitDate !== entryDate) {
+      if (!dateMap[exitDate]) dateMap[exitDate] = [];
+      dateMap[exitDate].push({ ...e, _dateRole: 'exit' });
+    }
+  }
+
+  const firstDay = new Date(year, month, 1);
+  // Monday=0 week, getDay() is Sun=0, so adjust:
+  let startDow = firstDay.getDay(); // 0=Sun
+  startDow = startDow === 0 ? 6 : startDow - 1; // convert to Mon=0
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const [selectedDate, setSelectedDate] = useState(null);
+  const pad = n => String(n).padStart(2, '0');
+
+  const selectedKey = selectedDate ? `${year}-${pad(month + 1)}-${pad(selectedDate)}` : null;
+  const selectedEntries = selectedKey ? (dateMap[selectedKey] || []) : [];
+
+  return (
+    <div style={{ padding: '16px 0' }}>
+      {/* Month navigation */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <button onClick={onPrevMonth} style={{ background: 'rgba(255,255,255,0.08)', border: 'none', color: 'var(--text)', padding: '4px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 16 }}>‹</button>
+        <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--text)', minWidth: 120, textAlign: 'center' }}>
+          {monthNames[month]} {year}
+        </span>
+        <button onClick={onNextMonth} style={{ background: 'rgba(255,255,255,0.08)', border: 'none', color: 'var(--text)', padding: '4px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 16 }}>›</button>
+      </div>
+
+      {/* Day headers */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 4 }}>
+        {dayNames.map(d => (
+          <div key={d} style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, padding: '2px 0' }}>{d}</div>
+        ))}
+      </div>
+
+      {/* Calendar grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+        {cells.map((day, i) => {
+          if (!day) return <div key={`empty-${i}`} />;
+          const key = `${year}-${pad(month + 1)}-${pad(day)}`;
+          const dayEntries = dateMap[key] || [];
+          const hasEntry = dayEntries.some(e => e._dateRole === 'entry');
+          const hasWin = dayEntries.some(e => e._dateRole === 'exit' && e.outcome === 'win');
+          const hasLoss = dayEntries.some(e => e._dateRole === 'exit' && e.outcome === 'loss');
+          const isSelected = selectedDate === day;
+          return (
+            <div key={key}
+              onClick={() => setSelectedDate(isSelected ? null : day)}
+              style={{
+                minHeight: 44,
+                background: isSelected ? 'rgba(0,229,255,0.15)' : 'rgba(255,255,255,0.03)',
+                border: isSelected ? '1px solid var(--cyan)' : '1px solid rgba(255,255,255,0.05)',
+                borderRadius: 4,
+                padding: '4px 6px',
+                cursor: dayEntries.length ? 'pointer' : 'default',
+                position: 'relative',
+              }}
+            >
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>{day}</div>
+              {/* Dots */}
+              <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginTop: 3 }}>
+                {hasEntry && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4488ff', display: 'inline-block' }} title="Opened" />}
+                {hasWin && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} title="Win closed" />}
+                {hasLoss && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--red)', display: 'inline-block' }} title="Loss closed" />}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Selected day detail */}
+      {selectedDate && (
+        <div style={{ marginTop: 16, padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 10, color: 'var(--text)', fontSize: 13 }}>
+            {monthNames[month]} {selectedDate}, {year}
+          </div>
+          {selectedEntries.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Нет сделок за этот день</div>
+          ) : selectedEntries.map((e, i) => {
+            const pnl = e.final_pnl_pct ?? e.gain_pct;
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: e._dateRole === 'entry' ? 'rgba(68,136,255,0.2)' : (e.outcome === 'win' ? 'rgba(0,200,100,0.2)' : 'rgba(255,68,68,0.2)'), color: e._dateRole === 'entry' ? '#4488ff' : (e.outcome === 'win' ? 'var(--green)' : 'var(--red)') }}>
+                  {e._dateRole === 'entry' ? 'OPEN' : (e.outcome === 'win' ? 'WIN' : 'LOSS')}
+                </span>
+                <span style={{ fontWeight: 700, color: 'var(--text)', fontSize: 13 }}>{e.symbol}</span>
+                {e.tier && <span style={{ fontSize: 10, color: TIER_COLORS[e.tier] || 'var(--cyan)' }}>{e.tier}</span>}
+                {pnl != null && e._dateRole === 'exit' && (
+                  <span style={{ marginLeft: 'auto', fontWeight: 700, color: pnl >= 0 ? 'var(--green)' : 'var(--red)', fontSize: 13 }}>
+                    {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}%
+                  </span>
+                )}
+                {e._dateRole === 'entry' && (
+                  <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: 11 }}>
+                    ${e.entry_price?.toFixed(2)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 10, color: 'var(--text-muted)' }}>
+        <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#4488ff', marginRight: 4 }} />Открыта</span>
+        <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'var(--green)', marginRight: 4 }} />Закрыта WIN</span>
+        <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'var(--red)', marginRight: 4 }} />Закрыта LOSS</span>
+      </div>
+    </div>
+  );
+}
+
 function ProgressBar({ current, entry, target, stop }) {
   if (!target || !entry) return null;
-  const range = target - (stop || entry * 0.9);
-  const progress = Math.max(0, Math.min(100, ((current || entry) - (stop || entry * 0.9)) / range * 100));
-  const pct = current ? ((current - entry) / entry * 100) : 0;
+  const effectiveStop = stop || entry * 0.9;
+  const range = target - effectiveStop;
+  const effectiveCurrent = current || entry;
+  const progress = Math.max(0, Math.min(100, (effectiveCurrent - effectiveStop) / range * 100));
+  const hasCurrent = current != null && current > 0;
+  const pct = hasCurrent ? ((current - entry) / entry * 100) : null;
+  const stopDist = ((entry - effectiveStop) / entry * 100);
+  const targetDist = ((target - entry) / entry * 100);
   return (
     <div style={{ margin: '6px 0' }}>
       <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
         <div style={{
           height: '100%', width: `${progress}%`, borderRadius: 2,
-          background: pct >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
+          background: pct != null && pct >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
           transition: 'width 0.3s',
         }} />
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginTop: 2, color: 'var(--text-muted)' }}>
-        <span style={{ color: 'var(--red)' }}>Stop ${stop?.toFixed(2) || '?'}</span>
-        <span style={{ color: pct >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
-          {pct >= 0 ? '+' : ''}{pct.toFixed(1)}% to target
+        <span style={{ color: 'var(--red)' }}>Stop -{stopDist.toFixed(1)}%</span>
+        <span style={{ color: pct != null ? (pct >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text-muted)', fontWeight: 700 }}>
+          {pct != null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` : '─'}
         </span>
-        <span style={{ color: 'var(--green)' }}>Target ${target?.toFixed(2)}</span>
+        <span style={{ color: 'var(--green)' }}>Target +{targetDist.toFixed(1)}%</span>
       </div>
     </div>
   );
@@ -113,6 +252,18 @@ export default function Journal() {
   const [deepAnalytics, setDeepAnalytics] = useState(null);
   const [deepLoading, setDeepLoading] = useState(false);
   const [livePrices, setLivePrices] = useState({});
+  const now = new Date();
+  const [calendarYear, setCalendarYear] = useState(now.getFullYear());
+  const [calendarMonth, setCalendarMonth] = useState(now.getMonth());
+
+  function prevMonth() {
+    if (calendarMonth === 0) { setCalendarYear(y => y - 1); setCalendarMonth(11); }
+    else setCalendarMonth(m => m - 1);
+  }
+  function nextMonth() {
+    if (calendarMonth === 11) { setCalendarYear(y => y + 1); setCalendarMonth(0); }
+    else setCalendarMonth(m => m + 1);
+  }
 
   const loadData = useCallback(async () => {
     try {
@@ -145,7 +296,7 @@ export default function Journal() {
   }, [loadLivePrices]);
 
   const filtered = entries.filter(e => {
-    if (filter === 'ALL' || filter === 'ANALYTICS') return true;
+    if (filter === 'ALL' || filter === 'ANALYTICS' || filter === 'CALENDAR') return true;
     if (filter === 'OPEN') return e.outcome === 'open';
     if (filter === 'CLOSED') return ['win', 'loss', 'skip'].includes(e.outcome);
     if (filter === 'WIN') return e.outcome === 'win';
@@ -168,7 +319,7 @@ export default function Journal() {
         outcome,
         status: reason === 'STOP_HIT' ? 'STOPPED' : 'CLOSED',
         exit_reason: reason,
-        final_pnl_pct: ((price - entry.entry_price) / entry.entry_price * 100).toFixed(2),
+        final_pnl_pct: parseFloat(((price - entry.entry_price) / entry.entry_price * 100).toFixed(2)),
       }),
     });
     loadData();
@@ -280,6 +431,24 @@ export default function Journal() {
                 <div className={styles.statValue}>{stats.avg_hold_days}d</div>
               </div>
             )}
+            {stats.best_trade && (
+              <div className={styles.statCard}>
+                <div className={styles.statLabel}>BEST TRADE</div>
+                <div className={`${styles.statValue} ${styles.win}`} style={{ fontSize: 14 }}>
+                  {stats.best_trade.symbol}
+                </div>
+                <div className={styles.statMeta}>+{stats.best_trade.pnl_pct}%</div>
+              </div>
+            )}
+            {stats.worst_trade && (
+              <div className={styles.statCard}>
+                <div className={styles.statLabel}>WORST TRADE</div>
+                <div className={`${styles.statValue} ${styles.loss}`} style={{ fontSize: 14 }}>
+                  {stats.worst_trade.symbol}
+                </div>
+                <div className={styles.statMeta}>{stats.worst_trade.pnl_pct}%</div>
+              </div>
+            )}
           </div>
         )}
 
@@ -297,7 +466,7 @@ export default function Journal() {
               }}
             >
               {t}
-              {t !== 'ANALYTICS' && (
+              {t !== 'ANALYTICS' && t !== 'CALENDAR' && (
                 <span style={{ marginLeft: 5, opacity: 0.6 }}>
                   ({t === 'ALL' ? entries.length
                     : t === 'OPEN' ? openCount
@@ -308,6 +477,17 @@ export default function Journal() {
             </button>
           ))}
         </div>
+
+        {/* Calendar tab */}
+        {filter === 'CALENDAR' && (
+          <CalendarView
+            entries={entries}
+            calendarYear={calendarYear}
+            calendarMonth={calendarMonth}
+            onPrevMonth={prevMonth}
+            onNextMonth={nextMonth}
+          />
+        )}
 
         {/* Analytics tab */}
         {filter === 'ANALYTICS' && (
@@ -508,7 +688,7 @@ export default function Journal() {
         )}
 
         {/* Trade list */}
-        {filter !== 'ANALYTICS' && (
+        {filter !== 'ANALYTICS' && filter !== 'CALENDAR' && (
           <div className={styles.tradeList}>
             {filtered.length === 0 ? (
               <div className={styles.empty}>
