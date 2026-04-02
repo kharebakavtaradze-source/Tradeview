@@ -162,7 +162,7 @@ function ProgressBar({ current, entry, target, stop }) {
       <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
         <div style={{
           height: '100%', width: `${progress}%`, borderRadius: 2,
-          background: pct != null && pct >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
+          background: pct == null ? 'rgba(100,100,100,0.4)' : pct >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
           transition: 'width 0.3s',
         }} />
       </div>
