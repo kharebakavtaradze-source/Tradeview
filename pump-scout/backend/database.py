@@ -809,6 +809,25 @@ async def get_journal_stats() -> dict:
         buckets, key=lambda b: buckets[b]["wins"] / buckets[b]["total"]
     ) if buckets else None
 
+    # Best and worst individual trades
+    best_trade = None
+    worst_trade = None
+    if closed:
+        best_e = max(closed, key=_trade_pnl)
+        worst_e = min(closed, key=_trade_pnl)
+        best_trade = {
+            "symbol": best_e.get("symbol"),
+            "pnl_pct": round(_trade_pnl(best_e), 2),
+            "outcome": best_e.get("outcome"),
+            "days_held": best_e.get("days_held"),
+        }
+        worst_trade = {
+            "symbol": worst_e.get("symbol"),
+            "pnl_pct": round(_trade_pnl(worst_e), 2),
+            "outcome": worst_e.get("outcome"),
+            "days_held": worst_e.get("days_held"),
+        }
+
     return {
         "total_trades": len(entries),
         "open_trades": len(open_trades),
@@ -821,6 +840,8 @@ async def get_journal_stats() -> dict:
         "best_score_range": best_range,
         "wins": len(wins),
         "losses": len(losses),
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
     }
 
 

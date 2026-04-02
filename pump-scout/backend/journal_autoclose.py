@@ -4,6 +4,7 @@ Runs at 16:05 EST weekdays to update open positions and auto-close on stop/targe
 Tracks SPY daily returns, saves position snapshots, computes alpha / max_gain_day / missed_exit_pct.
 Provides cumulative insights endpoint with 6-hour cache.
 """
+import asyncio
 import json
 import logging
 import os
@@ -163,27 +164,65 @@ async def update_journal_prices_intraday():
         logger.warning(f"Intraday price update failed: {e}")
 
 
-async def auto_close_journal():
+async def _batch_fetch_prices(symbols: list[str]) -> dict[str, float]:
+    """Batch-fetch latest prices for a list of symbols via Yahoo Finance v7.
+    Returns {symbol: price} for all successful lookups."""
+    if not symbols:
+        return {}
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    result: dict[str, float] = {}
+    # Yahoo accepts up to ~200 symbols in one call; chunk just in case
+    chunk_size = 50
+    for i in range(0, len(symbols), chunk_size):
+        chunk = symbols[i : i + chunk_size]
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(
+                        url,
+                        params={"symbols": ",".join(chunk), "fields": "regularMarketPrice"},
+                        headers=YAHOO_HEADERS,
+                    )
+                    if resp.status_code != 200:
+                        break
+                    quotes = resp.json().get("quoteResponse", {}).get("result", [])
+                    for q in quotes:
+                        sym = q.get("symbol")
+                        price = q.get("regularMarketPrice")
+                        if sym and price:
+                            result[sym] = price
+                    break  # success
+            except Exception as e:
+                logger.warning(f"Batch price fetch attempt {attempt+1} failed: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)
+    return result
+
+
+async def auto_close_journal(dry_run: bool = False):
     """
     Runs at 16:05 EST weekdays.
-    - Fetches SPY daily return for alpha calculation
+    - Batch-fetches all prices in a single Yahoo Finance call
     - Updates open journal entries with current price, days held, max gain/loss
     - Saves daily position snapshots
     - Auto-closes entries that hit their stop_loss or target_price
     - Computes alpha, max_gain_day, missed_exit_pct on close
+
+    If dry_run=True, returns what WOULD be closed without writing to DB.
     """
-    logger.info("Auto-close journal starting...")
+    logger.info(f"Auto-close journal starting... (dry_run={dry_run})")
     entries = await get_open_journal_entries()
     if not entries:
         logger.info("No open journal entries to update")
-        return
+        return {"updated": 0, "closed": 0, "skipped": 0, "dry_run": dry_run}
 
-    # Fetch SPY price for alpha calculation
-    spy_price = await fetch_closing_price("SPY")
+    # --- Batch-fetch all prices (including SPY) in one go ---
+    all_symbols = list({e["symbol"] for e in entries} | {"SPY"})
+    prices = await _batch_fetch_prices(all_symbols)
+
+    spy_price = prices.get("SPY")
     spy_daily_pct = 0.0
     if spy_price:
-        # Compare to yesterday's SPY close via a simple ratio proxy
-        # We use 0 as fallback if we can't get yesterday's price
         try:
             spy_yesterday = await _fetch_prev_close("SPY")
             if spy_yesterday and spy_yesterday > 0:
@@ -193,18 +232,41 @@ async def auto_close_journal():
 
     updated = 0
     closed = 0
-    for entry in entries:
-        try:
-            price = await fetch_closing_price(entry["symbol"])
-            if not price:
-                continue
+    skipped = 0
+    dry_run_results = []
 
+    for entry in entries:
+        sym = entry["symbol"]
+        price = prices.get(sym)
+        if not price:
+            logger.warning(f"No price for {sym} — skipping")
+            skipped += 1
+            continue
+
+        try:
             entry_price = entry.get("entry_price", 0)
             pct = (price - entry_price) / entry_price * 100 if entry_price > 0 else 0
 
             days = entry.get("days_held", 0) + 1
             max_gain = max(entry.get("max_gain_pct") or 0, pct)
             max_loss = min(entry.get("max_loss_pct") or 0, pct)
+
+            stop = entry.get("stop_loss")
+            target = entry.get("target_price")
+
+            should_stop = stop and price <= stop
+            should_target = target and price >= target
+
+            if dry_run:
+                dry_run_results.append({
+                    "symbol": sym,
+                    "price": round(price, 4),
+                    "pct": round(pct, 2),
+                    "stop": stop,
+                    "target": target,
+                    "would_close": "STOP_HIT" if should_stop else ("TARGET_HIT" if should_target else None),
+                })
+                continue
 
             # Save daily snapshot
             try:
@@ -216,7 +278,7 @@ async def auto_close_journal():
                     spy_daily_pct=spy_daily_pct,
                 )
             except Exception as e:
-                logger.warning(f"Snapshot save failed for {entry['symbol']}: {e}")
+                logger.warning(f"Snapshot save failed for {sym}: {e}")
 
             update_data = {
                 "current_price": round(price, 4),
@@ -227,19 +289,19 @@ async def auto_close_journal():
                 "last_updated": datetime.now(timezone.utc),
             }
 
-            stop = entry.get("stop_loss")
-            target = entry.get("target_price")
-
-            if stop and price <= stop:
+            if should_stop or should_target:
                 spy_total = await get_spy_cumulative_for_entry(entry["id"])
                 alpha = round(pct - spy_total, 2)
                 mgd = await get_max_gain_day(entry["id"])
                 missed_exit = round(max_gain - pct, 2)
+                exit_reason = "STOP_HIT" if should_stop else "TARGET_HIT"
+                outcome = "loss" if should_stop else "win"
+                status = "STOPPED" if should_stop else "CLOSED"
 
                 entry_for_analysis = {
                     **entry,
                     "final_pnl_pct": round(pct, 2),
-                    "exit_reason": "STOP_HIT",
+                    "exit_reason": exit_reason,
                     "days_held": days,
                     "max_gain_day": mgd,
                     "missed_exit_pct": missed_exit,
@@ -248,9 +310,9 @@ async def auto_close_journal():
                 }
                 ai = await analyze_closed_trade(entry_for_analysis)
                 update_data.update({
-                    "outcome": "loss",
-                    "status": "STOPPED",
-                    "exit_reason": "STOP_HIT",
+                    "outcome": outcome,
+                    "status": status,
+                    "exit_reason": exit_reason,
                     "exit_price": round(price, 4),
                     "exit_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                     "final_pnl_pct": round(pct, 2),
@@ -261,48 +323,21 @@ async def auto_close_journal():
                     "ai_analysis": ai,
                 })
                 closed += 1
-                logger.info(f"Auto-stopped {entry['symbol']} at ${price:.2f} ({pct:+.1f}%) alpha={alpha:+.1f}%")
-
-            elif target and price >= target:
-                spy_total = await get_spy_cumulative_for_entry(entry["id"])
-                alpha = round(pct - spy_total, 2)
-                mgd = await get_max_gain_day(entry["id"])
-                missed_exit = round(max_gain - pct, 2)
-
-                entry_for_analysis = {
-                    **entry,
-                    "final_pnl_pct": round(pct, 2),
-                    "exit_reason": "TARGET_HIT",
-                    "days_held": days,
-                    "max_gain_day": mgd,
-                    "missed_exit_pct": missed_exit,
-                    "alpha_pct": alpha,
-                    "spy_return_pct": round(spy_total, 2),
-                }
-                ai = await analyze_closed_trade(entry_for_analysis)
-                update_data.update({
-                    "outcome": "win",
-                    "status": "CLOSED",
-                    "exit_reason": "TARGET_HIT",
-                    "exit_price": round(price, 4),
-                    "exit_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    "final_pnl_pct": round(pct, 2),
-                    "spy_return_pct": round(spy_total, 2),
-                    "alpha_pct": alpha,
-                    "max_gain_day": mgd,
-                    "missed_exit_pct": missed_exit,
-                    "ai_analysis": ai,
-                })
-                closed += 1
-                logger.info(f"Auto-target hit {entry['symbol']} at ${price:.2f} ({pct:+.1f}%) alpha={alpha:+.1f}%")
+                logger.info(f"Auto-{exit_reason} {sym} at ${price:.2f} ({pct:+.1f}%) alpha={alpha:+.1f}%")
 
             await update_journal_entry(entry["id"], update_data)
             updated += 1
 
         except Exception as e:
-            logger.error(f"Auto-close failed for {entry.get('symbol')}: {e}")
+            logger.error(f"Auto-close failed for {sym}: {e}")
+            skipped += 1
 
-    logger.info(f"Auto-close done: {updated} updated, {closed} closed | SPY day: {spy_daily_pct:+.2f}%")
+    if dry_run:
+        logger.info(f"Dry-run complete: {len(dry_run_results)} entries checked")
+        return {"dry_run": True, "entries": dry_run_results}
+
+    logger.info(f"Auto-close done: {updated} updated, {closed} closed, {skipped} skipped | SPY day: {spy_daily_pct:+.2f}%")
+    return {"updated": updated, "closed": closed, "skipped": skipped, "spy_daily_pct": spy_daily_pct}
 
 
 async def _fetch_prev_close(symbol: str) -> float | None:

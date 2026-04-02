@@ -526,6 +526,14 @@ async def journal_snapshots(entry_id: int):
     return {"journal_id": entry_id, "snapshots": snaps}
 
 
+@app.get("/api/journal/test-autoclose")
+async def test_autoclose():
+    """Dry-run auto-close: shows what WOULD be closed without writing to DB."""
+    from journal_autoclose import auto_close_journal
+    result = await auto_close_journal(dry_run=True)
+    return result
+
+
 # ─── Scan Candidates routes ────────────────────────────────────────────────────
 
 @app.get("/api/candidates/missed")
