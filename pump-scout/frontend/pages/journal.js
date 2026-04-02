@@ -500,6 +500,15 @@ export default function Journal() {
 
             {(insightsLoading || deepLoading) && <div className={styles.loading}><span className={styles.spinner} /> Analyzing trades…</div>}
 
+            {/* No closed trades message */}
+            {!insightsLoading && !deepLoading && stats?.closed_trades === 0 && (
+              <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.06)' }}>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
+                <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>Нет данных для анализа</div>
+                <div style={{ fontSize: 12 }}>Закройте минимум 3 сделки чтобы увидеть AI-аналитику по сигналам, тирам и паттернам</div>
+              </div>
+            )}
+
             {/* AI Coaching Insights */}
             {insights && !insights.message && (
               <div style={{ display: 'grid', gap: 12, marginBottom: 20 }}>
