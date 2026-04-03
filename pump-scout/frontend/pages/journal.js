@@ -764,6 +764,11 @@ export default function Journal() {
                       <span>
                         <span className={styles.tradeLabel}>Entry </span>
                         ${e.entry_price?.toFixed(2)}
+                        {e.entry_date && (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 9, marginLeft: 5 }}>
+                            {new Date(e.entry_date).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })}
+                          </span>
+                        )}
                         {isOpen && livePrice && (
                           <span style={{ color: 'var(--text-muted)' }}>
                             {' → '}
@@ -771,6 +776,11 @@ export default function Journal() {
                               ${livePrice?.toFixed(2)}
                             </b>
                             {isLive && <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 3 }}>●</span>}
+                          </span>
+                        )}
+                        {isOpen && !livePrice && (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 10, marginLeft: 6 }}>
+                            нет цены
                           </span>
                         )}
                         {!isOpen && e.exit_price && (
