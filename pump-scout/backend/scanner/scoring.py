@@ -70,6 +70,176 @@ def apply_cycle_bonus(score: float, sector: str, cycle_phase: str) -> tuple[floa
     return new_score, bonus
 
 
+def calc_setup_quality_layers(
+    indicators: dict,
+    regime: dict,
+    market_regime: dict | None = None,
+    sector_data: dict | None = None,
+    industry_data: dict | None = None,
+) -> dict:
+    """
+    5-layer trade quality assessment. DISPLAY ONLY — never modifies total_score.
+
+    Layers (each 0–10):
+      1. Market    — overall market regime health
+      2. Sector    — sector momentum + class grade
+      3. Industry  — industry ETF trend (sub-sector)
+      4. Structure — Wyckoff structure + OBV/CMF alignment
+      5. Execution — gap, premarket, squeeze trigger readiness
+
+    Returns dict with layer scores and overall quality label.
+    """
+    layers: dict[str, int] = {}
+
+    # ── Layer 1: Market ───────────────────────────────────────────────────────
+    mkt = 5  # baseline neutral
+    if market_regime:
+        regime_str = market_regime.get("regime", "NEUTRAL")
+        cycle = market_regime.get("cycle_phase", "NEUTRAL")
+        spy_pct = market_regime.get("spy_pct", 0) or 0
+        if regime_str in ("RISK_ON",):
+            mkt = 9
+        elif regime_str == "NEUTRAL":
+            mkt = 6
+        elif regime_str in ("RISK_OFF",):
+            mkt = 3
+        elif regime_str == "FEAR":
+            mkt = 1
+        # Cycle phase fine-tuning
+        if cycle == "RISK_ON_GROWTH":
+            mkt = min(10, mkt + 1)
+        elif cycle in ("STAGFLATION", "FEAR"):
+            mkt = max(0, mkt - 1)
+        # SPY daily drift
+        if spy_pct > 0.5:
+            mkt = min(10, mkt + 1)
+        elif spy_pct < -0.5:
+            mkt = max(0, mkt - 1)
+    layers["market"] = mkt
+
+    # ── Layer 2: Sector ───────────────────────────────────────────────────────
+    sec = 5
+    if sector_data:
+        sc_class = sector_data.get("sector_class", "C")
+        sec_pct = sector_data.get("change_pct", 0) or 0
+        class_map = {"A": 9, "B": 7, "C": 5, "D": 3, "F": 1}
+        sec = class_map.get(sc_class, 5)
+        # Reinforce with vs_spy
+        vs_spy = sector_data.get("vs_spy_1d", 0) or 0
+        if vs_spy > 0.3:
+            sec = min(10, sec + 1)
+        elif vs_spy < -0.3:
+            sec = max(0, sec - 1)
+    layers["sector"] = sec
+
+    # ── Layer 3: Industry ─────────────────────────────────────────────────────
+    ind = 5
+    if industry_data:
+        ind_pct = industry_data.get("pct_1d", 0) or 0
+        if ind_pct > 1.0:
+            ind = 9
+        elif ind_pct > 0.3:
+            ind = 7
+        elif abs(ind_pct) < 0.3:
+            ind = 5
+        elif ind_pct < -1.0:
+            ind = 2
+        else:
+            ind = 3
+    layers["industry"] = ind
+
+    # ── Layer 4: Structure ────────────────────────────────────────────────────
+    struct = 0
+    state = regime.get("state", "NONE")
+    in_acc = regime.get("in_acc", False)
+    obv = indicators.get("obv", {})
+    obv_strength = obv.get("obv_strength", "WEAK")
+    obv_div = obv.get("obv_divergence", False)
+    cmf_pctl = indicators.get("cmf_pctl", 0)
+
+    if state in ("FIRE", "ARM"):
+        struct += 4
+    elif state in ("BASE", "STEALTH_BASE", "STEALTH_ARM"):
+        struct += 3
+    elif state == "STEALTH":
+        struct += 2
+
+    if in_acc:
+        struct += 2
+
+    if obv_strength == "STRONG":
+        struct += 2
+    elif obv_strength == "MEDIUM":
+        struct += 1
+
+    if obv_div:
+        struct += 1
+
+    if cmf_pctl >= 70:
+        struct += 1
+
+    layers["structure"] = min(10, struct)
+
+    # ── Layer 5: Execution ────────────────────────────────────────────────────
+    exe = 0
+    sqz_bars = indicators.get("bb_sqz_bars", 0)
+    gap = indicators.get("gap", {})
+    gap_type = gap.get("gap_type", "NONE")
+    anomaly_ratio = indicators.get("anomaly_ratio", 0)
+    stealth = indicators.get("stealth", {})
+
+    # Squeeze buildup
+    if sqz_bars >= 10:
+        exe += 3
+    elif sqz_bars >= 5:
+        exe += 2
+    elif sqz_bars >= 3:
+        exe += 1
+
+    # Gap confirmation
+    if gap_type == "GAP_UP_STRONG":
+        exe += 3
+    elif gap_type == "GAP_UP":
+        exe += 2
+    elif gap_type == "GAP_DOWN_STRONG":
+        exe -= 2
+    elif gap_type == "GAP_DOWN":
+        exe -= 1
+
+    # Volume spike as entry confirmation
+    if anomaly_ratio >= 5:
+        exe += 3
+    elif anomaly_ratio >= 3:
+        exe += 2
+    elif anomaly_ratio >= 2:
+        exe += 1
+
+    # Stealth accumulation bonus
+    if stealth.get("is_stealth"):
+        exe += 1
+
+    layers["execution"] = max(0, min(10, exe))
+
+    # ── Overall quality label ─────────────────────────────────────────────────
+    avg = sum(layers.values()) / len(layers)
+    if avg >= 8:
+        quality = "PRIME"
+    elif avg >= 6.5:
+        quality = "STRONG"
+    elif avg >= 5:
+        quality = "MODERATE"
+    elif avg >= 3.5:
+        quality = "WEAK"
+    else:
+        quality = "AVOID"
+
+    return {
+        "layers": layers,
+        "quality": quality,
+        "avg": round(avg, 1),
+    }
+
+
 def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
     anomaly_ratio = indicators.get("anomaly_ratio", 0)
     cmf_pctl = indicators.get("cmf_pctl", 0)

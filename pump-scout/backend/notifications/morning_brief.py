@@ -169,19 +169,36 @@ async def send_morning_brief() -> bool:
 
     # ── 5. Sector flow (Finviz live) + top 2 by scan strength ────────────────
     try:
-        from scanner.sector_performance import fetch_sector_performance
+        from scanner.sector_performance import fetch_sector_performance, calc_sector_momentum, check_retention
         sector_perf = await fetch_sector_performance()
         if sector_perf:
-            strong = [
-                f"{k} {v['change_pct']:+.1f}%"
-                for k, v in sorted(sector_perf.items(), key=lambda x: -x[1]["change_pct"])
-                if v["change_pct"] > 0.3
-            ]
-            weak = [
-                f"{k} {v['change_pct']:+.1f}%"
-                for k, v in sorted(sector_perf.items(), key=lambda x: x[1]["change_pct"])
-                if v["change_pct"] < -1.5
-            ]
+            spy_pct_1d = 0.0
+            try:
+                from database import get_market_regime_latest as _gmrl
+                _r = await _gmrl()
+                spy_pct_1d = (_r or {}).get("spy_pct", 0.0) or 0.0
+            except Exception:
+                pass
+            sector_momentum = calc_sector_momentum(sector_perf, spy_pct=spy_pct_1d)
+
+            strong = []
+            weak = []
+            _RETENTION_LABEL = {
+                "RETAINING": "✅",
+                "RECOVERING": "🔄",
+                "FADING": "⚠️",
+                "NEUTRAL": "",
+            }
+            for k, v in sorted(sector_momentum.items(), key=lambda x: -x[1]["change_pct"]):
+                pct = v["change_pct"]
+                sc = v.get("sector_class", "C")
+                ret = await check_retention(k, pct)
+                ret_tag = _RETENTION_LABEL.get(ret, "")
+                if pct > 0.3:
+                    strong.append(f"{k} {pct:+.1f}% [{sc}]{ret_tag}")
+                elif pct < -1.5:
+                    weak.append(f"{k} {pct:+.1f}% [{sc}]{ret_tag}")
+
             if strong:
                 lines.append("💚 <b>Sector rotation IN:</b>")
                 lines.append("  " + "  |  ".join(strong[:5]))
@@ -211,6 +228,36 @@ async def send_morning_brief() -> bool:
                 lines.append("")
     except Exception as e:
         logger.warning(f"morning_brief: sector lookup failed: {e}")
+
+    # ── 5b. Industry ETF leaders / laggards ──────────────────────────────────
+    try:
+        from database import get_market_regime_latest as _get_regime
+        _regime = await _get_regime()
+        if _regime:
+            ind_leaders = _regime.get("industry_leaders", [])
+            ind_laggards = _regime.get("industry_laggards", [])
+            iwm_vs_spy = _regime.get("iwm_vs_spy", 0.0) or 0.0
+            small_cap = _regime.get("small_cap_regime", "NEUTRAL")
+
+            _sc_emoji = {"LEADING": "🔺", "LAGGING": "🔻", "NEUTRAL": "⚪"}
+            lines.append(
+                f"<b>📡 Small Cap (IWM):</b> {_sc_emoji.get(small_cap, '⚪')} "
+                f"{small_cap}  vs SPY {iwm_vs_spy:+.1f}%"
+            )
+
+            if ind_leaders:
+                leader_str = "  ".join(
+                    f"{e['name']} {e.get('pct_1d', 0):+.1f}%" for e in ind_leaders[:3]
+                )
+                lines.append(f"  ↑ Лидеры: {leader_str}")
+            if ind_laggards:
+                laggard_str = "  ".join(
+                    f"{e['name']} {e.get('pct_1d', 0):+.1f}%" for e in ind_laggards[:3]
+                )
+                lines.append(f"  ↓ Аутсайдеры: {laggard_str}")
+            lines.append("")
+    except Exception as e:
+        logger.warning(f"morning_brief: industry ETF section failed: {e}")
 
     # ── 6. Upcoming earnings for tracked symbols ──────────────────────────────
     try:

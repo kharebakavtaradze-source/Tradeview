@@ -114,6 +114,32 @@ def _parse_sector_table(soup: BeautifulSoup) -> dict:
     return result
 
 
+def classify_sector_strength(
+    change_pct_1d: float,
+    vs_spy_1d: float = 0.0,
+    change_pct_5d: float = 0.0,
+) -> str:
+    """
+    Classify sector into A/B/C/D/F letter grades.
+
+    A — outperforming, strong and clean
+    B — improving, mildly positive
+    C — neutral, flat
+    D — underperforming
+    F — broken, sharply negative
+    """
+    if change_pct_1d > 0.5 and vs_spy_1d > 0:
+        return "A"
+    elif change_pct_1d > 0 or change_pct_5d > 1:
+        return "B"
+    elif abs(change_pct_1d) < 0.3:
+        return "C"
+    elif change_pct_1d < -1.5:
+        return "F"
+    else:
+        return "D"
+
+
 def get_strong_sectors(data: dict) -> list[str]:
     """Return GICS sector names with change_pct > +0.5%."""
     from scanner.sector_map import FINVIZ_TO_GICS
@@ -134,9 +160,9 @@ def get_weak_sectors(data: dict) -> list[str]:
     return result
 
 
-def calc_sector_momentum(data: dict) -> dict:
+def calc_sector_momentum(data: dict, spy_pct: float = 0.0) -> dict:
     """
-    Rank sectors by today's performance. Adds rank_1d and trending flag.
+    Rank sectors by today's performance. Adds rank_1d, trending, and sector_class.
     Returns data dict enriched with momentum fields (keyed by Finviz name).
     """
     if not data:
@@ -145,10 +171,15 @@ def calc_sector_momentum(data: dict) -> dict:
     sorted_sectors = sorted(data.items(), key=lambda x: x[1]["change_pct"], reverse=True)
     result = {}
     for rank, (name, d) in enumerate(sorted_sectors, 1):
+        change = d["change_pct"]
+        vs_spy = round(change - spy_pct, 2)
+        sector_class = classify_sector_strength(change, vs_spy_1d=vs_spy)
         result[name] = {
             **d,
             "rank_1d": rank,
-            "trending": rank <= 3 and d["change_pct"] > 0,
+            "trending": rank <= 3 and change > 0,
+            "vs_spy_1d": vs_spy,
+            "sector_class": sector_class,
         }
     return result
 
@@ -157,3 +188,34 @@ async def fetch_sector_performance_with_momentum() -> dict:
     """Fetch sector performance and enrich with momentum ranking."""
     data = await fetch_sector_performance()
     return calc_sector_momentum(data)
+
+
+async def check_retention(sector: str, today_pct: float) -> str:
+    """
+    Compare today's sector performance vs yesterday to assess retention.
+
+    Returns one of:
+      RETAINING  — positive today AND positive yesterday (holding gains)
+      FADING     — positive yesterday but flat/down today (losing momentum)
+      RECOVERING — negative yesterday but positive today (bouncing back)
+      NEUTRAL    — flat both days or insufficient data
+    """
+    try:
+        from database import get_sector_history
+        history = await get_sector_history(sector, days=2)
+        if not history or len(history) < 2:
+            return "NEUTRAL"
+
+        # history[0] = most recent, history[1] = day before
+        yesterday_pct = history[1].get("change_pct_1d", 0.0) or 0.0
+
+        if today_pct > 0.2 and yesterday_pct > 0.2:
+            return "RETAINING"
+        elif yesterday_pct > 0.2 and today_pct <= 0.2:
+            return "FADING"
+        elif yesterday_pct <= -0.2 and today_pct > 0.2:
+            return "RECOVERING"
+        else:
+            return "NEUTRAL"
+    except Exception:
+        return "NEUTRAL"

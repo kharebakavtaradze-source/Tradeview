@@ -398,6 +398,69 @@ export default function TickerCard({ data, hypeData, streakDays }) {
         </div>
       )}
 
+      {/* Setup Quality Layers — 5-layer display (display only, never affects score) */}
+      {data.setup_quality?.layers && Object.keys(data.setup_quality.layers).length > 0 && (() => {
+        const { layers, quality, avg } = data.setup_quality;
+        const LAYER_LABELS = { market: 'MKT', sector: 'SEC', industry: 'IND', structure: 'STR', execution: 'EXE' };
+        const QUALITY_COLOR = {
+          PRIME: '#00c853', STRONG: '#69f0ae', MODERATE: '#ffd740', WEAK: '#ff7043', AVOID: '#ff1744',
+        };
+        const qColor = QUALITY_COLOR[quality] || '#888';
+        const getBarColor = (val) => val >= 7 ? '#00c853' : val >= 5 ? '#ffd740' : '#ff4466';
+        return (
+          <div style={{
+            padding: '5px 10px 4px',
+            borderTop: '1px solid rgba(255,255,255,0.05)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.07em' }}>
+                SETUP QUALITY
+              </span>
+              <span style={{
+                fontSize: 9, fontWeight: 700, color: qColor,
+                background: `${qColor}18`,
+                border: `1px solid ${qColor}44`,
+                borderRadius: 3, padding: '1px 5px',
+              }}>{quality} {avg}/10</span>
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {['market', 'sector', 'industry', 'structure', 'execution'].map(key => {
+                const val = layers[key] ?? 5;
+                const barColor = getBarColor(val);
+                return (
+                  <div key={key} title={`${LAYER_LABELS[key]}: ${val}/10`}
+                    style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                    <div style={{
+                      width: '100%', height: 28, background: 'rgba(255,255,255,0.05)',
+                      borderRadius: 2, position: 'relative', overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        position: 'absolute', bottom: 0, left: 0, right: 0,
+                        height: `${val * 10}%`,
+                        background: barColor,
+                        opacity: 0.75,
+                        borderRadius: 2,
+                        transition: 'height 0.3s ease',
+                      }} />
+                      <span style={{
+                        position: 'absolute', top: '50%', left: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        fontSize: 9, fontWeight: 700, color: '#fff',
+                        textShadow: '0 0 3px rgba(0,0,0,0.8)',
+                        pointerEvents: 'none',
+                      }}>{val}</span>
+                    </div>
+                    <span style={{ fontSize: 8, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
+                      {LAYER_LABELS[key]}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Hype detail panel */}
       {showHype && hypeScore && (
         <div className={styles.hypePanel}>

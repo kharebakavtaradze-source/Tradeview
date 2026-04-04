@@ -25,7 +25,27 @@ REGIME_ETFS = [
     "XLC",   # Communication Services
     "XLU",   # Utilities
     "GLD",   # Gold (fear gauge)
+    # Industry ETFs — sub-sector sympathy tracking
+    "IWM",   # Small Cap (Russell 2000)
+    "SMH",   # Semiconductors
+    "XBI",   # Biotechnology
+    "ITA",   # Aerospace & Defense
+    "TAN",   # Solar
+    "KRE",   # Regional Banks
+    "XME",   # Metals & Mining
+    "IYT",   # Transportation
 ]
+
+# Industry ETF → industry name (for output labels)
+INDUSTRY_ETF_NAMES = {
+    "SMH":  "Semiconductors",
+    "XBI":  "Biotechnology",
+    "ITA":  "Aerospace & Defense",
+    "TAN":  "Solar",
+    "KRE":  "Regional Banks",
+    "XME":  "Metals & Mining",
+    "IYT":  "Transportation",
+}
 
 _YAHOO_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -235,6 +255,32 @@ async def detect_market_regime() -> dict:
     # Detect cycle phase from 1-day ETF moves
     cycle_phase = detect_cycle_phase(etf_data)
 
+    # Industry ETF analysis
+    industry_etf_data: dict = {}
+    industry_leaders: list[str] = []
+    industry_laggards: list[str] = []
+    for sym, name in INDUSTRY_ETF_NAMES.items():
+        d = etf_data.get(sym)
+        if d:
+            pct_1d = d.get("pct_1d", 0) or 0
+            industry_etf_data[sym] = {"name": name, "change_pct": pct_1d}
+            if pct_1d > 1.0:
+                industry_leaders.append(name)
+            elif pct_1d < -1.0:
+                industry_laggards.append(name)
+
+    # IWM small-cap regime
+    iwm = etf_data.get("IWM", {})
+    spy_1d = spy.get("pct_1d", 0) or 0
+    iwm_1d = iwm.get("pct_1d", 0) or 0
+    iwm_vs_spy = round(iwm_1d - spy_1d, 2)
+    if iwm_vs_spy > 0.5:
+        small_cap_regime = "LEADING"
+    elif iwm_vs_spy < -0.5:
+        small_cap_regime = "LAGGING"
+    else:
+        small_cap_regime = "NEUTRAL"
+
     result = {
         "regime": regime,
         "cycle_phase": cycle_phase,
@@ -259,6 +305,12 @@ async def detect_market_regime() -> dict:
         "weak_sectors": weak_sectors,
         "recommendation": recommendation,
         "etf_details": etf_data,
+        "industry_etf_data": industry_etf_data,
+        "industry_leaders": industry_leaders,
+        "industry_laggards": industry_laggards,
+        "iwm_pct": iwm_1d,
+        "iwm_vs_spy": iwm_vs_spy,
+        "small_cap_regime": small_cap_regime,
     }
 
     # Enrich strong/weak sectors with live Finviz data (more granular than ETF proxies)
