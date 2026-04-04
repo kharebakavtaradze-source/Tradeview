@@ -53,7 +53,7 @@ export default function TickerCard({ data, hypeData, streakDays }) {
   const [hypeDetail, setHypeDetail] = useState(null);
   const [fetchingHype, setFetchingHype] = useState(false);
 
-  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector, regime_warning, earnings } = data;
+  const { symbol, price, indicators = {}, regime = {}, score = {}, candles, ai_analysis, premarket, sympathy = {}, sector, industry, sympathy_strength, regime_warning, earnings } = data;
 
   const tier = score.tier || 'WATCH';
   const totalScore = score.total_score || 0;
@@ -301,8 +301,8 @@ export default function TickerCard({ data, hypeData, streakDays }) {
 
       </div>
 
-      {/* Sector + regime warning badges */}
-      {(sector || regime_warning || cefWarning || scoreConflict || rsStrong || rsOutperform) && (
+      {/* Sector + industry + regime warning badges */}
+      {(sector || industry || regime_warning || cefWarning || scoreConflict || rsStrong || rsOutperform) && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '4px 10px 0' }}>
           {sector && sector !== 'Unknown' && (
             <span style={{
@@ -311,6 +311,23 @@ export default function TickerCard({ data, hypeData, streakDays }) {
               color: '#4488ff', borderRadius: 3, padding: '1px 6px',
             }}>
               {sector}
+            </span>
+          )}
+          {industry && industry !== '' && (
+            <span style={{
+              fontSize: 9, fontWeight: 600, letterSpacing: '0.04em',
+              background: 'rgba(100,180,255,0.07)', border: '1px solid rgba(100,180,255,0.18)',
+              color: 'rgba(140,200,255,0.85)', borderRadius: 3, padding: '1px 6px',
+            }}
+              title={`Industry: ${industry}${sympathy_strength && sympathy_strength !== 'UNKNOWN' ? ` · ${sympathy_strength} sympathy` : ''}`}
+            >
+              {industry}
+              {sympathy_strength === 'STRONG' && (
+                <span title="Strong industry sympathy" style={{ marginLeft: 4, color: '#ff8800' }}>🔥</span>
+              )}
+              {sympathy_strength === 'MEDIUM' && (
+                <span title="Medium industry sympathy" style={{ marginLeft: 4, color: '#ffd740' }}>⚡</span>
+              )}
             </span>
           )}
           {regime_warning && (
