@@ -20,6 +20,24 @@ _REGIME_EMOJI = {
     "ROTATION_DEFENSIVE": "🏥",
 }
 
+_CYCLE_EMOJI = {
+    "RISK_ON_GROWTH": "🚀",
+    "LATE_CYCLE":     "⚡",
+    "STAGFLATION":    "⚠️",
+    "RISK_OFF":       "🛡",
+    "FEAR":           "😱",
+    "NEUTRAL":        "😐",
+}
+
+_CYCLE_ADVICE = {
+    "RISK_ON_GROWTH": "Tech + Growth приоритет",
+    "LATE_CYCLE":     "Energy + Materials приоритет",
+    "STAGFLATION":    "Energy + Staples, избегай Growth",
+    "RISK_OFF":       "Utilities + Healthcare приоритет",
+    "FEAR":           "Держи кэш, только Materials",
+    "NEUTRAL":        "Нет чёткого направления",
+}
+
 
 async def send_morning_brief() -> bool:
     """Build and send the morning brief to Telegram. Returns True if sent."""
@@ -46,6 +64,13 @@ async def send_morning_brief() -> bool:
             )
             if rec:
                 lines.append(f"<i>{rec}</i>")
+            # Cycle phase
+            cycle_phase = regime.get("cycle_phase", "NEUTRAL")
+            cp_emoji = _CYCLE_EMOJI.get(cycle_phase, "😐")
+            cp_advice = _CYCLE_ADVICE.get(cycle_phase, "")
+            lines.append(f"{cp_emoji} <b>Cycle Phase: {cycle_phase}</b>")
+            if cp_advice:
+                lines.append(f"  {cp_advice}")
             lines.append("")
     except Exception as e:
         logger.warning(f"morning_brief: regime lookup failed: {e}")

@@ -115,10 +115,45 @@ def _parse_sector_table(soup: BeautifulSoup) -> dict:
 
 
 def get_strong_sectors(data: dict) -> list[str]:
-    """Return sector names with change_pct > +0.5%."""
-    return [name for name, d in data.items() if d["change_pct"] > 0.5]
+    """Return GICS sector names with change_pct > +0.5%."""
+    from scanner.sector_map import FINVIZ_TO_GICS
+    result = []
+    for name, d in data.items():
+        if d["change_pct"] > 0.5:
+            result.append(FINVIZ_TO_GICS.get(name, name))
+    return result
 
 
 def get_weak_sectors(data: dict) -> list[str]:
-    """Return sector names with change_pct < -1.5%."""
-    return [name for name, d in data.items() if d["change_pct"] < -1.5]
+    """Return GICS sector names with change_pct < -1.5%."""
+    from scanner.sector_map import FINVIZ_TO_GICS
+    result = []
+    for name, d in data.items():
+        if d["change_pct"] < -1.5:
+            result.append(FINVIZ_TO_GICS.get(name, name))
+    return result
+
+
+def calc_sector_momentum(data: dict) -> dict:
+    """
+    Rank sectors by today's performance. Adds rank_1d and trending flag.
+    Returns data dict enriched with momentum fields (keyed by Finviz name).
+    """
+    if not data:
+        return {}
+
+    sorted_sectors = sorted(data.items(), key=lambda x: x[1]["change_pct"], reverse=True)
+    result = {}
+    for rank, (name, d) in enumerate(sorted_sectors, 1):
+        result[name] = {
+            **d,
+            "rank_1d": rank,
+            "trending": rank <= 3 and d["change_pct"] > 0,
+        }
+    return result
+
+
+async def fetch_sector_performance_with_momentum() -> dict:
+    """Fetch sector performance and enrich with momentum ranking."""
+    data = await fetch_sector_performance()
+    return calc_sector_momentum(data)
