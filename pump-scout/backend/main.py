@@ -972,6 +972,19 @@ async def sector_performance_latest():
     return sorted_data
 
 
+@app.get("/api/sector-momentum")
+async def sector_momentum():
+    """Return sectors ranked by today's performance with trending flag."""
+    from scanner.sector_performance import fetch_sector_performance_with_momentum
+    from scanner.sector_map import FINVIZ_TO_GICS
+    data = await fetch_sector_performance_with_momentum()
+    # Enrich with GICS names
+    enriched = {}
+    for fv_name, d in data.items():
+        enriched[fv_name] = {**d, "gics_name": FINVIZ_TO_GICS.get(fv_name, fv_name)}
+    return dict(sorted(enriched.items(), key=lambda x: x[1].get("rank_1d", 99)))
+
+
 @app.get("/api/sector-strength/{sector}")
 async def sector_strength_by_sector(sector: str):
     """Return tickers in a specific sector with their scores."""

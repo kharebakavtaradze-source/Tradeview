@@ -334,26 +334,51 @@ async def run_scan() -> dict:
         for r in results:
             r["regime_warning"] = r.get("sector", "Unknown") in weak_sectors
 
-        # Sector alignment bonus/penalty using Finviz live data (applied post-sector-resolution)
-        if sector_perf:
-            _TIER_RANK = {"SKIP": 0, "WATCH": 1, "STEALTH": 2, "SYMPATHY": 3, "BASE": 3, "ARM": 4, "FIRE": 5}
-            for r in results:
-                sector = r.get("sector", "Unknown")
-                sp = sector_perf.get(sector)
-                if not sp:
-                    continue
-                sc = r["score"]
+        # Sector alignment: Finviz live + cycle phase bonus (applied post-sector-resolution)
+        from scanner.scoring import apply_cycle_bonus
+        from scanner.sector_map import FINVIZ_TO_GICS
+        cycle_phase = regime.get("cycle_phase", "NEUTRAL") if regime else "NEUTRAL"
+        _TIER_RANK = {"SKIP": 0, "WATCH": 1, "STEALTH": 2, "SYMPATHY": 3, "BASE": 3, "ARM": 4, "FIRE": 5}
+        for r in results:
+            sector = r.get("sector", "Unknown")
+            sc = r["score"]
+
+            # 1. Finviz live sector performance bonus (try GICS name then Finviz name)
+            gics_sector = sector
+            sp = sector_perf.get(sector) if sector_perf else None
+            if not sp and sector_perf:
+                # Try mapping via FINVIZ_TO_GICS reverse: find Finviz key whose GICS value matches
+                for fv_name, gics_name in FINVIZ_TO_GICS.items():
+                    if gics_name == sector:
+                        sp = sector_perf.get(fv_name)
+                        break
+            if sp:
                 if sp["change_pct"] > 0.5:
                     sc["total_score"] = min(round(sc["total_score"] + 5, 2), 100)
                     sc["sector_rs_bonus"] = 5
                 elif sp["change_pct"] < -1.5:
                     sc["total_score"] = round(sc["total_score"] * 0.90, 2)
                     sc["sector_rs_bonus"] = -10
-                    # Downgrade tier if score dropped below threshold
                     score_now = sc["total_score"]
                     current_tier = sc["tier"]
                     if score_now <= 60 and _TIER_RANK.get(current_tier, 0) >= _TIER_RANK["FIRE"]:
                         sc["tier"] = "ARM"
+
+            # 2. Cycle phase sector bonus (additive, ±20 cap)
+            if sector != "Unknown":
+                new_score, cycle_bonus = apply_cycle_bonus(sc["total_score"], sector, cycle_phase)
+                sc["total_score"] = new_score
+                sc["cycle_phase_bonus"] = cycle_bonus
+                sc["cycle_phase"] = cycle_phase
+                # Re-check tier after bonus
+                if sc["total_score"] > 80 and _TIER_RANK.get(sc["tier"], 0) < _TIER_RANK["FIRE"]:
+                    if sc["tier"] not in ("SYMPATHY",):
+                        sc["tier"] = "FIRE"
+                elif sc["total_score"] > 60 and sc["tier"] in ("BASE", "WATCH", "STEALTH"):
+                    sc["tier"] = "ARM"
+            else:
+                sc["cycle_phase_bonus"] = 0
+                sc["cycle_phase"] = cycle_phase
 
     # Step 5: Pre-market data for all scored tickers
     scored_symbols = [r["symbol"] for r in results]

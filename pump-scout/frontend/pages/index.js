@@ -156,7 +156,7 @@ export default function Home() {
       const [regimeRes, strengthRes, perfRes] = await Promise.all([
         fetch(`${API_URL}/api/market-regime`),
         fetch(`${API_URL}/api/sector-strength`),
-        fetch(`${API_URL}/api/sector-performance/latest`),
+        fetch(`${API_URL}/api/sector-momentum`),
       ]);
       if (regimeRes.ok) setMarketRegime(await regimeRes.json());
       if (strengthRes.ok) {
@@ -362,8 +362,10 @@ export default function Home() {
         {/* Market Regime Banner */}
         {marketRegime && <MarketRegimeBanner regime={marketRegime} />}
 
-        {/* Live Sector Performance Bar (Finviz) */}
-        {Object.keys(sectorPerf).length > 0 && <SectorBar data={sectorPerf} />}
+        {/* Live Sector Performance Bar (Finviz) with cycle phase */}
+        {Object.keys(sectorPerf).length > 0 && (
+          <SectorBar data={sectorPerf} cyclePhase={marketRegime?.cycle_phase} />
+        )}
 
         {/* Sector Strength Bar (scan-based) */}
         {sectorStrength.length > 0 && (
