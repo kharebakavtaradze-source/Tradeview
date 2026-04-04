@@ -1,23 +1,24 @@
 .container {
-  max-width: 900px;
+  max-width: 1000px;
   margin: 0 auto;
-  padding: 16px 12px 40px;
+  padding: 16px 12px 48px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   color: #e0e0e0;
   min-height: 100vh;
   background: #0a0a0f;
 }
 
+/* ── Header ── */
 .header {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 14px;
   margin-bottom: 12px;
 }
 
 .back {
   font-size: 11px;
-  color: rgba(255,255,255,0.45);
+  color: rgba(255,255,255,0.4);
   text-decoration: none;
   transition: color 0.15s;
 }
@@ -30,12 +31,104 @@
   margin: 0;
 }
 
+.timestamp {
+  font-size: 10px;
+  color: rgba(255,255,255,0.3);
+  margin-left: auto;
+}
+
+/* ── Regime Banner ── */
+.regimeBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.regimeLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.regimeLabel {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.regimeEtfs {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cycleBlock {
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+}
+
+/* ── Rotation Row ── */
+.rotationRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  min-height: 24px;
+}
+
+.rotIn, .rotOut {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.rotTag {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.rotSector {
+  font-size: 9px;
+  font-weight: 700;
+  border: 1px solid;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ── Section ── */
+.section {
+  margin-bottom: 18px;
+}
+
+.sectionLabel {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: rgba(255,255,255,0.3);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
 /* ── ETF Heatmap ── */
 .etfGrid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 8px;
-  margin: 10px 0 14px;
+  gap: 6px;
 }
 
 @media (max-width: 600px) {
@@ -43,31 +136,68 @@
 }
 
 .etfBox {
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid;
   border-radius: 6px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   text-align: center;
 }
 
 .etfSymbol {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  color: rgba(255,255,255,0.45);
+  color: rgba(255,255,255,0.4);
+}
+
+.etfLabel {
+  display: block;
+  font-size: 8px;
+  color: rgba(255,255,255,0.25);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .etfPct {
   display: block;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   margin-top: 2px;
 }
 
+/* ── Industry row ── */
+.indRow {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Live Momentum Grid ── */
+.momentumGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+@media (max-width: 700px) {
+  .momentumGrid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.momCard {
+  border: 1px solid;
+  border-radius: 6px;
+  padding: 8px 10px;
+  transition: background 0.15s;
+}
+.momCard:hover { background: rgba(255,255,255,0.04) !important; }
+
 /* ── Sector Table ── */
 .loading, .empty {
   text-align: center;
-  color: rgba(255,255,255,0.45);
-  padding: 40px;
+  color: rgba(255,255,255,0.35);
+  padding: 30px;
   font-size: 12px;
 }
 
@@ -83,54 +213,56 @@
 
 .table th {
   text-align: left;
-  padding: 6px 10px;
-  color: rgba(255,255,255,0.45);
+  padding: 5px 8px;
+  color: rgba(255,255,255,0.35);
   font-weight: 600;
   letter-spacing: 0.06em;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  font-size: 9px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
 }
 
 .table td {
-  padding: 8px 10px;
+  padding: 7px 8px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   vertical-align: middle;
 }
 
 .row {
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background 0.1s;
 }
 .row:hover { background: rgba(255,255,255,0.03); }
-.rowSelected { background: rgba(68,136,255,0.06); }
+.rowSelected { background: rgba(68,136,255,0.05); }
 
 .sectorName {
   font-weight: 700;
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
 .strongTag {
-  margin-left: 6px;
-  font-size: 11px;
+  margin-left: 5px;
+  font-size: 10px;
 }
 .weakTag {
-  margin-left: 6px;
-  font-size: 11px;
+  margin-left: 5px;
+  font-size: 10px;
   color: #ff8800;
 }
 
 .scoreCell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .scoreBar {
-  height: 6px;
+  height: 5px;
   background: linear-gradient(90deg, #4488ff, #00c8ff);
   border-radius: 3px;
-  min-width: 4px;
+  min-width: 3px;
   flex-shrink: 0;
+  max-width: 90px;
 }
 
 .leader {
@@ -138,29 +270,29 @@
   color: #4488ff;
 }
 
-/* ── Detail expand ── */
+/* ── Detail Expand ── */
 .detailCell {
-  padding: 8px 14px 14px;
-  background: rgba(255,255,255,0.02);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 8px 12px 12px;
+  background: rgba(255,255,255,0.015);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
 }
 
 .detailLoading {
   font-size: 11px;
-  color: rgba(255,255,255,0.45);
+  color: rgba(255,255,255,0.35);
 }
 
 .tickerGrid {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .tickerRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 0;
+  gap: 8px;
+  padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   flex-wrap: wrap;
 }
@@ -168,7 +300,7 @@
 .tickerSym {
   font-weight: 800;
   font-size: 12px;
-  width: 60px;
+  width: 56px;
   flex-shrink: 0;
 }
 
@@ -178,7 +310,7 @@
   background: rgba(255,255,255,0.06);
   border-radius: 3px;
   padding: 1px 5px;
-  color: rgba(255,255,255,0.45);
+  color: rgba(255,255,255,0.4);
 }
 
 .tickerScore {
@@ -190,7 +322,7 @@
 .sympathyTag {
   font-size: 9px;
   font-weight: 700;
-  background: rgba(0,229,255,0.08);
+  background: rgba(0,229,255,0.07);
   border: 1px solid rgba(0,229,255,0.2);
   color: #00e5ff;
   border-radius: 3px;
@@ -202,23 +334,23 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-top: 24px;
+  margin-top: 20px;
 }
 
 .refreshBtn {
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
   color: #fff;
   border-radius: 4px;
-  padding: 4px 12px;
+  padding: 5px 14px;
   font-size: 11px;
   cursor: pointer;
   font-family: inherit;
   transition: all 0.15s;
 }
-.refreshBtn:hover { background: rgba(255,255,255,0.12); }
+.refreshBtn:hover { background: rgba(255,255,255,0.1); }
 
 .footerNote {
   font-size: 10px;
-  color: rgba(255,255,255,0.45);
+  color: rgba(255,255,255,0.35);
 }
