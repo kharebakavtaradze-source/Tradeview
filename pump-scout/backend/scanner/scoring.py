@@ -5,6 +5,70 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ── Cycle-phase sector bonus/penalty ─────────────────────────────────────────
+# Additive, capped at ±20 — sector is context, not the dominant signal.
+CYCLE_SECTOR_WEIGHTS: dict[str, dict[str, int]] = {
+    "RISK_ON_GROWTH": {
+        "Information Technology":  15,
+        "Consumer Discretionary":  10,
+        "Financials":               8,
+        "Communication Services":   5,
+        "Health Care":              3,
+        "Energy":                  -5,
+        "Utilities":              -10,
+        "Consumer Staples":       -10,
+    },
+    "LATE_CYCLE": {
+        "Energy":                  15,
+        "Materials":               12,
+        "Industrials":              8,
+        "Financials":               5,
+        "Information Technology":  -5,
+        "Consumer Discretionary":  -8,
+        "Real Estate":            -10,
+    },
+    "STAGFLATION": {
+        "Energy":                  20,
+        "Materials":               15,
+        "Consumer Staples":        10,
+        "Utilities":                8,
+        "Information Technology": -15,
+        "Consumer Discretionary": -20,
+        "Real Estate":            -15,
+    },
+    "RISK_OFF": {
+        "Utilities":               15,
+        "Consumer Staples":        12,
+        "Health Care":             10,
+        "Communication Services":   5,
+        "Energy":                  -5,
+        "Information Technology": -10,
+        "Consumer Discretionary": -15,
+    },
+    "FEAR": {
+        "Materials":                5,
+        "Consumer Staples":         5,
+        # all others get -10 (applied as default in apply_cycle_bonus)
+    },
+    "NEUTRAL": {},
+}
+
+
+def apply_cycle_bonus(score: float, sector: str, cycle_phase: str) -> tuple[float, int]:
+    """
+    Apply additive sector bonus/penalty based on current cycle phase.
+    Returns (new_score, bonus_applied).
+    Bonus is capped at ±20. FEAR phase defaults to -10 for unlisted sectors.
+    """
+    weights = CYCLE_SECTOR_WEIGHTS.get(cycle_phase, {})
+    if cycle_phase == "FEAR":
+        bonus = weights.get(sector, -10)
+    else:
+        bonus = weights.get(sector, 0)
+    bonus = max(-20, min(20, bonus))
+    new_score = round(min(100, max(0, score + bonus)), 2)
+    return new_score, bonus
+
 
 def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
     anomaly_ratio = indicators.get("anomaly_ratio", 0)

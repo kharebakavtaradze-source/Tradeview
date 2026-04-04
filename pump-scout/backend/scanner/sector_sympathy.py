@@ -19,8 +19,10 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
 from scanner.sector_map import SECTOR_MAP as _KNOWN_SECTORS
 
 
-async def _fetch_sector_api(ticker: str, client: httpx.AsyncClient) -> str:
-    """Fetch sector from Yahoo Finance assetProfile. Tries query2 then query1."""
+async def _fetch_sector_api(ticker: str, client: httpx.AsyncClient) -> tuple[str, str]:
+    """Fetch sector AND industry from Yahoo Finance assetProfile.
+    Returns (sector, industry). Tries query2 then query1."""
+    from scanner.sector_map import FINVIZ_TO_GICS
     for host in ("query2.finance.yahoo.com", "query1.finance.yahoo.com"):
         url = f"https://{host}/v10/finance/quoteSummary/{ticker}?modules=assetProfile"
         try:
@@ -28,12 +30,16 @@ async def _fetch_sector_api(ticker: str, client: httpx.AsyncClient) -> str:
             if resp.status_code == 200:
                 data = resp.json()
                 result = data.get("quoteSummary", {}).get("result") or [{}]
-                sector = result[0].get("assetProfile", {}).get("sector") or ""
+                profile = result[0].get("assetProfile", {})
+                raw_sector = profile.get("sector") or ""
+                industry = profile.get("industry") or ""
+                # Normalize sector to GICS name if Yahoo returns Finviz-style name
+                sector = FINVIZ_TO_GICS.get(raw_sector, raw_sector)
                 if sector:
-                    return sector
+                    return sector, industry
         except Exception:
             continue
-    return "Unknown"
+    return "Unknown", ""
 
 
 async def get_sector(ticker: str) -> str:
@@ -61,16 +67,16 @@ async def get_sector(ticker: str) -> str:
 
     try:
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            sector = await _fetch_sector_api(ticker, client)
+            sector, industry = await _fetch_sector_api(ticker, client)
     except Exception as e:
         logger.debug(f"get_sector failed for {ticker}: {e}")
-        sector = "Unknown"
+        sector, industry = "Unknown", ""
 
     _sector_cache[ticker] = sector
     if sector != "Unknown":
         try:
             from database import save_sector_to_db
-            await save_sector_to_db(ticker, sector)
+            await save_sector_to_db(ticker, sector, industry=industry)
         except Exception:
             pass
 
@@ -117,12 +123,12 @@ async def get_sectors_batch(tickers: list) -> dict:
     # Fetch remaining from Yahoo API
     async def fetch_one(ticker: str, client: httpx.AsyncClient):
         async with semaphore:
-            sector = await _fetch_sector_api(ticker, client)
+            sector, industry = await _fetch_sector_api(ticker, client)
             _sector_cache[ticker] = sector
             if sector != "Unknown":
                 try:
                     from database import save_sector_to_db
-                    await save_sector_to_db(ticker, sector)
+                    await save_sector_to_db(ticker, sector, industry=industry)
                 except Exception:
                     pass
             return ticker, sector
@@ -177,13 +183,17 @@ def calc_sympathy_score(ticker_result: dict, sector_leaders: dict) -> dict:
     """
     Score sympathy play potential for a ticker given sector leaders.
 
-    New logic (v2):
+    Logic (v3 — industry-aware):
     - Leader must have score >= 60
     - This ticker must lag leader by >= 3% price change
     - This ticker must have vol >= 1.5x
-    - CMF bonus for accumulation signal
+    - Industry-level match = stronger sympathy than sector-level only
     """
+    from scanner.sector_map import TICKER_INDUSTRY, SYMPATHY_INDUSTRIES
+
     sector = ticker_result.get("sector", "Unknown")
+    my_symbol = ticker_result.get("symbol", "")
+    my_industry = TICKER_INDUSTRY.get(my_symbol, "")
 
     if sector == "Unknown" or sector not in sector_leaders:
         return {"is_sympathy": False, "sympathy_score": 0}
@@ -192,7 +202,6 @@ def calc_sympathy_score(ticker_result: dict, sector_leaders: dict) -> dict:
     if not leaders:
         return {"is_sympathy": False, "sympathy_score": 0}
 
-    my_symbol = ticker_result.get("symbol", "")
     # Filter out this ticker from leaders
     sector_leaders_filtered = [l for l in leaders if l["symbol"] != my_symbol]
     if not sector_leaders_filtered:
@@ -201,6 +210,8 @@ def calc_sympathy_score(ticker_result: dict, sector_leaders: dict) -> dict:
     best_leader = sector_leaders_filtered[0]
     leader_score = best_leader["score"]
     leader_change = best_leader["change"]
+    leader_symbol = best_leader["symbol"]
+    leader_industry = TICKER_INDUSTRY.get(leader_symbol, "")
 
     # Leader must be strong
     if leader_score < 60:
@@ -239,14 +250,31 @@ def calc_sympathy_score(ticker_result: dict, sector_leaders: dict) -> dict:
     elif my_vol > 2:
         score += 5
 
+    # Industry-level sympathy bonus: same industry = much stronger signal
+    industry_match = "sector"
+    industry_bonus = 0
+    if leader_industry and my_industry and leader_industry == my_industry:
+        industry_match = "industry"
+        strength = SYMPATHY_INDUSTRIES.get(my_industry, "WEAK")
+        mult = {"STRONG": 0.4, "MEDIUM": 0.25, "WEAK": 0.1}.get(strength, 0.1)
+        industry_bonus = min(20, leader_change * mult)
+        score += industry_bonus
+    elif my_industry:
+        # Same sector but different industry — weaker sympathy
+        industry_bonus = min(8, leader_change * 0.1)
+        score += industry_bonus
+
     score = min(100, round(score))
 
     return {
         "is_sympathy": score >= 50,
         "sympathy_score": score,
         "sector": sector,
+        "my_industry": my_industry,
+        "leader_industry": leader_industry,
+        "industry_match": industry_match,
         "leaders": [l["symbol"] for l in sector_leaders_filtered[:3]],
-        "leader": best_leader["symbol"],
+        "leader": leader_symbol,
         "leader_score": round(leader_score, 1),
         "leader_change_pct": round(leader_change, 2),
         "my_change_pct": round(my_change, 2),

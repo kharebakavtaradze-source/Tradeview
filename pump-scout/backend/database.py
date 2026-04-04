@@ -238,6 +238,7 @@ class SectorCache(Base):
 
     symbol = Column(String(20), primary_key=True, index=True)
     sector = Column(String(100), nullable=False)
+    industry = Column(String(100), nullable=True)
     fetched_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -360,6 +361,10 @@ _SCAN_CANDIDATE_MIGRATIONS = [
     ("downgrade_reason","VARCHAR(30)"),
 ]
 
+_SECTOR_CACHE_MIGRATIONS = [
+    ("industry", "VARCHAR(100)"),
+]
+
 _AI_PORTFOLIO_MIGRATIONS = [
     ("current_price",  "FLOAT"),
     ("max_gain_pct",   "FLOAT DEFAULT 0"),
@@ -418,6 +423,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE ai_portfolio ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for col, coltype in _SECTOR_CACHE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE sector_cache ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -440,6 +450,13 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration ai_portfolio.{col} failed (non-fatal): {e}")
+        for col, coltype in _SECTOR_CACHE_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE sector_cache ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration sector_cache.{col} failed (non-fatal): {e}")
 
 
 async def init_db():
@@ -595,8 +612,8 @@ async def get_sector_from_db(symbol: str) -> Optional[str]:
     return None
 
 
-async def save_sector_to_db(symbol: str, sector: str) -> None:
-    """Upsert sector value into the DB cache."""
+async def save_sector_to_db(symbol: str, sector: str, industry: str = "") -> None:
+    """Upsert sector and industry into the DB cache."""
     try:
         async with get_session_factory()() as session:
             result = await session.execute(
@@ -605,11 +622,14 @@ async def save_sector_to_db(symbol: str, sector: str) -> None:
             row = result.scalar_one_or_none()
             if row:
                 row.sector = sector
+                if industry:
+                    row.industry = industry
                 row.fetched_at = datetime.utcnow()
             else:
                 session.add(SectorCache(
                     symbol=symbol.upper(),
                     sector=sector,
+                    industry=industry or None,
                     fetched_at=datetime.utcnow(),
                 ))
             await session.commit()

@@ -11,7 +11,21 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-REGIME_ETFS = ["SPY", "QQQ", "XLE", "XLV", "XLU", "GLD"]
+REGIME_ETFS = [
+    "SPY", "QQQ",
+    "XLK",   # Information Technology
+    "XLV",   # Health Care
+    "XLF",   # Financials
+    "XLY",   # Consumer Discretionary
+    "XLP",   # Consumer Staples
+    "XLE",   # Energy
+    "XLI",   # Industrials
+    "XLB",   # Materials
+    "XLRE",  # Real Estate
+    "XLC",   # Communication Services
+    "XLU",   # Utilities
+    "GLD",   # Gold (fear gauge)
+]
 
 _YAHOO_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -75,6 +89,53 @@ async def fetch_etf_data(symbol: str) -> dict | None:
         return None
 
 
+def detect_cycle_phase(etf_data: dict) -> str:
+    """
+    Detect current market cycle phase using sector ETF 1-day performance.
+
+    Returns one of:
+      RISK_ON_GROWTH  — Tech/Growth leading
+      LATE_CYCLE      — Energy/Materials leading
+      STAGFLATION     — Energy up, Growth down
+      RISK_OFF        — Defensives leading
+      FEAR            — Gold up, everything down
+      NEUTRAL         — No clear pattern
+    """
+    def pct(sym: str) -> float:
+        return etf_data.get(sym, {}).get("pct_1d", 0) or 0
+
+    xle  = pct("XLE")
+    xlk  = pct("XLK")
+    xlb  = pct("XLB")
+    xlu  = pct("XLU")
+    xlp  = pct("XLP")
+    xlv  = pct("XLV")
+    gld  = pct("GLD")
+    spy  = pct("SPY")
+
+    # FEAR: gold rising, broad market falling
+    if gld > 1.5 and spy < -1.0:
+        return "FEAR"
+
+    # STAGFLATION: energy up, growth down, market negative
+    if xle > 1.0 and xlk < -0.5 and spy < 0:
+        return "STAGFLATION"
+
+    # LATE_CYCLE: energy + materials leading
+    if xle > 0.5 and xlb > 0.3 and spy > -0.5:
+        return "LATE_CYCLE"
+
+    # RISK_OFF: defensives outperform, tech down
+    if (xlu > 0.3 or xlp > 0.3 or xlv > 0.3) and xlk < 0:
+        return "RISK_OFF"
+
+    # RISK_ON_GROWTH: tech leading, broad market up
+    if xlk > 0.5 and spy > 0:
+        return "RISK_ON_GROWTH"
+
+    return "NEUTRAL"
+
+
 async def detect_market_regime() -> dict:
     """
     Detect the current market regime using ETF data.
@@ -107,54 +168,62 @@ async def detect_market_regime() -> dict:
         except Exception as e:
             logger.warning(f"DB fallback for regime failed: {e}")
 
-    spy = etf_data.get("SPY", {})
-    qqq = etf_data.get("QQQ", {})
-    xle = etf_data.get("XLE", {})
-    xlv = etf_data.get("XLV", {})
-    xlu = etf_data.get("XLU", {})
-    gld = etf_data.get("GLD", {})
+    spy  = etf_data.get("SPY", {})
+    qqq  = etf_data.get("QQQ", {})
+    xlk  = etf_data.get("XLK", {})
+    xle  = etf_data.get("XLE", {})
+    xlv  = etf_data.get("XLV", {})
+    xlu  = etf_data.get("XLU", {})
+    xlb  = etf_data.get("XLB", {})
+    xlf  = etf_data.get("XLF", {})
+    xly  = etf_data.get("XLY", {})
+    xlp  = etf_data.get("XLP", {})
+    xli  = etf_data.get("XLI", {})
+    xlre = etf_data.get("XLRE", {})
+    xlc  = etf_data.get("XLC", {})
+    gld  = etf_data.get("GLD", {})
 
     regime = "NEUTRAL"
     strong_sectors: list[str] = []
     weak_sectors: list[str] = []
     recommendation = ""
 
-    # FEAR: Gold rising + SPY falling
+    # FEAR: Gold rising + SPY falling (5d)
     if gld.get("pct_5d", 0) > 2 and spy.get("pct_5d", 0) < -2:
         regime = "FEAR"
-        strong_sectors = ["Materials", "Utilities", "Healthcare"]
-        weak_sectors = ["Technology", "Consumer Cyclical", "Financial"]
+        strong_sectors = ["Materials", "Utilities", "Health Care"]
+        weak_sectors = ["Information Technology", "Consumer Discretionary", "Financials"]
         recommendation = "Рынок в страхе. Фокус на defensive секторах. Только FIRE сигналы."
 
-    # RISK_OFF: SPY below EMA20 + Utilities outperform
+    # RISK_OFF: SPY below EMA20 + Utilities outperform QQQ
     elif not spy.get("above_ema20", True) and xlu.get("pct_5d", 0) > qqq.get("pct_5d", 0):
         regime = "RISK_OFF"
-        strong_sectors = ["Utilities", "Healthcare", "Consumer Defensive"]
-        weak_sectors = ["Technology", "Communication", "Consumer Cyclical"]
-        recommendation = "Защитный режим. Предпочитать Healthcare и Utilities."
+        strong_sectors = ["Utilities", "Health Care", "Consumer Staples"]
+        weak_sectors = ["Information Technology", "Communication Services", "Consumer Discretionary"]
+        recommendation = "Защитный режим. Предпочитать Health Care и Utilities."
 
-    # ROTATION_ENERGY: Energy strongly outperforms
+    # ROTATION_ENERGY: Energy strongly outperforms SPY (5d)
     elif xle.get("pct_5d", 0) > spy.get("pct_5d", 0) + 3:
         regime = "ROTATION_ENERGY"
         strong_sectors = ["Energy", "Materials"]
-        weak_sectors = ["Technology", "Consumer Cyclical"]
+        weak_sectors = ["Information Technology", "Consumer Discretionary"]
         recommendation = "Ротация в Energy. Искать нефтяные sympathy сделки."
 
     # ROTATION_DEFENSIVE: Defensive beats growth
     elif (xlv.get("pct_5d", 0) > qqq.get("pct_5d", 0) + 2 or
           xlu.get("pct_5d", 0) > qqq.get("pct_5d", 0) + 2):
         regime = "ROTATION_DEFENSIVE"
-        strong_sectors = ["Healthcare", "Consumer Defensive", "Utilities"]
-        weak_sectors = ["Technology", "Communication"]
-        recommendation = "Деньги перетекают в defensive. Biotech и Healthcare в приоритете."
+        strong_sectors = ["Health Care", "Consumer Staples", "Utilities"]
+        weak_sectors = ["Information Technology", "Communication Services"]
+        recommendation = "Деньги перетекают в defensive. Biotech и Health Care в приоритете."
 
     # RISK_ON: SPY + QQQ above EMA20
     elif (spy.get("above_ema20", False) and
           qqq.get("above_ema20", False) and
           qqq.get("pct_5d", 0) > 0):
         regime = "RISK_ON"
-        strong_sectors = ["Technology", "Communication", "Consumer Cyclical"]
-        weak_sectors = ["Utilities", "Consumer Defensive"]
+        strong_sectors = ["Information Technology", "Communication Services", "Consumer Discretionary"]
+        weak_sectors = ["Utilities", "Consumer Staples"]
         recommendation = "Бычий рынок. Фокус на Growth секторах. Все сигналы активны."
 
     else:
@@ -163,14 +232,26 @@ async def detect_market_regime() -> dict:
         weak_sectors = []
         recommendation = "Нейтральный рынок. Работать по обычным сигналам."
 
+    # Detect cycle phase from 1-day ETF moves
+    cycle_phase = detect_cycle_phase(etf_data)
+
     result = {
         "regime": regime,
+        "cycle_phase": cycle_phase,
         "date": date.today().isoformat(),
         "spy_pct": spy.get("pct_1d", 0),
         "qqq_pct": qqq.get("pct_1d", 0),
+        "xlk_pct": xlk.get("pct_1d", 0),
         "xle_pct": xle.get("pct_1d", 0),
         "xlv_pct": xlv.get("pct_1d", 0),
         "xlu_pct": xlu.get("pct_1d", 0),
+        "xlb_pct": xlb.get("pct_1d", 0),
+        "xlf_pct": xlf.get("pct_1d", 0),
+        "xly_pct": xly.get("pct_1d", 0),
+        "xlp_pct": xlp.get("pct_1d", 0),
+        "xli_pct": xli.get("pct_1d", 0),
+        "xlre_pct": xlre.get("pct_1d", 0),
+        "xlc_pct": xlc.get("pct_1d", 0),
         "gld_pct": gld.get("pct_1d", 0),
         "spy_vs_ema20": spy.get("vs_ema20", 0),
         "qqq_vs_ema20": qqq.get("vs_ema20", 0),

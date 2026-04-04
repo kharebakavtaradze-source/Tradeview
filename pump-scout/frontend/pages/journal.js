@@ -162,7 +162,7 @@ function ProgressBar({ current, entry, target, stop }) {
       <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
         <div style={{
           height: '100%', width: `${progress}%`, borderRadius: 2,
-          background: pct != null && pct >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
+          background: pct == null ? 'rgba(100,100,100,0.4)' : pct >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
           transition: 'width 0.3s',
         }} />
       </div>
@@ -500,6 +500,15 @@ export default function Journal() {
 
             {(insightsLoading || deepLoading) && <div className={styles.loading}><span className={styles.spinner} /> Analyzing trades…</div>}
 
+            {/* No closed trades message */}
+            {!insightsLoading && !deepLoading && stats?.closed_trades === 0 && (
+              <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.06)' }}>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
+                <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>Нет данных для анализа</div>
+                <div style={{ fontSize: 12 }}>Закройте минимум 3 сделки чтобы увидеть AI-аналитику по сигналам, тирам и паттернам</div>
+              </div>
+            )}
+
             {/* AI Coaching Insights */}
             {insights && !insights.message && (
               <div style={{ display: 'grid', gap: 12, marginBottom: 20 }}>
@@ -755,6 +764,11 @@ export default function Journal() {
                       <span>
                         <span className={styles.tradeLabel}>Entry </span>
                         ${e.entry_price?.toFixed(2)}
+                        {e.entry_date && (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 9, marginLeft: 5 }}>
+                            {new Date(e.entry_date).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })}
+                          </span>
+                        )}
                         {isOpen && livePrice && (
                           <span style={{ color: 'var(--text-muted)' }}>
                             {' → '}
@@ -762,6 +776,11 @@ export default function Journal() {
                               ${livePrice?.toFixed(2)}
                             </b>
                             {isLive && <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 3 }}>●</span>}
+                          </span>
+                        )}
+                        {isOpen && !livePrice && (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 10, marginLeft: 6 }}>
+                            нет цены
                           </span>
                         )}
                         {!isOpen && e.exit_price && (
