@@ -364,7 +364,19 @@ async def run_scan() -> dict:
                     if score_now <= 60 and _TIER_RANK.get(current_tier, 0) >= _TIER_RANK["FIRE"]:
                         sc["tier"] = "ARM"
 
-            # 2. Cycle phase sector bonus (additive, ±20 cap)
+            # 2. Sector class bonus from A/B/C/D/F classification
+            sector_class = sp.get("sector_class", "C") if sp else "C"
+            sc["sector_class"] = sector_class
+            class_bonus = {"A": 5, "B": 0, "C": 0, "D": -5, "F": -10}.get(sector_class, 0)
+            if class_bonus != 0:
+                sc["total_score"] = round(min(100, max(0, sc["total_score"] + class_bonus)), 2)
+                sc["sector_class_bonus"] = class_bonus
+                if sector_class == "F":
+                    r["regime_warning"] = True
+            else:
+                sc["sector_class_bonus"] = 0
+
+            # 3. Cycle phase sector bonus (additive, ±20 cap)
             if sector != "Unknown":
                 new_score, cycle_bonus = apply_cycle_bonus(sc["total_score"], sector, cycle_phase)
                 sc["total_score"] = new_score
@@ -379,6 +391,22 @@ async def run_scan() -> dict:
             else:
                 sc["cycle_phase_bonus"] = 0
                 sc["cycle_phase"] = cycle_phase
+
+            # 4. Setup quality layers (DISPLAY ONLY — never touches total_score)
+            try:
+                from scanner.scoring import calc_setup_quality_layers
+                # Build sector_data for quality layer from sector_perf entry (sp)
+                sector_data_for_layers = sp if sp else {}
+                quality_layers = calc_setup_quality_layers(
+                    indicators=r["indicators"],
+                    regime=r["regime"],
+                    market_regime=regime,
+                    sector_data=sector_data_for_layers,
+                    industry_data=None,  # industry ETF data not per-ticker yet
+                )
+                r["setup_quality"] = quality_layers
+            except Exception as _qe:
+                r["setup_quality"] = {"layers": {}, "quality": "MODERATE", "avg": 5.0}
 
     # Step 5: Pre-market data for all scored tickers
     scored_symbols = [r["symbol"] for r in results]
