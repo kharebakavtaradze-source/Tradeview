@@ -1001,18 +1001,69 @@ async def sector_strength_by_sector(sector: str):
             r = results_by_symbol.get(sym)
             if r:
                 tickers_detail.append({
-                    "symbol": sym,
-                    "tier": r.get("score", {}).get("tier"),
-                    "score": round(r.get("score", {}).get("total_score", 0), 1),
-                    "price": r.get("price"),
+                    "symbol":          sym,
+                    "tier":            r.get("score", {}).get("tier"),
+                    "score":           round(r.get("score", {}).get("total_score", 0), 1),
+                    "price":           r.get("price"),
                     "price_change_pct": r.get("indicators", {}).get("price_change_pct", 0),
-                    "cmf_pctl": r.get("indicators", {}).get("cmf_pctl", 0),
-                    "vol_ratio": r.get("indicators", {}).get("anomaly_ratio", 0),
-                    "sympathy": r.get("sympathy", {}),
+                    "cmf_pctl":        r.get("indicators", {}).get("cmf_pctl", 0),
+                    "vol_ratio":       r.get("indicators", {}).get("anomaly_ratio", 0),
+                    "sympathy":        r.get("sympathy", {}),
+                    "industry":        r.get("industry", ""),
+                    "sympathy_strength": r.get("sympathy_strength", "UNKNOWN"),
+                    "setup_quality":   r.get("setup_quality", {}),
                 })
     tickers_detail.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     return {**data, "tickers_detail": tickers_detail}
+
+
+# ─── Admin / Maintenance routes ───────────────────────────────────────────────
+
+@app.get("/api/admin/test-massive")
+async def admin_test_massive(symbol: str = "KPTI"):
+    """
+    Test the Massive Reference Data API for a single symbol.
+    Verifies API key and response format before running full enrichment.
+    """
+    from scanner.massive_client import get_ticker_reference, MASSIVE_API_KEY
+    if not MASSIVE_API_KEY:
+        return {"error": "MASSIVE_API_KEY not set in environment"}
+
+    data = await get_ticker_reference(symbol.upper())
+
+    # Check if already in DB
+    from database import get_sector_full_from_db
+    cached = await get_sector_full_from_db(symbol.upper())
+
+    return {
+        "symbol":           symbol.upper(),
+        "massive_response": data,
+        "cached_in_db":     cached,
+        "api_key_set":      bool(MASSIVE_API_KEY),
+    }
+
+
+@app.get("/api/admin/enrich-sectors")
+async def admin_enrich_sectors(background_tasks: BackgroundTasks):
+    """
+    Manually trigger the Massive sector/industry enrichment job.
+    Runs in background — rate limited to 1 call per 15s.
+    Returns immediately with count of symbols queued.
+    """
+    from database import get_symbols_needing_enrichment
+    missing = await get_symbols_needing_enrichment(limit=200)
+
+    async def _run():
+        from scheduler import enrich_sector_cache
+        await enrich_sector_cache()
+
+    background_tasks.add_task(_run)
+    return {
+        "status":  "started",
+        "queued":  len(missing),
+        "message": f"Enriching {len(missing)} symbols in background (1 per 15s)",
+    }
 
 
 # ─── EOD Log routes ────────────────────────────────────────────────────────────

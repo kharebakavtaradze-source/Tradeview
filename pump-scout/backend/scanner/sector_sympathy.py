@@ -11,7 +11,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # In-process memory cache — fast path, avoid DB for hot-path tickers
-_sector_cache: dict = {}
+_sector_cache: dict   = {}
+_industry_cache: dict = {}   # symbol → industry string (populated from DB/Yahoo)
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -57,11 +58,13 @@ async def get_sector(ticker: str) -> str:
 
     # Try DB cache (avoids API calls across restarts)
     try:
-        from database import get_sector_from_db, save_sector_to_db
-        cached = await get_sector_from_db(ticker)
-        if cached:
-            _sector_cache[ticker] = cached
-            return cached
+        from database import get_sector_full_from_db
+        cached_row = await get_sector_full_from_db(ticker)
+        if cached_row and cached_row.get("sector") and cached_row["sector"] != "Unknown":
+            _sector_cache[ticker] = cached_row["sector"]
+            if cached_row.get("industry"):
+                _industry_cache[ticker] = cached_row["industry"]
+            return cached_row["sector"]
     except Exception:
         pass
 
@@ -73,6 +76,8 @@ async def get_sector(ticker: str) -> str:
         sector, industry = "Unknown", ""
 
     _sector_cache[ticker] = sector
+    if industry:
+        _industry_cache[ticker] = industry
     if sector != "Unknown":
         try:
             from database import save_sector_to_db
@@ -84,33 +89,46 @@ async def get_sector(ticker: str) -> str:
 
 
 async def get_sectors_batch(tickers: list) -> dict:
-    """Fetch sectors for multiple tickers concurrently (max 5 at a time)."""
+    """
+    Fetch sectors (+ industry when cached) for multiple tickers concurrently.
+
+    Returns:
+      {symbol: {"sector": str, "industry": str}}
+
+    Industry comes from DB enrichment (Massive nightly job) when available.
+    Yahoo API is used as fallback for unknown sectors — industry from Yahoo too.
+    """
     semaphore = asyncio.Semaphore(5)
 
-    # Pre-fill from known map and in-memory cache
-    result: dict[str, str] = {}
+    # result stores {"sector": ..., "industry": ...} per symbol
+    result: dict[str, dict] = {}
     need_fetch: list[str] = []
+
     for t in tickers:
         t = t.upper()
         if t in _KNOWN_SECTORS:
-            result[t] = _KNOWN_SECTORS[t]
+            result[t] = {"sector": _KNOWN_SECTORS[t], "industry": _industry_cache.get(t, "")}
         elif t in _sector_cache:
-            result[t] = _sector_cache[t]
+            result[t] = {"sector": _sector_cache[t], "industry": _industry_cache.get(t, "")}
         else:
             need_fetch.append(t)
 
     if not need_fetch:
         return result
 
-    # Check DB cache for remaining tickers
+    # Check DB cache for remaining tickers (includes industry + massive_fetched)
     try:
-        from database import get_sector_from_db
+        from database import get_sector_full_from_db
         still_need: list[str] = []
         for t in need_fetch:
-            cached = await get_sector_from_db(t)
-            if cached:
-                result[t] = cached
-                _sector_cache[t] = cached
+            row = await get_sector_full_from_db(t)
+            if row and row.get("sector") and row["sector"] != "Unknown":
+                sector   = row["sector"]
+                industry = row.get("industry") or ""
+                result[t] = {"sector": sector, "industry": industry}
+                _sector_cache[t] = sector
+                if industry:
+                    _industry_cache[t] = industry
             else:
                 still_need.append(t)
         need_fetch = still_need
@@ -120,18 +138,20 @@ async def get_sectors_batch(tickers: list) -> dict:
     if not need_fetch:
         return result
 
-    # Fetch remaining from Yahoo API
+    # Fetch remaining from Yahoo API (never Massive — rate limited, nightly only)
     async def fetch_one(ticker: str, client: httpx.AsyncClient):
         async with semaphore:
             sector, industry = await _fetch_sector_api(ticker, client)
             _sector_cache[ticker] = sector
+            if industry:
+                _industry_cache[ticker] = industry
             if sector != "Unknown":
                 try:
                     from database import save_sector_to_db
                     await save_sector_to_db(ticker, sector, industry=industry)
                 except Exception:
                     pass
-            return ticker, sector
+            return ticker, sector, industry
 
     try:
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
@@ -142,8 +162,8 @@ async def get_sectors_batch(tickers: list) -> dict:
         raw = []
 
     for r in raw:
-        if isinstance(r, tuple) and len(r) == 2:
-            result[r[0]] = r[1]
+        if isinstance(r, tuple) and len(r) == 3:
+            result[r[0]] = {"sector": r[1], "industry": r[2]}
 
     return result
 

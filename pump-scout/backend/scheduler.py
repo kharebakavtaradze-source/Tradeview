@@ -65,6 +65,59 @@ async def _run_data_rotation():
         logger.error(f"Data rotation failed: {e}", exc_info=True)
 
 
+async def enrich_sector_cache() -> dict:
+    """
+    Nightly job: fills missing sector/industry data from Massive Reference Data.
+    Rate limit: 1 call per 15 seconds (safe for 5 calls/min free plan).
+    Returns {"enriched": N, "total": M} summary dict.
+    """
+    import asyncio as _asyncio
+    from database import get_symbols_needing_enrichment, save_sector_to_db
+    from scanner.massive_client import get_ticker_reference
+
+    missing = await get_symbols_needing_enrichment(limit=200)
+    if not missing:
+        logger.info("sector_cache enrichment: nothing to enrich")
+        return {"enriched": 0, "total": 0}
+
+    logger.info(f"Massive enrichment: {len(missing)} symbols queued")
+    enriched = 0
+
+    for symbol in missing:
+        try:
+            data = await get_ticker_reference(symbol)
+            if data and data.get("sector"):
+                await save_sector_to_db(
+                    symbol,
+                    sector=data["sector"],
+                    industry=data.get("industry") or "",
+                    market_cap=data.get("market_cap"),
+                    massive_fetched=True,
+                )
+                enriched += 1
+                logger.debug(f"Massive enriched: {symbol} → {data['sector']} / {data.get('industry')}")
+            else:
+                # Mark as attempted so we don't retry forever
+                # Set massive_fetched=True even with no data (API returned nothing useful)
+                await save_sector_to_db(symbol, sector="Unknown", massive_fetched=True)
+        except Exception as e:
+            logger.warning(f"Massive enrichment failed for {symbol}: {e}")
+
+        # 1 call per 15s = 4 calls/min — safely under 5 calls/min free limit
+        await _asyncio.sleep(15)
+
+    logger.info(f"Massive enrichment complete: {enriched}/{len(missing)} updated")
+    return {"enriched": enriched, "total": len(missing)}
+
+
+async def _run_sector_enrichment():
+    """Wrapper for scheduler."""
+    try:
+        await enrich_sector_cache()
+    except Exception as e:
+        logger.error(f"Sector enrichment job failed: {e}", exc_info=True)
+
+
 async def _run_sector_performance():
     """Refresh Finviz sector performance cache (clears stale 4-hour window)."""
     try:
@@ -303,10 +356,26 @@ def start_scheduler():
         misfire_grace_time=3600,
     )
 
+    # 22:00 ET Mon–Fri — Massive sector/industry enrichment (free plan: 1 per 15s)
+    scheduler.add_job(
+        _run_sector_enrichment,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=22,
+            minute=0,
+            timezone=EASTERN_TZ,
+        ),
+        id="sector_cache_enrichment",
+        name="Massive Sector/Industry Enrichment (10:00 PM ET)",
+        replace_existing=True,
+        misfire_grace_time=1800,
+    )
+
     scheduler.start()
     logger.info(
         "Scheduler started — 3 scan jobs + hype monitor (3x daily) + morning brief + price alerts "
-        "+ 5 portfolio/journal/EOD jobs + regime at 16:15 + sector perf at 16:20 + weekly data rotation"
+        "+ 5 portfolio/journal/EOD jobs + regime at 16:15 + sector perf at 16:20 "
+        "+ Massive enrichment at 22:00 + weekly data rotation"
     )
 
 
