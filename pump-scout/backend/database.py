@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, select, text
+from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -233,13 +233,16 @@ class AIPortfolioState(Base):
 
 
 class SectorCache(Base):
-    """Persistent sector cache — avoids repeated Yahoo Finance API calls."""
+    """Persistent sector cache — avoids repeated Yahoo Finance / Massive API calls."""
     __tablename__ = "sector_cache"
 
-    symbol = Column(String(20), primary_key=True, index=True)
-    sector = Column(String(100), nullable=False)
-    industry = Column(String(100), nullable=True)
-    fetched_at = Column(DateTime, default=datetime.utcnow)
+    symbol           = Column(String(20), primary_key=True, index=True)
+    sector           = Column(String(100), nullable=False)
+    industry         = Column(String(100), nullable=True)
+    market_cap       = Column(BigInteger, nullable=True)
+    massive_fetched  = Column(Boolean, default=False, nullable=False)
+    massive_fetched_at = Column(DateTime, nullable=True)
+    fetched_at       = Column(DateTime, default=datetime.utcnow)
 
 
 class EodLog(Base):
@@ -362,7 +365,10 @@ _SCAN_CANDIDATE_MIGRATIONS = [
 ]
 
 _SECTOR_CACHE_MIGRATIONS = [
-    ("industry", "VARCHAR(100)"),
+    ("industry",           "VARCHAR(100)"),
+    ("market_cap",         "BIGINT"),
+    ("massive_fetched",    "BOOLEAN DEFAULT FALSE"),
+    ("massive_fetched_at", "TIMESTAMP"),
 ]
 
 _AI_PORTFOLIO_MIGRATIONS = [
@@ -612,8 +618,12 @@ async def get_sector_from_db(symbol: str) -> Optional[str]:
     return None
 
 
-async def save_sector_to_db(symbol: str, sector: str, industry: str = "") -> None:
-    """Upsert sector and industry into the DB cache."""
+async def get_sector_full_from_db(symbol: str) -> Optional[dict]:
+    """
+    Return the full cached sector row as a dict, regardless of age.
+    Used by the nightly enrichment job.
+    Returns None if not cached at all.
+    """
     try:
         async with get_session_factory()() as session:
             result = await session.execute(
@@ -621,16 +631,74 @@ async def save_sector_to_db(symbol: str, sector: str, industry: str = "") -> Non
             )
             row = result.scalar_one_or_none()
             if row:
+                return {
+                    "sector":          row.sector,
+                    "industry":        row.industry,
+                    "market_cap":      row.market_cap,
+                    "massive_fetched": row.massive_fetched or False,
+                }
+    except Exception as e:
+        logger.debug(f"sector_cache full read failed for {symbol}: {e}")
+    return None
+
+
+async def get_symbols_needing_enrichment(limit: int = 200) -> list[str]:
+    """
+    Return symbols that have no industry or unconfirmed sector
+    and have NOT been fetched from Massive yet.
+    """
+    try:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(SectorCache.symbol).where(
+                    (SectorCache.massive_fetched == False) &  # noqa: E712
+                    (
+                        (SectorCache.industry == None) |  # noqa: E711
+                        (SectorCache.sector == "Unknown") |
+                        (SectorCache.sector == None)  # noqa: E711
+                    )
+                ).order_by(SectorCache.symbol).limit(limit)
+            )
+            return [row[0] for row in result.fetchall()]
+    except Exception as e:
+        logger.debug(f"get_symbols_needing_enrichment failed: {e}")
+        return []
+
+
+async def save_sector_to_db(
+    symbol: str,
+    sector: str,
+    industry: str = "",
+    market_cap: Optional[int] = None,
+    massive_fetched: bool = False,
+) -> None:
+    """Upsert sector and industry into the DB cache."""
+    try:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(SectorCache).where(SectorCache.symbol == symbol.upper())
+            )
+            row = result.scalar_one_or_none()
+            now = datetime.utcnow()
+            if row:
                 row.sector = sector
                 if industry:
                     row.industry = industry
-                row.fetched_at = datetime.utcnow()
+                if market_cap:
+                    row.market_cap = market_cap
+                if massive_fetched:
+                    row.massive_fetched = True
+                    row.massive_fetched_at = now
+                row.fetched_at = now
             else:
                 session.add(SectorCache(
                     symbol=symbol.upper(),
                     sector=sector,
                     industry=industry or None,
-                    fetched_at=datetime.utcnow(),
+                    market_cap=market_cap or None,
+                    massive_fetched=massive_fetched,
+                    massive_fetched_at=now if massive_fetched else None,
+                    fetched_at=now,
                 ))
             await session.commit()
     except Exception as e:

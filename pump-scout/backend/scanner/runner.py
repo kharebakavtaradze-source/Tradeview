@@ -308,9 +308,21 @@ async def run_scan() -> dict:
     if results:
         print(f"Fetching sectors for {len(results)} tickers...")
         symbols = [r["symbol"] for r in results]
-        sectors = await get_sectors_batch(symbols)
+        sectors_data = await get_sectors_batch(symbols)
+        from scanner.sector_map import SYMPATHY_INDUSTRIES
         for r in results:
-            r["sector"] = sectors.get(r["symbol"], "Unknown")
+            sec_info = sectors_data.get(r["symbol"], {})
+            if isinstance(sec_info, dict):
+                r["sector"]   = sec_info.get("sector", "Unknown") or "Unknown"
+                r["industry"] = sec_info.get("industry", "") or ""
+            else:
+                r["sector"]   = sec_info or "Unknown"
+                r["industry"] = ""
+            # Sympathy strength from industry classification
+            if r["industry"]:
+                r["sympathy_strength"] = SYMPATHY_INDUSTRIES.get(r["industry"], "WEAK")
+            else:
+                r["sympathy_strength"] = "UNKNOWN"
 
         sector_leaders = find_sector_leaders(results)
         _TIER_RANK = {"SKIP": 0, "WATCH": 1, "STEALTH": 2, "SYMPATHY": 3, "BASE": 3, "ARM": 4, "FIRE": 5}
