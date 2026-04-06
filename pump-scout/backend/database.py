@@ -85,10 +85,11 @@ class Base(DeclarativeBase):
 class Scan(Base):
     __tablename__ = "scans"
 
-    id = Column(Integer, primary_key=True, index=True)
-    scanned_at = Column(DateTime, default=datetime.utcnow, index=True)
+    id            = Column(Integer, primary_key=True, index=True)
+    scanned_at    = Column(DateTime, default=datetime.utcnow, index=True)
     total_tickers = Column(Integer, default=0)
-    results_json = Column(Text, nullable=False)
+    results_json  = Column(Text, nullable=False)
+    scan_type     = Column(String(30), nullable=True, index=True)  # 'massive_eod' | 'yahoo_intraday'
 
 
 class Watchlist(Base):
@@ -434,6 +435,10 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE sector_cache ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        try:
+            await conn.execute(text("ALTER TABLE scans ADD COLUMN scan_type VARCHAR(30)"))
+        except Exception:
+            pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -463,6 +468,12 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration sector_cache.{col} failed (non-fatal): {e}")
+        try:
+            await conn.execute(text(
+                "ALTER TABLE scans ADD COLUMN IF NOT EXISTS scan_type VARCHAR(30)"
+            ))
+        except Exception as e:
+            logger.warning(f"Migration scans.scan_type failed (non-fatal): {e}")
 
 
 async def init_db():
@@ -491,6 +502,7 @@ async def save_scan(data: dict) -> int:
             scanned_at=datetime.utcnow(),
             total_tickers=data.get("total", len(results)),
             results_json=json.dumps(scan_data),
+            scan_type=data.get("scan_type"),
         )
         session.add(scan)
         await session.commit()
@@ -526,6 +538,35 @@ async def get_latest_scan() -> Optional[dict]:
         )
         scan = result.scalar_one_or_none()
         if not scan:
+            return None
+        data = json.loads(scan.results_json)
+        data["scan_id"] = scan.id
+        return data
+
+
+async def get_latest_scan_by_type(scan_type: str) -> Optional[dict]:
+    """Return the most recent scan of a specific type ('massive_eod' or 'yahoo_intraday')."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(Scan)
+            .where(Scan.scan_type == scan_type)
+            .order_by(Scan.scanned_at.desc())
+            .limit(1)
+        )
+        scan = result.scalar_one_or_none()
+        if not scan:
+            # Fallback: search JSON for scan_type field (for old rows without column value)
+            result2 = await session.execute(
+                select(Scan).order_by(Scan.scanned_at.desc()).limit(10)
+            )
+            for row in result2.scalars():
+                try:
+                    data = json.loads(row.results_json)
+                    if data.get("scan_type") == scan_type:
+                        data["scan_id"] = row.id
+                        return data
+                except Exception:
+                    continue
             return None
         data = json.loads(scan.results_json)
         data["scan_id"] = scan.id
