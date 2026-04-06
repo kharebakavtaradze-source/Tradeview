@@ -28,6 +28,7 @@ export default function AdminPage() {
   const [massiveResult, setMassiveResult] = useState(null);
   const [enrichResult, setEnrichResult] = useState(null);
   const [universeResult, setUniverseResult] = useState(null);
+  const [regimeResult, setRegimeResult] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
   const [loading, setLoading] = useState({});
   const [error, setError] = useState({});
@@ -71,6 +72,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (key === 'massive')  setMassiveResult(data);
       if (key === 'enrich')   setEnrichResult(data);
+      if (key === 'regime')   setRegimeResult(data);
       if (key === 'universe') {
         setUniverseResult(data);
         // Begin polling status after triggering
@@ -256,6 +258,26 @@ export default function AdminPage() {
           )}
         </div>
 
+        {/* ── Refresh Market Regime ── */}
+        <div style={card}>
+          <p style={label}>Refresh Market Regime &amp; ETF Data</p>
+          <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
+            Re-fetches all ETF prices from Yahoo Finance and recalculates regime, cycle phase, industry leaders.<br />
+            Scheduled: 16:15 ET Mon–Fri. Use this to refresh after a holiday or if ETF boxes show "—".
+          </p>
+          <button
+            onClick={() => call('regime', `${API_URL}/api/market-regime/refresh`)}
+            disabled={loading.regime}
+            style={{ background: 'rgba(180,100,255,0.12)', border: '1px solid rgba(180,100,255,0.35)', borderRadius: 4, padding: '7px 18px', color: '#c87fff', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700 }}
+          >
+            {loading.regime ? '⏳ Refreshing…' : '📡 Refresh Regime'}
+          </button>
+          {error.regime && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.regime}</div>}
+          {regimeResult && (
+            <pre style={pre}>{JSON.stringify(regimeResult, null, 2)}</pre>
+          )}
+        </div>
+
         {/* ── Quick Links ── */}
         <div style={card}>
           <p style={label}>Direct Backend Links</p>
@@ -265,6 +287,8 @@ export default function AdminPage() {
               ['/api/admin/run-universe-scan', 'Trigger universe scan (background)'],
               ['/api/admin/universe-scan/status', 'Live scan progress'],
               ['/api/admin/enrich-sectors', 'Trigger sector enrichment'],
+              ['/api/market-regime/refresh', 'Refresh ETF / market regime (background)'],
+              ['/api/market-regime', 'Latest market regime'],
               ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
               ['/api/scan/intraday/latest', 'Latest intraday scan results'],
               ['/api/scan/latest', 'Latest scan (any type)'],

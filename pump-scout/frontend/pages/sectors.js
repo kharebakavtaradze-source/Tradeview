@@ -382,7 +382,8 @@ export default function Sectors() {
                     // Try to enrich with Finviz momentum
                     const mom = momentumByGics[s.sector] || null;
                     const sc  = mom?.sector_class || null;
-                    const flowPct = mom?.change_pct ?? s.momentum_pct;
+                    // Prefer Finviz momentum; fall back to scan avg price-change (treat 0 as no data)
+                    const flowPct = mom?.change_pct ?? (s.momentum_pct || null);
                     const vsSpyPct = mom?.vs_spy_1d ?? null;
                     return (
                       <>

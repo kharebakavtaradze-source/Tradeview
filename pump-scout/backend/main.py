@@ -742,6 +742,7 @@ async def market_regime_history():
 
 
 @app.post("/api/market-regime/refresh")
+@app.get("/api/market-regime/refresh")
 async def market_regime_refresh(background_tasks: BackgroundTasks):
     """Manually trigger market regime detection (runs in background)."""
     from scanner.market_regime import detect_market_regime

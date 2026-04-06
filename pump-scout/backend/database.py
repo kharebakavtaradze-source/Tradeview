@@ -1560,7 +1560,16 @@ async def save_market_regime(data: dict) -> None:
         row = result.scalar_one_or_none()
         strong = ",".join(data.get("strong_sectors", []))
         weak = ",".join(data.get("weak_sectors", []))
-        etf_json = json.dumps(data.get("etf_details", {}))
+        # Store full result dict so cycle_phase, industry_leaders, etc. survive restarts
+        etf_json = json.dumps({
+            "etf_details":      data.get("etf_details", {}),
+            "cycle_phase":      data.get("cycle_phase", "NEUTRAL"),
+            "industry_leaders": data.get("industry_leaders", []),
+            "industry_laggards":data.get("industry_laggards", []),
+            "iwm_pct":          data.get("iwm_pct", 0),
+            "iwm_vs_spy":       data.get("iwm_vs_spy", 0),
+            "small_cap_regime": data.get("small_cap_regime", "NEUTRAL"),
+        })
 
         if row:
             row.regime = data["regime"]
@@ -1599,26 +1608,89 @@ async def save_market_regime(data: dict) -> None:
 def _regime_row_to_dict(row: MarketRegime) -> dict:
     strong = [s for s in (row.strong_sectors or "").split(",") if s]
     weak = [s for s in (row.weak_sectors or "").split(",") if s]
-    etf = {}
+
+    # Load stored JSON — supports both old format (plain ETF dict) and
+    # new format (nested dict with "etf_details" key and extra computed fields)
+    raw = {}
     try:
-        etf = json.loads(row.etf_details_json or "{}")
+        raw = json.loads(row.etf_details_json or "{}")
     except Exception:
         pass
+
+    if "etf_details" in raw:
+        # New format: full result dict
+        etf              = raw.get("etf_details", {})
+        cycle_phase      = raw.get("cycle_phase", "NEUTRAL")
+        industry_leaders = raw.get("industry_leaders", [])
+        industry_laggards= raw.get("industry_laggards", [])
+        iwm_pct          = raw.get("iwm_pct", 0)
+        iwm_vs_spy       = raw.get("iwm_vs_spy", 0)
+        small_cap_regime = raw.get("small_cap_regime", "NEUTRAL")
+    else:
+        # Old format: just the ETF data dict — reconstruct derived fields
+        etf = raw
+        spy_1d = row.spy_pct or 0
+        iwm_1d = (etf.get("IWM") or {}).get("pct_1d", 0) or 0
+        iwm_vs_spy = round(iwm_1d - spy_1d, 2)
+        iwm_pct = iwm_1d
+        if iwm_vs_spy > 0.5:
+            small_cap_regime = "LEADING"
+        elif iwm_vs_spy < -0.5:
+            small_cap_regime = "LAGGING"
+        else:
+            small_cap_regime = "NEUTRAL"
+        # Reconstruct industry leaders/laggards from stored ETF data
+        _IND_ETFS = {"SMH": "Semiconductors", "XBI": "Biotechnology",
+                     "ITA": "Aerospace & Defense", "TAN": "Solar",
+                     "KRE": "Regional Banks", "XME": "Metals & Mining",
+                     "IYT": "Transportation"}
+        industry_leaders = []
+        industry_laggards = []
+        for sym, name in _IND_ETFS.items():
+            d = etf.get(sym) or {}
+            p = d.get("pct_1d", 0) or 0
+            entry = {"symbol": sym, "name": name, "pct_1d": p}
+            if p > 1.0:
+                industry_leaders.append(entry)
+            elif p < -1.0:
+                industry_laggards.append(entry)
+        # Detect cycle phase from stored ETF pct_1d values
+        def _p(sym): return (etf.get(sym) or {}).get("pct_1d", 0) or 0
+        gld_p = _p("GLD"); spy_p = spy_1d
+        if gld_p > 1.5 and spy_p < -1.0:
+            cycle_phase = "FEAR"
+        elif _p("XLE") > 1.0 and _p("XLK") < -0.5 and spy_p < 0:
+            cycle_phase = "STAGFLATION"
+        elif _p("XLE") > 0.5 and _p("XLB") > 0.3 and spy_p > -0.5:
+            cycle_phase = "LATE_CYCLE"
+        elif (_p("XLU") > 0.3 or _p("XLP") > 0.3 or _p("XLV") > 0.3) and _p("XLK") < 0:
+            cycle_phase = "RISK_OFF"
+        elif _p("XLK") > 0.5 and spy_p > 0:
+            cycle_phase = "RISK_ON_GROWTH"
+        else:
+            cycle_phase = "NEUTRAL"
+
     return {
-        "date": row.date.isoformat() if row.date else None,
-        "regime": row.regime,
-        "spy_pct": row.spy_pct,
-        "qqq_pct": row.qqq_pct,
-        "xle_pct": row.xle_pct,
-        "xlv_pct": row.xlv_pct,
-        "xlu_pct": row.xlu_pct,
-        "gld_pct": row.gld_pct,
-        "spy_vs_ema20": row.spy_vs_ema20,
-        "qqq_vs_ema20": row.qqq_vs_ema20,
-        "strong_sectors": strong,
-        "weak_sectors": weak,
-        "recommendation": row.recommendation,
-        "etf_details": etf,
+        "date":              row.date.isoformat() if row.date else None,
+        "regime":            row.regime,
+        "spy_pct":           row.spy_pct,
+        "qqq_pct":           row.qqq_pct,
+        "xle_pct":           row.xle_pct,
+        "xlv_pct":           row.xlv_pct,
+        "xlu_pct":           row.xlu_pct,
+        "gld_pct":           row.gld_pct,
+        "spy_vs_ema20":      row.spy_vs_ema20,
+        "qqq_vs_ema20":      row.qqq_vs_ema20,
+        "strong_sectors":    strong,
+        "weak_sectors":      weak,
+        "recommendation":    row.recommendation,
+        "etf_details":       etf,
+        "cycle_phase":       cycle_phase,
+        "industry_leaders":  industry_leaders,
+        "industry_laggards": industry_laggards,
+        "iwm_pct":           iwm_pct,
+        "iwm_vs_spy":        iwm_vs_spy,
+        "small_cap_regime":  small_cap_regime,
     }
 
 
