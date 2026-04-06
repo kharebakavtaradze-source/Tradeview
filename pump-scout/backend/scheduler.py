@@ -370,17 +370,18 @@ def start_scheduler():
         misfire_grace_time=3600,
     )
 
-    # 17:00 ET Mon–Fri — Massive EOD Universe Scan (primary signal source)
+    # 22:00 ET Mon–Fri — Massive EOD Universe Scan
+    # = 06:00 next day Tbilisi time (6h after market close, data fully settled)
     scheduler.add_job(
         _run_universe_scan,
         trigger=CronTrigger(
             day_of_week="mon-fri",
-            hour=17,
+            hour=22,
             minute=0,
             timezone=EASTERN_TZ,
         ),
         id="universe_scan_eod",
-        name="Massive EOD Universe Scan (5:00 PM ET)",
+        name="Massive EOD Universe Scan (10:00 PM ET / 06:00 Tbilisi)",
         replace_existing=True,
         misfire_grace_time=3600,
     )
@@ -403,7 +404,7 @@ def start_scheduler():
     scheduler.start()
     logger.info(
         "Scheduler started — "
-        "PIPELINE 1: Massive EOD universe scan at 17:00 ET | "
+        "PIPELINE 1: Massive EOD universe scan at 22:00 ET (06:00 Tbilisi) | "
         "PIPELINE 2: Yahoo intraday validation at 8:00, 9:30, 12:00 ET | "
         "Hype monitor 3x daily | Morning brief | Price alerts | "
         "Portfolio/journal/EOD jobs | Regime 16:15 | Sector perf 16:20 | "
