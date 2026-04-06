@@ -1,49 +1,57 @@
 """
-Massive/Polygon data client for EOD universe scans.
+Massive.com data client for EOD universe scans.
 
-Massive.com = rebranded Polygon.io (Oct 2025).
-Package: polygon-api-client (same API, new domain branding).
+Base URL: https://api.massive.com  (Polygon-compatible API, different domain)
+Auth:     ?apiKey=KEY  (standard Polygon-style query param)
+Package:  httpx  (already in requirements — no extra SDK needed)
+
+Endpoints used:
+  GET /v2/aggs/grouped/locale/us/market/stocks/{date}  → all US stocks EOD
+  GET /v2/aggs/ticker/{sym}/range/1/day/{from}/{to}    → individual candle history
+  GET /v3/reference/tickers/{sym}                       → sector / market_cap
 
 Used ONLY for:
-  1. Nightly EOD universe scan (fetch_grouped_daily)
-  2. Individual symbol history for top candidates (fetch_candles_massive)
+  1. Nightly EOD universe scan  (fetch_grouped_daily)
+  2. Per-candidate history      (fetch_candles_massive)
   3. Sector/industry enrichment (fetch_ticker_details)
 
 Never called during intraday Yahoo validation scans.
 """
-import asyncio
 import logging
 import os
 from datetime import date, datetime, timedelta
+from typing import Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
 MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY", "")
+MASSIVE_BASE    = "https://api.massive.com"
+_TIMEOUT        = httpx.Timeout(30.0, connect=10.0)
 
 
-def _get_client():
-    """Get synchronous Polygon/Massive REST client."""
-    from polygon import RESTClient
-    if not MASSIVE_API_KEY:
-        raise ValueError("MASSIVE_API_KEY not set in environment")
-    return RESTClient(api_key=MASSIVE_API_KEY)
+def _params(**extra) -> dict:
+    """Base query params — always includes apiKey."""
+    return {"apiKey": MASSIVE_API_KEY, **extra}
 
+
+# ── Date helpers ──────────────────────────────────────────────────────────────
 
 def get_last_trading_day(offset: int = 1) -> str:
     """
-    Return a trading-day date string.
-    offset=1 → yesterday (most common: get last close).
-    offset=0 → today (data may not be ready until after 5 PM ET).
-    Skips weekends only — holiday fallback is handled by fetch_grouped_daily().
+    Return a trading-day date string (YYYY-MM-DD).
+    offset=1 → yesterday.  Skips weekends only.
+    Holiday fallback is handled by fetch_grouped_daily (auto-retry).
     """
     d = date.today() - timedelta(days=offset)
-    while d.weekday() >= 5:  # Saturday=5, Sunday=6
+    while d.weekday() >= 5:
         d -= timedelta(days=1)
     return d.strftime("%Y-%m-%d")
 
 
 def _prev_weekday(date_str: str) -> str:
-    """Return the previous weekday before a given YYYY-MM-DD string."""
+    """Step back one weekday from a YYYY-MM-DD string."""
     d = datetime.strptime(date_str, "%Y-%m-%d").date() - timedelta(days=1)
     while d.weekday() >= 5:
         d -= timedelta(days=1)
@@ -52,69 +60,64 @@ def _prev_weekday(date_str: str) -> str:
 
 # ── Grouped Daily ─────────────────────────────────────────────────────────────
 
-def _sync_fetch_grouped_daily(target_date: str) -> dict:
+async def _fetch_grouped_daily_raw(target_date: str) -> dict:
     """
-    ONE Polygon API call → ALL US stocks EOD bars.
-    Runs in a thread (sync client).
+    Single HTTP call → ALL US stocks EOD bars for one date.
+    Returns parsed + filtered dict, or {} on any error.
     """
-    client = _get_client()
-    result = {}
+    url = f"{MASSIVE_BASE}/v2/aggs/grouped/locale/us/market/stocks/{target_date}"
 
-    total_raw    = 0
-    skip_alpha   = 0
-    skip_len     = 0
-    skip_vol     = 0
-    skip_price   = 0
+    total_raw  = skip_alpha = skip_len = skip_vol = skip_price = 0
+    result: dict = {}
 
-    for bar in client.get_grouped_daily_aggs(
-        locale="us",
-        market_type="stocks",
-        date=target_date,
-        adjusted=True,
-    ):
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(url, params=_params(adjusted="true", include_otc="false"))
+
+    if resp.status_code != 200:
+        logger.warning(
+            f"Grouped daily HTTP {resp.status_code} for {target_date}: "
+            f"{resp.text[:200]}"
+        )
+        return {}
+
+    data = resp.json()
+    status = data.get("status", "")
+    if status not in ("OK", "DELAYED"):
+        logger.warning(f"Grouped daily status={status!r} for {target_date}")
+
+    for bar in data.get("results") or []:
         total_raw += 1
-        sym = bar.ticker or ""
+        sym   = (bar.get("T") or "").upper()
+        vol   = bar.get("v") or 0
+        close = bar.get("c") or 0.0
 
-        if not sym.isalpha():
-            skip_alpha += 1
-            continue
-        if len(sym) > 5:
-            skip_len += 1
-            continue
-
-        vol   = bar.volume or 0
-        close = bar.close  or 0.0
-
-        if vol < 100_000:
-            skip_vol += 1
-            continue
-        if not (1.0 <= close <= 1000.0):
-            skip_price += 1
-            continue
+        if not sym.isalpha():      skip_alpha += 1; continue
+        if len(sym) > 5:           skip_len   += 1; continue
+        if vol < 100_000:          skip_vol   += 1; continue
+        if not (1.0 <= close <= 1000.0): skip_price += 1; continue
 
         result[sym] = {
-            "open":   bar.open,
-            "high":   bar.high,
-            "low":    bar.low,
+            "open":   bar.get("o"),
+            "high":   bar.get("h"),
+            "low":    bar.get("l"),
             "close":  close,
-            "volume": vol,
-            "vwap":   bar.vw,
-            "trades": bar.transactions or 0,
+            "volume": int(vol),
+            "vwap":   bar.get("vw"),
+            "trades": bar.get("n") or 0,
             "date":   target_date,
         }
 
     logger.info(
-        f"Grouped daily raw={total_raw} | "
-        f"skip_non_alpha={skip_alpha} skip_len>{5}={skip_len} "
-        f"skip_vol<100K={skip_vol} skip_price={skip_price} | "
+        f"Grouped daily {target_date}: raw={total_raw} | "
+        f"skip_alpha={skip_alpha} skip_len={skip_len} "
+        f"skip_vol={skip_vol} skip_price={skip_price} | "
         f"passed={len(result)}"
     )
     if total_raw == 0:
         logger.warning(
-            "Grouped daily returned 0 rows — possible causes: "
-            "holiday/weekend date, wrong API key, Polygon plan doesn't include grouped daily"
+            f"Grouped daily returned 0 rows for {target_date} — "
+            "market holiday, weekend, or data not yet available"
         )
-
     return result
 
 
@@ -122,130 +125,134 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
     """
     Fetch EOD bars for ALL US stocks in a single API call.
 
-    If the requested date returns 0 results (holiday, early close, data delay),
-    automatically falls back to the previous weekday — up to 5 attempts.
-    This handles Good Friday, market holidays, and data pipeline delays.
+    Auto-retries up to 5 previous weekdays when 0 results are returned
+    (handles Good Friday, market holidays, Massive data pipeline delays).
 
     Returns:
-        {
-            "AAPL": {"open": 175.0, "high": 178.5, "low": 174.2,
-                     "close": 177.3, "volume": 45_000_000,
-                     "vwap": 176.8, "trades": 450_000, "date": "2025-01-15"},
-            ...
-        }
-    Quality filter: volume >= 100K, price $1–$1000, alpha symbols only.
+        {"AAPL": {"open":..., "high":..., "low":..., "close":...,
+                  "volume":..., "vwap":..., "trades":..., "date":...}, ...}
     """
-    if not target_date:
-        target_date = get_last_trading_day(offset=1)
-
     if not MASSIVE_API_KEY:
         logger.error("fetch_grouped_daily: MASSIVE_API_KEY not set")
         return {}
 
+    if not target_date:
+        target_date = get_last_trading_day(offset=1)
+
     attempt_date = target_date
     for attempt in range(5):
-        logger.info(f"Massive: fetching grouped daily for {attempt_date} (attempt {attempt + 1})")
+        logger.info(f"Massive grouped daily: {attempt_date} (attempt {attempt + 1}/5)")
         try:
-            result = await asyncio.to_thread(_sync_fetch_grouped_daily, attempt_date)
+            result = await _fetch_grouped_daily_raw(attempt_date)
             if result:
                 if attempt > 0:
                     logger.info(
-                        f"Grouped daily: found data on fallback date {attempt_date} "
-                        f"({attempt} day(s) before {target_date} — likely a holiday)"
+                        f"Found data on fallback {attempt_date} "
+                        f"({attempt} day(s) before requested {target_date})"
                     )
                 return result
-            # 0 results — this day is a holiday or has no data yet
             logger.warning(
-                f"Grouped daily: 0 results for {attempt_date} "
-                f"(holiday or data not ready) — trying previous trading day"
+                f"0 results for {attempt_date} — likely a holiday, trying previous day"
             )
             attempt_date = _prev_weekday(attempt_date)
         except Exception as e:
-            logger.error(f"fetch_grouped_daily failed for {attempt_date}: {e}")
+            logger.error(f"fetch_grouped_daily error on {attempt_date}: {e}")
             return {}
 
     logger.error(
-        f"fetch_grouped_daily: no data found after 5 attempts "
-        f"(tried back from {target_date})"
+        f"fetch_grouped_daily: no data after 5 attempts "
+        f"(tried back from {target_date}) — check API key or plan"
     )
     return {}
 
 
 # ── Individual Symbol Candles ─────────────────────────────────────────────────
 
-def _sync_fetch_candles(symbol: str, start_date: str, end_date: str) -> list:
-    """Fetch daily OHLCV bars for one symbol. Runs in a thread."""
-    client = _get_client()
-    candles = []
-
-    for a in client.list_aggs(
-        ticker=symbol.upper(),
-        multiplier=1,
-        timespan="day",
-        from_=start_date,
-        to=end_date,
-        adjusted=True,
-        limit=50000,
-    ):
-        candles.append({
-            "o": a.open,
-            "h": a.high,
-            "l": a.low,
-            "c": a.close,
-            "v": int(a.volume or 0),
-            "t": a.timestamp,  # milliseconds epoch
-        })
-
-    candles.sort(key=lambda x: x["t"])
-    return candles
-
-
 async def fetch_candles_massive(symbol: str, days: int = 200) -> list:
     """
-    Fetch up to `days` daily bars for one symbol via Massive/Polygon.
+    Fetch up to `days` daily OHLCV bars for one symbol.
+    Handles Massive pagination via next_url.
     Returns list sorted oldest→newest, same format as Yahoo candles.
-    Returns [] on failure (caller should skip the symbol).
+    Returns [] on failure.
     """
     if not MASSIVE_API_KEY:
         return []
 
     end_date   = date.today().strftime("%Y-%m-%d")
     start_date = (date.today() - timedelta(days=days + 60)).strftime("%Y-%m-%d")
+    url = f"{MASSIVE_BASE}/v2/aggs/ticker/{symbol.upper()}/range/1/day/{start_date}/{end_date}"
 
+    candles: list = []
     try:
-        candles = await asyncio.to_thread(
-            _sync_fetch_candles, symbol, start_date, end_date
-        )
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            next_url: Optional[str] = None
+            while True:
+                if next_url:
+                    # next_url already includes apiKey from Massive
+                    resp = await client.get(next_url)
+                else:
+                    resp = await client.get(
+                        url,
+                        params=_params(adjusted="true", sort="asc", limit=50000),
+                    )
+
+                if resp.status_code != 200:
+                    logger.warning(f"Candles HTTP {resp.status_code} for {symbol}")
+                    break
+
+                data = resp.json()
+                for bar in data.get("results") or []:
+                    candles.append({
+                        "o": bar.get("o"),
+                        "h": bar.get("h"),
+                        "l": bar.get("l"),
+                        "c": bar.get("c"),
+                        "v": int(bar.get("v") or 0),
+                        "t": bar.get("t"),   # milliseconds epoch
+                    })
+
+                next_url = data.get("next_url")
+                if not next_url:
+                    break  # no more pages
+
+        candles.sort(key=lambda x: x["t"])
         return candles[-days:]
+
     except Exception as e:
         logger.warning(f"fetch_candles_massive({symbol}): {e}")
         return []
 
 
-# ── Ticker Details (sector / industry enrichment) ─────────────────────────────
-
-def _sync_fetch_ticker_details(symbol: str) -> dict:
-    """Fetch reference data for one symbol. Runs in a thread."""
-    client = _get_client()
-    d = client.get_ticker_details(symbol.upper())
-    return {
-        "sector":     d.sic_description or None,
-        "industry":   d.sic_description or None,
-        "market_cap": d.market_cap or None,
-        "exchange":   d.primary_exchange or None,
-    }
-
+# ── Ticker Details (sector / market_cap enrichment) ───────────────────────────
 
 async def fetch_ticker_details(symbol: str) -> dict | None:
     """
-    Fetch sector, industry, market_cap for one symbol.
-    Returns None on failure — caller decides what to do.
-    Use ONLY for sector_cache enrichment (not hot-path).
+    Fetch sector (sic_description), market_cap, exchange for one symbol.
+    Use ONLY for sector_cache enrichment — not in the hot scan path.
+    Returns None on failure.
     """
     if not MASSIVE_API_KEY:
         return None
+
+    url = f"{MASSIVE_BASE}/v3/reference/tickers/{symbol.upper()}"
     try:
-        return await asyncio.to_thread(_sync_fetch_ticker_details, symbol)
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(url, params=_params())
+
+        if resp.status_code == 404:
+            logger.debug(f"Ticker details: {symbol} not found")
+            return None
+        if resp.status_code != 200:
+            logger.warning(f"Ticker details HTTP {resp.status_code} for {symbol}")
+            return None
+
+        r = resp.json().get("results") or {}
+        return {
+            "sector":     r.get("sic_description") or None,
+            "industry":   r.get("sic_description") or None,
+            "market_cap": r.get("market_cap")       or None,
+            "exchange":   r.get("primary_exchange") or None,
+        }
     except Exception as e:
         logger.warning(f"fetch_ticker_details({symbol}): {e}")
         return None

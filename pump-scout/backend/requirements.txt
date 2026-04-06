@@ -14,4 +14,3 @@ aiosqlite>=0.20.0
 sqlalchemy[asyncio]>=2.0.0
 pytz>=2024.1
 finnhub-python>=2.4.20
-polygon-api-client>=1.14.0
