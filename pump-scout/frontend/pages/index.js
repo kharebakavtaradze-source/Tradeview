@@ -123,9 +123,22 @@ export default function Home() {
 
   const fetchLatest = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/scan/latest`);
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const data = await res.json();
+      // Always prefer the full EOD universe scan as the primary view.
+      // Falls back to /api/scan/latest only when no EOD scan exists yet.
+      const res = await fetch(`${API_URL}/api/scan/universe/latest`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && (data.total > 0 || data.results?.length > 0)) {
+          setScanData(data);
+          setError(null);
+          setLoading(false);
+          return;
+        }
+      }
+      // Fallback: any scan (first run / before first universe scan)
+      const fallback = await fetch(`${API_URL}/api/scan/latest`);
+      if (!fallback.ok) throw new Error(`API error ${fallback.status}`);
+      const data = await fallback.json();
       setScanData(data);
       setError(null);
     } catch (err) {
@@ -213,23 +226,26 @@ export default function Home() {
   const handleRescan = async () => {
     setScanning(true);
     try {
+      // Trigger intraday validation (Pipeline 2) — runs in background.
+      // The main display always shows the EOD universe scan; intraday
+      // results are stored in DB for alerts/AI portfolio but do NOT
+      // replace the primary view.
       await fetch(`${API_URL}/api/scan/run`, { method: 'POST' });
-      // Poll for completion — stop as soon as scanned_at changes
-      const prevTs = scanData?.scanned_at || null;
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
-        const res = await fetch(`${API_URL}/api/scan/latest`);
-        if (res.ok) {
-          const data = await res.json();
-          setScanData(data);
-          setError(null);
-          if (data.scanned_at && data.scanned_at !== prevTs) {
-            clearInterval(poll);
-            setScanning(false);
-            return;
+        // After intraday completes, re-fetch the EOD universe scan
+        // so the display stays on the full 600-candidate data set.
+        try {
+          const res = await fetch(`${API_URL}/api/scan/universe/latest`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.total > 0) {
+              setScanData(data);
+              setError(null);
+            }
           }
-        }
+        } catch { /* silent */ }
         if (attempts >= 60) {
           clearInterval(poll);
           setScanning(false);
@@ -238,6 +254,7 @@ export default function Home() {
       setTimeout(() => {
         clearInterval(poll);
         setScanning(false);
+        fetchLatest(); // restore EOD data after timeout
       }, 5 * 60 * 1000);
     } catch (err) {
       setError(err.message);
@@ -376,40 +393,10 @@ export default function Home() {
           />
         )}
 
-        {/* Scan source badge */}
-        {scanData && !scanning && (
-          <div className={styles.scanTypeBadge}>
-            {scanData.scan_type === 'massive_eod' ? (
-              <>
-                <span className={styles.scanTypeDot} style={{ background: '#44aaff' }} />
-                <strong>📊 EOD Universe</strong>
-                <span className={styles.scanTypeSub}>
-                  — {scanData.total} тикеров · Полный рынок, данные на закрытие
-                  {scanData.universe_size ? ` · ${scanData.universe_size.toLocaleString()} в universe` : ''}
-                </span>
-              </>
-            ) : scanData.scan_type === 'yahoo_intraday' ? (
-              <>
-                <span className={styles.scanTypeDot} style={{ background: '#44ff88' }} />
-                <strong>⚡ Intraday</strong>
-                <span className={styles.scanTypeSub}>
-                  — {scanData.total} тикеров · Проверка кандидатов, live данные
-                </span>
-              </>
-            ) : (
-              <>
-                <span className={styles.scanTypeDot} style={{ background: '#888' }} />
-                <strong>Scan</strong>
-                <span className={styles.scanTypeSub}>— {scanData.total} тикеров</span>
-              </>
-            )}
-          </div>
-        )}
-
         {/* Scanning progress banner */}
         {scanning && (
           <div className={styles.scanningBanner}>
-            <span className={styles.spinner} /> Intraday validation in progress — checking yesterday&apos;s candidates at market open…
+            <span className={styles.spinner} /> Intraday validation in progress… Results stored for AI portfolio. Chart data unchanged.
           </div>
         )}
 
