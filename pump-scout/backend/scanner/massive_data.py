@@ -14,7 +14,7 @@ Never called during intraday Yahoo validation scans.
 import asyncio
 import logging
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,18 @@ def get_last_trading_day(offset: int = 1) -> str:
     Return a trading-day date string.
     offset=1 → yesterday (most common: get last close).
     offset=0 → today (data may not be ready until after 5 PM ET).
-    Skips weekends; does NOT skip holidays (Polygon handles that gracefully).
+    Skips weekends only — holiday fallback is handled by fetch_grouped_daily().
     """
     d = date.today() - timedelta(days=offset)
     while d.weekday() >= 5:  # Saturday=5, Sunday=6
+        d -= timedelta(days=1)
+    return d.strftime("%Y-%m-%d")
+
+
+def _prev_weekday(date_str: str) -> str:
+    """Return the previous weekday before a given YYYY-MM-DD string."""
+    d = datetime.strptime(date_str, "%Y-%m-%d").date() - timedelta(days=1)
+    while d.weekday() >= 5:
         d -= timedelta(days=1)
     return d.strftime("%Y-%m-%d")
 
@@ -114,6 +122,10 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
     """
     Fetch EOD bars for ALL US stocks in a single API call.
 
+    If the requested date returns 0 results (holiday, early close, data delay),
+    automatically falls back to the previous weekday — up to 5 attempts.
+    This handles Good Friday, market holidays, and data pipeline delays.
+
     Returns:
         {
             "AAPL": {"open": 175.0, "high": 178.5, "low": 174.2,
@@ -130,14 +142,33 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
         logger.error("fetch_grouped_daily: MASSIVE_API_KEY not set")
         return {}
 
-    logger.info(f"Massive: fetching grouped daily for {target_date}")
-    try:
-        result = await asyncio.to_thread(_sync_fetch_grouped_daily, target_date)
-        logger.info(f"Grouped daily: {len(result)} tickers after quality filter")
-        return result
-    except Exception as e:
-        logger.error(f"fetch_grouped_daily failed: {e}")
-        return {}
+    attempt_date = target_date
+    for attempt in range(5):
+        logger.info(f"Massive: fetching grouped daily for {attempt_date} (attempt {attempt + 1})")
+        try:
+            result = await asyncio.to_thread(_sync_fetch_grouped_daily, attempt_date)
+            if result:
+                if attempt > 0:
+                    logger.info(
+                        f"Grouped daily: found data on fallback date {attempt_date} "
+                        f"({attempt} day(s) before {target_date} — likely a holiday)"
+                    )
+                return result
+            # 0 results — this day is a holiday or has no data yet
+            logger.warning(
+                f"Grouped daily: 0 results for {attempt_date} "
+                f"(holiday or data not ready) — trying previous trading day"
+            )
+            attempt_date = _prev_weekday(attempt_date)
+        except Exception as e:
+            logger.error(f"fetch_grouped_daily failed for {attempt_date}: {e}")
+            return {}
+
+    logger.error(
+        f"fetch_grouped_daily: no data found after 5 attempts "
+        f"(tried back from {target_date})"
+    )
+    return {}
 
 
 # ── Individual Symbol Candles ─────────────────────────────────────────────────
