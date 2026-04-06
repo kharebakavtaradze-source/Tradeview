@@ -121,8 +121,8 @@ async def run_universe_scan(target_date: str = None) -> dict:
     all_bars = await fetch_grouped_daily(target_date)
     if not all_bars:
         _update(running=False, phase="error", finished_at=datetime.utcnow(),
-                last_error="No data from Massive grouped daily API")
-        logger.error("Universe scan aborted: no data from Massive grouped daily")
+                last_error="No trading data found (tried 5 days back — check API key / Polygon plan)")
+        logger.error("Universe scan aborted: fetch_grouped_daily returned empty after 5 attempts")
         return {
             "results": [], "scan_type": "massive_eod",
             "scanned_at": scan_start.isoformat(),
