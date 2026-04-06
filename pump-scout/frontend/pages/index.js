@@ -4,13 +4,12 @@ import Link from 'next/link';
 import TickerCard from '../components/TickerCard';
 import Scanner from '../components/Scanner';
 import MarketRegimeBanner from '../components/MarketRegimeBanner';
-import SectorStrengthBar from '../components/SectorStrengthBar';
 import SectorBar from '../components/SectorBar';
 import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000; // 60 seconds
-const VERSION = 'v25.0';
+const VERSION = 'v30.0';
 const TIERS = ['FIRE', 'ARM', 'BASE', 'STEALTH', 'SYMPATHY', 'FLOW', 'SILENT', 'HYPE', 'WATCH'];
 const TIER_LABELS = {
   FIRE: '🔥 FIRE', ARM: '👁 ARM', BASE: '📦 BASE', STEALTH: '🕵 STEALTH',
@@ -113,7 +112,6 @@ export default function Home() {
   const [marketOpen, setMarketOpen] = useState(true);
   const [marketTimer, setMarketTimer] = useState({ open: true, label: '00:00:00' });
   const [marketRegime, setMarketRegime] = useState(null);
-  const [sectorStrength, setSectorStrength] = useState([]);
   const [sectorFilter, setSectorFilter] = useState(null);
   const [hypeStatus, setHypeStatus] = useState(null);
   const [hypeResults, setHypeResults] = useState([]);
@@ -166,16 +164,11 @@ export default function Home() {
 
   const fetchRegime = useCallback(async () => {
     try {
-      const [regimeRes, strengthRes, perfRes] = await Promise.all([
+      const [regimeRes, perfRes] = await Promise.all([
         fetch(`${API_URL}/api/market-regime`),
-        fetch(`${API_URL}/api/sector-strength`),
         fetch(`${API_URL}/api/sector-momentum`),
       ]);
       if (regimeRes.ok) setMarketRegime(await regimeRes.json());
-      if (strengthRes.ok) {
-        const d = await strengthRes.json();
-        setSectorStrength(d.sectors || []);
-      }
       if (perfRes.ok) setSectorPerf(await perfRes.json());
     } catch {
       // regime is optional — silent fail
@@ -384,14 +377,6 @@ export default function Home() {
           <SectorBar data={sectorPerf} cyclePhase={marketRegime?.cycle_phase} />
         )}
 
-        {/* Sector Strength Bar (scan-based) */}
-        {sectorStrength.length > 0 && (
-          <SectorStrengthBar
-            sectors={sectorStrength}
-            onSectorClick={setSectorFilter}
-            activeFilter={sectorFilter}
-          />
-        )}
 
         {/* Scanning progress banner */}
         {scanning && (
