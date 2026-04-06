@@ -166,7 +166,68 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
     return {}
 
 
-# ── Individual Symbol Candles ─────────────────────────────────────────────────
+# ── US ETF Symbol Cache ───────────────────────────────────────────────────────
+
+_etf_cache: set[str] = set()
+_etf_cache_date: Optional[str] = None
+
+
+async def get_us_etf_symbols() -> set[str]:
+    """
+    Fetch all US-listed ETF symbols from Polygon reference API.
+    Cached in memory for 7 days — call once per universe scan.
+    Returns set of uppercase ticker strings e.g. {"SPY", "QQQ", "ARKK", ...}.
+    """
+    global _etf_cache, _etf_cache_date
+
+    today = date.today().isoformat()
+    # Refresh weekly
+    if _etf_cache and _etf_cache_date:
+        cache_age = (date.today() - date.fromisoformat(_etf_cache_date)).days
+        if cache_age < 7:
+            logger.info(f"ETF cache hit: {len(_etf_cache)} symbols (age {cache_age}d)")
+            return _etf_cache
+
+    logger.info("Fetching US ETF symbol list from Polygon reference API…")
+    etfs: set[str] = set()
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        url = f"{MASSIVE_BASE}/v3/reference/tickers"
+        params = _params(type="ETF", market="stocks", active="true", limit=1000)
+        fetched = 0
+
+        while url:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code != 200:
+                    logger.warning(f"ETF list HTTP {resp.status_code}")
+                    break
+                data = resp.json()
+                for t in data.get("results") or []:
+                    sym = (t.get("ticker") or "").upper()
+                    if sym:
+                        etfs.add(sym)
+                fetched += len(data.get("results") or [])
+                # Pagination
+                next_url = data.get("next_url")
+                if next_url:
+                    url = next_url
+                    params = _params()   # apiKey already embedded in next_url? add anyway
+                else:
+                    break
+            except Exception as e:
+                logger.warning(f"ETF list fetch error: {e}")
+                break
+
+    if etfs:
+        _etf_cache = etfs
+        _etf_cache_date = today
+        logger.info(f"ETF cache refreshed: {len(etfs)} US ETFs loaded")
+    else:
+        logger.warning("ETF list returned 0 results — using stale cache if available")
+
+    return _etf_cache
+
 
 async def fetch_candles_massive(symbol: str, days: int = 200) -> list:
     """
