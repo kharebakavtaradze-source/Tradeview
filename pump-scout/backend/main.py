@@ -137,57 +137,67 @@ async def health():
     }
 
 
+async def _fetch_live_price_v8(symbol: str, client) -> dict | None:
+    """
+    Fetch real-time price using Yahoo Finance v8/finance/chart (same API used by scanner).
+    Returns {price, change_pct, prev_close} or None on failure.
+    meta.regularMarketPrice is live even during market hours.
+    """
+    import httpx
+    YAHOO_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}"
+    try:
+        resp = await client.get(url, params={"interval": "1d", "range": "5d"}, headers=YAHOO_HEADERS, timeout=10.0)
+        if resp.status_code != 200:
+            return None
+        result = resp.json().get("chart", {}).get("result") or []
+        if not result:
+            return None
+        meta = result[0].get("meta", {})
+        price = meta.get("regularMarketPrice")
+        prev_close = meta.get("chartPreviousClose") or meta.get("previousClose")
+        if not price:
+            return None
+        change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else None
+        return {"price": round(price, 4), "change_pct": change_pct, "prev_close": prev_close}
+    except Exception:
+        return None
+
+
 @app.get("/api/prices/live")
 async def get_live_prices(symbols: str = ""):
     """
-    Batch-fetch real-time quotes for comma-separated symbols from Yahoo Finance.
-    Returns {SYMBOL: {price, change_pct, volume, prev_close}} for each symbol.
-    Used by the frontend to overlay live prices on EOD scan data during market hours.
+    Batch real-time prices for comma-separated symbols via Yahoo Finance v8/finance/chart.
+    Returns {SYMBOL: {price, change_pct, prev_close}}.
+    Used by frontend to overlay live prices on EOD scan data during market hours.
     """
-    import httpx
-    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    import asyncio, httpx
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:100]
     if not sym_list:
         return {}
-    # Cap to 100 symbols per request
-    sym_list = sym_list[:100]
 
-    YAHOO_HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-    }
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    fields = "regularMarketPrice,regularMarketChangePercent,regularMarketVolume,regularMarketPreviousClose"
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                url,
-                params={"symbols": ",".join(sym_list), "fields": fields},
-                headers=YAHOO_HEADERS,
-            )
-            if resp.status_code != 200:
-                logger.warning(f"live prices: Yahoo returned {resp.status_code}")
-                return {}
-            quotes = resp.json().get("quoteResponse", {}).get("result", [])
-    except Exception as e:
-        logger.warning(f"live prices fetch failed: {e}")
-        return {}
+    semaphore = asyncio.Semaphore(8)  # max 8 concurrent requests
+
+    async def fetch_one(sym: str, client) -> tuple[str, dict | None]:
+        async with semaphore:
+            data = await _fetch_live_price_v8(sym, client)
+            return sym, data
+
+    async with httpx.AsyncClient() as client:
+        tasks = [fetch_one(sym, client) for sym in sym_list]
+        pairs = await asyncio.gather(*tasks, return_exceptions=True)
 
     result = {}
-    for q in quotes:
-        sym = q.get("symbol")
-        if not sym:
-            continue
-        price = q.get("regularMarketPrice")
-        change_pct = q.get("regularMarketChangePercent")
-        volume = q.get("regularMarketVolume")
-        prev_close = q.get("regularMarketPreviousClose")
-        result[sym] = {
-            "price":       price,
-            "change_pct":  round(change_pct, 2) if change_pct is not None else None,
-            "volume":      volume,
-            "prev_close":  prev_close,
-        }
+    for item in pairs:
+        if isinstance(item, tuple):
+            sym, data = item
+            if data:
+                result[sym] = data
     return result
 
 
@@ -358,43 +368,41 @@ async def journal_stats():
 @app.get("/api/journal/live-prices")
 async def journal_live_prices():
     """
-    Return live market prices for all open journal positions.
-    Single batched Yahoo Finance request — called by frontend every 60s during market hours.
+    Return live prices + P&L% for all open journal positions.
+    Uses v8/finance/chart (same API as the main scanner) — reliable from Railway.
+    Called by frontend every 60s during market hours.
     """
-    import httpx
+    import asyncio, httpx
     from database import get_open_journal_entries
 
     entries = await get_open_journal_entries()
     if not entries:
         return {}
 
-    symbols = [e["symbol"] for e in entries]
     entry_map = {e["symbol"]: e["entry_price"] for e in entries}
+    sym_list = list(entry_map.keys())
+    semaphore = asyncio.Semaphore(8)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-    }
+    async def fetch_one(sym: str, client) -> tuple[str, dict | None]:
+        async with semaphore:
+            data = await _fetch_live_price_v8(sym, client)
+            return sym, data
+
+    async with httpx.AsyncClient() as client:
+        tasks = [fetch_one(sym, client) for sym in sym_list]
+        pairs = await asyncio.gather(*tasks, return_exceptions=True)
+
     result = {}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                "https://query1.finance.yahoo.com/v7/finance/quote",
-                params={"symbols": ",".join(symbols), "fields": "regularMarketPrice"},
-                headers=headers,
-            )
-            if resp.status_code == 200:
-                quotes = resp.json().get("quoteResponse", {}).get("result", [])
-                for q in quotes:
-                    sym = q.get("symbol")
-                    price = q.get("regularMarketPrice")
-                    if sym and price:
-                        entry_price = entry_map.get(sym, 0)
-                        pct = round((price - entry_price) / entry_price * 100, 2) if entry_price else 0
-                        result[sym] = {"price": round(price, 4), "pct": pct}
-    except Exception as e:
-        logger.warning(f"live-prices fetch failed: {e}")
+    for item in pairs:
+        if not isinstance(item, tuple):
+            continue
+        sym, data = item
+        if not data:
+            continue
+        price = data["price"]
+        entry_price = entry_map.get(sym, 0)
+        pct = round((price - entry_price) / entry_price * 100, 2) if entry_price else 0
+        result[sym] = {"price": price, "pct": pct, "change_pct": data.get("change_pct")}
 
     return result
 

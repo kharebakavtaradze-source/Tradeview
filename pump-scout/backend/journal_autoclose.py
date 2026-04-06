@@ -36,23 +36,27 @@ YAHOO_HEADERS = {
 
 
 async def fetch_closing_price(symbol: str) -> float | None:
-    """Fetch the latest closing price from Yahoo Finance v7."""
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    """Fetch the latest market price via Yahoo Finance v8/finance/chart (same as scanner)."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}"
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     url,
-                    params={"symbols": symbol.upper(), "fields": "regularMarketPrice"},
+                    params={"interval": "1d", "range": "5d"},
                     headers=YAHOO_HEADERS,
                 )
                 if resp.status_code != 200:
-                    return None
-                quotes = resp.json().get("quoteResponse", {}).get("result", [])
-                if quotes:
-                    return quotes[0].get("regularMarketPrice")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                result = resp.json().get("chart", {}).get("result") or []
+                if result:
+                    price = result[0].get("meta", {}).get("regularMarketPrice")
+                    if price:
+                        return price
         except Exception as e:
             logger.warning(f"Price fetch failed for {symbol} (attempt {attempt+1}): {e}")
+            await asyncio.sleep(2 ** attempt)
     return None
 
 
