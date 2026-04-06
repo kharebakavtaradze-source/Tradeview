@@ -222,9 +222,9 @@ async def ai_portfolio_decisions():
                 logger.warning(f"Force-sold CEF/ETN {pos['symbol']} at ${price:.2f}")
     open_positions = await get_open_ai_positions()
 
-    # Get latest scan results
-    from database import get_latest_scan
-    scan = await get_latest_scan()
+    # Get latest EOD universe scan (preferred) — fall back to any scan
+    from database import get_latest_scan, get_latest_scan_by_type
+    scan = await get_latest_scan_by_type("massive_eod") or await get_latest_scan()
     if not scan:
         logger.warning("No scan data available for portfolio decisions")
         return
