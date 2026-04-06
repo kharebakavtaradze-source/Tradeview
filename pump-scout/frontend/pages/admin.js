@@ -1,8 +1,26 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+const PHASE_LABELS = {
+  idle:              'Idle — not running',
+  fetching_universe: 'Fetching universe from Polygon…',
+  filtering:         'Applying price/volume filters…',
+  scoring:           'Scoring candidates…',
+  enriching:         'Enriching sector data…',
+  saving:            'Saving results to database…',
+  done:              'Done',
+  error:             'Failed',
+};
+
+function fmtSecs(s) {
+  if (s == null) return '—';
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
 
 export default function AdminPage() {
   const [symbol, setSymbol] = useState('AAPL');
@@ -10,8 +28,40 @@ export default function AdminPage() {
   const [massiveResult, setMassiveResult] = useState(null);
   const [enrichResult, setEnrichResult] = useState(null);
   const [universeResult, setUniverseResult] = useState(null);
+  const [scanStatus, setScanStatus] = useState(null);
   const [loading, setLoading] = useState({});
   const [error, setError] = useState({});
+  const pollRef = useRef(null);
+
+  // Poll /api/admin/universe-scan/status every 5s
+  const startPolling = () => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/universe-scan/status`);
+        const data = await res.json();
+        setScanStatus(data);
+        if (!data.running) stopPolling();
+      } catch (_) {}
+    }, 5000);
+  };
+
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  };
+
+  // Fetch status once on mount, start polling if already running
+  useEffect(() => {
+    fetch(`${API_URL}/api/admin/universe-scan/status`)
+      .then(r => r.json())
+      .then(data => {
+        setScanStatus(data);
+        if (data.running) startPolling();
+      })
+      .catch(() => {});
+    return stopPolling;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function call(key, url) {
     setLoading(l => ({ ...l, [key]: true }));
@@ -19,9 +69,17 @@ export default function AdminPage() {
     try {
       const res = await fetch(url);
       const data = await res.json();
-      if (key === 'massive')   setMassiveResult(data);
-      if (key === 'enrich')    setEnrichResult(data);
-      if (key === 'universe')  setUniverseResult(data);
+      if (key === 'massive')  setMassiveResult(data);
+      if (key === 'enrich')   setEnrichResult(data);
+      if (key === 'universe') {
+        setUniverseResult(data);
+        // Begin polling status after triggering
+        setTimeout(() => {
+          fetch(`${API_URL}/api/admin/universe-scan/status`)
+            .then(r => r.json()).then(d => { setScanStatus(d); if (d.running) startPolling(); })
+            .catch(() => {});
+        }, 1500);
+      }
     } catch (err) {
       setError(e => ({ ...e, [key]: err.message }));
     } finally {
@@ -35,7 +93,10 @@ export default function AdminPage() {
 
   return (
     <>
-      <Head><title>Admin — Pump Scout</title></Head>
+      <Head>
+        <title>Admin — Pump Scout</title>
+        <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
+      </Head>
       <div style={{ maxWidth: 820, margin: '0 auto', padding: '24px 16px', fontFamily: "'JetBrains Mono', monospace", color: '#e0e0e0', background: '#0a0a0f', minHeight: '100vh' }}>
 
         {/* Header */}
@@ -84,6 +145,67 @@ export default function AdminPage() {
           {error.universe && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.universe}</div>}
           {universeResult && (
             <pre style={pre}>{JSON.stringify(universeResult, null, 2)}</pre>
+          )}
+
+          {/* ── Live progress widget ── */}
+          {scanStatus && scanStatus.phase !== 'idle' && (
+            <div style={{ marginTop: 14, background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '12px 14px', border: `1px solid ${scanStatus.running ? 'rgba(68,170,255,0.3)' : scanStatus.phase === 'done' ? 'rgba(68,255,100,0.25)' : 'rgba(255,100,100,0.25)'}` }}>
+              {/* Phase + running indicator */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                {scanStatus.running && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#44aaff', boxShadow: '0 0 6px #44aaff', display: 'inline-block', animation: 'pulse 1.2s infinite' }} />}
+                {!scanStatus.running && scanStatus.phase === 'done' && <span style={{ color: '#44ff64', fontSize: 13 }}>✓</span>}
+                {!scanStatus.running && scanStatus.phase === 'error' && <span style={{ color: '#ff6b6b', fontSize: 13 }}>✗</span>}
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#ddd' }}>
+                  {PHASE_LABELS[scanStatus.phase] || scanStatus.phase}
+                </span>
+                {scanStatus.target_date && (
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>
+                    {scanStatus.target_date}
+                  </span>
+                )}
+              </div>
+
+              {/* Progress bar (scoring phase) */}
+              {scanStatus.candidates_total > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>
+                    <span>Scoring candidates</span>
+                    <span>{scanStatus.candidates_done} / {scanStatus.candidates_total}</span>
+                  </div>
+                  <div style={{ height: 5, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', borderRadius: 3,
+                      background: scanStatus.running ? '#44aaff' : '#44ff64',
+                      width: `${Math.round((scanStatus.candidates_done / scanStatus.candidates_total) * 100)}%`,
+                      transition: 'width 0.5s ease',
+                    }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Stats grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                {[
+                  ['Universe', scanStatus.universe_raw > 0 ? scanStatus.universe_raw.toLocaleString() : '—'],
+                  ['Filtered', scanStatus.universe_filtered > 0 ? scanStatus.universe_filtered.toLocaleString() : '—'],
+                  ['Results', scanStatus.results_count],
+                  ['🔥 FIRE', scanStatus.fire_count],
+                  ['💪 ARM', scanStatus.arm_count],
+                  ['Errors', scanStatus.errors],
+                  ['Elapsed', fmtSecs(scanStatus.elapsed_secs)],
+                  ['ETA', scanStatus.running ? fmtSecs(scanStatus.eta_secs) : '—'],
+                ].map(([label, val]) => (
+                  <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '5px 8px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginBottom: 2 }}>{label}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#e0e0e0' }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+
+              {scanStatus.last_error && (
+                <div style={{ marginTop: 8, fontSize: 10, color: '#ff8888' }}>Error: {scanStatus.last_error}</div>
+              )}
+            </div>
           )}
         </div>
 
@@ -141,6 +263,7 @@ export default function AdminPage() {
             {[
               ['/api/admin/test-massive?symbol=' + symbol, 'Test Massive connection'],
               ['/api/admin/run-universe-scan', 'Trigger universe scan (background)'],
+              ['/api/admin/universe-scan/status', 'Live scan progress'],
               ['/api/admin/enrich-sectors', 'Trigger sector enrichment'],
               ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
               ['/api/scan/intraday/latest', 'Latest intraday scan results'],

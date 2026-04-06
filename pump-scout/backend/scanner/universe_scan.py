@@ -49,11 +49,57 @@ BATCH_SIZE = 20
 # ETFs excluded from trading results (used for regime detection only)
 _REGIME_ETFS = {"SPY", "QQQ", "XLE", "XLV", "XLU", "GLD", "IWM"}
 
+# ── Live progress tracker ─────────────────────────────────────────────────────
+# Module-level dict updated throughout the scan. Polled by /api/admin/universe-scan/status.
+_progress: dict = {
+    "running":           False,
+    "phase":             "idle",          # idle | fetching_universe | filtering | scoring | enriching | saving | done | error
+    "started_at":        None,
+    "finished_at":       None,
+    "target_date":       None,
+    "universe_raw":      0,               # total tickers returned by grouped daily
+    "universe_filtered": 0,               # after price/volume filter
+    "candidates_total":  0,               # top N selected for full scoring
+    "candidates_done":   0,               # scored so far
+    "results_count":     0,               # passed scoring (not SKIP)
+    "fire_count":        0,
+    "arm_count":         0,
+    "errors":            0,
+    "elapsed_secs":      0,
+    "eta_secs":          None,            # estimated seconds remaining
+    "last_error":        None,
+    "last_scan":         None,            # summary of last completed scan
+}
+
+
+def get_progress() -> dict:
+    """Return a copy of the current scan progress dict."""
+    p = dict(_progress)
+    if p["running"] and p["started_at"]:
+        p["elapsed_secs"] = round((datetime.utcnow() - p["started_at"]).total_seconds())
+        # ETA: extrapolate from scoring rate
+        done  = p["candidates_done"]
+        total = p["candidates_total"]
+        if done > 0 and total > done:
+            rate = p["elapsed_secs"] / done          # seconds per candidate
+            p["eta_secs"] = round(rate * (total - done))
+        else:
+            p["eta_secs"] = None
+    return p
+
+
+def _update(**kwargs):
+    _progress.update(kwargs)
+    if _progress.get("running") and _progress.get("started_at"):
+        _progress["elapsed_secs"] = round(
+            (datetime.utcnow() - _progress["started_at"]).total_seconds()
+        )
+
 
 async def run_universe_scan(target_date: str = None) -> dict:
     """
     Full EOD universe scan via Massive/Polygon.
-    Called by scheduler at 17:00 ET Mon–Fri.
+    Called by scheduler at 22:00 ET Mon–Fri.
 
     Returns scan result dict compatible with save_scan().
     """
@@ -62,18 +108,28 @@ async def run_universe_scan(target_date: str = None) -> dict:
     if not target_date:
         target_date = get_last_trading_day(offset=1)
 
+    _update(
+        running=True, phase="fetching_universe",
+        started_at=scan_start, finished_at=None, target_date=target_date,
+        universe_raw=0, universe_filtered=0, candidates_total=0,
+        candidates_done=0, results_count=0, fire_count=0, arm_count=0,
+        errors=0, last_error=None,
+    )
     logger.info(f"=== Universe Scan starting: {target_date} ===")
 
     # ── STEP 1: One API call → all US stocks ────────────────────────────────
     all_bars = await fetch_grouped_daily(target_date)
     if not all_bars:
-        logger.error("Universe scan aborted: no data from Massive grouped daily")
+        _update(running=False, phase="error", finished_at=datetime.utcnow(),
+                last_error="No trading data found (tried 5 days back — check API key / Polygon plan)")
+        logger.error("Universe scan aborted: fetch_grouped_daily returned empty after 5 attempts")
         return {
             "results": [], "scan_type": "massive_eod",
             "scanned_at": scan_start.isoformat(),
             "total": 0, "error": "No data from Massive API",
         }
 
+    _update(phase="filtering", universe_raw=len(all_bars))
     logger.info(f"Universe: {len(all_bars)} tickers in grouped daily")
 
     # ── STEP 2: Price / volume / symbol filter ───────────────────────────────
@@ -101,6 +157,7 @@ async def run_universe_scan(target_date: str = None) -> dict:
     # ── STEP 3: Volume rank → select top candidates for full scoring ─────────
     ranked = sorted(filtered.items(), key=lambda kv: kv[1]["volume"], reverse=True)
     candidates = [sym for sym, _ in ranked[:MAX_CANDIDATES]]
+    _update(phase="scoring", universe_filtered=len(filtered), candidates_total=len(candidates))
     logger.info(f"Top {len(candidates)} by volume selected for full scoring")
 
     # ── STEP 4–7: Fetch candle history, calc indicators, score ──────────────
@@ -186,13 +243,26 @@ async def run_universe_scan(target_date: str = None) -> dict:
                 logger.warning(f"Scoring failed for {sym}: {e}")
                 errors += 1
 
-        progress = min(i + BATCH_SIZE, len(candidates))
-        logger.info(f"Universe scan progress: {progress}/{len(candidates)}, results so far: {len(results)}")
+        done_so_far = min(i + BATCH_SIZE, len(candidates))
+        fire_so_far = sum(1 for r in results if r["score"]["tier"] == "FIRE")
+        arm_so_far  = sum(1 for r in results if r["score"]["tier"] == "ARM")
+        _update(
+            candidates_done=done_so_far,
+            results_count=len(results),
+            fire_count=fire_so_far,
+            arm_count=arm_so_far,
+            errors=errors,
+        )
+        logger.info(
+            f"Universe scan: {done_so_far}/{len(candidates)} scored | "
+            f"{len(results)} results ({fire_so_far} FIRE, {arm_so_far} ARM)"
+        )
 
         # Brief pause between batches to be polite to Polygon API
         await asyncio.sleep(0.3)
 
     logger.info(f"Scoring complete: {len(results)} scored, {errors} errors")
+    _update(phase="enriching")
 
     # ── STEP 8: Sector enrichment via get_sectors_batch ─────────────────────
     if results:
@@ -299,6 +369,13 @@ async def run_universe_scan(target_date: str = None) -> dict:
         t = r["score"]["tier"]
         tier_counts[t] = tier_counts.get(t, 0) + 1
 
+    _update(
+        phase="saving",
+        results_count=len(results),
+        fire_count=tier_counts.get("FIRE", 0),
+        arm_count=tier_counts.get("ARM", 0),
+    )
+
     scan_end = datetime.utcnow()
     duration_secs = (scan_end - scan_start).total_seconds()
 
@@ -373,6 +450,19 @@ async def run_universe_scan(target_date: str = None) -> dict:
         except Exception as e:
             logger.warning(f"Unknown sector enrichment failed (non-fatal): {e}")
 
+    finished_at = datetime.utcnow()
+    _update(
+        running=False, phase="done", finished_at=finished_at,
+        last_scan={
+            "target_date":    target_date,
+            "total":          len(results),
+            "fire":           tier_counts.get("FIRE", 0),
+            "arm":            tier_counts.get("ARM", 0),
+            "universe_size":  len(all_bars),
+            "duration_secs":  round(duration_secs, 1),
+            "finished_at":    finished_at.isoformat(),
+        },
+    )
     logger.info(
         f"=== Universe scan complete: {len(results)} results, "
         f"{tier_counts.get('FIRE', 0)} FIRE, {tier_counts.get('ARM', 0)} ARM "
