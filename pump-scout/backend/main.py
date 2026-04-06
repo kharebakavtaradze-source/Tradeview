@@ -137,6 +137,60 @@ async def health():
     }
 
 
+@app.get("/api/prices/live")
+async def get_live_prices(symbols: str = ""):
+    """
+    Batch-fetch real-time quotes for comma-separated symbols from Yahoo Finance.
+    Returns {SYMBOL: {price, change_pct, volume, prev_close}} for each symbol.
+    Used by the frontend to overlay live prices on EOD scan data during market hours.
+    """
+    import httpx
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        return {}
+    # Cap to 100 symbols per request
+    sym_list = sym_list[:100]
+
+    YAHOO_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    fields = "regularMarketPrice,regularMarketChangePercent,regularMarketVolume,regularMarketPreviousClose"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                url,
+                params={"symbols": ",".join(sym_list), "fields": fields},
+                headers=YAHOO_HEADERS,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"live prices: Yahoo returned {resp.status_code}")
+                return {}
+            quotes = resp.json().get("quoteResponse", {}).get("result", [])
+    except Exception as e:
+        logger.warning(f"live prices fetch failed: {e}")
+        return {}
+
+    result = {}
+    for q in quotes:
+        sym = q.get("symbol")
+        if not sym:
+            continue
+        price = q.get("regularMarketPrice")
+        change_pct = q.get("regularMarketChangePercent")
+        volume = q.get("regularMarketVolume")
+        prev_close = q.get("regularMarketPreviousClose")
+        result[sym] = {
+            "price":       price,
+            "change_pct":  round(change_pct, 2) if change_pct is not None else None,
+            "volume":      volume,
+            "prev_close":  prev_close,
+        }
+    return result
+
+
 @app.get("/api/scan/latest")
 async def get_latest():
     """Return the most recent scan results."""
