@@ -28,6 +28,7 @@ from scanner.massive_data import (
     fetch_candles_massive,
     fetch_ticker_details,
     get_last_trading_day,
+    get_us_etf_symbols,
 )
 from scanner.indicators import calc_all
 from scanner.wyckoff import detect_regime
@@ -132,33 +133,63 @@ async def run_universe_scan(target_date: str = None) -> dict:
     _update(phase="filtering", universe_raw=len(all_bars))
     logger.info(f"Universe: {len(all_bars)} tickers in grouped daily")
 
-    # ── STEP 2: Price / volume / symbol filter ───────────────────────────────
+    # ── STEP 2: Load ETF exclusion list + apply filters ─────────────────────
     try:
         from scanner.sector_map import NON_STOCK_SECURITIES
     except Exception:
         NON_STOCK_SECURITIES = set()
 
+    # Fetch US ETF symbol list (cached 7 days, one call per week)
+    etf_symbols: set[str] = set()
+    try:
+        etf_symbols = await get_us_etf_symbols()
+        logger.info(f"ETF exclusion list: {len(etf_symbols)} symbols")
+    except Exception as e:
+        logger.warning(f"ETF list fetch failed (non-fatal, ETFs may slip through): {e}")
+
     filtered = {}
+    skip_regime = skip_etf = skip_cef = skip_vol = skip_price = 0
     for sym, bar in all_bars.items():
         if sym in _REGIME_ETFS:
-            continue
+            skip_regime += 1; continue
+        if sym.upper() in etf_symbols:
+            skip_etf += 1; continue
         if sym.upper() in NON_STOCK_SECURITIES:
-            continue
+            skip_cef += 1; continue
         vol   = bar["volume"]
         close = bar["close"]
         if vol < MIN_VOLUME:
-            continue
+            skip_vol += 1; continue
         if not (MIN_PRICE <= close <= MAX_PRICE):
-            continue
+            skip_price += 1; continue
         filtered[sym] = bar
 
-    logger.info(f"After price/volume filter: {len(filtered)} tickers")
+    logger.info(
+        f"After filters: {len(filtered)} stocks "
+        f"(skipped: {skip_regime} regime ETFs, {skip_etf} ETFs, "
+        f"{skip_cef} CEF/ETN, {skip_vol} low-vol, {skip_price} price)"
+    )
 
-    # ── STEP 3: Volume rank → select top candidates for full scoring ─────────
-    ranked = sorted(filtered.items(), key=lambda kv: kv[1]["volume"], reverse=True)
+    # ── STEP 3: Pre-score → select top candidates for full scoring ───────────
+    # Rank by dollar volume × price-move bonus rather than raw share volume.
+    # Dollar volume = close × volume (de-emphasises penny-stock noise).
+    # Move bonus = 1 + |day_change_pct| / 10 (rewards stocks that actually moved).
+    # Stocks with $1M+ daily dollar vol AND a 5% move rank 1.5× higher than flat ones.
+    def _pre_score(bar: dict) -> float:
+        close  = bar["close"]
+        vol    = bar["volume"]
+        open_  = bar.get("open") or close
+        dollar_vol = close * vol
+        move_pct = abs(close - open_) / open_ * 100 if open_ > 0 else 0
+        return dollar_vol * (1 + move_pct / 10)
+
+    ranked = sorted(filtered.items(), key=lambda kv: _pre_score(kv[1]), reverse=True)
     candidates = [sym for sym, _ in ranked[:MAX_CANDIDATES]]
     _update(phase="scoring", universe_filtered=len(filtered), candidates_total=len(candidates))
-    logger.info(f"Top {len(candidates)} by volume selected for full scoring")
+    logger.info(
+        f"Top {len(candidates)} candidates selected by dollar-vol×move pre-score "
+        f"(from {len(filtered)} filtered stocks)"
+    )
 
     # ── STEP 4–7: Fetch candle history, calc indicators, score ──────────────
     results   = []
