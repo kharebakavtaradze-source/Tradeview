@@ -143,15 +143,26 @@ async def run_ribbon_pass(
 
 async def get_scan_symbols() -> tuple[list[str], dict]:
     """
-    Build scan symbol list from 4 dynamic sources. No hardcoded tickers.
-    Returns (symbols, source_counts) where source_counts logs the breakdown.
+    Build intraday validation symbol list.
+
+    PIPELINE 2 (Yahoo Intraday) — NOT a universe screener.
+    Sources are yesterday's Massive EOD candidates + journal positions.
+    Much smaller universe (200–400) vs old Finviz screener (800).
+
+    Falls back to Finviz screener on first run (when no EOD candidates exist yet).
     """
     symbols: set[str] = set()
 
-    # SOURCE 1: Screener (primary — Finviz → Yahoo → static fallback)
-    screener_symbols = await get_tickers()
-    symbols.update(screener_symbols)
-    source_screener = len(screener_symbols)
+    # SOURCE 1: Yesterday's FIRE/ARM/BASE candidates from Massive EOD scan
+    # These are the signals we want to validate at market open.
+    source_eod_candidates = 0
+    try:
+        from database import get_recent_fire_arm_symbols
+        recent_syms = await get_recent_fire_arm_symbols(days=2)
+        symbols.update(recent_syms)
+        source_eod_candidates = len(recent_syms)
+    except Exception as e:
+        logger.warning(f"get_scan_symbols: recent candidates lookup failed: {e}")
 
     # SOURCE 2: Open journal positions — always track what we're holding
     source_journal = 0
@@ -164,33 +175,37 @@ async def get_scan_symbols() -> tuple[list[str], dict]:
     except Exception as e:
         logger.warning(f"get_scan_symbols: journal lookup failed: {e}")
 
-    # SOURCE 3: Recent FIRE/ARM candidates (last 7 days, outcome not yet known)
-    source_candidates = 0
-    try:
-        from database import get_recent_fire_arm_symbols
-        recent_syms = await get_recent_fire_arm_symbols(days=7)
-        symbols.update(recent_syms)
-        source_candidates = len(recent_syms)
-    except Exception as e:
-        logger.warning(f"get_scan_symbols: recent candidates lookup failed: {e}")
-
-    # SOURCE 4: Regime ETFs (needed for market regime calculation)
+    # SOURCE 3: Regime ETFs (needed for market regime calculation)
     symbols.update(REGIME_ETFS)
+
+    # FALLBACK: If no EOD candidates yet (first run / cold start),
+    # use Finviz screener so the system is never empty.
+    source_screener = 0
+    if source_eod_candidates == 0:
+        logger.warning("No EOD candidates found — falling back to Finviz screener (cold start)")
+        try:
+            screener_syms = await get_tickers()
+            symbols.update(screener_syms)
+            source_screener = len(screener_syms)
+        except Exception as e:
+            logger.warning(f"get_scan_symbols: Finviz fallback failed: {e}")
 
     total = len(symbols)
     source_counts = {
-        "screener": source_screener,
-        "journal": source_journal,
-        "recent_candidates": source_candidates,
-        "regime_etfs": len(REGIME_ETFS),
-        "total": total,
+        "eod_candidates": source_eod_candidates,
+        "journal":         source_journal,
+        "regime_etfs":     len(REGIME_ETFS),
+        "screener_fallback": source_screener,
+        "total":           total,
+        "scan_mode":       "intraday_validation" if source_eod_candidates > 0 else "screener_fallback",
     }
 
-    print(f"Scan symbols breakdown:")
-    print(f"  Screener:          {source_screener}")
+    print("Intraday scan symbols:")
+    print(f"  EOD candidates:    {source_eod_candidates}")
     print(f"  Journal positions: {source_journal}")
-    print(f"  Recent FIRE/ARM:   {source_candidates}")
     print(f"  Regime ETFs:       {len(REGIME_ETFS)}")
+    if source_screener:
+        print(f"  Screener fallback: {source_screener}")
     print(f"  Total unique:      {total}")
 
     return list(symbols), source_counts
@@ -496,14 +511,15 @@ async def run_scan() -> dict:
         logger.error(f"Ribbon pass failed (non-fatal): {e}")
 
     return {
-        "results": final,
-        "scanned_at": scan_start.isoformat(),
-        "total": len(final),
-        "duration_secs": round(duration_secs, 1),
-        "tier_counts": tier_counts,
-        "sector_strength": sector_strength if results else {},
+        "results":            final,
+        "scanned_at":         scan_start.isoformat(),
+        "total":              len(final),
+        "duration_secs":      round(duration_secs, 1),
+        "tier_counts":        tier_counts,
+        "sector_strength":    sector_strength if results else {},
         "sector_performance": sector_perf,
-        "market_regime": regime,
-        "symbol_sources": symbol_sources,
+        "market_regime":      regime,
+        "symbol_sources":     symbol_sources,
         "ribbon_extra_count": ribbon_extra,
+        "scan_type":          "yahoo_intraday",
     }

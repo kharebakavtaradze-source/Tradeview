@@ -8,6 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from scanner.runner import run_scan
+from scanner.universe_scan import run_universe_scan
 from database import save_scan, rotate_old_data
 from hype_monitor.monitor import run_hype_monitor
 from journal_autoclose import auto_close_journal, update_journal_prices_intraday
@@ -116,6 +117,19 @@ async def _run_sector_enrichment():
         await enrich_sector_cache()
     except Exception as e:
         logger.error(f"Sector enrichment job failed: {e}", exc_info=True)
+
+
+async def _run_universe_scan():
+    """Run the Massive EOD universe scan and persist results."""
+    try:
+        logger.info("Universe scan (Massive EOD) starting...")
+        result = await run_universe_scan()
+        total  = result.get("total", 0)
+        fire   = result.get("tier_counts", {}).get("FIRE", 0)
+        arm    = result.get("tier_counts", {}).get("ARM", 0)
+        logger.info(f"Universe scan complete — {total} results, {fire} FIRE, {arm} ARM")
+    except Exception as e:
+        logger.error(f"Universe scan failed: {e}", exc_info=True)
 
 
 async def _run_sector_performance():
@@ -356,6 +370,21 @@ def start_scheduler():
         misfire_grace_time=3600,
     )
 
+    # 17:00 ET Mon–Fri — Massive EOD Universe Scan (primary signal source)
+    scheduler.add_job(
+        _run_universe_scan,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=17,
+            minute=0,
+            timezone=EASTERN_TZ,
+        ),
+        id="universe_scan_eod",
+        name="Massive EOD Universe Scan (5:00 PM ET)",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     # 22:00 ET Mon–Fri — Massive sector/industry enrichment (free plan: 1 per 15s)
     scheduler.add_job(
         _run_sector_enrichment,
@@ -373,9 +402,12 @@ def start_scheduler():
 
     scheduler.start()
     logger.info(
-        "Scheduler started — 3 scan jobs + hype monitor (3x daily) + morning brief + price alerts "
-        "+ 5 portfolio/journal/EOD jobs + regime at 16:15 + sector perf at 16:20 "
-        "+ Massive enrichment at 22:00 + weekly data rotation"
+        "Scheduler started — "
+        "PIPELINE 1: Massive EOD universe scan at 17:00 ET | "
+        "PIPELINE 2: Yahoo intraday validation at 8:00, 9:30, 12:00 ET | "
+        "Hype monitor 3x daily | Morning brief | Price alerts | "
+        "Portfolio/journal/EOD jobs | Regime 16:15 | Sector perf 16:20 | "
+        "Sector enrichment 22:00 | Weekly rotation Sun 2:00"
     )
 
 
