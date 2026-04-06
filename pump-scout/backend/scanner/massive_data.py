@@ -52,27 +52,36 @@ def _sync_fetch_grouped_daily(target_date: str) -> dict:
     client = _get_client()
     result = {}
 
+    total_raw    = 0
+    skip_alpha   = 0
+    skip_len     = 0
+    skip_vol     = 0
+    skip_price   = 0
+
     for bar in client.get_grouped_daily_aggs(
         locale="us",
         market_type="stocks",
         date=target_date,
         adjusted=True,
     ):
+        total_raw += 1
         sym = bar.ticker or ""
 
-        # Skip non-standard symbols (warrants, preferred, ADRs with dots)
         if not sym.isalpha():
+            skip_alpha += 1
             continue
         if len(sym) > 5:
+            skip_len += 1
             continue
 
         vol   = bar.volume or 0
         close = bar.close  or 0.0
 
-        # Minimum quality gate — skip penny stocks + illiquid
         if vol < 100_000:
+            skip_vol += 1
             continue
         if not (1.0 <= close <= 1000.0):
+            skip_price += 1
             continue
 
         result[sym] = {
@@ -85,6 +94,18 @@ def _sync_fetch_grouped_daily(target_date: str) -> dict:
             "trades": bar.transactions or 0,
             "date":   target_date,
         }
+
+    logger.info(
+        f"Grouped daily raw={total_raw} | "
+        f"skip_non_alpha={skip_alpha} skip_len>{5}={skip_len} "
+        f"skip_vol<100K={skip_vol} skip_price={skip_price} | "
+        f"passed={len(result)}"
+    )
+    if total_raw == 0:
+        logger.warning(
+            "Grouped daily returned 0 rows — possible causes: "
+            "holiday/weekend date, wrong API key, Polygon plan doesn't include grouped daily"
+        )
 
     return result
 
