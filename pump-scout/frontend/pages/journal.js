@@ -7,6 +7,10 @@ import styles from '../styles/Journal.module.css';
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 const FILTER_TABS = ['ALL', 'OPEN', 'CLOSED', 'WIN', 'LOSS', 'CALENDAR', 'ANALYTICS'];
+const FILTER_LABELS = {
+  ALL: '📋 All', OPEN: '📂 Open', CLOSED: '✅ Closed',
+  WIN: '🏆 Wins', LOSS: '📉 Losses', CALENDAR: '📅 Calendar', ANALYTICS: '📊 Analytics',
+};
 
 const TIER_COLORS = {
   FIRE: '#ffd700', ARM: '#00e5ff', BASE: '#00c853', STEALTH: '#cc44ff',
@@ -158,8 +162,8 @@ function ProgressBar({ current, entry, target, stop }) {
   const stopDist = ((entry - effectiveStop) / entry * 100);
   const targetDist = ((target - entry) / entry * 100);
   return (
-    <div style={{ margin: '6px 0' }}>
-      <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
+    <div style={{ margin: '2px 0 4px', padding: '0 14px' }}>
+      <div style={{ height: 5, background: 'rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden' }}>
         <div style={{
           height: '100%', width: `${progress}%`, borderRadius: 2,
           background: pct == null ? 'rgba(100,100,100,0.4)' : pct >= 0 ? 'rgba(0,200,100,0.6)' : 'rgba(255,68,68,0.6)',
@@ -185,8 +189,8 @@ function SignalRow({ e }) {
   if (e.entry_hype > 0) parts.push(`Hype ${e.entry_hype}`);
   if (!parts.length) return null;
   return (
-    <div style={{ fontSize: 9, color: 'var(--text-muted)', display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
-      {parts.map((p, i) => <span key={i} style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 2 }}>{p}</span>)}
+    <div style={{ fontSize: 9, color: 'var(--text-muted)', display: 'flex', gap: 6, flexWrap: 'wrap', padding: '0 14px 4px' }}>
+      {parts.map((p, i) => <span key={i} style={{ background: 'rgba(255,255,255,0.06)', padding: '2px 6px', borderRadius: 3 }}>{p}</span>)}
     </div>
   );
 }
@@ -252,6 +256,7 @@ export default function Journal() {
   const [deepAnalytics, setDeepAnalytics] = useState(null);
   const [deepLoading, setDeepLoading] = useState(false);
   const [livePrices, setLivePrices] = useState({});
+  const [closeModal, setCloseModal] = useState(null); // { entry, initialReason }
   const now = new Date();
   const [calendarYear, setCalendarYear] = useState(now.getFullYear());
   const [calendarMonth, setCalendarMonth] = useState(now.getMonth());
@@ -304,24 +309,20 @@ export default function Journal() {
     return true;
   });
 
-  async function handleClose(id, reason) {
-    const entry = entries.find(e => e.id === id);
-    if (!entry) return;
-    const price = parseFloat(prompt(`Exit price for ${entry.symbol}?`, entry.current_price || entry.entry_price));
-    if (!price) return;
-    const outcome = reason === 'STOP_HIT' ? 'loss' : 'win';
-    await fetch(`${API_URL}/api/journal/${id}`, {
+  async function handleClose(entry, exitPrice, reason, outcome) {
+    await fetch(`${API_URL}/api/journal/${entry.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        exit_price: price,
+        exit_price: exitPrice,
         exit_date: new Date().toISOString().split('T')[0],
         outcome,
-        status: reason === 'STOP_HIT' ? 'STOPPED' : 'CLOSED',
+        status: outcome === 'loss' ? 'STOPPED' : 'CLOSED',
         exit_reason: reason,
-        final_pnl_pct: parseFloat(((price - entry.entry_price) / entry.entry_price * 100).toFixed(2)),
+        final_pnl_pct: parseFloat(((exitPrice - entry.entry_price) / entry.entry_price * 100).toFixed(2)),
       }),
     });
+    setCloseModal(null);
     loadData();
   }
 
@@ -454,28 +455,33 @@ export default function Journal() {
 
         {/* Filter tabs */}
         <div className={styles.filterBar}>
-          {FILTER_TABS.map(t => (
-            <button key={t}
-              className={`${styles.filterTab} ${filter === t ? styles.filterTabActive : ''}`}
-              onClick={() => {
-                setFilter(t);
-                if (t === 'ANALYTICS') {
-                  if (!insights) loadInsights();
-                  if (!deepAnalytics) loadDeepAnalytics();
-                }
-              }}
-            >
-              {t}
-              {t !== 'ANALYTICS' && t !== 'CALENDAR' && (
-                <span style={{ marginLeft: 5, opacity: 0.6 }}>
-                  ({t === 'ALL' ? entries.length
-                    : t === 'OPEN' ? openCount
-                    : t === 'CLOSED' ? entries.filter(e => ['win','loss','skip'].includes(e.outcome)).length
-                    : entries.filter(e => e.outcome === t.toLowerCase()).length})
-                </span>
-              )}
-            </button>
-          ))}
+          {FILTER_TABS.map(t => {
+            const count = t === 'ALL' ? entries.length
+              : t === 'OPEN' ? openCount
+              : t === 'CLOSED' ? entries.filter(e => ['win','loss','skip'].includes(e.outcome)).length
+              : t === 'WIN' ? winCount
+              : t === 'LOSS' ? lossCount
+              : null;
+            return (
+              <button key={t}
+                className={`${styles.filterTab} ${filter === t ? styles.filterTabActive : ''}`}
+                onClick={() => {
+                  setFilter(t);
+                  if (t === 'ANALYTICS') {
+                    if (!insights) loadInsights();
+                    if (!deepAnalytics) loadDeepAnalytics();
+                  }
+                }}
+              >
+                {FILTER_LABELS[t] || t}
+                {count != null && count > 0 && (
+                  <span className={`${styles.tabCount} ${filter === t ? styles.tabCountActive : ''}`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         {/* Calendar tab */}
@@ -701,7 +707,9 @@ export default function Journal() {
           <div className={styles.tradeList}>
             {filtered.length === 0 ? (
               <div className={styles.empty}>
-                {entries.length === 0 ? 'No trades yet. Add your first trade!' : `No ${filter.toLowerCase()} trades.`}
+                {entries.length === 0
+                  ? <><div style={{ fontSize: 28, marginBottom: 10 }}>📔</div>No trades yet — add your first trade!</>
+                  : `No ${FILTER_LABELS[filter] || filter.toLowerCase()} trades.`}
               </div>
             ) : filtered.map(e => {
               const isOpen = e.outcome === 'open';
@@ -714,152 +722,120 @@ export default function Journal() {
               const displayPct = isOpen ? livePct : pnl;
               const isLive = isOpen && !!live;
 
-              const cardStyle = isWin
-                ? { borderLeft: '3px solid var(--green)' }
-                : isLoss
-                ? { borderLeft: '3px solid var(--red)' }
-                : { borderLeft: '3px solid rgba(255,255,255,0.1)' };
-
               return (
-                <div key={e.id} className={`${styles.tradeCard} ${isWin ? styles.tradeCardWin : isLoss ? styles.tradeCardLoss : isOpen ? styles.tradeCardOpen : styles.tradeCardSkip}`}
-                  style={cardStyle}>
+                <div key={e.id} className={`${styles.tradeCard} ${isWin ? styles.tradeCardWin : isLoss ? styles.tradeCardLoss : isOpen ? styles.tradeCardOpen : styles.tradeCardSkip}`}>
 
-                  {/* Header */}
-                  <div className={styles.tradeMeta} style={{ alignItems: 'center' }}>
-                    <span className={styles.tradeSymbol}>{e.symbol}</span>
-                    {e.tier && (
-                      <span className={styles.tradeBadge} style={{
-                        color: TIER_COLORS[e.tier] || 'var(--text-muted)',
-                        background: (TIER_COLORS[e.tier] || '#888') + '18',
-                        border: `1px solid ${(TIER_COLORS[e.tier] || '#888')}44`,
-                      }}>{e.tier}</span>
-                    )}
-                    {isOpen && e.days_held > 0 && (
-                      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Day {e.days_held}</span>
-                    )}
-                    {!isOpen && (
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3,
-                        background: isWin ? 'rgba(0,200,100,0.12)' : 'rgba(255,68,68,0.12)',
-                        color: isWin ? 'var(--green)' : 'var(--red)',
-                      }}>
-                        {isWin ? '✅ WIN' : '❌ LOSS'}
-                        {pnl != null ? ` ${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%` : ''}
-                        {e.days_held > 0 ? ` · ${e.days_held}d` : ''}
-                      </span>
-                    )}
-                    {displayPct != null && isOpen && (
-                      <span style={{
-                        fontSize: 11, fontWeight: 700,
-                        color: displayPct >= 0 ? 'var(--green)' : 'var(--red)',
-                      }}>
-                        {displayPct >= 0 ? '+' : ''}{displayPct.toFixed(1)}%
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Price row */}
-                  <div className={styles.tradeBody}>
-                    <div className={styles.tradeRow} style={{ fontSize: 11 }}>
-                      <span>
-                        <span className={styles.tradeLabel}>Entry </span>
-                        ${e.entry_price?.toFixed(2)}
-                        {e.entry_date && (
-                          <span style={{ color: 'var(--text-muted)', fontSize: 9, marginLeft: 5 }}>
-                            {new Date(e.entry_date).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })}
-                          </span>
-                        )}
-                        {isOpen && livePrice && (
-                          <span style={{ color: 'var(--text-muted)' }}>
-                            {' → '}
-                            <b style={{ color: displayPct >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                              ${livePrice?.toFixed(2)}
-                            </b>
-                            {isLive && <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 3 }}>●</span>}
-                          </span>
-                        )}
-                        {isOpen && !livePrice && (
-                          <span style={{ color: 'var(--text-muted)', fontSize: 10, marginLeft: 6 }}>
-                            нет цены
-                          </span>
-                        )}
-                        {!isOpen && e.exit_price && (
-                          <span style={{ color: 'var(--text-muted)' }}> → ${e.exit_price?.toFixed(2)}</span>
-                        )}
-                      </span>
-                      {e.exit_reason && (
-                        <span style={{ fontSize: 9, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 2 }}>
-                          {e.exit_reason}
+                  {/* ── Header: symbol + tier + outcome badge ── */}
+                  <div className={styles.cardHeader}>
+                    <div className={styles.cardSymbolGroup}>
+                      <span className={styles.tradeSymbol}>{e.symbol}</span>
+                      {e.tier && (
+                        <span className={styles.tradeBadge} style={{
+                          color: TIER_COLORS[e.tier] || 'var(--text-muted)',
+                          background: (TIER_COLORS[e.tier] || '#888') + '18',
+                          border: `1px solid ${(TIER_COLORS[e.tier] || '#888')}44`,
+                        }}>{e.tier}</span>
+                      )}
+                      {isOpen && e.days_held > 0 && (
+                        <span className={styles.dayPill}>Day {e.days_held}</span>
+                      )}
+                    </div>
+                    <div className={styles.cardPnlGroup}>
+                      {isOpen ? (
+                        <>
+                          {displayPct != null && (
+                            <span className={styles.livePct} style={{ color: displayPct >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                              {displayPct >= 0 ? '+' : ''}{displayPct.toFixed(1)}%
+                              {isLive && <span className={styles.liveDot} title="Live price" />}
+                            </span>
+                          )}
+                          <span className={`${styles.outcomeBadge} ${styles.outcomeOpen}`}>OPEN</span>
+                        </>
+                      ) : (
+                        <span className={`${styles.outcomeBadge} ${isWin ? styles.outcomeWin : styles.outcomeLoss}`}>
+                          {isWin ? '✅ WIN' : '❌ LOSS'}
+                          {pnl != null && <b style={{ marginLeft: 6 }}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}%</b>}
+                          {e.days_held > 0 && <span style={{ fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>{e.days_held}d</span>}
                         </span>
                       )}
                     </div>
-
-                    {/* Progress bar for open trades */}
-                    {isOpen && (e.target_price || e.stop_loss) && (
-                      <ProgressBar current={livePrice} entry={e.entry_price}
-                        target={e.target_price} stop={e.stop_loss} />
-                    )}
-
-                    {/* Signal row */}
-                    <SignalRow e={e} />
-
-                    {e.catalyst && (
-                      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>
-                        📌 {e.catalyst}
-                      </div>
-                    )}
-                    {e.notes && <div className={styles.tradeNotes}>{e.notes}</div>}
-                    {e.tags?.length > 0 && (
-                      <div className={styles.tradeTags}>
-                        {e.tags.map(t => <span key={t} className={styles.tradeTag}>{t}</span>)}
-                      </div>
-                    )}
-
-                    {/* Alpha / SPY metrics for closed trades */}
-                    {!isOpen && (e.alpha_pct != null || e.spy_return_pct != null || e.max_gain_day != null || e.missed_exit_pct != null) && (
-                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 9, marginTop: 4, padding: '3px 6px', background: 'rgba(255,255,255,0.04)', borderRadius: 3 }}>
-                        {e.spy_return_pct != null && (
-                          <span style={{ color: 'var(--text-muted)' }}>SPY: <b style={{ color: e.spy_return_pct >= 0 ? 'var(--green)' : 'var(--red)' }}>{e.spy_return_pct >= 0 ? '+' : ''}{e.spy_return_pct.toFixed(1)}%</b></span>
-                        )}
-                        {e.alpha_pct != null && (
-                          <span style={{ color: 'var(--text-muted)' }}>α: <b style={{ color: e.alpha_pct >= 0 ? 'var(--cyan)' : 'var(--red)' }}>{e.alpha_pct >= 0 ? '+' : ''}{e.alpha_pct.toFixed(1)}%</b></span>
-                        )}
-                        {e.max_gain_day != null && (
-                          <span style={{ color: 'var(--text-muted)' }}>Peak: <b style={{ color: 'var(--gold)' }}>Day {e.max_gain_day}</b></span>
-                        )}
-                        {e.missed_exit_pct != null && e.missed_exit_pct > 0 && (
-                          <span style={{ color: 'var(--text-muted)' }}>Left: <b style={{ color: '#ffa500' }}>{e.missed_exit_pct.toFixed(1)}%</b></span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* AI analysis box for closed trades */}
-                    {!isOpen && e.ai_analysis && <AIBox analysis={e.ai_analysis} />}
                   </div>
 
-                  {/* Actions */}
-                  <div className={styles.tradeActions}>
+                  {/* ── Price row ── */}
+                  <div className={styles.priceRow}>
+                    <span className={styles.priceEntry}>${e.entry_price?.toFixed(2)}</span>
+                    {e.entry_date && (
+                      <span className={styles.dateTag}>{new Date(e.entry_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                    )}
+                    <span className={styles.priceArrow}>→</span>
+                    {isOpen ? (
+                      livePrice
+                        ? <span className={styles.priceExit} style={{ color: (displayPct ?? 0) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>${livePrice.toFixed(2)}</span>
+                        : <span className={styles.priceNoData}>no price</span>
+                    ) : e.exit_price ? (
+                      <>
+                        <span className={styles.priceExit}>${e.exit_price.toFixed(2)}</span>
+                        {e.exit_date && <span className={styles.dateTag}>{new Date(e.exit_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>}
+                      </>
+                    ) : null}
+                    {e.exit_reason && (
+                      <span className={styles.exitReasonPill}>{e.exit_reason.replace(/_/g, ' ')}</span>
+                    )}
+                  </div>
+
+                  {/* ── Progress bar (open trades only) ── */}
+                  {isOpen && (e.target_price || e.stop_loss) && (
+                    <ProgressBar current={livePrice} entry={e.entry_price} target={e.target_price} stop={e.stop_loss} />
+                  )}
+
+                  {/* ── Signal + context ── */}
+                  <SignalRow e={e} />
+                  {e.catalyst && <div className={styles.catalyst}>📌 {e.catalyst}</div>}
+                  {e.notes && <div className={styles.tradeNotes}>{e.notes}</div>}
+                  {e.tags?.length > 0 && (
+                    <div className={styles.tradeTags}>
+                      {e.tags.map(t => <span key={t} className={styles.tradeTag}>{t}</span>)}
+                    </div>
+                  )}
+
+                  {/* ── Alpha row (closed) ── */}
+                  {!isOpen && (e.alpha_pct != null || e.spy_return_pct != null || e.max_gain_day != null || e.missed_exit_pct != null) && (
+                    <div className={styles.alphaRow}>
+                      {e.spy_return_pct != null && <span>SPY <b style={{ color: e.spy_return_pct >= 0 ? 'var(--green)' : 'var(--red)' }}>{e.spy_return_pct >= 0 ? '+' : ''}{e.spy_return_pct.toFixed(1)}%</b></span>}
+                      {e.alpha_pct != null && <span>α <b style={{ color: e.alpha_pct >= 0 ? 'var(--cyan)' : 'var(--red)' }}>{e.alpha_pct >= 0 ? '+' : ''}{e.alpha_pct.toFixed(1)}%</b></span>}
+                      {e.max_gain_day != null && <span>Peak <b style={{ color: 'var(--gold)' }}>Day {e.max_gain_day}</b></span>}
+                      {e.missed_exit_pct > 0 && <span>Left <b style={{ color: '#ffa500' }}>{e.missed_exit_pct.toFixed(1)}%</b></span>}
+                    </div>
+                  )}
+
+                  {/* ── AI analysis (closed) ── */}
+                  {!isOpen && e.ai_analysis && <AIBox analysis={e.ai_analysis} />}
+
+                  {/* ── Action bar ── */}
+                  <div className={styles.cardActions}>
                     {isOpen && (
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        <button className={styles.smallBtn}
-                          onClick={() => handleClose(e.id, 'MANUAL')}
-                          style={{ color: 'var(--cyan)' }}>✓ Close</button>
+                      <div className={styles.closeActions}>
+                        <button className={`${styles.actionBtn} ${styles.actionBtnClose}`}
+                          onClick={() => setCloseModal({ entry: e, initialReason: 'MANUAL' })}>
+                          ✓ Close
+                        </button>
                         {e.stop_loss && (
-                          <button className={styles.smallBtn}
-                            onClick={() => handleClose(e.id, 'STOP_HIT')}
-                            style={{ color: 'var(--red)' }}>⛔ Stop</button>
+                          <button className={`${styles.actionBtn} ${styles.actionBtnStop}`}
+                            onClick={() => setCloseModal({ entry: e, initialReason: 'STOP_HIT' })}>
+                            ⛔ Stop Hit
+                          </button>
                         )}
                         {e.target_price && (
-                          <button className={styles.smallBtn}
-                            onClick={() => handleClose(e.id, 'TARGET_HIT')}
-                            style={{ color: 'var(--green)' }}>🎯 Target</button>
+                          <button className={`${styles.actionBtn} ${styles.actionBtnTarget}`}
+                            onClick={() => setCloseModal({ entry: e, initialReason: 'TARGET_HIT' })}>
+                            🎯 Target
+                          </button>
                         )}
                       </div>
                     )}
-                    <div className={styles.actionBtns}>
-                      <button className={styles.smallBtn} onClick={() => setEditEntry(e)} title="Edit">✎</button>
-                      <button className={styles.smallBtn} onClick={() => handleDelete(e.id)}
-                        style={{ color: 'var(--red)' }} title="Delete">✕</button>
+                    <div className={styles.utilActions}>
+                      <button className={styles.utilBtn} onClick={() => setEditEntry(e)}>✎ Edit</button>
+                      <button className={`${styles.utilBtn} ${styles.utilBtnDanger}`} onClick={() => handleDelete(e.id)}>✕</button>
                     </div>
                   </div>
                 </div>
@@ -875,7 +851,94 @@ export default function Journal() {
       {editEntry && (
         <EditModal entry={editEntry} onClose={() => setEditEntry(null)} onSaved={() => { loadData(); setEditEntry(null); }} />
       )}
+      {closeModal && (
+        <CloseModal
+          entry={closeModal.entry}
+          initialReason={closeModal.initialReason}
+          livePrice={livePrices[closeModal.entry.symbol]?.price ?? closeModal.entry.current_price}
+          onClose={() => setCloseModal(null)}
+          onConfirm={(price, reason, outcome) => handleClose(closeModal.entry, price, reason, outcome)}
+        />
+      )}
     </>
+  );
+}
+
+function CloseModal({ entry, initialReason, livePrice, onClose, onConfirm }) {
+  const suggested = livePrice ?? entry.current_price ?? entry.entry_price ?? 0;
+  const [price, setPrice] = useState(suggested ? Number(suggested).toFixed(2) : '');
+  const [reason, setReason] = useState(initialReason || 'MANUAL');
+  const [saving, setSaving] = useState(false);
+
+  const numPrice = parseFloat(price);
+  const valid = numPrice > 0 && !isNaN(numPrice);
+  const pnlPct = valid && entry.entry_price
+    ? ((numPrice - entry.entry_price) / entry.entry_price * 100)
+    : null;
+  const isWin = reason === 'STOP_HIT' ? false : (pnlPct != null ? pnlPct >= 0 : true);
+
+  async function confirm() {
+    if (!valid) return;
+    setSaving(true);
+    const outcome = !isWin ? 'loss' : 'win';
+    await onConfirm(numPrice, reason, outcome);
+    setSaving(false);
+  }
+
+  return (
+    <div className={styles.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className={styles.modal} style={{ maxWidth: 340 }}>
+        <div className={styles.modalTitle}>Close {entry.symbol}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14, marginTop: -8 }}>
+          Entry: <b>${entry.entry_price?.toFixed(2)}</b>
+          {entry.entry_date && <span style={{ marginLeft: 8 }}>{new Date(entry.entry_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>}
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <label className={styles.label}>EXIT PRICE</label>
+          <input
+            className={styles.input} type="number" step="0.01"
+            value={price} onChange={e => setPrice(e.target.value)}
+            autoFocus onKeyDown={e => e.key === 'Enter' && confirm()}
+            placeholder="0.00"
+            style={{ fontSize: 18, padding: '8px 12px', fontWeight: 700 }}
+          />
+        </div>
+
+        {pnlPct != null && (
+          <div style={{
+            padding: '10px 14px', borderRadius: 6, marginBottom: 12, textAlign: 'center',
+            background: isWin ? 'rgba(0,200,100,0.1)' : 'rgba(255,68,102,0.1)',
+            border: `1px solid ${isWin ? 'rgba(0,200,100,0.35)' : 'rgba(255,68,102,0.35)'}`,
+          }}>
+            <span style={{ fontSize: 20, fontWeight: 800, color: isWin ? 'var(--green)' : 'var(--red)' }}>
+              {isWin ? '✅ WIN' : '❌ LOSS'} {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+            </span>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 16 }}>
+          <label className={styles.label}>EXIT REASON</label>
+          <select className={styles.select} value={reason} onChange={e => setReason(e.target.value)}>
+            <option value="MANUAL">Manual Close</option>
+            <option value="TARGET_HIT">🎯 Target Hit</option>
+            <option value="STOP_HIT">⛔ Stop Hit (Loss)</option>
+            <option value="TRAILING_STOP">Trailing Stop</option>
+            <option value="PARTIAL">Partial Exit</option>
+          </select>
+        </div>
+
+        <div className={styles.modalFooter}>
+          <button className={styles.btn} onClick={onClose}>Cancel</button>
+          <button
+            className={`${styles.btn} ${isWin ? styles.btnPrimary : styles.btnDanger}`}
+            onClick={confirm} disabled={saving || !valid}
+          >
+            {saving ? 'Saving…' : `Confirm ${isWin ? 'WIN ✅' : 'LOSS ❌'}`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
