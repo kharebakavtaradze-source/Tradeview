@@ -1135,6 +1135,17 @@ async def admin_run_universe_scan(background_tasks: BackgroundTasks, date: str =
     }
 
 
+@app.get("/api/admin/universe-scan/status")
+async def admin_universe_scan_status():
+    """
+    Live progress of the universe scan.
+    Poll every 5s while running=true.
+    Returns phase, candidates_done/total, FIRE/ARM counts, elapsed/ETA.
+    """
+    from scanner.universe_scan import get_progress
+    return get_progress()
+
+
 # ─── EOD Log routes ────────────────────────────────────────────────────────────
 
 @app.get("/api/eod-log/latest")
