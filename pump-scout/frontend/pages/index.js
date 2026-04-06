@@ -105,6 +105,7 @@ function getMarketCountdown() {
 
 export default function Home() {
   const [scanData, setScanData] = useState(null);
+  const [livePrices, setLivePrices] = useState({});  // {SYMBOL: {price, change_pct}}
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('FIRE');
@@ -187,6 +188,20 @@ export default function Home() {
     }
   }, []);
 
+  // Fetch live prices from Yahoo for all displayed symbols and overlay on EOD data.
+  // Only runs during market hours. Called every 60s via the main refresh interval.
+  const fetchLivePrices = useCallback(async (results) => {
+    if (!results || results.length === 0) return;
+    const symbols = results.map(r => r.symbol).join(',');
+    try {
+      const res = await fetch(`${API_URL}/api/prices/live?symbols=${encodeURIComponent(symbols)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setLivePrices(data);
+      }
+    } catch { /* silent — live prices are best-effort */ }
+  }, []);
+
   useEffect(() => {
     fetchLatest();
     fetchHype();
@@ -204,6 +219,17 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [fetchLatest, fetchHype, fetchRegime, fetchStreaks]);
+
+  // Live price overlay: runs every 30s during market hours
+  useEffect(() => {
+    if (!scanData?.results?.length) return;
+    if (!isMarketOpen()) return;
+    fetchLivePrices(scanData.results);
+    const liveInterval = setInterval(() => {
+      if (isMarketOpen()) fetchLivePrices(scanData.results);
+    }, 30 * 1000);
+    return () => clearInterval(liveInterval);
+  }, [scanData, fetchLivePrices]);
 
   useEffect(() => {
     const tick = () => {
@@ -303,6 +329,20 @@ export default function Home() {
     }
   }, [scanData]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Overlay live Yahoo prices onto EOD scan data during market hours
+  const withLivePrice = (ticker) => {
+    const live = livePrices[ticker.symbol];
+    if (!live?.price) return ticker;
+    return {
+      ...ticker,
+      price: live.price,
+      indicators: {
+        ...ticker.indicators,
+        price_change_pct: live.change_pct ?? ticker.indicators?.price_change_pct,
+      },
+    };
+  };
+
   const tierCounts = {
     ...(scanData?.tier_counts || {}),
     SYMPATHY: sympathyResults.length,
@@ -377,6 +417,14 @@ export default function Home() {
           <SectorBar data={sectorPerf} cyclePhase={marketRegime?.cycle_phase} />
         )}
 
+
+        {/* Live price indicator */}
+        {!scanning && marketOpen && Object.keys(livePrices).length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px', fontSize: 10, color: 'rgba(0,200,100,0.7)' }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#00c864', display: 'inline-block', animation: 'pulse 1.5s infinite' }} />
+            Live prices · updates every 30s
+          </div>
+        )}
 
         {/* Scanning progress banner */}
         {scanning && (
@@ -573,7 +621,7 @@ export default function Home() {
                         </div>
                         <div className={styles.grid}>
                           {tickers.map(ticker => (
-                            <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} streakDays={streakBySymbol[ticker.symbol] || 0} />
+                            <TickerCard key={ticker.symbol} data={withLivePrice(ticker)} hypeData={hypeByTicker[ticker.symbol]} streakDays={streakBySymbol[ticker.symbol] || 0} />
                           ))}
                         </div>
                       </div>
@@ -583,7 +631,7 @@ export default function Home() {
               ) : (
               <div className={`${styles.grid} fade-in`}>
                 {filtered.map((ticker) => (
-                  <TickerCard key={ticker.symbol} data={ticker} hypeData={hypeByTicker[ticker.symbol]} streakDays={streakBySymbol[ticker.symbol] || 0} />
+                  <TickerCard key={ticker.symbol} data={withLivePrice(ticker)} hypeData={hypeByTicker[ticker.symbol]} streakDays={streakBySymbol[ticker.symbol] || 0} />
                 ))}
               </div>
               )
