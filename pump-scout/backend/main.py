@@ -39,6 +39,7 @@ from database import (
     get_journal_entry,
     get_journal_stats,
     get_latest_scan,
+    get_latest_scan_by_type,
     get_market_regime_history,
     get_market_regime_latest,
     get_open_ai_positions,
@@ -166,6 +167,36 @@ async def get_history(days: int = 30):
     """Return scan history summary for the last N days."""
     history = await get_scan_history(days=min(days, 90))
     return {"history": history, "days": days}
+
+
+@app.get("/api/scan/universe/latest")
+async def get_universe_scan_latest():
+    """Return the latest Massive EOD universe scan results."""
+    data = await get_latest_scan_by_type("massive_eod")
+    if not data:
+        return {
+            "results": [], "scanned_at": None, "total": 0,
+            "scan_type": "massive_eod",
+            "message": "No EOD universe scan yet. Runs at 17:00 ET Mon–Fri.",
+        }
+    results = data.get("results", [])
+    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
+    return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
+
+
+@app.get("/api/scan/intraday/latest")
+async def get_intraday_scan_latest():
+    """Return the latest Yahoo intraday validation scan results."""
+    data = await get_latest_scan_by_type("yahoo_intraday")
+    if not data:
+        return {
+            "results": [], "scanned_at": None, "total": 0,
+            "scan_type": "yahoo_intraday",
+            "message": "No intraday scan yet. Runs at 8:00, 9:30, 12:00 ET Mon–Fri.",
+        }
+    results = data.get("results", [])
+    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
+    return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
 
 
 @app.get("/api/ticker/{symbol}")
@@ -1021,26 +1052,41 @@ async def sector_strength_by_sector(sector: str):
 # ─── Admin / Maintenance routes ───────────────────────────────────────────────
 
 @app.get("/api/admin/test-massive")
-async def admin_test_massive(symbol: str = "KPTI"):
+async def admin_test_massive(symbol: str = "AAPL"):
     """
-    Test the Massive Reference Data API for a single symbol.
-    Verifies API key and response format before running full enrichment.
+    Test the Massive/Polygon connection.
+    Fetches a sample from grouped daily data + ticker details for one symbol.
     """
-    from scanner.massive_client import get_ticker_reference, MASSIVE_API_KEY
+    from scanner.massive_data import (
+        fetch_grouped_daily, fetch_ticker_details,
+        get_last_trading_day, MASSIVE_API_KEY,
+    )
     if not MASSIVE_API_KEY:
-        return {"error": "MASSIVE_API_KEY not set in environment"}
+        return {"error": "MASSIVE_API_KEY not set in environment", "api_key_set": False}
 
-    data = await get_ticker_reference(symbol.upper())
+    target_date = get_last_trading_day(offset=1)
 
-    # Check if already in DB
+    # Fetch grouped daily (all US stocks in 1 call) and return a sample
+    all_bars = await fetch_grouped_daily(target_date)
+    sample_syms = sorted(all_bars.keys())[:5]
+    sample = [{"symbol": s, **all_bars[s]} for s in sample_syms]
+
+    # Also test ticker details for the requested symbol
+    details = await fetch_ticker_details(symbol.upper())
+
+    # Check DB cache
     from database import get_sector_full_from_db
     cached = await get_sector_full_from_db(symbol.upper())
 
     return {
-        "symbol":           symbol.upper(),
-        "massive_response": data,
-        "cached_in_db":     cached,
-        "api_key_set":      bool(MASSIVE_API_KEY),
+        "status":         "ok" if all_bars else "error",
+        "api_key_set":    True,
+        "target_date":    target_date,
+        "universe_count": len(all_bars),
+        "sample_tickers": len(sample),
+        "sample":         sample,
+        "ticker_details": details,
+        "db_cached":      cached,
     }
 
 
@@ -1063,6 +1109,29 @@ async def admin_enrich_sectors(background_tasks: BackgroundTasks):
         "status":  "started",
         "queued":  len(missing),
         "message": f"Enriching {len(missing)} symbols in background (1 per 15s)",
+    }
+
+
+@app.get("/api/admin/run-universe-scan")
+async def admin_run_universe_scan(background_tasks: BackgroundTasks, date: str = None):
+    """
+    Manually trigger the Massive EOD universe scan.
+    Runs in background — fetches all US stocks and scores top 600.
+    Returns immediately; check /api/scan/universe/latest for results.
+    """
+    from scanner.massive_data import MASSIVE_API_KEY
+    if not MASSIVE_API_KEY:
+        return {"error": "MASSIVE_API_KEY not set — cannot run universe scan"}
+
+    async def _run():
+        from scanner.universe_scan import run_universe_scan
+        await run_universe_scan(target_date=date)
+
+    background_tasks.add_task(_run)
+    return {
+        "status":      "started",
+        "target_date": date or "yesterday (auto)",
+        "message":     "Universe scan running in background. Check /api/scan/universe/latest for results.",
     }
 
 

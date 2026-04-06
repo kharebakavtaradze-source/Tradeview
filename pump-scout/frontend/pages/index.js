@@ -376,10 +376,40 @@ export default function Home() {
           />
         )}
 
+        {/* Scan source badge */}
+        {scanData && !scanning && (
+          <div className={styles.scanTypeBadge}>
+            {scanData.scan_type === 'massive_eod' ? (
+              <>
+                <span className={styles.scanTypeDot} style={{ background: '#44aaff' }} />
+                <strong>📊 EOD Universe</strong>
+                <span className={styles.scanTypeSub}>
+                  — {scanData.total} тикеров · Полный рынок, данные на закрытие
+                  {scanData.universe_size ? ` · ${scanData.universe_size.toLocaleString()} в universe` : ''}
+                </span>
+              </>
+            ) : scanData.scan_type === 'yahoo_intraday' ? (
+              <>
+                <span className={styles.scanTypeDot} style={{ background: '#44ff88' }} />
+                <strong>⚡ Intraday</strong>
+                <span className={styles.scanTypeSub}>
+                  — {scanData.total} тикеров · Проверка кандидатов, live данные
+                </span>
+              </>
+            ) : (
+              <>
+                <span className={styles.scanTypeDot} style={{ background: '#888' }} />
+                <strong>Scan</strong>
+                <span className={styles.scanTypeSub}>— {scanData.total} тикеров</span>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Scanning progress banner */}
         {scanning && (
           <div className={styles.scanningBanner}>
-            <span className={styles.spinner} /> Scan in progress — fetching ~800 tickers and calculating signals. This takes 2–4 minutes…
+            <span className={styles.spinner} /> Intraday validation in progress — checking yesterday&apos;s candidates at market open…
           </div>
         )}
 
