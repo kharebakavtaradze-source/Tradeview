@@ -119,6 +119,7 @@ export default function Home() {
   const [hypeRunning, setHypeRunning] = useState(false);
   const [streaks, setStreaks] = useState([]);
   const [sectorPerf, setSectorPerf] = useState({});
+  const [universeProgress, setUniverseProgress] = useState(null);
 
   const fetchLatest = useCallback(async () => {
     try {
@@ -219,6 +220,27 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [fetchLatest, fetchHype, fetchRegime, fetchStreaks]);
+
+  // Universe scan progress polling — every 5s, auto-refreshes data when done
+  useEffect(() => {
+    let prevRunning = false;
+    const pollProgress = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/universe-scan/status`);
+        if (!res.ok) return;
+        const p = await res.json();
+        setUniverseProgress(p);
+        // When scan transitions from running → done, reload the scan data
+        if (prevRunning && !p.running && p.phase === 'done') {
+          fetchLatest();
+        }
+        prevRunning = p.running;
+      } catch { /* non-fatal */ }
+    };
+    pollProgress();
+    const interval = setInterval(pollProgress, 5000);
+    return () => clearInterval(interval);
+  }, [fetchLatest]);
 
   // Live price overlay: runs every 30s during market hours
   useEffect(() => {
@@ -426,8 +448,81 @@ export default function Home() {
           </div>
         )}
 
-        {/* Scanning progress banner */}
-        {scanning && (
+        {/* Universe scan progress banner */}
+        {universeProgress?.running && (() => {
+          const p = universeProgress;
+          const total = p.candidates_total || 0;
+          const done  = p.candidates_done  || 0;
+          const pct   = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+          const phaseLabel = {
+            fetching_universe: 'Fetching universe data',
+            filtering:         'Filtering stocks',
+            scoring:           'Scoring candidates',
+            enriching:         'Enriching sectors',
+            saving:            'Saving results',
+            done:              'Complete',
+            error:             'Error',
+            idle:              'Idle',
+          }[p.phase] || p.phase;
+          const fmtTime = (s) => {
+            if (!s) return null;
+            if (s < 60) return `${s}s`;
+            return `${Math.floor(s / 60)}m ${s % 60}s`;
+          };
+          return (
+            <div className={styles.universeBanner}>
+              <div className={styles.universeBannerHeader}>
+                <span><span className={styles.spinner} />Universe Scan Running</span>
+                <span className={styles.universeBannerPhase}>{phaseLabel}</span>
+              </div>
+              {total > 0 && (
+                <div className={styles.universeProgressTrack}>
+                  <div className={styles.universeProgressBar} style={{ width: `${pct}%` }} />
+                </div>
+              )}
+              <div className={styles.universeBannerStats}>
+                {total > 0 && (
+                  <span className={styles.universeBannerStat}>
+                    <strong>{done}</strong>/{total} scored ({pct}%)
+                  </span>
+                )}
+                {p.universe_raw > 0 && (
+                  <span className={styles.universeBannerStat}>
+                    Universe: <strong>{p.universe_raw.toLocaleString()}</strong> → {p.universe_filtered?.toLocaleString() || '…'} filtered
+                  </span>
+                )}
+                {p.fire_count > 0 && (
+                  <span className={styles.universeBannerStat}>
+                    <span className={styles.fireCount}>🔥 {p.fire_count} FIRE</span>
+                  </span>
+                )}
+                {p.arm_count > 0 && (
+                  <span className={styles.universeBannerStat}>
+                    <span className={styles.armCount}>⚡ {p.arm_count} ARM</span>
+                  </span>
+                )}
+                {p.results_count > 0 && (
+                  <span className={styles.universeBannerStat}>
+                    Results: <strong>{p.results_count}</strong>
+                  </span>
+                )}
+                {p.elapsed_secs > 0 && (
+                  <span className={styles.universeBannerStat}>
+                    Elapsed: <strong>{fmtTime(p.elapsed_secs)}</strong>
+                  </span>
+                )}
+                {p.eta_secs != null && (
+                  <span className={styles.universeBannerStat}>
+                    ETA: <strong>~{fmtTime(p.eta_secs)}</strong>
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Intraday scanning progress banner */}
+        {scanning && !universeProgress?.running && (
           <div className={styles.scanningBanner}>
             <span className={styles.spinner} /> Intraday validation in progress… Results stored for AI portfolio. Chart data unchanged.
           </div>
