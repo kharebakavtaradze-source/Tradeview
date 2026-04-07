@@ -1,5 +1,27 @@
 """
-Scoring engine: combines indicator data + Wyckoff regime into a composite score.
+Pump Scout Scoring Engine v2.0 — Confluence-based pump detection.
+
+Philosophy:
+  Pumps happen when MULTIPLE signals align simultaneously.
+  Instead of a simple weighted sum (one signal dominates), we use a
+  confluence model: each additional strong signal multiplies the final score.
+
+  Four dimensions (each 0–100):
+    1. VOLUME PRESSURE  — is aggressive buying happening? (anomaly, Z-score, OBV)
+    2. STRUCTURE        — is price compressed and coiling? (BB squeeze, EMA ribbon, Wyckoff)
+    3. SMART MONEY FLOW — are institutions quietly loading? (CMF, OBV div, inst flow)
+    4. MOMENTUM CONTEXT — are we early, not late? (RS, RSI div, gap, EMA trend)
+
+  Confluence multiplier: each dimension scoring >= 60 earns +12% (max 4 dims = ×1.48)
+  Silent Volume bonus: is_stealth + obv_divergence + cmf_pctl >= 60 → ×1.15 extra
+
+  Penalties applied after:
+    in_dist         → ×0.60 (smart money exiting)
+    rsi > 70        → ×0.75 (overbought — too late)
+    rsi > 65        → ×0.88
+    cmf_pctl < 20   → ×0.80 (poor money flow)
+    obv NEGATIVE    → ×0.85
+    GAP_DOWN_STRONG → ×0.80
 """
 import logging
 
@@ -241,212 +263,349 @@ def calc_setup_quality_layers(
 
 
 def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
-    anomaly_ratio = indicators.get("anomaly_ratio", 0)
-    cmf_pctl = indicators.get("cmf_pctl", 0)
-    cmf_val = indicators.get("cmf", 0)
-    sqz_bars = indicators.get("bb_sqz_bars", 0)
-    in_acc = regime.get("in_acc", False)
-    price_change_pct_signed = indicators.get("price_change_pct", 0)
-    price_change_pct = abs(price_change_pct_signed)
-    state = regime.get("state", "NONE")
-    stealth = indicators.get("stealth", {})
-    vol_ratio = stealth.get("vol_ratio", 0)  # today_vol / yesterday_vol
+    """
+    Confluence-based pump detection scoring engine.
 
-    # --- Volume Anomaly Score (0–100) ---
+    Scores four independent dimensions (0-100 each), then multiplies by a
+    confluence bonus for setups where multiple dimensions align simultaneously.
+
+    A stock with 3-4 strong signals gets a multiplicative boost — this makes
+    FIRE tier genuinely hard to reach without multi-signal confirmation.
+    """
+    # ── Extract signals ───────────────────────────────────────────────────────
+    anomaly_ratio   = indicators.get("anomaly_ratio", 0) or 0
+    vol_z           = indicators.get("vol_z", 0) or 0
+    cmf_pctl        = indicators.get("cmf_pctl", 0) or 0
+    cmf_val         = indicators.get("cmf", 0) or 0
+    sqz_bars        = indicators.get("bb_sqz_bars", 0) or 0
+    atr_ratio       = indicators.get("atr_ratio", 1.0) or 1.0
+    ribbon_compr    = indicators.get("ribbon_compression", "NONE")
+    compr_bullish   = indicators.get("compression_and_bullish", False)
+    ema8_slope      = indicators.get("ema8_slope", "FLAT")
+    above_ema20     = indicators.get("above_ema20", False)
+    above_ema50     = indicators.get("above_ema50", False)
+    rs_score        = indicators.get("rs_score", 0) or 0
+    price_chg_pct   = abs(indicators.get("price_change_pct", 0) or 0)
+
+    stealth         = indicators.get("stealth", {}) or {}
+    is_stealth      = stealth.get("is_stealth", False)
+    stealth_score_v = stealth.get("stealth_score", 0) or 0
+
+    obv             = indicators.get("obv", {}) or {}
+    obv_strength    = obv.get("obv_strength", "WEAK")
+    obv_divergence  = obv.get("obv_divergence", False)
+
+    rsi_data        = indicators.get("rsi", {}) or {}
+    rsi_value       = rsi_data.get("value", 50) or 50
+    rsi_divergence  = rsi_data.get("has_divergence", False)
+    div_strength    = rsi_data.get("div_strength", 0) or 0
+    rsi_oversold    = rsi_data.get("oversold", False)
+
+    gap             = indicators.get("gap", {}) or {}
+    gap_type        = gap.get("gap_type", "NONE")
+
+    inst            = indicators.get("institutional_flow", {}) or {}
+    is_inst         = inst.get("is_institutional", False)
+    inst_flow_score = inst.get("flow_score", 0) or 0
+
+    state           = regime.get("state", "NONE")
+    in_acc          = regime.get("in_acc", False)
+    in_dist         = regime.get("in_dist", False)
+    breakout        = regime.get("breakout", False)
+    wyckoff_conf    = regime.get("confidence", 0) or 0
+
+    # ── DIMENSION 1: VOLUME PRESSURE (0–100) ─────────────────────────────────
+    # Is aggressive/unusual buying happening? Core pump-detection signal.
+
+    # Anomaly ratio — continuous, not step function (0–50)
     if anomaly_ratio >= 10:
-        vol_score = 100
+        vol_anomaly_pts = 50
     elif anomaly_ratio >= 5:
-        vol_score = 80
-    elif anomaly_ratio >= 3:
-        vol_score = 60
+        vol_anomaly_pts = 35 + (anomaly_ratio - 5) / 5 * 15
     elif anomaly_ratio >= 2:
-        vol_score = 40
+        vol_anomaly_pts = 15 + (anomaly_ratio - 2) / 3 * 20
+    elif anomaly_ratio >= 1.5:
+        vol_anomaly_pts = (anomaly_ratio - 1.5) / 0.5 * 15
     else:
-        vol_score = 0
+        vol_anomaly_pts = 0
 
-    # --- Accumulation Score (0–100) ---
-    accum_score = 0
+    # Volume Z-score — statistical significance (0–20)
+    if vol_z >= 3.0:
+        vol_z_pts = 20
+    elif vol_z >= 2.0:
+        vol_z_pts = 12 + (vol_z - 2.0) * 8
+    elif vol_z >= 1.0:
+        vol_z_pts = 4 + (vol_z - 1.0) * 8
+    else:
+        vol_z_pts = max(0.0, vol_z * 4)
 
-    # CMF component (max 30)
-    if cmf_pctl >= 80:
-        accum_score += 30
-    elif cmf_pctl >= 60:
-        accum_score += 20
-    elif cmf_val > 0:
-        accum_score += 10
+    # OBV slope — are buyers accumulating over multiple days? (0–20)
+    obv_vol_pts = {"STRONG": 20, "MEDIUM": 12, "WEAK": 5, "NEGATIVE": 0}.get(obv_strength, 0)
 
-    # Squeeze component (max 30)
+    # Stealth volume pattern — high vol + quiet price = smart money (0–15)
+    if is_stealth and stealth_score_v >= 70:
+        stealth_vol_pts = 15
+    elif is_stealth and stealth_score_v >= 50:
+        stealth_vol_pts = 10
+    elif is_stealth:
+        stealth_vol_pts = 5
+    else:
+        stealth_vol_pts = 0
+
+    vol_dim = min(100.0, vol_anomaly_pts + vol_z_pts + obv_vol_pts + stealth_vol_pts)
+
+    # ── DIMENSION 2: STRUCTURE (0–100) ───────────────────────────────────────
+    # Is price technically compressed and ready to break out?
+
+    # BB Squeeze duration — the coiled spring (0–35)
     if sqz_bars >= 10:
-        accum_score += 30
+        bb_pts = 35
+    elif sqz_bars >= 7:
+        bb_pts = 28
     elif sqz_bars >= 5:
-        accum_score += 20
+        bb_pts = 22
     elif sqz_bars >= 3:
-        accum_score += 10
-
-    # Accumulation regime bonus (max 30)
-    if in_acc:
-        accum_score += 30
-
-    accum_score = min(accum_score, 100)
-
-    # --- RSI Divergence bonus (max +20 to accum_score) ---
-    rsi_data = indicators.get("rsi", {})
-    if rsi_data.get("has_divergence"):
-        div_strength = rsi_data.get("div_strength", 0)
-        rsi_bonus = 20 if div_strength >= 10 else 15 if div_strength >= 5 else 10
-        accum_score = min(accum_score + rsi_bonus, 100)
-
-    # --- OBV bonus (max +25 to accum_score) ---
-    # OBV confirms accumulation: rising OBV = smart money buying
-    # OBV divergence (OBV up, price flat) = our key stealth pattern
-    obv = indicators.get("obv", {})
-    obv_strength = obv.get("obv_strength", "WEAK")
-    obv_divergence = obv.get("obv_divergence", False)
-    if obv_strength == "STRONG":
-        accum_score = min(accum_score + 15, 100)
-    elif obv_strength == "MEDIUM":
-        accum_score = min(accum_score + 8, 100)
-    if obv_divergence:
-        accum_score = min(accum_score + 10, 100)
-
-    # --- Gap bonus (up to +15 to vol_score, penalty for gap down) ---
-    gap = indicators.get("gap", {})
-    gap_type = gap.get("gap_type", "NONE")
-    if gap_type == "GAP_UP_STRONG":
-        vol_score = min(vol_score + 15, 100)
-    elif gap_type == "GAP_UP":
-        vol_score = min(vol_score + 8, 100)
-    elif gap_type == "GAP_DOWN_STRONG":
-        vol_score = max(vol_score - 20, 0)
-    elif gap_type == "GAP_DOWN":
-        vol_score = max(vol_score - 10, 0)
-
-    # --- Stealth Bonus ---
-    stealth_bonus = 0
-    if stealth.get("is_stealth"):
-        stealth_bonus = stealth.get("stealth_score", 0) * 0.3
-
-    # --- Quiet Factor (multiplier) ---
-    if price_change_pct < 1.0 and anomaly_ratio > 3.0:
-        quiet_factor = 1.5
-    elif price_change_pct < 3.0 and anomaly_ratio > 2.0:
-        quiet_factor = 1.2
+        bb_pts = 15
+    elif sqz_bars >= 1:
+        bb_pts = 8
     else:
-        quiet_factor = 1.0
+        bb_pts = 0
 
-    # OBV divergence nudge: when quiet_factor is already elevated, push it a bit more
-    if obv_divergence and quiet_factor > 1.0:
-        quiet_factor = min(1.5, quiet_factor + 0.1)
+    # EMA ribbon compression — price-action compression (0–25)
+    if ribbon_compr == "STRONG" and compr_bullish:
+        ema_pts = 25   # compressed + price above all EMAs = textbook pre-breakout
+    elif ribbon_compr == "STRONG":
+        ema_pts = 18
+    elif ribbon_compr == "MEDIUM" and compr_bullish:
+        ema_pts = 16
+    elif ribbon_compr == "MEDIUM":
+        ema_pts = 11
+    elif ribbon_compr == "WEAK":
+        ema_pts = 5
+    else:
+        ema_pts = 0
 
-    # --- Relative Strength vs SPY (5-day) ---
-    rs_score = indicators.get("rs_score", 0)
-    rs_bonus = 0
+    # Wyckoff state — structural context (0–25)
+    _WYCKOFF_PTS = {
+        "FIRE": 25, "ARM": 20, "STEALTH_ARM": 20,
+        "BASE": 15, "STEALTH_BASE": 15, "STEALTH": 12,
+    }
+    wyckoff_pts = _WYCKOFF_PTS.get(state, 8 if in_acc else 0)
+
+    # ATR expansion — volatility expanding after contraction = move starting (0–15)
+    if atr_ratio >= 1.5:
+        atr_pts = 15
+    elif atr_ratio >= 1.2:
+        atr_pts = 10
+    elif atr_ratio >= 1.0:
+        atr_pts = 4
+    else:
+        atr_pts = 0
+
+    struct_dim = min(100.0, bb_pts + ema_pts + wyckoff_pts + atr_pts)
+
+    # ── DIMENSION 3: SMART MONEY FLOW (0–100) ────────────────────────────────
+    # Evidence of institutions quietly accumulating
+
+    # CMF percentile — sustained buying pressure over N bars (0–35)
+    if cmf_pctl >= 80:
+        cmf_pts = 35
+    elif cmf_pctl >= 65:
+        cmf_pts = 25
+    elif cmf_pctl >= 50:
+        cmf_pts = 16
+    elif cmf_pctl >= 35:
+        cmf_pts = 9
+    elif cmf_val > 0:
+        cmf_pts = 4
+    else:
+        cmf_pts = 0
+
+    # OBV divergence — OBV rising while price is flat (0–30)
+    # This is the most reliable institutional accumulation fingerprint
+    if obv_divergence and obv_strength == "STRONG":
+        obv_div_pts = 30
+    elif obv_divergence and obv_strength == "MEDIUM":
+        obv_div_pts = 22
+    elif obv_divergence:
+        obv_div_pts = 15
+    elif obv_strength == "STRONG":
+        obv_div_pts = 10
+    elif obv_strength == "MEDIUM":
+        obv_div_pts = 5
+    else:
+        obv_div_pts = 0
+
+    # Institutional flow — detected multi-day institutional buying (0–20)
+    if is_inst and inst_flow_score >= 70:
+        inst_pts = 20
+    elif is_inst and inst_flow_score >= 50:
+        inst_pts = 14
+    elif is_inst:
+        inst_pts = 8
+    else:
+        inst_pts = 0
+
+    # Stealth pattern quality — confirms smart money loading (0–15)
+    if stealth_score_v >= 70:
+        stealth_smart_pts = 15
+    elif stealth_score_v >= 50:
+        stealth_smart_pts = 10
+    elif stealth_score_v >= 30:
+        stealth_smart_pts = 5
+    else:
+        stealth_smart_pts = 0
+
+    smart_dim = min(100.0, cmf_pts + obv_div_pts + inst_pts + stealth_smart_pts)
+
+    # ── DIMENSION 4: MOMENTUM CONTEXT (0–100) ────────────────────────────────
+    # Are we early in the move? Is the stock outperforming?
+
+    # RSI divergence — price lower low but RSI higher low = hidden strength (0–35)
+    if rsi_divergence and div_strength >= 10:
+        rsi_pts = 35
+    elif rsi_divergence and div_strength >= 5:
+        rsi_pts = 25
+    elif rsi_divergence:
+        rsi_pts = 18
+    elif rsi_oversold:
+        rsi_pts = 10
+    elif rsi_value <= 50:
+        rsi_pts = 5
+    elif rsi_value <= 65:
+        rsi_pts = 2
+    else:
+        rsi_pts = 0
+
+    # Relative strength vs SPY 5-day — outperforming market = targeted buying (0–30)
     if rs_score > 10:
-        rs_bonus = 15
-    elif rs_score > 5 and state in ("RISK_OFF", "FEAR"):
-        rs_bonus = 15
+        rs_pts = 30
     elif rs_score > 5:
-        rs_bonus = 8
+        rs_pts = 20
+    elif rs_score > 2:
+        rs_pts = 12
+    elif rs_score > 0:
+        rs_pts = 6
+    else:
+        rs_pts = 0
 
-    # --- Institutional Flow Bonus ---
-    inst = indicators.get("institutional_flow", {})
-    inst_bonus = inst.get("flow_score", 0) * 0.2 if inst.get("is_institutional") else 0
+    # Gap direction (-15 to +15)
+    gap_pts = {
+        "GAP_UP_STRONG": 15, "GAP_UP": 10,
+        "NONE": 0, "GAP_DOWN": -8, "GAP_DOWN_STRONG": -15,
+    }.get(gap_type, 0)
 
-    # --- Composite Score ---
-    total_score = (vol_score * 0.4 + accum_score * 0.3 + stealth_bonus * 0.3) * quiet_factor
-    total_score = min(total_score + inst_bonus + rs_bonus, 100)
+    # Price position + EMA trend (0–25)
+    if breakout and in_acc:
+        pos_pts = 20   # breakout from accumulation = ideal entry point
+    elif breakout:
+        pos_pts = 12
+    elif above_ema50:
+        pos_pts = 10
+    elif above_ema20:
+        pos_pts = 6
+    else:
+        pos_pts = 0
+    if ema8_slope == "RISING":
+        pos_pts = min(pos_pts + 5, 25)
 
-    # sector_rs_bonus is applied post-scoring in runner.py (after sector is resolved)
-    sector_rs_bonus = 0
+    mom_dim = min(100.0, max(0.0, rsi_pts + rs_pts + gap_pts + pos_pts))
 
-    # Stealth floor: stealth signal always at least WATCH
-    if stealth.get("is_stealth") and total_score < 25:
-        total_score = 25
+    # ── CONFLUENCE MULTIPLIER ─────────────────────────────────────────────────
+    # Each dimension scoring >= 60 earns +12% — rewarding multi-signal setups
+    dims = [vol_dim, struct_dim, smart_dim, mom_dim]
+    strong_count = sum(1 for d in dims if d >= 60)
+    confluence_mult = 1.0 + strong_count * 0.12   # max ×1.48 with 4 strong dims
 
-    # --- RSI overbought penalty ---
-    rsi_value = rsi_data.get("value", 50) or 50
+    # ── SILENT VOLUME BONUS ───────────────────────────────────────────────────
+    # The "institutional accumulation fingerprint":
+    # High volume + flat price + OBV rising + CMF elevated = pre-pump loading
+    silent_volume = is_stealth and obv_divergence and cmf_pctl >= 60
+    silent_mult = 1.15 if silent_volume else 1.0
+
+    # ── BASE SCORE ────────────────────────────────────────────────────────────
+    weighted_base = (
+        vol_dim    * 0.35 +
+        struct_dim * 0.30 +
+        smart_dim  * 0.20 +
+        mom_dim    * 0.15
+    )
+    total_score = weighted_base * confluence_mult * silent_mult
+
+    # ── PENALTIES ─────────────────────────────────────────────────────────────
+    if in_dist:
+        total_score *= 0.60          # smart money is selling, not buying
     if rsi_value > 70:
-        total_score *= 0.7   # overbought — significantly reduce
+        total_score *= 0.75          # overbought — too late to enter cleanly
     elif rsi_value > 65:
-        total_score *= 0.85  # approaching overbought
-
-    # --- Weak money-flow penalty ---
+        total_score *= 0.88          # approaching overbought
     if cmf_pctl < 20:
-        total_score *= 0.8
-
-    # --- Distribution penalty ---
-    # Stocks in distribution are being sold by smart money — heavy penalty
-    if regime.get("in_dist"):
-        total_score *= 0.6
-
-    # --- OBV NEGATIVE penalty (secondary signal, lighter than CMF) ---
+        total_score *= 0.80          # sustained selling pressure
     if obv_strength == "NEGATIVE":
-        total_score *= 0.85
+        total_score *= 0.85          # more volume on down-days than up-days
+    if gap_type == "GAP_DOWN_STRONG":
+        total_score *= 0.80          # strong overnight distribution event
+
+    # Stealth floor — meaningful stealth always at least WATCH
+    if is_stealth and stealth_score_v >= 50 and total_score < 25:
+        total_score = 25.0
 
     total_score = round(min(total_score, 100), 2)
 
-    # --- Tier ---
-    # Step 1: score-based tier
-    if total_score > 80:
+    # ── TIER ASSIGNMENT ───────────────────────────────────────────────────────
+    if total_score > 78:
         tier = "FIRE"
-    elif total_score > 60:
+    elif total_score > 58:
         tier = "ARM"
-    elif total_score > 40:
+    elif total_score > 38:
         tier = "BASE"
-    elif stealth.get("is_stealth") and stealth.get("stealth_score", 0) >= 50:
+    elif is_stealth and stealth_score_v >= 50:
         tier = "STEALTH"
-    elif total_score > 25:
+    elif total_score > 22:
         tier = "WATCH"
     else:
         tier = "SKIP"
 
-    # Step 2: Wyckoff state can upgrade tier but never downgrade
+    # Wyckoff state can upgrade tier (never downgrade)
     _TIER_RANK = {"SKIP": 0, "WATCH": 1, "STEALTH": 2, "SYMPATHY": 3, "BASE": 3, "ARM": 4, "FIRE": 5}
     _STATE_MIN = {
-        "FIRE": "FIRE",
-        "ARM": "ARM",
-        "BASE": "BASE",
-        "STEALTH": "STEALTH",
-        "STEALTH_BASE": "STEALTH",
-        "STEALTH_ARM": "STEALTH",
+        "FIRE": "FIRE", "ARM": "ARM", "BASE": "BASE",
+        "STEALTH": "STEALTH", "STEALTH_BASE": "STEALTH", "STEALTH_ARM": "STEALTH",
     }
     if state in _STATE_MIN:
         candidate = _STATE_MIN[state]
         if _TIER_RANK.get(candidate, 0) > _TIER_RANK.get(tier, 0):
             tier = candidate
 
-    # Step 3: Strong institutional flow upgrades BASE/WATCH to ARM
+    # Strong institutional flow upgrades BASE/WATCH → ARM
     if (
-        inst.get("is_institutional")
+        is_inst
         and inst.get("days", 0) >= 5
-        and inst.get("flow_score", 0) >= 70
+        and inst_flow_score >= 70
         and tier in ("BASE", "WATCH")
     ):
         tier = "ARM"
 
-    # Step 4: Hard caps from penalty conditions
-    # Distribution stocks can never be FIRE
-    if regime.get("in_dist") and tier == "FIRE":
+    # Hard caps
+    if in_dist and tier == "FIRE":
         tier = "ARM"
-    # Overbought stocks (RSI > 70) can never be FIRE
     if rsi_value > 70 and tier == "FIRE":
         tier = "ARM"
 
-    # Snapshot before quality downgrades (for analytics)
     original_tier = tier
     original_score = total_score
 
-    # Step 5 & 6: Quality downgrades — mutually exclusive, CEF takes priority
+    # ── QUALITY DOWNGRADES ────────────────────────────────────────────────────
     cef_warning = False
     cef_note = None
     score_conflict = False
     score_conflict_note = None
     primary_downgrade = None
 
+    _run_conflict_check = True
     if symbol:
         from scanner.sector_map import NON_STOCK_SECURITIES
         if symbol.upper() in NON_STOCK_SECURITIES:
-            # CEF/ETN — FINAL, no further downgrades applied after this
             cef_warning = True
             cef_note = (
                 "Closed-end fund or ETN — volume signals may reflect "
@@ -456,59 +615,65 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
                 tier = "WATCH"
                 total_score = round(total_score * 0.6, 2)
             primary_downgrade = "NON_STOCK_SECURITY"
+            logger.info(f"CEF downgrade: {symbol} {original_tier}→{tier} score {total_score:.1f}")
+            _run_conflict_check = False
+
+    if _run_conflict_check and total_score >= 75 and wyckoff_conf < 50:
+        score_conflict = True
+        score_conflict_note = (
+            f"Score {total_score:.0f} driven by volume/stealth but Wyckoff "
+            f"confidence only {wyckoff_conf}% — structure not fully "
+            f"confirmed, treat as ARM."
+        )
+        if tier == "FIRE":
+            tier = "ARM"
+            total_score = round(total_score * 0.88, 2)
+        primary_downgrade = "LOW_CONFIDENCE"
+        if symbol:
             logger.info(
-                f"CEF downgrade: {symbol} {original_tier}→{tier} "
-                f"score {total_score:.1f}"
+                f"Conflict downgrade: {symbol} {original_tier}→{tier} "
+                f"score {total_score:.1f} confidence {wyckoff_conf}%"
             )
-        else:
-            # Only check confidence conflict for real stocks (not CEFs)
-            wyckoff_confidence = regime.get("confidence", 0)
-            if total_score >= 75 and wyckoff_confidence < 50:
-                score_conflict = True
-                score_conflict_note = (
-                    f"Score {total_score:.0f} driven by volume/stealth but Wyckoff "
-                    f"confidence only {wyckoff_confidence}% — structure not fully "
-                    f"confirmed, treat as ARM."
-                )
-                if tier == "FIRE":
-                    tier = "ARM"
-                    total_score = round(total_score * 0.88, 2)
-                primary_downgrade = "LOW_CONFIDENCE"
-                logger.info(
-                    f"Conflict downgrade: {symbol} {original_tier}→{tier} "
-                    f"score {total_score:.1f} confidence {wyckoff_confidence}%"
-                )
-    else:
-        # No symbol provided — still run confidence check
-        wyckoff_confidence = regime.get("confidence", 0)
-        if total_score >= 75 and wyckoff_confidence < 50:
-            score_conflict = True
-            score_conflict_note = (
-                f"Score {total_score:.0f} driven by volume/stealth but Wyckoff "
-                f"confidence only {wyckoff_confidence}% — structure not fully "
-                f"confirmed, treat as ARM."
-            )
-            if tier == "FIRE":
-                tier = "ARM"
-                total_score = round(total_score * 0.88, 2)
-            primary_downgrade = "LOW_CONFIDENCE"
+
+    # ── BACKWARD-COMPATIBLE RETURN VALUES ────────────────────────────────────
+    # Legacy fields kept for DB schema / frontend compatibility.
+    # vol_score and accum_score now reflect the new pillar scores.
+    vol_score    = round(vol_dim)
+    accum_score  = round((struct_dim + smart_dim) / 2)
+    stealth_bonus = round(stealth_score_v * 0.3, 2)
+    inst_bonus   = round(inst_pts * 0.2, 2) if is_inst else 0.0
+    rs_bonus     = rs_pts
+
+    # quiet_factor repurposed as confluence display value
+    quiet_factor = round(confluence_mult, 3)
 
     return {
-        "total_score": total_score,
-        "vol_score": vol_score,
-        "accum_score": accum_score,
-        "stealth_bonus": round(stealth_bonus, 2),
-        "inst_bonus": round(inst_bonus, 2),
-        "rs_score": round(rs_score, 2),
-        "rs_bonus": rs_bonus,
-        "sector_rs_bonus": sector_rs_bonus,
-        "quiet_factor": quiet_factor,
-        "tier": tier,
-        "original_tier": original_tier,
+        "total_score":    total_score,
+        # Legacy compatibility fields
+        "vol_score":      vol_score,
+        "accum_score":    accum_score,
+        "stealth_bonus":  stealth_bonus,
+        "inst_bonus":     inst_bonus,
+        "rs_score":       round(rs_score, 2),
+        "rs_bonus":       rs_bonus,
+        "sector_rs_bonus": 0,            # applied post-scoring in runner.py
+        "quiet_factor":   quiet_factor,  # now = confluence_mult for display
+        # Tier
+        "tier":           tier,
+        "original_tier":  original_tier,
         "original_score": original_score,
-        "primary_downgrade": primary_downgrade,
-        "cef_warning": cef_warning,
-        "cef_note": cef_note,
-        "score_conflict": score_conflict,
+        # Diagnostics
+        "primary_downgrade":   primary_downgrade,
+        "cef_warning":         cef_warning,
+        "cef_note":            cef_note,
+        "score_conflict":      score_conflict,
         "score_conflict_note": score_conflict_note,
+        # New pillar breakdown (analytics / frontend)
+        "vol_dim":         round(vol_dim, 1),
+        "struct_dim":      round(struct_dim, 1),
+        "smart_dim":       round(smart_dim, 1),
+        "mom_dim":         round(mom_dim, 1),
+        "confluence_mult": quiet_factor,
+        "silent_volume":   silent_volume,
+        "strong_dims":     strong_count,
     }
