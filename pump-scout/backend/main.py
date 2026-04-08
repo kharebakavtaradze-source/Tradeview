@@ -966,9 +966,20 @@ async def get_ribbon_scanner(
     mode: 'all' | 'compression' | 'breakout' | 'stack'
     """
     from database import get_ribbon_candidates
+    from scanner.massive_data import get_us_etf_symbols
+    from scanner.sector_map import NON_STOCK_SECURITIES
 
     scan = await get_latest_scan()
     main_results = scan.get("results", []) if scan else []
+
+    # ETF exclusion — filter stale DB rows that pre-date the ETF fix
+    try:
+        etf_symbols = await get_us_etf_symbols()
+    except Exception:
+        etf_symbols = set()
+
+    def _is_etf(sym: str) -> bool:
+        return sym.upper() in etf_symbols or sym.upper() in NON_STOCK_SECURITIES
 
     # SOURCE 2: ribbon candidates table (last 1 day)
     ribbon_rows = await get_ribbon_candidates(days_back=1)
@@ -978,6 +989,8 @@ async def get_ribbon_scanner(
 
     # Process main scan results
     for r in main_results:
+        if _is_etf(r["symbol"]):
+            continue
         ind        = r.get("indicators", {})
         score_data = r.get("score", {})
         symbol     = r["symbol"]
@@ -1006,6 +1019,8 @@ async def get_ribbon_scanner(
     for row in ribbon_rows:
         symbol = row["symbol"]
         if symbol in seen:
+            continue
+        if _is_etf(symbol):
             continue
 
         spread  = row.get("ema_spread_pct", 999.0) or 999.0
