@@ -44,7 +44,7 @@ async def run_ribbon_pass(
         from scanner.massive_data import get_us_etf_symbols
         etf_symbols = await get_us_etf_symbols()
     except Exception as e:
-        logger.warning(f"Ribbon pass: ETF list unavailable (non-fatal): {e}")
+        logger.warning(f"Ribbon pass: exclusion list unavailable (non-fatal): {e}")
 
     candidates = []
 
