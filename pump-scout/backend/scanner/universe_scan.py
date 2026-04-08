@@ -42,7 +42,7 @@ MIN_PRICE    = 1.50      # avoid true pennies
 MAX_PRICE    = 500.0     # avoid Berkshire / massive stocks
 
 # How many candidates get full history + indicator scoring
-MAX_CANDIDATES = 600
+MAX_CANDIDATES = 1500
 
 # Concurrent Polygon calls per batch (stay polite to API)
 BATCH_SIZE = 20
