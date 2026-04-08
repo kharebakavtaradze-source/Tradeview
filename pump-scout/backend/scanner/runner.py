@@ -38,14 +38,25 @@ async def run_ribbon_pass(
     """
     from scanner.sector_map import NON_STOCK_SECURITIES
 
+    # Load full ETF exclusion list (cached 7 days — fast after first call)
+    etf_symbols: set = set()
+    try:
+        from scanner.massive_data import get_us_etf_symbols
+        etf_symbols = await get_us_etf_symbols()
+    except Exception as e:
+        logger.warning(f"Ribbon pass: ETF list unavailable (non-fatal): {e}")
+
     candidates = []
 
     for symbol, candles in all_candles.items():
+        sym_upper = symbol.upper()
         # Skip ETFs / regime ETFs
         if symbol in REGIME_ETFS:
             continue
+        if sym_upper in etf_symbols:
+            continue
         # Skip non-stock securities (CEFs, ETNs)
-        if symbol.upper() in NON_STOCK_SECURITIES:
+        if sym_upper in NON_STOCK_SECURITIES:
             continue
         # Skip symbols already captured by main scan
         if symbol in main_scan_symbols:

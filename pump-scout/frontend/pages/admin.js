@@ -21,7 +21,7 @@ const PHASE_HINTS = {
   fetching_universe: '~5–15s',
   filtering_etf:     '~5–30s (then cached for 7 days)',
   filtering:         '~2s',
-  scoring:           '~15–25 min for 600 candidates',
+  scoring:           '~40–50 min for 1500 candidates',
   enriching:         '~2–5 min',
   saving:            '~5s',
 };
@@ -158,7 +158,7 @@ export default function AdminPage() {
             ]},
             // NIGHT
             { group: 'NIGHT', items: [
-              { gmt4: '06:00', et: '22:00', color: '#ff4466', tag: 'PIPELINE 1 ★', name: 'Massive EOD Universe Scan', desc: 'Main daily scan. One Polygon API call → all US stocks (~8000). Filters by price ($1.50–$500) and volume (>200K). Top 600 by dollar-volume → full indicator scoring (RSI, CMF, Wyckoff, OBV, ATR, EMA ribbon…) → FIRE/ARM/BASE tiers. Saves 600-result scan as source for tomorrow\'s intraday scans.' },
+              { gmt4: '06:00', et: '22:00', color: '#ff4466', tag: 'PIPELINE 1 ★', name: 'Massive EOD Universe Scan', desc: 'Main daily scan. One Polygon API call → all US stocks (~8000). Filters by price ($1.50–$500) and volume (>200K). Top 1500 by dollar-volume → full indicator scoring (RSI, CMF, Wyckoff, OBV, ATR, EMA ribbon…) → FIRE/ARM/BASE tiers. Saves results as source for tomorrow\'s intraday scans. ~40–50 min.' },
               { gmt4: 'after EOD ↑', et: '—', color: '#888888', tag: 'ENRICH', name: 'Sector/Industry Enrichment', desc: 'Runs automatically after successful universe scan completion. Fills missing sector & industry data for scanned symbols via Massive Reference Data API. Rate-limited to 1 call per 15s. Triggered by scan success — not a fixed clock time.' },
             ]},
             // WEEKLY
@@ -200,8 +200,8 @@ export default function AdminPage() {
         <div style={card}>
           <p style={label}>Run Universe Scan (Massive EOD)</p>
           <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
-            Fetches all US stocks (~5–8K) from Polygon → filters by price ($1.50–$500) and volume (&gt;200K) → takes top 600 by dollar volume → full indicator scoring.<br />
-            <span style={{ color: 'rgba(255,255,255,0.25)' }}>Why 600? Each ticker needs an individual Polygon API call. Scoring all ~3K filtered stocks would take 5+ hours. 600 covers the most active universe in ~20 min.</span><br />
+            Fetches all US stocks (~5–8K) from Polygon → filters by price ($1.50–$500) and volume (&gt;200K) → takes top 1500 by dollar volume → full indicator scoring.<br />
+            <span style={{ color: 'rgba(255,255,255,0.25)' }}>Each ticker needs an individual Polygon API call. 1500 candidates takes ~40–50 min to score.</span><br />
             Scheduled: 06:00 GMT+4 Mon–Fri (= 22:00 ET). Sector enrichment runs automatically after.
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
