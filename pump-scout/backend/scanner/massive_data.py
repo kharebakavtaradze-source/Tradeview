@@ -191,38 +191,44 @@ async def get_us_etf_symbols() -> set[str]:
     logger.info("Fetching US ETF symbol list from Polygon reference API…")
     etfs: set[str] = set()
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    # Hard cap: US has ~3000 ETFs; 5 pages × 1000 = 5000 is more than enough.
+    # Without this cap, a buggy next_url loop could hang the scan indefinitely.
+    MAX_PAGES = 5
+    # Overall timeout: if we can't get the list in 30s, skip and move on.
+    overall_timeout = httpx.Timeout(10.0, connect=5.0)
+
+    async with httpx.AsyncClient(timeout=overall_timeout) as client:
         url = f"{MASSIVE_BASE}/v3/reference/tickers"
         params = _params(type="ETF", market="stocks", active="true", limit=1000)
-        fetched = 0
+        page = 0
 
-        while url:
+        while url and page < MAX_PAGES:
+            page += 1
             try:
                 resp = await client.get(url, params=params)
                 if resp.status_code != 200:
-                    logger.warning(f"ETF list HTTP {resp.status_code}")
+                    logger.warning(f"ETF list HTTP {resp.status_code} (page {page})")
                     break
                 data = resp.json()
                 for t in data.get("results") or []:
                     sym = (t.get("ticker") or "").upper()
                     if sym:
                         etfs.add(sym)
-                fetched += len(data.get("results") or [])
-                # Pagination
                 next_url = data.get("next_url")
                 if next_url:
+                    # next_url already contains apiKey cursor — don't duplicate params
                     url = next_url
-                    params = _params()   # apiKey already embedded in next_url? add anyway
+                    params = {"apiKey": MASSIVE_API_KEY}
                 else:
                     break
             except Exception as e:
-                logger.warning(f"ETF list fetch error: {e}")
+                logger.warning(f"ETF list fetch error (page {page}): {e}")
                 break
 
     if etfs:
         _etf_cache = etfs
         _etf_cache_date = today
-        logger.info(f"ETF cache refreshed: {len(etfs)} US ETFs loaded")
+        logger.info(f"ETF cache refreshed: {len(etfs)} US ETFs loaded in {page} page(s)")
     else:
         logger.warning("ETF list returned 0 results — using stale cache if available")
 

@@ -228,37 +228,6 @@
 .fireCount { color: #ff6b35 !important; font-weight: 700; }
 .armCount  { color: #ffd700 !important; font-weight: 700; }
 
-/* ── Universe scan big 3 counters ──────────────────── */
-.universeCounters {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.universeCounter {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  background: rgba(138, 92, 246, 0.08);
-  border: 1px solid rgba(138, 92, 246, 0.2);
-  border-radius: 5px;
-  padding: 6px 8px;
-}
-
-.universeCounterNum {
-  font-size: 20px;
-  font-weight: 800;
-  color: #a78bfa;
-  line-height: 1;
-}
-
-.universeCounterLbl {
-  font-size: 9px;
-  color: rgba(167, 139, 250, 0.55);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-top: 3px;
-}
 
 .marketOpen {
   background: rgba(0, 200, 100, 0.08);

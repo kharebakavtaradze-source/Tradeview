@@ -475,31 +475,17 @@ export default function Home() {
                 <span><span className={styles.spinner} />Universe Scan Running</span>
                 <span className={styles.universeBannerPhase}>{phaseLabel}</span>
               </div>
-              {/* Big 3 counters — started / scanned / remaining */}
-              {total > 0 && (
-                <div className={styles.universeCounters}>
-                  <div className={styles.universeCounter}>
-                    <span className={styles.universeCounterNum}>{total.toLocaleString()}</span>
-                    <span className={styles.universeCounterLbl}>Started</span>
-                  </div>
-                  <div className={styles.universeCounter}>
-                    <span className={styles.universeCounterNum} style={{ color: '#44aaff' }}>{done.toLocaleString()}</span>
-                    <span className={styles.universeCounterLbl}>Scanned</span>
-                  </div>
-                  <div className={styles.universeCounter}>
-                    <span className={styles.universeCounterNum} style={{ color: total - done > 0 ? '#ffd700' : '#44ff64' }}>
-                      {Math.max(0, total - done).toLocaleString()}
-                    </span>
-                    <span className={styles.universeCounterLbl}>Remaining</span>
-                  </div>
-                </div>
-              )}
               {total > 0 && (
                 <div className={styles.universeProgressTrack}>
                   <div className={styles.universeProgressBar} style={{ width: `${pct}%` }} />
                 </div>
               )}
               <div className={styles.universeBannerStats}>
+                {total > 0 && (
+                  <span className={styles.universeBannerStat}>
+                    <strong>{done.toLocaleString()}</strong>/{total.toLocaleString()} scored ({pct}%)
+                  </span>
+                )}
                 {p.universe_raw > 0 && (
                   <span className={styles.universeBannerStat}>
                     Universe: <strong>{p.universe_raw.toLocaleString()}</strong> → {p.universe_filtered?.toLocaleString() || '…'} filtered
