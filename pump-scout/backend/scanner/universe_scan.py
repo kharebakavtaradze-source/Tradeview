@@ -42,10 +42,10 @@ MIN_PRICE    = 1.50      # avoid true pennies
 MAX_PRICE    = 500.0     # avoid Berkshire / massive stocks
 
 # How many candidates get full history + indicator scoring
-MAX_CANDIDATES = 1500
+MAX_CANDIDATES = 3000
 
 # Concurrent Polygon calls per batch (stay polite to API)
-BATCH_SIZE = 20
+BATCH_SIZE = 40
 
 # ETFs excluded from trading results (used for regime detection only)
 _REGIME_ETFS = {"SPY", "QQQ", "XLE", "XLV", "XLU", "GLD", "IWM"}
