@@ -200,9 +200,9 @@ export default function AdminPage() {
         <div style={card}>
           <p style={label}>Run Universe Scan (Massive EOD)</p>
           <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
-            Fetches all US stocks from Polygon grouped daily → scores top 600.<br />
-            Scheduled: 06:00 GMT+4 Mon–Fri (= 22:00 ET prev. day). Sector enrichment runs automatically after scan completes.<br />
-            This button triggers it immediately in the background.
+            Fetches all US stocks (~5–8K) from Polygon → filters by price ($1.50–$500) and volume (&gt;200K) → takes top 600 by dollar volume → full indicator scoring.<br />
+            <span style={{ color: 'rgba(255,255,255,0.25)' }}>Why 600? Each ticker needs an individual Polygon API call. Scoring all ~3K filtered stocks would take 5+ hours. 600 covers the most active universe in ~20 min.</span><br />
+            Scheduled: 06:00 GMT+4 Mon–Fri (= 22:00 ET). Sector enrichment runs automatically after.
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
