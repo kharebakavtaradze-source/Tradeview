@@ -107,7 +107,7 @@ async def run_universe_scan(target_date: str = None) -> dict:
     scan_start = datetime.utcnow()
 
     if not target_date:
-        target_date = get_last_trading_day(offset=1)
+        target_date = get_last_trading_day(offset=0)
 
     _update(
         running=True, phase="fetching_universe",

@@ -137,7 +137,7 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
         return {}
 
     if not target_date:
-        target_date = get_last_trading_day(offset=1)
+        target_date = get_last_trading_day(offset=0)
 
     attempt_date = target_date
     for attempt in range(5):
