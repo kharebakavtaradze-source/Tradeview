@@ -105,51 +105,54 @@ export default function AdminPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 28 }}>
           <Link href="/" style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textDecoration: 'none' }}>← back</Link>
           <h1 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '0.08em' }}>ADMIN PANEL</h1>
-          <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>{API_URL}</span>
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', background: 'rgba(138,92,246,0.15)', border: '1px solid rgba(138,92,246,0.4)', borderRadius: 3, padding: '2px 7px', color: '#a78bfa' }}>Timezone: GMT+4</span>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>{API_URL}</span>
+          </span>
         </div>
 
         {/* ── Automation Flow ── */}
         <div style={{ ...card, marginBottom: 24 }}>
           <p style={{ ...label, marginBottom: 16 }}>⚙ Automation Flow — Schedule &amp; Functions</p>
           <p style={{ margin: '0 0 14px', fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>
-            All times Mon–Fri unless noted. Tbilisi = ET + 8h (EDT).
+            All times shown in GMT+4 · Mon–Fri unless noted · U.S. market session shown in local GMT+4 time
           </p>
 
           {[
             // PRE-MARKET
             { group: 'PRE-MARKET', items: [
-              { et: '08:00', tbs: '16:00', color: '#44aaff', tag: 'PIPELINE 2', name: 'Pre-Market Intraday Scan', desc: 'Yahoo Finance: fetches OHLCV for yesterday\'s FIRE/ARM candidates + open journal positions. Computes indicators, scores, saves scan to DB.' },
-              { et: '09:00', tbs: '17:00', color: '#ffd740', tag: 'BRIEF', name: 'Morning Brief (Telegram)', desc: 'Sends Telegram message with top FIRE/ARM tickers from latest scan, market regime, and sector rotation summary.' },
-              { et: '09:00', tbs: '17:00', color: '#ff8844', tag: 'HYPE', name: 'Hype Monitor #1', desc: 'Fetches social/news volume for all scanned tickers. Detects SILENT_VOLUME, HYPE_NO_VOLUME, PEAK_FADING divergences.' },
+              { gmt4: '16:00', et: '08:00', color: '#44aaff', tag: 'PIPELINE 2', name: 'Pre-Market Intraday Scan', desc: 'Yahoo Finance: fetches OHLCV for yesterday\'s FIRE/ARM candidates + open journal positions. Computes indicators, scores, saves scan to DB.' },
+              { gmt4: '17:00', et: '09:00', color: '#ffd740', tag: 'BRIEF', name: 'Morning Brief (Telegram)', desc: 'Sends Telegram message with top FIRE/ARM tickers from latest scan, market regime, and sector rotation summary.' },
+              { gmt4: '17:10', et: '09:10', color: '#ff8844', tag: 'HYPE', name: 'Hype Monitor #1', desc: 'Fetches social/news volume for all scanned tickers. Detects SILENT_VOLUME, HYPE_NO_VOLUME, PEAK_FADING divergences.' },
+              { gmt4: '17:15', et: '09:15', color: '#cc44ff', tag: 'AI PORT', name: 'AI Decisions (pre-open)', desc: 'Claude AI reviews FIRE/ARM candidates from latest EOD scan + open positions. Makes BUY/SELL/HOLD decisions. Runs before market open so decisions are ready at the bell. Max 5 positions, 2% risk per trade, ATR-based sizing.' },
             ]},
             // MARKET OPEN
             { group: 'MARKET OPEN', items: [
-              { et: '09:30', tbs: '17:30', color: '#44aaff', tag: 'PIPELINE 2', name: 'Market Open Intraday Scan', desc: 'Same as 08:00 scan but with live market-open prices. Key scan — FIRE/ARM here are today\'s actionable setups.' },
-              { et: '09:45', tbs: '17:45', color: '#cc44ff', tag: 'AI PORT', name: 'AI Portfolio Decisions', desc: 'Claude AI reviews FIRE/ARM candidates from latest EOD scan + open positions. Makes BUY/SELL/HOLD decisions. Max 5 positions, 2% risk per trade, ATR-based sizing.' },
-              { et: '09:30–16:00', tbs: '17:30–00:00', color: '#44cc88', tag: 'EVERY 5m', name: 'AI Portfolio Price Update', desc: 'Updates current price, P&L%, max gain/loss for all open AI positions. Auto-closes on ATR stop or target hit.' },
-              { et: '09:30–16:00', tbs: '17:30–00:00', color: '#44cc88', tag: 'EVERY 5m', name: 'Journal Live Prices', desc: 'Persists live prices to journal DB (current_price, current_pct). Used by journal page to show real-time P&L without calling Yahoo Finance every page load.' },
-              { et: '09:30–16:00', tbs: '17:30–00:00', color: '#ff8844', tag: 'EVERY 30m', name: 'Price Alerts', desc: 'Checks all open journal positions — sends Telegram alert if price is within 3% of stop or target.' },
-              { et: '12:00', tbs: '20:00', color: '#44aaff', tag: 'PIPELINE 2', name: 'Midday Intraday Scan', desc: 'Midday re-check of yesterday\'s candidates with updated intraday data. Refreshes tier scores and sector strength.' },
-              { et: '12:00', tbs: '20:00', color: '#ff8844', tag: 'HYPE', name: 'Hype Monitor #2', desc: 'Second hype cycle check. Catches momentum shifts since morning.' },
+              { gmt4: '17:30', et: '09:30', color: '#44aaff', tag: 'PIPELINE 2', name: 'Market Open Intraday Scan', desc: 'Same as 16:00 scan but with live market-open prices. Key scan — FIRE/ARM here are today\'s actionable setups.' },
+              { gmt4: '17:30–00:00', et: '09:30–16:00', color: '#44cc88', tag: 'EVERY 30m', name: 'AI Portfolio Price Update', desc: 'Updates current price, P&L%, max gain/loss for all open AI positions. Auto-closes on ATR stop or target hit.' },
+              { gmt4: '17:30–00:00', et: '09:30–16:00', color: '#44cc88', tag: 'EVERY 30m', name: 'Journal Live Prices', desc: 'Persists live prices to journal DB (current_price, current_pct). Used by journal page to show real-time P&L without calling Yahoo Finance every page load.' },
+              { gmt4: '17:30–00:00', et: '09:30–16:00', color: '#ff8844', tag: 'EVERY 30m', name: 'Price Alerts', desc: 'Checks all open journal positions — sends Telegram alert if price is within 3% of stop or target.' },
+              { gmt4: '20:00', et: '12:00', color: '#44aaff', tag: 'PIPELINE 2', name: 'Midday Intraday Scan', desc: 'Midday re-check of yesterday\'s candidates with updated intraday data. Refreshes tier scores and sector strength.' },
+              { gmt4: '20:10', et: '12:10', color: '#ff8844', tag: 'HYPE', name: 'Hype Monitor #2', desc: 'Second hype cycle check. Catches momentum shifts since morning.' },
+              { gmt4: '23:20', et: '15:20', color: '#ff8844', tag: 'HYPE', name: 'Hype Monitor #3', desc: 'Pre-close hype check. Detects PEAK_FADING and SILENT_VOLUME ahead of tomorrow — last chance for next-day preparation before EOD.' },
             ]},
             // POST-CLOSE
             { group: 'POST-CLOSE', items: [
-              { et: '15:00', tbs: '23:00', color: '#ff8844', tag: 'HYPE', name: 'Hype Monitor #3', desc: 'Final hype check before close. Last chance to detect PEAK_FADING before EOD.' },
-              { et: '16:05', tbs: '00:05+1', color: '#44cc88', tag: 'JOURNAL', name: 'Journal Auto-Close', desc: 'Fetches closing prices for all open journal entries. Auto-closes if stop or target was hit. Computes P&L%, alpha vs SPY, days held, max gain/loss.' },
-              { et: '16:10', tbs: '00:10+1', color: '#44cc88', tag: 'JOURNAL', name: 'Fill Candidate Prices', desc: 'Fills historical exit prices for FIRE/ARM scan candidates (used in backtest stats and pattern streaks).' },
-              { et: '16:15', tbs: '00:15+1', color: '#ffd740', tag: 'REGIME', name: 'Market Regime Detection', desc: 'Fetches all sector ETF prices (SPY, QQQ, XLK, XLE, XLV, GLD, IWM, SMH, XBI…). Detects RISK_ON / RISK_OFF / FEAR / ROTATION / NEUTRAL. Saves etf_details, cycle phase, industry leaders/laggards.' },
-              { et: '16:20', tbs: '00:20+1', color: '#ffd740', tag: 'REGIME', name: 'Finviz Sector Performance', desc: 'Refreshes Finviz sector momentum cache (11 sectors: change%, rank, A/B/C/D/F class). Used for sector bonus in scoring and sector flow bar on home page.' },
-              { et: '16:30', tbs: '00:30+1', color: '#cc44ff', tag: 'AI PORT', name: 'AI Portfolio Daily Report', desc: 'Claude AI generates a daily portfolio report in Russian: P&L summary, best position, concerns, tomorrow plan. Sends to Telegram.' },
-              { et: '16:35', tbs: '00:35+1', color: '#888888', tag: 'EOD LOG', name: 'EOD Log Generator', desc: 'Generates a markdown summary of the full trading day: top signals, regime, sector rotation, portfolio status. Available via "EOD Log" button on home page.' },
+              { gmt4: '00:10', et: '16:10', color: '#44cc88', tag: 'JOURNAL', name: 'Journal Auto-Close', desc: 'Fetches closing prices for all open journal entries. Auto-closes if stop or target was hit. Computes P&L%, alpha vs SPY, days held, max gain/loss. Runs slightly after close to allow final prices to settle.' },
+              { gmt4: '00:15', et: '16:15', color: '#44cc88', tag: 'JOURNAL', name: 'Fill Candidate Prices', desc: 'Fills historical exit prices for FIRE/ARM scan candidates (used in backtest stats and pattern streaks).' },
+              { gmt4: '00:20', et: '16:20', color: '#ffd740', tag: 'REGIME', name: 'Market Regime Detection', desc: 'Fetches all sector ETF prices (SPY, QQQ, XLK, XLE, XLV, GLD, IWM, SMH, XBI…). Detects RISK_ON / RISK_OFF / FEAR / ROTATION / NEUTRAL. Saves etf_details, cycle phase, industry leaders/laggards.' },
+              { gmt4: '00:25', et: '16:25', color: '#ffd740', tag: 'REGIME', name: 'Finviz Sector Performance', desc: 'Refreshes Finviz sector momentum cache (11 sectors: change%, rank, A/B/C/D/F class). Used for sector bonus in scoring and sector flow bar on home page.' },
+              { gmt4: '00:30', et: '16:30', color: '#cc44ff', tag: 'AI PORT', name: 'AI Portfolio Daily Report', desc: 'Claude AI generates a daily portfolio report in Russian: P&L summary, best position, concerns, tomorrow plan. Sends to Telegram.' },
+              { gmt4: '00:35', et: '16:35', color: '#888888', tag: 'EOD LOG', name: 'EOD Log Generator', desc: 'Generates a markdown summary of the full trading day: top signals, regime, sector rotation, portfolio status. Available via "EOD Log" button on home page.' },
             ]},
             // NIGHT
             { group: 'NIGHT', items: [
-              { et: '22:00', tbs: '06:00+1', color: '#ff4466', tag: 'PIPELINE 1 ★', name: 'Massive EOD Universe Scan', desc: 'Main daily scan. One Polygon API call → all US stocks (~8000). Filters by price ($1.50–$500) and volume (>200K). Top 600 by volume → full indicator scoring (RSI, CMF, Wyckoff, OBV, ATR…) → FIRE/ARM/BASE tiers. Saves 600-result scan as source for tomorrow\'s intraday scans.' },
-              { et: '22:00', tbs: '06:00+1', color: '#888888', tag: 'ENRICH', name: 'Sector/Industry Enrichment', desc: 'Fills missing sector & industry data for scanned symbols via Massive Reference Data API. Rate-limited to 1 call per 15s. Runs alongside universe scan.' },
+              { gmt4: '06:00', et: '22:00', color: '#ff4466', tag: 'PIPELINE 1 ★', name: 'Massive EOD Universe Scan', desc: 'Main daily scan. One Polygon API call → all US stocks (~8000). Filters by price ($1.50–$500) and volume (>200K). Top 600 by dollar-volume → full indicator scoring (RSI, CMF, Wyckoff, OBV, ATR, EMA ribbon…) → FIRE/ARM/BASE tiers. Saves 600-result scan as source for tomorrow\'s intraday scans.' },
+              { gmt4: 'after EOD ↑', et: '—', color: '#888888', tag: 'ENRICH', name: 'Sector/Industry Enrichment', desc: 'Runs automatically after successful universe scan completion. Fills missing sector & industry data for scanned symbols via Massive Reference Data API. Rate-limited to 1 call per 15s. Triggered by scan success — not a fixed clock time.' },
             ]},
             // WEEKLY
             { group: 'WEEKLY', items: [
-              { et: 'Sun 02:00', tbs: 'Sun 10:00', color: '#888888', tag: 'MAINT', name: 'Data Rotation', desc: 'Deletes old scan rows, ribbon candidates, hype results, and position snapshots older than 90 days to prevent DB bloat.' },
+              { gmt4: 'Sun 10:00', et: 'Sun 02:00', color: '#888888', tag: 'MAINT', name: 'Data Rotation', desc: 'Deletes old scan rows, ribbon candidates, hype results, and position snapshots older than 90 days to prevent DB bloat.' },
             ]},
           ].map(({ group, items }) => (
             <div key={group} style={{ marginBottom: 20 }}>
@@ -159,10 +162,10 @@ export default function AdminPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {items.map((item, i) => (
                   <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 56px 1fr', gap: 8, alignItems: 'start', padding: '7px 10px', background: 'rgba(255,255,255,0.02)', borderRadius: 4, border: `1px solid ${item.color}18` }}>
-                    {/* Time */}
+                    {/* Time (GMT+4 primary) */}
                     <div>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: item.color, whiteSpace: 'nowrap' }}>{item.et} ET</div>
-                      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', whiteSpace: 'nowrap' }}>{item.tbs} TBS</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: item.color, whiteSpace: 'nowrap' }}>{item.gmt4}</div>
+                      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', whiteSpace: 'nowrap' }}>{item.et} ET</div>
                     </div>
                     {/* Tag */}
                     <div style={{ paddingTop: 1 }}>
@@ -187,7 +190,7 @@ export default function AdminPage() {
           <p style={label}>Run Universe Scan (Massive EOD)</p>
           <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
             Fetches all US stocks from Polygon grouped daily → scores top 600.<br />
-            Scheduled: 22:00 ET Mon–Fri (= 06:00 next day Tbilisi).<br />
+            Scheduled: 06:00 GMT+4 Mon–Fri (= 22:00 ET prev. day). Sector enrichment runs automatically after scan completes.<br />
             This button triggers it immediately in the background.
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -337,7 +340,7 @@ export default function AdminPage() {
           <p style={label}>Refresh Market Regime &amp; ETF Data</p>
           <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
             Re-fetches all ETF prices from Yahoo Finance and recalculates regime, cycle phase, industry leaders.<br />
-            Scheduled: 16:15 ET Mon–Fri. Use this to refresh after a holiday or if ETF boxes show "—".
+            Scheduled: 00:20 GMT+4 Mon–Fri (= 16:20 ET). Use this to refresh after a holiday or if ETF boxes show "—".
           </p>
           <button
             onClick={() => call('regime', `${API_URL}/api/market-regime/refresh`)}

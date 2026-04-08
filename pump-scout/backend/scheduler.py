@@ -1,6 +1,33 @@
 """
-APScheduler setup for automated morning scan jobs.
-Runs Monday–Friday at 8:00 AM, 9:30 AM, and 12:00 PM Eastern (UTC offsets).
+APScheduler setup — all schedule times shown in GMT+4 (= ET + 8h).
+
+PREMARKET (GMT+4):
+  16:00  Pre-Market Intraday Scan
+  17:00  Morning Brief
+  17:10  Hype Monitor #1
+  17:15  AI Portfolio Decisions (before market open)
+
+MARKET SESSION (GMT+4):
+  17:30  Market Open Intraday Scan
+  17:30–00:00 every 30 min  Price Alerts, AI Positions, Journal Prices
+  20:00  Midday Scan
+  20:10  Hype Monitor #2
+  23:20  Hype Monitor #3 (pre-close, next-day prep)
+
+POST-CLOSE (GMT+4):
+  00:10  Journal Auto-Close
+  00:15  Fill Candidate Prices
+  00:20  Market Regime Detection
+  00:25  Finviz Sector Performance
+  00:30  AI Portfolio Daily Report
+  00:35  EOD Log Generator
+
+NIGHT (GMT+4):
+  06:00  Massive EOD Universe Scan (Pipeline 1)
+  after  Sector/Industry Enrichment (triggered on scan success)
+
+WEEKLY:
+  Sun 10:00  Data Rotation
 """
 import logging
 
@@ -120,7 +147,11 @@ async def _run_sector_enrichment():
 
 
 async def _run_universe_scan():
-    """Run the Massive EOD universe scan and persist results."""
+    """
+    Run the Massive EOD universe scan and persist results.
+    On success, triggers sector/industry enrichment as a dependent step
+    (not a parallel cron) to ensure enrichment always runs after fresh data.
+    """
     try:
         logger.info("Universe scan (Massive EOD) starting...")
         result = await run_universe_scan()
@@ -128,6 +159,12 @@ async def _run_universe_scan():
         fire   = result.get("tier_counts", {}).get("FIRE", 0)
         arm    = result.get("tier_counts", {}).get("ARM", 0)
         logger.info(f"Universe scan complete — {total} results, {fire} FIRE, {arm} ARM")
+        # Trigger sector enrichment only after a successful scan (dependency-based)
+        if total > 0:
+            logger.info("Universe scan succeeded — starting sector/industry enrichment")
+            await _run_sector_enrichment()
+        else:
+            logger.warning("Universe scan returned 0 results — skipping sector enrichment")
     except Exception as e:
         logger.error(f"Universe scan failed: {e}", exc_info=True)
 
@@ -148,267 +185,215 @@ async def _run_sector_performance():
 def start_scheduler():
     """Register scan jobs and start the scheduler."""
 
-    # 16:20 ET — Finviz sector performance refresh (after close)
-    scheduler.add_job(
-        _run_sector_performance,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=16,
-            minute=20,
-            timezone=EASTERN_TZ,
-        ),
-        id="sector_performance_1620_et",
-        name="Finviz Sector Performance (4:20 PM ET)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
+    # ── PREMARKET ──────────────────────────────────────────────────────────────
 
-    # 16:15 ET — Market Regime Detection (after close, uses previous-day closing prices)
-    scheduler.add_job(
-        _run_market_regime,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=16,
-            minute=15,
-            timezone=EASTERN_TZ,
-        ),
-        id="market_regime_1615_est",
-        name="Market Regime Detection (4:15 PM ET)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
-
-    # 08:00 AM US/Eastern (handles EST/EDT automatically)
+    # 08:00 ET (16:00 GMT+4) — Pre-market intraday scan
     scheduler.add_job(
         _run_and_save,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=8,
-            minute=0,
-            timezone=EASTERN_TZ,
-        ),
-        id="scan_0800_est",
-        name="Morning Pre-Market Scan (8:00 AM ET)",
+        trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=EASTERN_TZ),
+        id="scan_0800_et",
+        name="Pre-Market Scan (08:00 ET / 16:00 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # 09:30 AM US/Eastern (market open)
-    scheduler.add_job(
-        _run_and_save,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=9,
-            minute=30,
-            timezone=EASTERN_TZ,
-        ),
-        id="scan_0930_est",
-        name="Market Open Scan (9:30 AM ET)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
-
-    # 12:00 PM US/Eastern (midday)
-    scheduler.add_job(
-        _run_and_save,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=12,
-            minute=0,
-            timezone=EASTERN_TZ,
-        ),
-        id="scan_1200_est",
-        name="Midday Scan (12:00 PM ET)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
-
-    # Hype monitor: 3x daily at 9:00, 12:00, 15:00 ET (Mon–Fri)
-    scheduler.add_job(
-        _run_hype_monitor,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour="9,12,15",
-            minute="0",
-            timezone=EASTERN_TZ,
-        ),
-        id="hype_monitor_3x_daily",
-        name="Hype Monitor (3x daily: 9 AM, 12 PM, 3 PM ET)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
-
-    # 09:00 AM ET — Morning Brief (Telegram summary)
+    # 09:00 ET (17:00 GMT+4) — Morning Brief Telegram
     scheduler.add_job(
         send_morning_brief,
-        trigger=CronTrigger(
-            day_of_week="mon-fri", hour=9, minute=0, timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=EASTERN_TZ),
         id="morning_brief",
-        name="Morning Brief Telegram (9:00 AM ET)",
+        name="Morning Brief Telegram (09:00 ET / 17:00 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # 09:45 AM ET — AI Portfolio decisions (after market-open scan settles)
+    # 09:10 ET (17:10 GMT+4) — Hype Monitor #1
+    scheduler.add_job(
+        _run_hype_monitor,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=10, timezone=EASTERN_TZ),
+        id="hype_monitor_1",
+        name="Hype Monitor #1 (09:10 ET / 17:10 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 09:15 ET (17:15 GMT+4) — AI Portfolio Decisions (before market open)
     scheduler.add_job(
         ai_portfolio_decisions,
-        trigger=CronTrigger(
-            day_of_week="mon-fri", hour=9, minute=45, timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=15, timezone=EASTERN_TZ),
         id="ai_portfolio_decisions",
-        name="AI Portfolio Decisions (9:45 AM ET)",
+        name="AI Portfolio Decisions (09:15 ET / 17:15 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # Every 5 min, 9:30–16:00 ET — update AI position prices + auto-stop/target
+    # ── MARKET SESSION ─────────────────────────────────────────────────────────
+
+    # 09:30 ET (17:30 GMT+4) — Market Open Scan
+    scheduler.add_job(
+        _run_and_save,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone=EASTERN_TZ),
+        id="scan_0930_et",
+        name="Market Open Scan (09:30 ET / 17:30 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # Every 5 min, 09:30–16:00 ET — AI position price update + auto-stop/target
     scheduler.add_job(
         update_ai_positions_intraday,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour="9-15",
-            minute="*/5",
-            timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone=EASTERN_TZ),
         id="ai_positions_intraday_5min",
-        name="AI Portfolio Intraday Price Update (every 5min)",
+        name="AI Portfolio Price Update (every 5min, 17:30–00:00 GMT+4)",
         replace_existing=True,
         misfire_grace_time=120,
     )
 
-    # Price alerts: every 30 min, Mon–Fri, 9:30–16:00 ET
-    scheduler.add_job(
-        check_price_alerts,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour="9-15",
-            minute="30,0",
-            timezone=EASTERN_TZ,
-        ),
-        id="price_alerts_30min",
-        name="Price Alerts Near Stop/Target (every 30min)",
-        replace_existing=True,
-        misfire_grace_time=120,
-    )
-
-    # Every 5 min, 9:30–16:00 ET — persist live prices to journal DB
+    # Every 5 min, 09:30–16:00 ET — persist live prices to journal DB
     scheduler.add_job(
         update_journal_prices_intraday,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour="9-15",
-            minute="*/5",
-            timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone=EASTERN_TZ),
         id="journal_live_prices_5min",
-        name="Journal Live Price Update (every 5min, market hours)",
+        name="Journal Live Prices (every 5min, 17:30–00:00 GMT+4)",
         replace_existing=True,
         misfire_grace_time=120,
     )
 
-    # 16:05 ET — Auto-close journal entries
+    # Every 30 min, 09:30–16:00 ET — price alerts
+    scheduler.add_job(
+        check_price_alerts,
+        trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="0,30", timezone=EASTERN_TZ),
+        id="price_alerts_30min",
+        name="Price Alerts (every 30min, 17:30–00:00 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=120,
+    )
+
+    # 12:00 ET (20:00 GMT+4) — Midday Scan
+    scheduler.add_job(
+        _run_and_save,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=12, minute=0, timezone=EASTERN_TZ),
+        id="scan_1200_et",
+        name="Midday Scan (12:00 ET / 20:00 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 12:10 ET (20:10 GMT+4) — Hype Monitor #2
+    scheduler.add_job(
+        _run_hype_monitor,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=12, minute=10, timezone=EASTERN_TZ),
+        id="hype_monitor_2",
+        name="Hype Monitor #2 (12:10 ET / 20:10 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 15:20 ET (23:20 GMT+4) — Hype Monitor #3 (pre-close, next-day prep)
+    scheduler.add_job(
+        _run_hype_monitor,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=20, timezone=EASTERN_TZ),
+        id="hype_monitor_3",
+        name="Hype Monitor #3 (15:20 ET / 23:20 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # ── POST-CLOSE ─────────────────────────────────────────────────────────────
+
+    # 16:10 ET (00:10 GMT+4) — Journal Auto-Close (slightly after close, prices settled)
     scheduler.add_job(
         auto_close_journal,
-        trigger=CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=5, timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=10, timezone=EASTERN_TZ),
         id="journal_autoclose",
-        name="Journal Auto-Close (4:05 PM ET)",
+        name="Journal Auto-Close (16:10 ET / 00:10 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # 16:10 ET — Fill historical prices for scan candidates
+    # 16:15 ET (00:15 GMT+4) — Fill historical prices for scan candidates
     scheduler.add_job(
         fill_candidate_prices,
-        trigger=CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=10, timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=15, timezone=EASTERN_TZ),
         id="fill_candidate_prices",
-        name="Fill Candidate Prices (4:10 PM ET)",
+        name="Fill Candidate Prices (16:15 ET / 00:15 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # 16:30 ET — AI Portfolio daily report
+    # 16:20 ET (00:20 GMT+4) — Market Regime Detection
+    scheduler.add_job(
+        _run_market_regime,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=20, timezone=EASTERN_TZ),
+        id="market_regime_1620_et",
+        name="Market Regime Detection (16:20 ET / 00:20 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 16:25 ET (00:25 GMT+4) — Finviz sector performance refresh
+    scheduler.add_job(
+        _run_sector_performance,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=25, timezone=EASTERN_TZ),
+        id="sector_performance_1625_et",
+        name="Finviz Sector Performance (16:25 ET / 00:25 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 16:30 ET (00:30 GMT+4) — AI Portfolio daily report
     scheduler.add_job(
         generate_daily_report,
-        trigger=CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=30, timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=EASTERN_TZ),
         id="ai_portfolio_report",
-        name="AI Portfolio Daily Report (4:30 PM ET)",
+        name="AI Portfolio Daily Report (16:30 ET / 00:30 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # 16:35 ET — Generate EOD log (after all other 4 PM jobs finish)
+    # 16:35 ET (00:35 GMT+4) — EOD Log Generator
     scheduler.add_job(
         run_eod_log,
-        trigger=CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=35, timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=35, timezone=EASTERN_TZ),
         id="eod_log",
-        name="EOD Log Generator (4:35 PM ET)",
+        name="EOD Log Generator (16:35 ET / 00:35 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )
 
-    # Sunday 02:00 ET — Weekly data rotation
-    scheduler.add_job(
-        _run_data_rotation,
-        trigger=CronTrigger(
-            day_of_week="sun",
-            hour=2,
-            minute=0,
-            timezone=EASTERN_TZ,
-        ),
-        id="weekly_data_rotation",
-        name="Weekly Data Rotation (Sun 2:00 AM ET)",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
+    # ── NIGHT ──────────────────────────────────────────────────────────────────
 
-    # 22:00 ET Mon–Fri — Massive EOD Universe Scan
-    # = 06:00 next day Tbilisi time (6h after market close, data fully settled)
+    # 22:00 ET (06:00 GMT+4 next day) — Massive EOD Universe Scan
+    # Sector/Industry Enrichment is triggered automatically on scan success (not a parallel cron)
     scheduler.add_job(
         _run_universe_scan,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=22,
-            minute=0,
-            timezone=EASTERN_TZ,
-        ),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=22, minute=0, timezone=EASTERN_TZ),
         id="universe_scan_eod",
-        name="Massive EOD Universe Scan (10:00 PM ET / 06:00 Tbilisi)",
+        name="Massive EOD Universe Scan (22:00 ET / 06:00 GMT+4)",
         replace_existing=True,
         misfire_grace_time=3600,
     )
 
-    # 22:00 ET Mon–Fri — Massive sector/industry enrichment (free plan: 1 per 15s)
+    # ── WEEKLY ─────────────────────────────────────────────────────────────────
+
+    # Sunday 02:00 ET (10:00 GMT+4) — Data Rotation
     scheduler.add_job(
-        _run_sector_enrichment,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=22,
-            minute=0,
-            timezone=EASTERN_TZ,
-        ),
-        id="sector_cache_enrichment",
-        name="Massive Sector/Industry Enrichment (10:00 PM ET)",
+        _run_data_rotation,
+        trigger=CronTrigger(day_of_week="sun", hour=2, minute=0, timezone=EASTERN_TZ),
+        id="weekly_data_rotation",
+        name="Weekly Data Rotation (Sun 02:00 ET / 10:00 GMT+4)",
         replace_existing=True,
-        misfire_grace_time=1800,
+        misfire_grace_time=3600,
     )
 
     scheduler.start()
     logger.info(
-        "Scheduler started — "
-        "PIPELINE 1: Massive EOD universe scan at 22:00 ET (06:00 Tbilisi) | "
-        "PIPELINE 2: Yahoo intraday validation at 8:00, 9:30, 12:00 ET | "
-        "Hype monitor 3x daily | Morning brief | Price alerts | "
-        "Portfolio/journal/EOD jobs | Regime 16:15 | Sector perf 16:20 | "
-        "Sector enrichment 22:00 | Weekly rotation Sun 2:00"
+        "Scheduler started (all times GMT+4) — "
+        "PIPELINE 1: Universe scan 06:00 GMT+4 + enrichment on success | "
+        "PIPELINE 2: Intraday scans 16:00, 17:30, 20:00 GMT+4 | "
+        "Hype: 17:10, 20:10, 23:20 GMT+4 | "
+        "AI decisions 17:15 GMT+4 (pre-open) | "
+        "Post-close 00:10–00:35 GMT+4 | Sun 10:00 rotation"
     )
 
 
