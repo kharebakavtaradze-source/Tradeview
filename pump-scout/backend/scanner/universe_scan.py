@@ -140,12 +140,14 @@ async def run_universe_scan(target_date: str = None) -> dict:
         NON_STOCK_SECURITIES = set()
 
     # Fetch US ETF symbol list (cached 7 days, one call per week)
+    _update(phase="filtering_etf")
     etf_symbols: set[str] = set()
     try:
         etf_symbols = await get_us_etf_symbols()
         logger.info(f"ETF exclusion list: {len(etf_symbols)} symbols")
     except Exception as e:
         logger.warning(f"ETF list fetch failed (non-fatal, ETFs may slip through): {e}")
+    _update(phase="filtering")
 
     filtered = {}
     skip_regime = skip_etf = skip_cef = skip_vol = skip_price = 0
