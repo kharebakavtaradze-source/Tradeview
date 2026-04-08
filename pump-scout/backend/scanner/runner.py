@@ -246,6 +246,17 @@ async def run_scan() -> dict:
     results = []
     skipped = 0
 
+    # Load ETF exclusion list (cached 7 days — same list used by universe_scan)
+    etf_symbols: set = set()
+    try:
+        from scanner.massive_data import get_us_etf_symbols
+        etf_symbols = await get_us_etf_symbols()
+        logger.info(f"Intraday ETF exclusion: {len(etf_symbols)} ETF symbols loaded")
+    except Exception as e:
+        logger.warning(f"ETF list unavailable for intraday scan (non-fatal): {e}")
+
+    from scanner.sector_map import NON_STOCK_SECURITIES as _NON_STOCK
+
     # Pre-compute SPY 5-day return for relative strength comparison
     spy_pct_5d = 0.0
     spy_candles = all_data.get("SPY", [])
@@ -261,6 +272,11 @@ async def run_scan() -> dict:
             continue
 
         try:
+            # Skip ETFs and non-stock securities (CEFs, ETNs)
+            if symbol.upper() in etf_symbols or symbol.upper() in _NON_STOCK:
+                skipped += 1
+                continue
+
             indicators = calc_all(candles)
             if not indicators:
                 skipped += 1

@@ -1055,6 +1055,80 @@ async def get_ribbon_scanner(
     }
 
 
+@app.get("/api/scan/ignition")
+async def get_ignition_scan(
+    mode: str = "all",
+    min_volume: int = 200_000,
+    min_quality: int = 0,
+    bullish_only: bool = False,
+    max_results: int = 100,
+):
+    """
+    Early Pump Ignition Layer — pre-breakout detection.
+
+    Merges main scan results (volume-anomaly confirmed) + ribbon_candidates
+    (EMA compression setups), applies ignition scoring, and returns ranked
+    pre-breakout setups.
+
+    mode: 'all' | 'confirmed' | 'early' | 'watch'
+      all       — all signals including NO_IGNITION
+      confirmed — IGNITION_CONFIRMED only (quality≥60, 4+ signals)
+      early     — IGNITION_CONFIRMED + EARLY_IGNITION
+      watch     — all except NO_IGNITION
+
+    min_quality: 0–100, filter by ignition_quality
+    bullish_only: true = exclude bearish stack tickers
+    max_results: cap result count (max 200)
+    """
+    from scanner.early_ignition import build_ignition_response
+    from database import get_ribbon_candidates
+
+    max_results = min(max_results, 200)
+
+    # SOURCE 1: Main scan results (last Yahoo intraday or EOD scan)
+    scan = await get_latest_scan()
+    main_results = scan.get("results", []) if scan else []
+
+    # Also include EOD universe scan results for broader coverage
+    eod_scan = await get_latest_scan_by_type("massive_eod")
+    eod_results = eod_scan.get("results", []) if eod_scan else []
+
+    # Merge both scans — main scan (intraday) takes priority over EOD
+    main_symbols = {r["symbol"] for r in main_results}
+    combined_main = main_results + [r for r in eod_results if r["symbol"] not in main_symbols]
+
+    # SOURCE 2: Ribbon candidates (compression setups, last 1 day)
+    ribbon_rows = await get_ribbon_candidates(days_back=1)
+
+    result = build_ignition_response(
+        main_results=combined_main,
+        ribbon_results=ribbon_rows,
+        mode=mode,
+        min_volume=min_volume,
+        min_quality=min_quality,
+        bullish_only=bullish_only,
+        max_results=max_results,
+    )
+
+    scanned_at = None
+    if scan:
+        scanned_at = scan.get("scanned_at")
+    elif eod_scan:
+        scanned_at = eod_scan.get("scanned_at")
+
+    return {
+        **result,
+        "scanned_at": scanned_at,
+        "filter": {
+            "mode":        mode,
+            "min_volume":  min_volume,
+            "min_quality": min_quality,
+            "bullish_only": bullish_only,
+            "max_results": max_results,
+        },
+    }
+
+
 @app.get("/api/sector-performance/latest")
 async def sector_performance_latest():
     """Return live Finviz sector performance (daily change%). Cached up to 4 hours."""
