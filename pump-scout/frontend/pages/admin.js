@@ -7,12 +7,23 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const PHASE_LABELS = {
   idle:              'Idle — not running',
   fetching_universe: 'Fetching universe from Polygon…',
+  filtering_etf:     'Loading ETF exclusion list… (first run only, cached 7 days)',
   filtering:         'Applying price/volume filters…',
   scoring:           'Scoring candidates…',
   enriching:         'Enriching sector data…',
   saving:            'Saving results to database…',
   done:              'Done',
   error:             'Failed',
+};
+
+// Rough expected duration per phase in seconds (shown as hint when no ETA available)
+const PHASE_HINTS = {
+  fetching_universe: '~5–15s',
+  filtering_etf:     '~5–30s (then cached for 7 days)',
+  filtering:         '~2s',
+  scoring:           '~15–25 min for 600 candidates',
+  enriching:         '~2–5 min',
+  saving:            '~5s',
 };
 
 function fmtSecs(s) {
@@ -234,11 +245,18 @@ export default function AdminPage() {
                 {scanStatus.running && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#44aaff', boxShadow: '0 0 6px #44aaff', display: 'inline-block', animation: 'pulse 1.2s infinite' }} />}
                 {!scanStatus.running && scanStatus.phase === 'done' && <span style={{ color: '#44ff64', fontSize: 13 }}>✓</span>}
                 {!scanStatus.running && scanStatus.phase === 'error' && <span style={{ color: '#ff6b6b', fontSize: 13 }}>✗</span>}
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#ddd' }}>
-                  {PHASE_LABELS[scanStatus.phase] || scanStatus.phase}
-                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#ddd' }}>
+                    {PHASE_LABELS[scanStatus.phase] || scanStatus.phase}
+                  </span>
+                  {PHASE_HINTS[scanStatus.phase] && scanStatus.candidates_total === 0 && (
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontStyle: 'italic' }}>
+                      Expected: {PHASE_HINTS[scanStatus.phase]}
+                    </span>
+                  )}
+                </div>
                 {scanStatus.target_date && (
-                  <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>
                     {scanStatus.target_date}
                   </span>
                 )}
