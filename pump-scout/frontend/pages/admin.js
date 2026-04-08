@@ -197,7 +197,7 @@ export default function AdminPage() {
             <input
               value={scanDate}
               onChange={e => setScanDate(e.target.value)}
-              placeholder="Date YYYY-MM-DD (blank = yesterday)"
+              placeholder="Date YYYY-MM-DD (blank = today)"
               style={{ flex: 1, minWidth: 200, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '6px 10px', color: '#e0e0e0', fontFamily: 'inherit', fontSize: 11 }}
             />
             <button
@@ -244,33 +244,49 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {/* Progress bar (scoring phase) */}
-              {scanStatus.candidates_total > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>
-                    <span>Scoring candidates</span>
-                    <span>{scanStatus.candidates_done} / {scanStatus.candidates_total}</span>
+              {/* Candidate scoring progress — shown as soon as candidates_total is known */}
+              {scanStatus.candidates_total > 0 && (() => {
+                const total     = scanStatus.candidates_total;
+                const done      = scanStatus.candidates_done;
+                const remaining = Math.max(0, total - done);
+                const pct       = Math.min(100, Math.round((done / total) * 100));
+                const barColor  = scanStatus.running ? '#44aaff' : '#44ff64';
+                return (
+                  <div style={{ marginBottom: 4 }}>
+                    {/* Big 3 numbers */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 8 }}>
+                      {[
+                        { label: 'Started',   val: total.toLocaleString(),     color: '#aaa'    },
+                        { label: 'Scanned',   val: done.toLocaleString(),      color: barColor  },
+                        { label: 'Remaining', val: remaining.toLocaleString(), color: remaining === 0 ? '#44ff64' : '#ffd700' },
+                      ].map(({ label, val, color }) => (
+                        <div key={label} style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 5, padding: '7px 10px', textAlign: 'center', border: `1px solid ${color}22` }}>
+                          <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginBottom: 3, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{label}</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color, lineHeight: 1 }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Progress bar */}
+                    <div style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden', marginBottom: 4 }}>
+                      <div style={{ height: '100%', borderRadius: 3, background: barColor, width: `${pct}%`, transition: 'width 0.5s ease' }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>
+                      <span>Scoring candidates</span>
+                      <span>{pct}% complete</span>
+                    </div>
                   </div>
-                  <div style={{ height: 5, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%', borderRadius: 3,
-                      background: scanStatus.running ? '#44aaff' : '#44ff64',
-                      width: `${Math.round((scanStatus.candidates_done / scanStatus.candidates_total) * 100)}%`,
-                      transition: 'width 0.5s ease',
-                    }} />
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Stats grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginTop: 4 }}>
                 {[
                   ['Universe', scanStatus.universe_raw > 0 ? scanStatus.universe_raw.toLocaleString() : '—'],
                   ['Filtered', scanStatus.universe_filtered > 0 ? scanStatus.universe_filtered.toLocaleString() : '—'],
-                  ['Results', scanStatus.results_count],
-                  ['🔥 FIRE', scanStatus.fire_count],
-                  ['💪 ARM', scanStatus.arm_count],
-                  ['Errors', scanStatus.errors],
+                  ['Results', scanStatus.results_count || '—'],
+                  ['🔥 FIRE', scanStatus.fire_count || '—'],
+                  ['💪 ARM', scanStatus.arm_count || '—'],
+                  ['Errors', scanStatus.errors || '0'],
                   ['Elapsed', fmtSecs(scanStatus.elapsed_secs)],
                   ['ETA', scanStatus.running ? fmtSecs(scanStatus.eta_secs) : '—'],
                 ].map(([label, val]) => (
