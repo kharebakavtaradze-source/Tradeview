@@ -1264,11 +1264,14 @@ async def admin_run_universe_scan(background_tasks: BackgroundTasks, date: str =
         from scanner.universe_scan import run_universe_scan
         await run_universe_scan(target_date=date)
 
+    from scanner.massive_data import get_last_trading_day
+    resolved_date = date or get_last_trading_day(offset=0)
+
     background_tasks.add_task(_run)
     return {
         "status":      "started",
-        "target_date": date or "yesterday (auto)",
-        "message":     "Universe scan running in background. Check /api/scan/universe/latest for results.",
+        "target_date": resolved_date,
+        "message":     f"Universe scan running in background for {resolved_date}. Check /api/scan/universe/latest for results.",
     }
 
 
