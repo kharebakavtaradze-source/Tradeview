@@ -158,7 +158,39 @@ export default function AIPortfolio() {
       <div className={styles.container}>
         <AppNav />
 
-        {loading && <div className={styles.loading}><span className={styles.spinner} /> Loading portfolio…</div>}
+        {/* Page header + action buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px var(--page-px, 28px) 10px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text)', flex: 1 }}>
+            AI PORTFOLIO
+          </div>
+          <button
+            onClick={refreshPrices}
+            disabled={refreshing}
+            style={{
+              fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 5,
+              border: '1px solid var(--cyan-border, rgba(0,212,245,0.3))',
+              background: 'var(--cyan-dim, rgba(0,212,245,0.08))',
+              color: 'var(--cyan)', cursor: refreshing ? 'not-allowed' : 'pointer',
+              opacity: refreshing ? 0.5 : 1, transition: 'opacity 0.15s',
+            }}
+          >
+            {refreshing ? '⟳ Refreshing…' : '⟳ Refresh Prices'}
+          </button>
+          <button
+            onClick={runNow}
+            disabled={running}
+            style={{
+              fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 5,
+              border: '1px solid var(--accent-border, rgba(124,90,245,0.35))',
+              background: 'var(--accent-dim, rgba(124,90,245,0.1))',
+              color: 'var(--accent)', cursor: running ? 'not-allowed' : 'pointer',
+              opacity: running ? 0.5 : 1, transition: 'opacity 0.15s',
+            }}
+          >
+            {running ? '⏳ Running…' : '▶ Run AI Now'}
+          </button>
+        </div>
+
 
         {/* Portfolio value card */}
         {state && (
