@@ -278,12 +278,20 @@ _TRUMP_ANTI_SIGNALS = [
 ]
 
 # ─── RSS Sources (public, no API key required) ────────────────────────────────
+# Google News RSS: always reliable, no API key, returns recent news per query.
+# Note: Reuters killed public RSS in 2023; replaced with Google News + AP + BBC.
 
 RSS_SOURCES = [
-    "https://feeds.reuters.com/reuters/businessNews",
-    "https://feeds.reuters.com/reuters/topNews",
+    # Google News search RSS — directly targets Trump policy news
+    "https://news.google.com/rss/search?q=trump+tariff+trade&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=trump+executive+order+policy&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=trump+china+sanctions+market&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=trump+economy+tax+fiscal&hl=en-US&gl=US&ceid=US:en",
+    # BBC Business (still active)
     "https://feeds.bbci.co.uk/news/business/rss.xml",
-    "https://rss.cnn.com/rss/money_latest.rss",
+    # AP News politics/business
+    "https://apnews.com/rss/politics",
+    "https://apnews.com/rss/business",
 ]
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -382,7 +390,7 @@ def classify_event(title: str, description: str = "") -> dict:
     combined = f"{title} {description}"
     relevance_score = _score_trump_relevance(combined)
 
-    if relevance_score < 50:
+    if relevance_score < 35:
         return {"relevant": False, "relevance_score": relevance_score}
 
     event_classes = _detect_classes(combined)
@@ -417,50 +425,95 @@ def classify_event(title: str, description: str = "") -> dict:
 # ─── RSS Parser ───────────────────────────────────────────────────────────────
 
 
+_RSS_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; PumpScoutBot/1.0; +https://pumpscout.io) "
+        "Googlebot/2.1 (+http://www.google.com/bot.html)"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
+
+
 async def _parse_rss_feed(url: str, client: httpx.AsyncClient) -> list[dict]:
     """
-    Fetch and parse a simple RSS feed.
+    Fetch and parse a simple RSS/Atom feed.
     Returns list of {title, description, published_at, source_url}.
+    Handles: CDATA-wrapped titles/descs, Google News RSS, BBC, AP.
     """
     items = []
     try:
-        resp = await client.get(url, timeout=httpx.Timeout(8.0, connect=4.0))
+        resp = await client.get(url, headers=_RSS_HEADERS, timeout=httpx.Timeout(10.0, connect=5.0))
         if resp.status_code != 200:
+            logger.warning(f"RSS {url} → HTTP {resp.status_code}")
             return []
 
         text = resp.text
-        # Minimal XML parsing — no lxml dependency
-        titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>|<title>(.*?)</title>", text, re.DOTALL)
-        descs  = re.findall(r"<description><!\[CDATA\[(.*?)\]\]></description>|<description>(.*?)</description>", text, re.DOTALL)
-        pubdates = re.findall(r"<pubDate>(.*?)</pubDate>", text)
-        links  = re.findall(r"<link>(.*?)</link>|<link\s[^>]*href=['\"]([^'\"]+)['\"]", text)
 
-        # Skip first title/desc which is usually the feed title
-        raw_titles = [t[0] or t[1] for t in titles][1:]
-        raw_descs  = [d[0] or d[1] for d in descs][1:]
-        raw_links  = [lk[0] or lk[1] for lk in links][1:]
+        # ── Item-level extraction ──────────────────────────────────────────────
+        # Split by <item> boundaries first for cleaner per-item parsing
+        item_blocks = re.split(r"<item[>\s]", text, flags=re.IGNORECASE)[1:]
 
-        for i, title in enumerate(raw_titles[:20]):
-            title = title.strip()
+        if not item_blocks:
+            # Atom fallback: split by <entry>
+            item_blocks = re.split(r"<entry[>\s]", text, flags=re.IGNORECASE)[1:]
+
+        from email.utils import parsedate_to_datetime
+
+        for raw in item_blocks[:25]:
+            # Title: CDATA or plain
+            title_m = re.search(
+                r"<title><!\[CDATA\[(.*?)\]\]></title>|<title>(.*?)</title>",
+                raw, re.DOTALL | re.IGNORECASE,
+            )
+            if not title_m:
+                continue
+            title = (title_m.group(1) or title_m.group(2) or "").strip()
+            # Strip HTML tags from title
+            title = re.sub(r"<[^>]+>", "", title).strip()
             if not title or len(title) < 10:
                 continue
-            desc = (raw_descs[i] if i < len(raw_descs) else "").strip()
-            pub  = (pubdates[i] if i < len(pubdates) else "").strip()
-            link = (raw_links[i] if i < len(raw_links) else "").strip()
 
-            # Parse pubDate → ISO format
+            # Description: CDATA or plain
+            desc_m = re.search(
+                r"<description><!\[CDATA\[(.*?)\]\]></description>|<description>(.*?)</description>",
+                raw, re.DOTALL | re.IGNORECASE,
+            )
+            desc = ""
+            if desc_m:
+                desc = (desc_m.group(1) or desc_m.group(2) or "").strip()
+                desc = re.sub(r"<[^>]+>", "", desc).strip()[:500]
+
+            # pubDate (RSS) or published / updated (Atom)
+            pub_m = re.search(r"<pubDate>(.*?)</pubDate>", raw, re.IGNORECASE)
+            if not pub_m:
+                pub_m = re.search(r"<published>(.*?)</published>", raw, re.IGNORECASE)
+            pub_raw = pub_m.group(1).strip() if pub_m else ""
             try:
-                from email.utils import parsedate_to_datetime
-                dt = parsedate_to_datetime(pub)
+                dt = parsedate_to_datetime(pub_raw)
                 pub_iso = dt.astimezone(timezone.utc).isoformat()
             except Exception:
-                pub_iso = datetime.now(timezone.utc).isoformat()
+                try:
+                    # ISO 8601 from Atom feeds
+                    pub_iso = datetime.fromisoformat(
+                        pub_raw.replace("Z", "+00:00")
+                    ).isoformat()
+                except Exception:
+                    pub_iso = datetime.now(timezone.utc).isoformat()
+
+            # Link: text content or href attribute
+            link_m = re.search(
+                r"<link>(https?://[^<]+)</link>|<link[^>]+href=['\"]([^'\"]+)['\"]",
+                raw, re.IGNORECASE,
+            )
+            link = ""
+            if link_m:
+                link = (link_m.group(1) or link_m.group(2) or "").strip()
 
             items.append({
-                "title": title,
-                "description": desc[:500],
+                "title":        title,
+                "description":  desc,
                 "published_at": pub_iso,
-                "source_url": link,
+                "source_url":   link,
             })
 
     except Exception as e:
