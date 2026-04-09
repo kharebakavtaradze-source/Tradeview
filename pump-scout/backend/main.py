@@ -703,6 +703,27 @@ async def ai_portfolio_run_now(background_tasks: BackgroundTasks):
     return {"status": "started", "message": "AI portfolio decisions running in background"}
 
 
+@app.post("/api/ai-portfolio/refresh-prices")
+async def ai_portfolio_refresh_prices():
+    """
+    Fetch live prices for all open AI positions and update P&L.
+    Safe to call any time — no AI decisions made, prices only.
+    """
+    from ai_portfolio import update_ai_positions_intraday
+    from database import get_open_ai_positions
+    positions = await get_open_ai_positions()
+    if not positions:
+        return {"status": "ok", "message": "No open positions to update", "updated": 0}
+    await update_ai_positions_intraday()
+    positions_after = await get_open_ai_positions()
+    return {
+        "status": "ok",
+        "updated": len(positions_after),
+        "message": f"Prices refreshed for {len(positions_after)} positions",
+        "positions": positions_after,
+    }
+
+
 # ─── Hype Monitor routes (specific routes BEFORE parameterized {symbol}) ───────
 
 @app.get("/api/hype/status")

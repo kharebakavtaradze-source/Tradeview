@@ -166,73 +166,110 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
     return {}
 
 
-# ── US ETF Symbol Cache ───────────────────────────────────────────────────────
+# ── Non-stock exclusion cache ─────────────────────────────────────────────────
+# Covers: ETF, ETN, ETV (exchange-traded vehicles), FUND (open-end / closed-end),
+# plus a hardcoded safety net for leveraged/inverse products and crypto spot ETFs
+# that Polygon may list under unusual types.
 
-_etf_cache: set[str] = set()
-_etf_cache_date: Optional[str] = None
+# Polygon security types to exclude (all are non-equity instruments)
+_EXCLUDED_POLYGON_TYPES = ("ETF", "ETN", "ETV", "FUND")
+
+# Known leveraged/inverse products and crypto spot ETFs — safety net for any
+# that slip through the API type filter (misclassified or new listings).
+_HARDCODED_EXCLUSIONS: set[str] = {
+    # ── Leveraged / inverse (ProShares) ──────────────────────────────────────
+    "TQQQ", "SQQQ", "UPRO", "SPXU", "SPXL", "SPXS",
+    "QLD",  "QID",  "SSO",  "SDS",  "UDOW", "SDOW",
+    "TNA",  "TZA",  "URTY", "SRTY", "LABU", "LABD",
+    "NUGT", "DUST", "JNUG", "JDST", "USLV", "DSLV",
+    "UCO",  "SCO",  "BOIL", "KOLD", "UNG",  "DGAZ",
+    "UGAZ", "GUSH", "DRIP", "NAIL", "SOXL", "SOXS",
+    "FNGU", "FNGD", "TECL", "TECS", "DPST", "FAZ",
+    "FAS",  "ERX",  "ERY",  "RETL", "SHLD",
+    # ── Leveraged / inverse (Direxion) ───────────────────────────────────────
+    "TMF",  "TMV",  "TBF",  "TBT",  "TBX",
+    "EDC",  "EDZ",  "INDL", "BRZU", "MEXI",
+    "DRN",  "DRV",  "CURE", "PILL",
+    # ── Crypto spot ETFs ─────────────────────────────────────────────────────
+    "GBTC", "ETHE", "IBIT", "FBTC", "BITB", "BTCO",
+    "ARKB", "BRRR", "HODL", "EZBC", "DEFI",
+    "ETHW", "CETH", "ETHV", "QETH", "FETH",
+    # ── Volatility products ───────────────────────────────────────────────────
+    "VXX",  "UVXY", "SVXY", "VIXY", "VIXM",
+    "TVIX", "TVIZ", "XIV",  "ZIV",
+}
+
+_excluded_cache: set[str] = set()
+_excluded_cache_date: Optional[str] = None
 
 
 async def get_us_etf_symbols() -> set[str]:
     """
-    Fetch all US-listed ETF symbols from Polygon reference API.
-    Cached in memory for 7 days — call once per universe scan.
-    Returns set of uppercase ticker strings e.g. {"SPY", "QQQ", "ARKK", ...}.
+    Fetch all non-stock securities from Polygon reference API.
+    Covers ETF, ETN, ETV, FUND types + hardcoded leveraged/inverse/crypto safety net.
+    Cached in memory for 7 days.
+    Returns set of uppercase ticker strings.
+
+    Kept as get_us_etf_symbols() for backwards-compat with all call sites.
     """
-    global _etf_cache, _etf_cache_date
+    global _excluded_cache, _excluded_cache_date
 
     today = date.today().isoformat()
-    # Refresh weekly
-    if _etf_cache and _etf_cache_date:
-        cache_age = (date.today() - date.fromisoformat(_etf_cache_date)).days
+    if _excluded_cache and _excluded_cache_date:
+        cache_age = (date.today() - date.fromisoformat(_excluded_cache_date)).days
         if cache_age < 7:
-            logger.info(f"ETF cache hit: {len(_etf_cache)} symbols (age {cache_age}d)")
-            return _etf_cache
+            logger.info(f"Exclusion cache hit: {len(_excluded_cache)} symbols (age {cache_age}d)")
+            return _excluded_cache
 
-    logger.info("Fetching US ETF symbol list from Polygon reference API…")
-    etfs: set[str] = set()
+    logger.info(f"Building exclusion list from Polygon: types={_EXCLUDED_POLYGON_TYPES}")
+    excluded: set[str] = set(_HARDCODED_EXCLUSIONS)  # start with safety net
 
-    # Hard cap: US has ~3000 ETFs; 5 pages × 1000 = 5000 is more than enough.
-    # Without this cap, a buggy next_url loop could hang the scan indefinitely.
-    MAX_PAGES = 5
-    # Overall timeout: if we can't get the list in 30s, skip and move on.
-    overall_timeout = httpx.Timeout(10.0, connect=5.0)
+    MAX_PAGES = 5          # 5 pages × 1000 = 5000 per type — more than enough
+    per_req_timeout = httpx.Timeout(10.0, connect=5.0)
 
-    async with httpx.AsyncClient(timeout=overall_timeout) as client:
-        url = f"{MASSIVE_BASE}/v3/reference/tickers"
-        params = _params(type="ETF", market="stocks", active="true", limit=1000)
-        page = 0
+    async with httpx.AsyncClient(timeout=per_req_timeout) as client:
+        for sec_type in _EXCLUDED_POLYGON_TYPES:
+            url    = f"{MASSIVE_BASE}/v3/reference/tickers"
+            params = _params(type=sec_type, market="stocks", active="true", limit=1000)
+            page   = 0
+            type_count = 0
 
-        while url and page < MAX_PAGES:
-            page += 1
-            try:
-                resp = await client.get(url, params=params)
-                if resp.status_code != 200:
-                    logger.warning(f"ETF list HTTP {resp.status_code} (page {page})")
+            while url and page < MAX_PAGES:
+                page += 1
+                try:
+                    resp = await client.get(url, params=params)
+                    if resp.status_code != 200:
+                        logger.warning(f"Exclusion list HTTP {resp.status_code} (type={sec_type} page={page})")
+                        break
+                    data = resp.json()
+                    for t in data.get("results") or []:
+                        sym = (t.get("ticker") or "").upper()
+                        if sym:
+                            excluded.add(sym)
+                            type_count += 1
+                    next_url = data.get("next_url")
+                    if next_url:
+                        url    = next_url
+                        params = {"apiKey": MASSIVE_API_KEY}
+                    else:
+                        break
+                except Exception as e:
+                    logger.warning(f"Exclusion list fetch error (type={sec_type} page={page}): {e}")
                     break
-                data = resp.json()
-                for t in data.get("results") or []:
-                    sym = (t.get("ticker") or "").upper()
-                    if sym:
-                        etfs.add(sym)
-                next_url = data.get("next_url")
-                if next_url:
-                    # next_url already contains apiKey cursor — don't duplicate params
-                    url = next_url
-                    params = {"apiKey": MASSIVE_API_KEY}
-                else:
-                    break
-            except Exception as e:
-                logger.warning(f"ETF list fetch error (page {page}): {e}")
-                break
 
-    if etfs:
-        _etf_cache = etfs
-        _etf_cache_date = today
-        logger.info(f"ETF cache refreshed: {len(etfs)} US ETFs loaded in {page} page(s)")
+            logger.info(f"  {sec_type}: {type_count} symbols fetched")
+
+    if len(excluded) > len(_HARDCODED_EXCLUSIONS):
+        _excluded_cache      = excluded
+        _excluded_cache_date = today
+        logger.info(f"Exclusion cache refreshed: {len(excluded)} total symbols "
+                    f"(ETF/ETN/ETV/FUND + {len(_HARDCODED_EXCLUSIONS)} hardcoded)")
     else:
-        logger.warning("ETF list returned 0 results — using stale cache if available")
+        logger.warning("Polygon returned 0 results — using hardcoded exclusions only")
+        _excluded_cache      = excluded   # still use the hardcoded set
+        _excluded_cache_date = today
 
-    return _etf_cache
+    return _excluded_cache
 
 
 async def fetch_candles_massive(symbol: str, days: int = 200) -> list:
