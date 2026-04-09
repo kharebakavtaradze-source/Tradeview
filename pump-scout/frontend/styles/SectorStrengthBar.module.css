@@ -1,7 +1,7 @@
 .container {
-  background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 10px 14px;
   margin: 8px 0;
   display: flex;
@@ -14,18 +14,18 @@
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   padding: 3px 6px;
-  transition: background 0.15s;
+  transition: background var(--t-fast);
 }
 
 .row:hover {
-  background: rgba(255,255,255,0.05);
+  background: var(--surface2);
 }
 
 .rowActive {
-  background: rgba(68, 136, 255, 0.1);
-  border: 1px solid rgba(68, 136, 255, 0.25);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
 }
 
 .name {
@@ -42,22 +42,22 @@
 .barWrap {
   flex: 1;
   height: 6px;
-  background: rgba(255,255,255,0.06);
-  border-radius: 3px;
+  background: var(--surface2);
+  border-radius: var(--r-sm);
   overflow: hidden;
 }
 
 .barFill {
   height: 100%;
-  background: linear-gradient(90deg, #4488ff, #00c8ff);
-  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--cyan));
+  border-radius: var(--r-sm);
   transition: width 0.3s ease;
 }
 
 .score {
   font-size: 10px;
   font-weight: 700;
-  color: #4488ff;
+  color: var(--accent);
   width: 28px;
   text-align: right;
   flex-shrink: 0;
@@ -75,16 +75,16 @@
   align-self: flex-start;
   margin-top: 2px;
   background: none;
-  border: 1px solid rgba(255,255,255,0.15);
+  border: 1px solid var(--border2);
   color: var(--text-muted);
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   padding: 2px 8px;
   font-size: 10px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--t-fast);
 }
 
 .clearBtn:hover {
-  border-color: rgba(255,255,255,0.3);
-  color: #fff;
+  border-color: var(--border2);
+  color: var(--text);
 }

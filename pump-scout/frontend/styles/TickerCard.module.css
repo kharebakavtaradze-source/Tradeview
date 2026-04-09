@@ -1,31 +1,32 @@
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-md);
   overflow: hidden;
-  transition: border-color 0.2s;
+  transition: border-color var(--t-std), background var(--t-std);
   cursor: pointer;
 }
 
 .card:hover {
   border-color: var(--border2);
+  background: var(--surface2);
 }
 
 .cardFire {
-  border-color: rgba(255, 215, 0, 0.3);
+  border-color: var(--gold-border);
   animation: firePulse 2.5s ease-in-out infinite;
 }
 
 .cardFire:hover {
-  border-color: rgba(255, 215, 0, 0.6);
+  border-color: var(--gold);
 }
 
-.cardArm      { border-color: rgba(0, 229, 255, 0.25); }
-.cardBase     { border-color: rgba(0, 200, 83, 0.2); }
-.cardStealth  { border-color: rgba(170, 0, 255, 0.3); box-shadow: 0 0 10px rgba(170, 0, 255, 0.15); }
-.cardWatch    { border-color: rgba(255, 136, 0, 0.2); }
-.cardSympathy { border-color: rgba(0, 229, 255, 0.3); box-shadow: 0 0 8px rgba(0, 229, 255, 0.1); }
-.cardFlow     { border-color: rgba(170, 0, 255, 0.2); }
+.cardArm      { border-color: var(--cyan-border); }
+.cardBase     { border-color: var(--lime-border); }
+.cardStealth  { border-color: var(--violet-border); box-shadow: 0 0 10px var(--violet-dim); }
+.cardWatch    { border-color: var(--amber-border); }
+.cardSympathy { border-color: var(--cyan-border); box-shadow: 0 0 8px var(--cyan-dim); }
+.cardFlow     { border-color: var(--violet-border); }
 
 /* ── Card Header ────────────────────────────────── */
 .header {
@@ -50,21 +51,21 @@
 }
 
 .badge {
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 700;
   padding: 2px 7px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   letter-spacing: 0.08em;
 }
 
-.badgeFire     { background: rgba(255,215,0,0.15);  color: var(--fire);  border: 1px solid rgba(255,215,0,0.4); }
-.badgeArm      { background: rgba(0,229,255,0.1);   color: var(--arm);   border: 1px solid rgba(0,229,255,0.3); }
-.badgeBase     { background: rgba(0,200,83,0.1);    color: var(--base);  border: 1px solid rgba(0,200,83,0.3); }
-.badgeStealth  { background: rgba(170,0,255,0.12);  color: #cc44ff;      border: 1px solid rgba(170,0,255,0.4); }
-.badgeWatch    { background: rgba(255,136,0,0.1);   color: var(--watch); border: 1px solid rgba(255,136,0,0.3); }
-.badgeSympathy { background: rgba(0,229,255,0.1);   color: #00e5ff;      border: 1px solid rgba(0,229,255,0.4); }
-.badgeFlow     { background: rgba(170,0,255,0.1);   color: #aa00ff;      border: 1px solid rgba(170,0,255,0.35); }
-.badgeNone     { background: rgba(107,107,154,0.1); color: var(--text-muted); border: 1px solid var(--border); }
+.badgeFire     { background: var(--gold-dim);    color: var(--fire);   border: 1px solid var(--gold-border); }
+.badgeArm      { background: var(--cyan-dim);    color: var(--arm);    border: 1px solid var(--cyan-border); }
+.badgeBase     { background: var(--lime-dim);    color: var(--base);   border: 1px solid var(--lime-border); }
+.badgeStealth  { background: var(--violet-dim);  color: var(--violet); border: 1px solid var(--violet-border); }
+.badgeWatch    { background: var(--amber-dim);   color: var(--watch);  border: 1px solid var(--amber-border); }
+.badgeSympathy { background: var(--cyan-dim);    color: var(--cyan);   border: 1px solid var(--cyan-border); }
+.badgeFlow     { background: var(--violet-dim);  color: var(--violet); border: 1px solid var(--violet-border); }
+.badgeNone     { background: var(--surface2);    color: var(--text-muted); border: 1px solid var(--border); }
 
 .score {
   font-size: 11px;
@@ -74,7 +75,7 @@
 
 /* ── Card Body ──────────────────────────────────── */
 .body {
-  padding: 10px 12px;
+  padding: 12px;
 }
 
 .priceRow {
@@ -85,7 +86,7 @@
 }
 
 .price {
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 700;
   color: var(--text);
 }
@@ -95,14 +96,14 @@
   font-weight: 600;
 }
 
-.priceUp   { color: var(--green); }
+.priceUp   { color: var(--lime); }
 .priceDown { color: var(--red); }
 .priceFlat { color: var(--text-muted); }
 
 .metrics {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 4px 12px;
+  gap: 6px 12px;
 }
 
 .metric {
@@ -113,7 +114,7 @@
 
 .metricLabel {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--text-xs);
   letter-spacing: 0.05em;
 }
 
@@ -125,13 +126,13 @@
 
 .metricHighlight { color: var(--cyan); }
 .metricGold      { color: var(--gold); }
-.metricStealth   { color: #cc44ff; }
-.metricGreen     { color: var(--green); }
+.metricStealth   { color: var(--violet); }
+.metricGreen     { color: var(--lime); }
 .metricRed       { color: var(--red); }
 
 .divDot {
   margin-left: 3px;
-  color: #00e5ff;
+  color: var(--cyan);
   font-size: 11px;
 }
 
@@ -140,12 +141,12 @@
   font-size: 9px;
   font-weight: 700;
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   letter-spacing: 0.06em;
   margin-left: 4px;
 }
-.premarketUp   { background: rgba(0,200,83,0.15);  color: var(--green); border: 1px solid rgba(0,200,83,0.3); }
-.premarketDown { background: rgba(255,68,102,0.12); color: var(--red);   border: 1px solid rgba(255,68,102,0.3); }
+.premarketUp   { background: var(--lime-dim);  color: var(--lime); border: 1px solid var(--lime-border); }
+.premarketDown { background: var(--red-dim);   color: var(--red);  border: 1px solid var(--red-border); }
 
 /* ── Signal badges row ──────────────────────────── */
 .signalsRow {
@@ -159,32 +160,32 @@
   font-size: 9px;
   font-weight: 700;
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   letter-spacing: 0.05em;
-  background: rgba(0, 229, 255, 0.1);
+  background: var(--cyan-dim);
   color: var(--cyan);
-  border: 1px solid rgba(0, 229, 255, 0.3);
+  border: 1px solid var(--cyan-border);
 }
 
 .badgeGap {
   font-size: 9px;
   font-weight: 700;
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   letter-spacing: 0.05em;
 }
-.badgeGapUp   { background: rgba(0,200,83,0.12);  color: var(--green); border: 1px solid rgba(0,200,83,0.3); }
-.badgeGapDown { background: rgba(255,68,102,0.1); color: var(--red);   border: 1px solid rgba(255,68,102,0.3); }
+.badgeGapUp   { background: var(--lime-dim); color: var(--lime); border: 1px solid var(--lime-border); }
+.badgeGapDown { background: var(--red-dim);  color: var(--red);  border: 1px solid var(--red-border); }
 
 .badgeStealth2 {
   font-size: 9px;
   font-weight: 700;
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   letter-spacing: 0.05em;
-  background: rgba(170, 0, 255, 0.1);
-  color: #cc44ff;
-  border: 1px solid rgba(170, 0, 255, 0.3);
+  background: var(--violet-dim);
+  color: var(--violet);
+  border: 1px solid var(--violet-border);
 }
 
 .stealthRow {
@@ -193,10 +194,10 @@
   gap: 5px;
   margin-top: 6px;
   padding: 4px 6px;
-  background: rgba(170, 0, 255, 0.07);
-  border: 1px solid rgba(170, 0, 255, 0.2);
-  border-radius: 3px;
-  font-size: 10px;
+  background: var(--violet-dim);
+  border: 1px solid var(--violet-border);
+  border-radius: var(--r-sm);
+  font-size: var(--text-xs);
 }
 
 .stealthIcon {
@@ -204,12 +205,12 @@
 }
 
 .stealthText {
-  color: #cc44ff;
+  color: var(--violet);
   letter-spacing: 0.03em;
 }
 
 .stealthStrong {
-  color: #ff66ff;
+  color: var(--accent);
   font-weight: 700;
 }
 
@@ -227,17 +228,19 @@
   color: var(--text-muted);
   font-size: 11px;
   letter-spacing: 0.05em;
-  transition: background 0.15s, color 0.15s;
+  font-family: var(--font-ui);
+  transition: background var(--t-fast), color var(--t-fast);
+  cursor: pointer;
 }
 
 .expandBtn:hover {
-  background: rgba(0,229,255,0.05);
-  color: var(--cyan);
+  background: var(--surface3);
+  color: var(--accent);
 }
 
 .expandIcon {
-  transition: transform 0.2s;
-  font-size: 10px;
+  transition: transform var(--t-std);
+  font-size: var(--text-xs);
 }
 
 .expandIconOpen {
@@ -258,24 +261,24 @@
   color: var(--cyan);
   font-size: 11px;
   letter-spacing: 0.05em;
-  background: rgba(0,229,255,0.03);
-  transition: background 0.15s;
+  background: var(--cyan-dim);
+  transition: background var(--t-fast);
 }
 
 .detailLink:hover {
-  background: rgba(0,229,255,0.08);
+  background: rgba(0, 212, 245, 0.08);
   text-decoration: none;
 }
 
 /* ── Sympathy Banner ────────────────────────────── */
 .sympathyBanner {
-  background: #0a1a2a;
-  border: 1px solid rgba(0, 229, 255, 0.3);
-  border-radius: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--cyan-border);
+  border-radius: var(--r-sm);
   padding: 6px 10px;
   margin: 6px 12px 0;
   font-size: 11px;
-  color: #00e5ff;
+  color: var(--cyan);
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -289,13 +292,13 @@
 
 /* ── Institutional Flow Banner ──────────────────── */
 .instFlowBanner {
-  background: #1a0a2a;
-  border: 1px solid rgba(170, 0, 255, 0.3);
-  border-radius: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--violet-border);
+  border-radius: var(--r-sm);
   padding: 6px 10px;
   margin: 6px 12px 0;
   font-size: 11px;
-  color: #aa00ff;
+  color: var(--violet);
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -307,15 +310,15 @@
   letter-spacing: 0.05em;
 }
 
-.flowStrengthStrong { color: #ffd700; font-weight: 700; }
-.flowStrengthMedium { color: #00e5ff; }
-.flowStrengthEarly  { color: #aa00ff; }
+.flowStrengthStrong { color: var(--gold);   font-weight: 700; }
+.flowStrengthMedium { color: var(--cyan); }
+.flowStrengthEarly  { color: var(--violet); }
 
 /* ── Hype Monitor Panel ──────────────────────────── */
 .hypePanel {
-  background: rgba(170, 0, 255, 0.04);
-  border: 1px solid rgba(170, 0, 255, 0.25);
-  border-radius: 4px;
+  background: var(--violet-dim);
+  border: 1px solid var(--violet-border);
+  border-radius: var(--r-sm);
   padding: 8px 12px;
   margin: 6px 12px 0;
   font-size: 11px;
@@ -324,7 +327,7 @@
 .hypePanelTitle {
   font-size: 11px;
   font-weight: 700;
-  color: #cc44ff;
+  color: var(--violet);
   letter-spacing: 0.07em;
   margin-bottom: 6px;
 }
@@ -334,7 +337,7 @@
   gap: 10px;
   flex-wrap: wrap;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--text-xs);
   margin-bottom: 4px;
 }
 
@@ -343,26 +346,26 @@
   align-items: center;
   justify-content: space-between;
   padding: 3px 8px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   margin-top: 3px;
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
 }
 
 .divLabel { letter-spacing: 0.04em; }
 .divSeverity { opacity: 0.7; font-size: 9px; }
 
-.divSilent   { background: rgba(0,200,83,0.08);   color: var(--green); border: 1px solid rgba(0,200,83,0.2); }
-.divVelocity { background: rgba(0,229,255,0.08);  color: var(--cyan);  border: 1px solid rgba(0,229,255,0.2); }
-.divPeak     { background: rgba(255,68,102,0.08); color: var(--red);   border: 1px solid rgba(255,68,102,0.2); }
-.divHype     { background: rgba(255,136,0,0.08);  color: var(--watch); border: 1px solid rgba(255,136,0,0.2); }
+.divSilent   { background: var(--lime-dim);  color: var(--lime);  border: 1px solid var(--lime-border); }
+.divVelocity { background: var(--cyan-dim);  color: var(--cyan);  border: 1px solid var(--cyan-border); }
+.divPeak     { background: var(--red-dim);   color: var(--red);   border: 1px solid var(--red-border); }
+.divHype     { background: var(--amber-dim); color: var(--watch); border: 1px solid var(--amber-border); }
 
 .hypeAI {
   margin-top: 6px;
   padding: 5px 8px;
-  background: rgba(0,0,0,0.2);
-  border-radius: 3px;
-  font-size: 10px;
+  background: var(--bg);
+  border-radius: var(--r-sm);
+  font-size: var(--text-xs);
   color: var(--text-dim);
   line-height: 1.4;
 }
@@ -371,8 +374,8 @@
   display: inline-block;
   margin-left: 8px;
   padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(0,229,255,0.1);
+  border-radius: var(--r-sm);
+  background: var(--cyan-dim);
   color: var(--cyan);
   font-weight: 700;
   font-size: 9px;

@@ -1,7 +1,7 @@
 .container {
-  padding: 12px;
+  padding: 14px 16px;
   background: var(--surface2);
-  border-radius: 4px;
+  border-radius: var(--r-md);
   margin: 8px 12px;
 }
 
@@ -10,6 +10,7 @@
   font-size: 11px;
   text-align: center;
   padding: 16px;
+  font-family: var(--font-ui);
 }
 
 .loadingDots::after {
@@ -28,11 +29,12 @@
   font-size: 11px;
   line-height: 1.7;
   white-space: pre-wrap;
+  font-family: var(--font-mono);
 }
 
 .section {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -47,18 +49,20 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   color: var(--text-muted);
-  margin-bottom: 3px;
+  margin-bottom: 4px;
+  font-family: var(--font-ui);
 }
 
 .sectionContent {
   font-size: 12px;
   color: var(--text);
   line-height: 1.5;
+  font-family: var(--font-ui);
 }
 
-.verdictStrong { color: var(--green); font-weight: 700; }
-.verdictWatch  { color: var(--orange); font-weight: 700; }
-.verdictAvoid  { color: var(--red); font-weight: 700; }
+.verdictStrong { color: var(--lime);  font-weight: 700; }
+.verdictWatch  { color: var(--amber); font-weight: 700; }
+.verdictAvoid  { color: var(--red);   font-weight: 700; }
 
 .levelRow {
   display: flex;
@@ -75,11 +79,13 @@
 .levelName {
   color: var(--text-muted);
   font-size: 10px;
+  font-family: var(--font-ui);
 }
 
 .levelPrice {
   color: var(--gold);
   font-weight: 600;
+  font-family: var(--font-mono);
 }
 
 .noAnalysis {
@@ -88,4 +94,5 @@
   font-style: italic;
   text-align: center;
   padding: 12px;
+  font-family: var(--font-ui);
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
 import styles from '../styles/Ribbon.module.css';
+import AppNav from '../components/AppNav';
 import JournalModal from '../components/JournalModal';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -331,13 +331,7 @@ export default function RibbonPage() {
       </Head>
 
       <div className={styles.page}>
-        {/* Nav */}
-        <div className={styles.nav}>
-          <Link href="/" className={styles.navLink}>← Dashboard</Link>
-          <Link href="/journal" className={styles.navLink}>📔 Journal</Link>
-          <Link href="/sectors" className={styles.navLink}>🗂 Sectors</Link>
-          <Link href="/macro-events" className={styles.navLink}>🌐 Macro</Link>
-        </div>
+        <AppNav />
 
         {/* Header */}
         <div className={styles.header}>

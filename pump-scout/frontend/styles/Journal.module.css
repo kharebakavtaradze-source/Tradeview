@@ -1,8 +1,8 @@
 .container {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 0 16px 60px;
+  width: 100%;
+  padding: 0 var(--page-px) 60px;
   min-height: 100vh;
+  box-sizing: border-box;
 }
 
 /* ── Nav ─────────────────────────────────────────── */
@@ -22,6 +22,7 @@
   letter-spacing: 0.05em;
   transition: color 0.15s;
   text-decoration: none;
+  font-family: var(--font-ui);
 }
 .backLink:hover { color: var(--cyan); }
 
@@ -30,6 +31,7 @@
   font-weight: 700;
   letter-spacing: 0.1em;
   color: var(--cyan);
+  font-family: var(--font-ui);
 }
 
 .navActions {
@@ -41,7 +43,7 @@
 /* ── Buttons ─────────────────────────────────────── */
 .btn {
   padding: 6px 14px;
-  border-radius: 4px;
+  border-radius: var(--r-md);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -50,35 +52,36 @@
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.15s;
+  font-family: var(--font-ui);
 }
 .btn:hover { color: var(--text); border-color: var(--text-muted); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btnPrimary {
-  background: rgba(0,229,255,0.1);
-  border-color: rgba(0,229,255,0.4);
-  color: var(--cyan);
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
-.btnPrimary:hover { background: rgba(0,229,255,0.18); }
+.btnPrimary:hover { background: rgba(124,90,245,0.2); }
 
 .btnGold {
-  background: rgba(255,215,0,0.08);
-  border-color: rgba(255,215,0,0.35);
+  background: var(--gold-dim);
+  border-color: var(--gold-border);
   color: var(--gold);
 }
-.btnGold:hover { background: rgba(255,215,0,0.15); }
+.btnGold:hover { background: rgba(245,197,24,0.2); }
 
 .btnDanger {
-  background: rgba(255,68,102,0.1);
-  border-color: rgba(255,68,102,0.35);
+  background: var(--red-dim);
+  border-color: var(--red-border);
   color: var(--red);
 }
-.btnDanger:hover { background: rgba(255,68,102,0.18); }
+.btnDanger:hover { background: rgba(240,62,92,0.2); }
 
 /* ── Stats grid ──────────────────────────────────── */
 .statsGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 8px;
   margin: 16px 0 12px;
 }
@@ -86,7 +89,7 @@
 .statCard {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-md);
   padding: 10px 14px;
 }
 
@@ -96,6 +99,7 @@
   letter-spacing: 0.08em;
   margin-bottom: 4px;
   text-transform: uppercase;
+  font-family: var(--font-ui);
 }
 
 .statValue {
@@ -103,10 +107,11 @@
   font-weight: 700;
   color: var(--text);
   line-height: 1.1;
+  font-family: var(--font-mono);
 }
 
-.statMeta { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
-.win  { color: var(--green); }
+.statMeta { font-size: 10px; color: var(--text-muted); margin-top: 3px; font-family: var(--font-ui); }
+.win  { color: var(--lime); }
 .loss { color: var(--red); }
 .neutral { color: var(--text-muted); }
 
@@ -135,22 +140,24 @@
   margin-bottom: -1px;
   transition: color 0.15s;
   white-space: nowrap;
+  font-family: var(--font-ui);
 }
 .filterTab:hover { color: var(--text); }
-.filterTabActive { color: var(--cyan); border-bottom-color: var(--cyan); }
+.filterTabActive { color: var(--accent); border-bottom-color: var(--accent); }
 
 .tabCount {
   font-size: 10px;
-  background: rgba(255,255,255,0.07);
-  border-radius: 10px;
+  background: var(--surface2);
+  border-radius: var(--r-pill);
   padding: 0 6px;
   min-width: 18px;
   text-align: center;
   color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 .tabCountActive {
-  background: rgba(0,229,255,0.15);
-  color: var(--cyan);
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 /* ── Trade list ──────────────────────────────────── */
@@ -164,26 +171,26 @@
 .tradeCard {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-md);
   padding: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   transition: box-shadow 0.15s;
 }
-.tradeCard:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+.tradeCard:hover { box-shadow: 0 2px 16px rgba(0,0,0,0.4); }
 
-.tradeCardWin  { border-left: 3px solid var(--green); }
+.tradeCardWin  { border-left: 3px solid var(--lime); }
 .tradeCardLoss { border-left: 3px solid var(--red); }
 .tradeCardOpen { border-left: 3px solid var(--cyan); }
-.tradeCardSkip { border-left: 3px solid rgba(255,255,255,0.12); }
+.tradeCardSkip { border-left: 3px solid var(--border2); }
 
 /* ── Card header row ── */
 .cardHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px 6px;
+  padding: 14px 16px 6px;
   gap: 8px;
 }
 
@@ -206,24 +213,27 @@
   font-weight: 800;
   color: var(--text);
   letter-spacing: 0.03em;
+  font-family: var(--font-ui);
 }
 
 .tradeBadge {
   font-size: 9px;
   font-weight: 700;
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   letter-spacing: 0.06em;
+  font-family: var(--font-ui);
 }
 
 .dayPill {
   font-size: 9px;
   font-weight: 600;
-  color: rgba(0,229,255,0.7);
-  background: rgba(0,229,255,0.07);
-  border: 1px solid rgba(0,229,255,0.2);
+  color: rgba(0,212,245,0.7);
+  background: rgba(0,212,245,0.07);
+  border: 1px solid rgba(0,212,245,0.2);
   border-radius: 10px;
   padding: 1px 7px;
+  font-family: var(--font-ui);
 }
 
 .livePct {
@@ -232,6 +242,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  font-family: var(--font-mono);
 }
 
 .liveDot {
@@ -239,7 +250,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--lime);
   opacity: 0.7;
   animation: pulse 2s ease-in-out infinite;
 }
@@ -254,22 +265,24 @@
   font-size: 10px;
   font-weight: 700;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   letter-spacing: 0.05em;
   white-space: nowrap;
+  font-family: var(--font-ui);
 }
-.outcomeWin  { background: rgba(0,200,83,0.12);   color: var(--green); border: 1px solid rgba(0,200,83,0.3); }
-.outcomeLoss { background: rgba(255,68,102,0.1);  color: var(--red);   border: 1px solid rgba(255,68,102,0.3); }
-.outcomeOpen { background: rgba(0,229,255,0.08);  color: var(--cyan);  border: 1px solid rgba(0,229,255,0.25); }
+.outcomeWin  { background: var(--lime-dim);  color: var(--lime); border: 1px solid var(--lime-border); }
+.outcomeLoss { background: var(--red-dim);   color: var(--red);  border: 1px solid var(--red-border); }
+.outcomeOpen { background: var(--cyan-dim);  color: var(--cyan); border: 1px solid var(--cyan-border); }
 
 /* ── Price row ── */
 .priceRow {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 14px 6px;
+  padding: 0 16px 6px;
   font-size: 11px;
   flex-wrap: wrap;
+  font-family: var(--font-mono);
 }
 
 .priceEntry {
@@ -291,26 +304,29 @@
   color: var(--text-muted);
   font-style: italic;
   font-size: 10px;
+  font-family: var(--font-ui);
 }
 
 .dateTag {
   font-size: 9px;
   color: var(--text-muted);
-  background: rgba(255,255,255,0.05);
-  border-radius: 3px;
+  background: var(--surface2);
+  border-radius: var(--r-sm);
   padding: 1px 5px;
+  font-family: var(--font-ui);
 }
 
 .exitReasonPill {
   font-size: 9px;
   font-weight: 600;
   color: var(--text-muted);
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 3px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
   padding: 1px 5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  font-family: var(--font-ui);
 }
 
 /* ── Middle content area ── */
@@ -320,7 +336,8 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 0 14px 8px;
+  padding: 0 16px 10px;
+  font-family: var(--font-ui);
 }
 
 .tradeRow { display: flex; gap: 16px; flex-wrap: wrap; }
@@ -330,31 +347,34 @@
   font-size: 9px;
   color: var(--text-muted);
   margin-top: 2px;
-  padding: 0 14px;
+  padding: 0 16px;
+  font-family: var(--font-ui);
 }
 
 .tradeNotes {
   color: var(--text-muted);
   font-style: italic;
   font-size: 10px;
-  padding: 0 14px 4px;
+  padding: 0 16px 4px;
   line-height: 1.4;
+  font-family: var(--font-ui);
 }
 
 .tradeTags {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
-  padding: 0 14px 4px;
+  padding: 0 16px 4px;
 }
 
 .tradeTag {
   font-size: 9px;
   padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(0,229,255,0.07);
+  border-radius: var(--r-sm);
+  background: var(--cyan-dim);
   color: var(--cyan);
-  border: 1px solid rgba(0,229,255,0.18);
+  border: 1px solid var(--cyan-border);
+  font-family: var(--font-ui);
 }
 
 /* ── Alpha metrics row ── */
@@ -364,11 +384,12 @@
   flex-wrap: wrap;
   font-size: 9px;
   color: var(--text-muted);
-  padding: 4px 14px;
-  background: rgba(255,255,255,0.03);
-  border-top: 1px solid rgba(255,255,255,0.04);
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  padding: 4px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   margin: 2px 0;
+  font-family: var(--font-mono);
 }
 
 /* ── Action bar ── */
@@ -376,10 +397,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px 10px;
+  padding: 8px 12px 12px;
   gap: 6px;
-  border-top: 1px solid rgba(255,255,255,0.05);
-  background: rgba(0,0,0,0.1);
+  border-top: 1px solid var(--border);
+  background: var(--surface2);
 }
 
 .closeActions {
@@ -390,36 +411,36 @@
 
 .actionBtn {
   padding: 5px 13px;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   font-size: 11px;
   font-weight: 600;
   border: 1px solid;
   cursor: pointer;
   transition: all 0.12s;
   letter-spacing: 0.03em;
-  font-family: inherit;
+  font-family: var(--font-ui);
 }
 
 .actionBtnClose {
-  background: rgba(0,229,255,0.1);
-  border-color: rgba(0,229,255,0.35);
+  background: var(--cyan-dim);
+  border-color: var(--cyan-border);
   color: var(--cyan);
 }
-.actionBtnClose:hover { background: rgba(0,229,255,0.2); }
+.actionBtnClose:hover { background: rgba(0,212,245,0.2); }
 
 .actionBtnStop {
-  background: rgba(255,68,102,0.1);
-  border-color: rgba(255,68,102,0.35);
+  background: var(--red-dim);
+  border-color: var(--red-border);
   color: var(--red);
 }
-.actionBtnStop:hover { background: rgba(255,68,102,0.2); }
+.actionBtnStop:hover { background: rgba(240,62,92,0.2); }
 
 .actionBtnTarget {
-  background: rgba(0,200,83,0.1);
-  border-color: rgba(0,200,83,0.35);
-  color: var(--green);
+  background: var(--lime-dim);
+  border-color: var(--lime-border);
+  color: var(--lime);
 }
-.actionBtnTarget:hover { background: rgba(0,200,83,0.2); }
+.actionBtnTarget:hover { background: rgba(40,217,113,0.2); }
 
 .utilActions {
   display: flex;
@@ -430,30 +451,30 @@
 .utilBtn {
   font-size: 10px;
   padding: 4px 10px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--border2);
   background: var(--surface2);
   color: var(--text-muted);
   cursor: pointer;
-  font-family: inherit;
+  font-family: var(--font-ui);
   transition: all 0.12s;
 }
 .utilBtn:hover { color: var(--text); border-color: var(--text-muted); }
 
 .utilBtnDanger { color: var(--red); }
-.utilBtnDanger:hover { background: rgba(255,68,102,0.08); border-color: rgba(255,68,102,0.3); }
+.utilBtnDanger:hover { background: var(--red-dim); border-color: var(--red-border); }
 
 /* ── Old compat (kept for AIBox, SignalRow) ── */
-.tradeCard > .tradeBody { padding: 0 14px 8px; }
+.tradeCard > .tradeBody { padding: 0 16px 10px; }
 .smallBtn {
   font-size: 10px;
   padding: 3px 8px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--border2);
   background: var(--surface2);
   color: var(--text-muted);
   cursor: pointer;
-  font-family: inherit;
+  font-family: var(--font-ui);
 }
 .smallBtn:hover { color: var(--text); }
 .actionBtns { display: flex; gap: 4px; }
@@ -465,12 +486,14 @@
   color: var(--text-muted);
   font-size: 13px;
   line-height: 1.6;
+  font-family: var(--font-ui);
 }
 
 .loading {
   text-align: center;
   padding: 40px;
   color: var(--text-muted);
+  font-family: var(--font-ui);
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -478,7 +501,7 @@
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(0,229,255,0.3);
+  border: 2px solid var(--cyan-dim);
   border-top-color: var(--cyan);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
@@ -502,7 +525,7 @@
 .modal {
   background: var(--surface);
   border: 1px solid var(--border2);
-  border-radius: 10px;
+  border-radius: var(--r-lg);
   width: 100%;
   max-width: 500px;
   max-height: 90vh;
@@ -517,6 +540,7 @@
   letter-spacing: 0.06em;
   color: var(--cyan);
   margin-bottom: 14px;
+  font-family: var(--font-ui);
 }
 
 .formGrid {
@@ -529,27 +553,28 @@
 .label {
   display: block;
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--text-dim);
   letter-spacing: 0.06em;
   margin-bottom: 4px;
   text-transform: uppercase;
+  font-family: var(--font-ui);
 }
 
 .input, .select, .textarea {
   width: 100%;
   background: var(--surface2);
   border: 1px solid var(--border2);
-  border-radius: 4px;
+  border-radius: var(--r-md);
   padding: 7px 10px;
   font-size: 12px;
   color: var(--text);
   outline: none;
-  font-family: inherit;
+  font-family: var(--font-ui);
   box-sizing: border-box;
 }
 .input:focus, .select:focus, .textarea:focus {
-  border-color: var(--cyan);
-  box-shadow: 0 0 0 2px rgba(0,229,255,0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
 }
 .textarea { resize: vertical; min-height: 60px; }
 
@@ -565,6 +590,7 @@
   font-size: 11px;
   color: var(--text-dim);
   cursor: pointer;
+  font-family: var(--font-ui);
 }
 
 .modalFooter {
@@ -580,7 +606,7 @@
 .insightsModal {
   background: var(--surface);
   border: 1px solid var(--border2);
-  border-radius: 8px;
+  border-radius: var(--r-md);
   width: 100%;
   max-width: 600px;
   max-height: 80vh;
@@ -593,14 +619,11 @@
   line-height: 1.6;
   color: var(--text-dim);
   white-space: pre-wrap;
+  font-family: var(--font-ui);
 }
 
 /* ── Gain/outcome badges (legacy, kept for compat) ── */
-.gainBadge { font-size: 13px; font-weight: 700; }
-.outcomeBadge {
-  font-size: 9px; font-weight: 700; padding: 2px 7px;
-  border-radius: 3px; letter-spacing: 0.06em;
-}
+.gainBadge { font-size: 13px; font-weight: 700; font-family: var(--font-mono); }
 .outcomeSkip { background: rgba(107,107,154,0.1); color: var(--text-muted); border: 1px solid var(--border); }
 
 /* ── tradeMeta (legacy compat) ── */

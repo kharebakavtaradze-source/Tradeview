@@ -4,6 +4,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import AIAnalysis from '../../components/AIAnalysis';
+import AppNav from '../../components/AppNav';
 import styles from '../../styles/Ticker.module.css';
 
 const Chart = dynamic(() => import('../../components/Chart'), { ssr: false });
@@ -98,9 +99,7 @@ export default function TickerPage() {
   if (error) {
     return (
       <div className={styles.container}>
-        <nav className={styles.nav}>
-          <Link href="/" className={styles.backLink}>← Back</Link>
-        </nav>
+        <AppNav />
         <div className={styles.error}>⚠ {error}</div>
       </div>
     );
@@ -122,13 +121,12 @@ export default function TickerPage() {
       </Head>
 
       <div className={styles.container}>
-        {/* Nav */}
-        <nav className={styles.nav}>
-          <Link href="/" className={styles.backLink}>
-            ← Dashboard
-          </Link>
+        <AppNav />
+        {/* Breadcrumb */}
+        <div className={styles.nav}>
+          <Link href="/" className={styles.backLink}>← Dashboard</Link>
           <span className={styles.navSymbol}>{symbol}</span>
-        </nav>
+        </div>
 
         {/* Hero */}
         <div className={styles.hero}>
