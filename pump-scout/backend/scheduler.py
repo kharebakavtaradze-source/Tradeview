@@ -249,6 +249,16 @@ def start_scheduler():
         misfire_grace_time=120,
     )
 
+    # 16:05 ET — post-close final price snapshot for AI positions
+    scheduler.add_job(
+        update_ai_positions_intraday,
+        trigger=CronTrigger(day_of_week="mon-fri", hour="16", minute="5", timezone=EASTERN_TZ),
+        id="ai_positions_post_close",
+        name="AI Portfolio Post-Close Price Snapshot (00:05 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
     # Every 5 min, 09:30–16:00 ET — persist live prices to journal DB
     scheduler.add_job(
         update_journal_prices_intraday,

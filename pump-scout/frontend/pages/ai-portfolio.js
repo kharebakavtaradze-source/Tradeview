@@ -116,6 +116,17 @@ export default function AIPortfolio() {
     setTimeout(async () => { await load(); setRunning(false); }, 12000);
   }
 
+  const [refreshing, setRefreshing] = useState(false);
+  async function refreshPrices() {
+    setRefreshing(true);
+    try {
+      await fetch(`${API_URL}/api/ai-portfolio/refresh-prices`, { method: 'POST' });
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   const allPositions = history.positions || [];
   const closedPositions = allPositions.filter(p => p.status === 'CLOSED').slice(0, 15);
   const portfolioHistory = history.history || [];
@@ -151,6 +162,15 @@ export default function AIPortfolio() {
           <span className={styles.navTitle}>🤖 AI PORTFOLIO</span>
           <div className={styles.navActions}>
             <Link href="/journal" className={styles.btn}>📔 Journal</Link>
+            <button
+              className={styles.btn}
+              onClick={refreshPrices}
+              disabled={refreshing}
+              title="Fetch latest prices for all open positions"
+              style={{ color: refreshing ? '#555' : '#00c864', borderColor: '#00c86440' }}
+            >
+              {refreshing ? '⏳ Updating…' : '⟳ Refresh Prices'}
+            </button>
             <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={runNow} disabled={running}>
               {running ? '⏳ Running…' : '▶ Run Now'}
             </button>
@@ -272,12 +292,26 @@ export default function AIPortfolio() {
                 {/* Price row */}
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', gap: 10, marginBottom: 2, flexWrap: 'wrap' }}>
                   <span>Entry <b style={{ color: 'var(--text-primary)' }}>${p.entry_price?.toFixed(2)}</b></span>
-                  {p.current_price && p.current_price !== p.entry_price && (
-                    <span>Now <b style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>${p.current_price?.toFixed(2)}</b></span>
-                  )}
+                  <span>Now <b style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>${(p.current_price || p.entry_price)?.toFixed(2)}</b></span>
                   <span>Invested <b>${p.invested_usd?.toFixed(0)}</b></span>
                   <span>Day <b>{p.days_held}</b></span>
                 </div>
+                {/* Price freshness */}
+                {(() => {
+                  if (!p.price_updated_at) return (
+                    <div style={{ fontSize: 9, color: '#ff8800', marginBottom: 2 }}>
+                      ⚠️ Price not yet updated — click ⟳ Refresh Prices
+                    </div>
+                  );
+                  const mins = Math.round((Date.now() - new Date(p.price_updated_at + 'Z').getTime()) / 60000);
+                  const color = mins > 60 ? '#ff8800' : mins > 15 ? '#ffd600' : '#555';
+                  const label = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins/60)}h ${mins%60}m ago`;
+                  return (
+                    <div style={{ fontSize: 9, color, marginBottom: 2 }}>
+                      Price as of: {label}
+                    </div>
+                  );
+                })()}
 
                 {/* Peak/trough */}
                 {(p.max_gain_pct !== 0 || p.max_loss_pct !== 0) && (

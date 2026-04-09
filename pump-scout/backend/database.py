@@ -206,6 +206,7 @@ class AIPortfolio(Base):
     invested_usd = Column(Float, default=0)
     current_value = Column(Float, nullable=True)
     current_price = Column(Float, nullable=True)     # latest fetched price
+    price_updated_at = Column(DateTime, nullable=True)  # when current_price was last fetched
     pnl_usd = Column(Float, default=0)
     pnl_pct = Column(Float, default=0)
     max_gain_pct = Column(Float, default=0)          # peak P&L since entry
@@ -373,12 +374,13 @@ _SECTOR_CACHE_MIGRATIONS = [
 ]
 
 _AI_PORTFOLIO_MIGRATIONS = [
-    ("current_price",  "FLOAT"),
-    ("max_gain_pct",   "FLOAT DEFAULT 0"),
-    ("max_loss_pct",   "FLOAT DEFAULT 0"),
-    ("stop_loss",      "FLOAT"),
-    ("target_price",   "FLOAT"),
-    ("exit_reason",    "VARCHAR(20)"),
+    ("current_price",    "FLOAT"),
+    ("max_gain_pct",     "FLOAT DEFAULT 0"),
+    ("max_loss_pct",     "FLOAT DEFAULT 0"),
+    ("stop_loss",        "FLOAT"),
+    ("target_price",     "FLOAT"),
+    ("exit_reason",      "VARCHAR(20)"),
+    ("price_updated_at", "TIMESTAMP"),
 ]
 
 _JOURNAL_MIGRATIONS = [
@@ -1000,6 +1002,7 @@ def _portfolio_to_dict(p: AIPortfolio) -> dict:
         "reason": p.reason,
         "days_held": p.days_held or 0,
         "scan_data": json.loads(p.scan_data) if p.scan_data else None,
+        "price_updated_at": p.price_updated_at.isoformat() if p.price_updated_at else None,
     }
 
 
@@ -1128,6 +1131,7 @@ async def update_ai_position_price(position_id: int, current_price: float) -> No
             return
         pos.current_price = current_price
         pos.current_value = current_price * (pos.shares or 0)
+        pos.price_updated_at = datetime.utcnow()
         if pos.entry_price and pos.entry_price > 0:
             pnl = round((current_price - pos.entry_price) / pos.entry_price * 100, 2)
             pos.pnl_pct = pnl
