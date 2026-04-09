@@ -300,6 +300,7 @@ export default function IgnitionPage() {
           <Link href="/ignition" className={`${styles.navLink} ${styles.navLinkActive}`}>⚡ Ignition</Link>
           <Link href="/sectors" className={styles.navLink}>Sectors</Link>
           <Link href="/journal" className={styles.navLink}>Journal</Link>
+          <Link href="/macro-events" className={styles.navLink}>🌐 Macro</Link>
           <Link href="/admin" className={styles.navLink}>Admin</Link>
         </nav>
 

@@ -1,0 +1,447 @@
+/* MacroEvents.module.css — Trump News Bias Layer — Version Alpha */
+
+.page {
+  min-height: 100vh;
+  background: var(--bg-primary, #0a0a0f);
+  color: var(--text-primary, #e8e8f0);
+  padding: 0 0 40px;
+  font-family: 'Inter', 'SF Mono', monospace;
+}
+
+/* ── Nav ─────────────────────────────────────────────────────── */
+.nav {
+  display: flex;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  overflow-x: auto;
+}
+
+.navLink {
+  font-size: 11px;
+  color: var(--text-muted, #666);
+  text-decoration: none;
+  padding: 3px 8px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.navLink:hover { color: #e8e8f0; background: rgba(255,255,255,0.06); }
+.navLinkActive { color: #ffd600 !important; }
+
+/* ── Header ──────────────────────────────────────────────────── */
+.header { padding: 20px 16px 8px; }
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.alphaTag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #0a0a0f;
+  background: #ffd600;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #e8e8f0;
+}
+
+.subtitle {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-muted, #666);
+  letter-spacing: 0.04em;
+}
+
+.disclaimer {
+  font-size: 10px;
+  color: rgba(255,255,255,0.25);
+  padding: 6px 16px;
+  background: rgba(255,200,0,0.04);
+  border-left: 2px solid rgba(255,214,0,0.3);
+  margin: 0 16px 8px;
+  border-radius: 0 4px 4px 0;
+}
+
+.scanTime { font-size: 10px; color: rgba(255,255,255,0.3); }
+
+/* ── Toolbar ─────────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  flex-wrap: wrap;
+}
+
+.refreshBtn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid rgba(255,214,0,0.4);
+  background: rgba(255,214,0,0.08);
+  color: #ffd600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.refreshBtn:hover { background: rgba(255,214,0,0.15); border-color: #ffd600; }
+.refreshBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.statusMsg {
+  font-size: 11px;
+  color: #555;
+}
+
+.spacer { flex: 1; }
+
+/* ── Active Bias Panel ───────────────────────────────────────── */
+.biasPanel {
+  margin: 12px 16px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.biasPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.biasPanelTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.biasComputedAt {
+  font-size: 10px;
+  color: #444;
+}
+
+.biasSummaryRow {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  overflow-x: auto;
+}
+
+.biasStat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 18px;
+  border-right: 1px solid rgba(255,255,255,0.05);
+  min-width: 80px;
+}
+.biasStat:last-child { border-right: none; }
+
+.biasStatVal {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.biasStatLbl {
+  font-size: 9px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.biasRegimeSummary {
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #aaa;
+  line-height: 1.5;
+}
+
+.biasSectors {
+  display: flex;
+  gap: 12px;
+  padding: 8px 14px 12px;
+  flex-wrap: wrap;
+}
+
+.biasSectorGroup { display: flex; flex-direction: column; gap: 4px; }
+.biasSectorLabel {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #444;
+  font-weight: 600;
+}
+.biasSectorPills { display: flex; flex-wrap: wrap; gap: 4px; }
+.sectorPill {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.bullSectorPill {
+  background: rgba(0,200,100,0.12);
+  color: #00c864;
+  border: 1px solid rgba(0,200,100,0.2);
+}
+.bearSectorPill {
+  background: rgba(255,68,68,0.12);
+  color: #ff6060;
+  border: 1px solid rgba(255,68,68,0.2);
+}
+
+.emptyBias {
+  padding: 20px 14px;
+  font-size: 12px;
+  color: #444;
+  text-align: center;
+}
+
+/* ── Active Classes ──────────────────────────────────────────── */
+.activeClassesRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px;
+}
+
+.classPill {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.05);
+  color: #ccc;
+  letter-spacing: 0.04em;
+}
+
+/* ── Summary Bar ─────────────────────────────────────────────── */
+.summaryBar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 10px 16px;
+  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  overflow-x: auto;
+}
+
+.summaryItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 16px;
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+.summaryItem:last-child { border-right: none; }
+
+.summaryNum {
+  font-size: 18px;
+  font-weight: 800;
+  color: #e8e8f0;
+  line-height: 1;
+}
+.summaryLbl {
+  font-size: 9px;
+  color: #555;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+
+/* ── Filter Tabs ─────────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 16px 4px;
+  overflow-x: auto;
+}
+
+.tab {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.tab:hover { border-color: rgba(255,255,255,0.2); color: #aaa; }
+.tabActive {
+  background: rgba(255,214,0,0.12);
+  border-color: rgba(255,214,0,0.4);
+  color: #ffd600;
+}
+
+/* ── Event List ──────────────────────────────────────────────── */
+.eventList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 40px 20px;
+  color: #444;
+  font-size: 13px;
+}
+
+/* ── Event Card ──────────────────────────────────────────────── */
+.eventCard {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  padding: 12px 14px;
+  transition: border-color 0.15s;
+}
+.eventCard:hover { border-color: rgba(255,255,255,0.14); }
+
+.eventCardHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.biasIcon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.eventTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ddd;
+  line-height: 1.4;
+  flex: 1;
+}
+
+.eventMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.primaryClassBadge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+
+.eventTime {
+  font-size: 10px;
+  color: #444;
+}
+
+.sourceLink {
+  font-size: 10px;
+  color: #555;
+  text-decoration: none;
+}
+.sourceLink:hover { color: #888; }
+
+.eventMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.metricChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: #888;
+}
+.metricChipLabel { color: #555; }
+.metricChipVal { color: var(--chip-color, #aaa); font-weight: 600; }
+
+.sectorImpactRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sectorGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sectorGroupLabel {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #444;
+}
+.sectorTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.sectorTag {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+.sectorTagBull {
+  background: rgba(0,200,100,0.1);
+  color: #00c864;
+}
+.sectorTagBear {
+  background: rgba(255,68,68,0.1);
+  color: #ff6060;
+}
+
+/* ── Loading / Error ─────────────────────────────────────────── */
+.loadingState {
+  text-align: center;
+  padding: 60px 20px;
+  color: #444;
+  font-size: 13px;
+}
+
+.errorState {
+  text-align: center;
+  padding: 40px 20px;
+  color: #ff6060;
+  font-size: 13px;
+}
