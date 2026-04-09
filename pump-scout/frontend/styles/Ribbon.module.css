@@ -1,36 +1,36 @@
 .page {
   min-height: 100vh;
-  background: var(--bg-primary, #0a0a0f);
-  color: var(--text-primary, #e8e8f0);
-  padding: 0 0 40px;
-  font-family: 'Inter', 'SF Mono', monospace;
+  background: var(--bg);
+  color: var(--text);
+  padding: 0 0 var(--sp-10);
+  font-family: var(--font-ui);
 }
 
 /* ── Nav ──────────────────────────────────────────────────── */
 .nav {
   display: flex;
   gap: 12px;
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 10px var(--page-px);
+  border-bottom: 1px solid var(--border);
 }
 
 .navLink {
   font-size: 11px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   text-decoration: none;
   padding: 3px 8px;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
+  border-radius: var(--r-sm);
+  transition: color var(--t-fast), background var(--t-fast);
 }
 
 .navLink:hover {
-  color: #e8e8f0;
-  background: rgba(255,255,255,0.06);
+  color: var(--text);
+  background: var(--surface2);
 }
 
 /* ── Header ───────────────────────────────────────────────── */
 .header {
-  padding: 20px 16px 8px;
+  padding: 20px var(--page-px) 8px;
 }
 
 .title {
@@ -38,27 +38,29 @@
   font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.02em;
-  color: #e8e8f0;
+  color: var(--text);
 }
 
 .subtitle {
   margin: 0 0 6px;
   font-size: 12px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   letter-spacing: 0.06em;
 }
 
 .scanTime {
   font-size: 10px;
-  color: rgba(255,255,255,0.3);
+  color: var(--text-muted);
+  opacity: 0.5;
 }
 
 /* ── Summary bar ──────────────────────────────────────────── */
 .summaryBar {
   display: flex;
   gap: 0;
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 10px var(--page-px);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
 }
 
 .summaryItem {
@@ -67,7 +69,7 @@
   align-items: center;
   flex: 1;
   padding: 6px 0;
-  border-right: 1px solid rgba(255,255,255,0.06);
+  border-right: 1px solid var(--border);
 }
 
 .summaryItem:last-child {
@@ -82,12 +84,12 @@
   font-size: 22px;
   font-weight: 800;
   line-height: 1.2;
-  color: #e8e8f0;
+  color: var(--text);
 }
 
 .summaryLabel {
   font-size: 9px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -96,15 +98,15 @@
 .tabs {
   display: flex;
   gap: 6px;
-  padding: 10px 16px 0;
+  padding: 10px var(--page-px) 0;
   overflow-x: auto;
 }
 
 .tab {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  color: var(--text-muted, #888);
-  border-radius: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--r-md);
   padding: 5px 12px;
   font-size: 11px;
   font-weight: 600;
@@ -113,22 +115,22 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: all 0.15s;
+  transition: all var(--t-fast);
 }
 
 .tab:hover {
-  border-color: rgba(255,255,255,0.2);
-  color: #e8e8f0;
+  border-color: var(--border2);
+  color: var(--text-dim);
 }
 
 .tabActive {
-  background: rgba(68,136,255,0.15);
-  border-color: rgba(68,136,255,0.4);
-  color: #4488ff;
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 
 .tabCount {
-  background: rgba(255,255,255,0.08);
+  background: var(--surface3);
   border-radius: 10px;
   padding: 0 6px;
   font-size: 10px;
@@ -142,8 +144,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 10px var(--page-px);
+  border-bottom: 1px solid var(--border);
 }
 
 .filterGroup {
@@ -154,31 +156,31 @@
 
 .filterLabel {
   font-size: 10px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   margin-right: 2px;
 }
 
 .filterBtn {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  color: var(--text-muted, #888);
-  border-radius: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
   padding: 3px 8px;
   font-size: 10px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--t-fast);
 }
 
 .filterBtn:hover {
-  border-color: rgba(255,255,255,0.2);
-  color: #e8e8f0;
+  border-color: var(--border2);
+  color: var(--text-dim);
 }
 
 .filterBtnActive {
-  background: rgba(68,136,255,0.15);
-  border-color: rgba(68,136,255,0.4);
-  color: #4488ff;
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 
 /* ── Grid ─────────────────────────────────────────────────── */
@@ -186,14 +188,14 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 12px;
-  padding: 14px 16px;
+  padding: 14px var(--page-px);
 }
 
 /* ── Card ─────────────────────────────────────────────────── */
 .card {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
@@ -218,12 +220,12 @@
   font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.02em;
-  color: #e8e8f0;
+  color: var(--text);
 }
 
 .price {
   font-size: 12px;
-  color: var(--text-muted, #888);
+  color: var(--text-muted);
 }
 
 .badgesBlock {
@@ -237,10 +239,10 @@
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  background: rgba(100,180,255,0.1);
-  border: 1px solid rgba(100,180,255,0.25);
-  color: #64b4ff;
-  border-radius: 3px;
+  background: var(--cyan-dim);
+  border: 1px solid var(--cyan-border);
+  color: var(--cyan);
+  border-radius: var(--r-sm);
   padding: 2px 6px;
 }
 
@@ -249,7 +251,7 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   border: 1px solid;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   padding: 2px 6px;
 }
 
@@ -257,7 +259,7 @@
   font-size: 10px;
   font-weight: 700;
   border: 1px solid;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   padding: 3px 8px;
 }
 
@@ -270,7 +272,7 @@
 
 .qualityLabel {
   font-size: 10px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   flex-shrink: 0;
   width: 60px;
 }
@@ -278,7 +280,7 @@
 .qualityBarWrap {
   flex: 1;
   height: 5px;
-  background: rgba(255,255,255,0.06);
+  background: var(--surface2);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -299,9 +301,9 @@
 
 /* EMA ribbon visual */
 .ribbonVisual {
-  background: rgba(0,0,0,0.2);
-  border: 1px solid rgba(255,255,255,0.05);
-  border-radius: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
@@ -317,14 +319,14 @@
 .ribbonPeriod {
   font-size: 10px;
   font-weight: 700;
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   width: 46px;
   flex-shrink: 0;
 }
 
 .ribbonVal {
   font-size: 10px;
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   flex: 1;
 }
 
@@ -338,7 +340,7 @@
   gap: 8px;
   margin-top: 2px;
   padding-top: 4px;
-  border-top: 1px solid rgba(255,255,255,0.06);
+  border-top: 1px solid var(--border);
 }
 
 .spreadRow {
@@ -347,12 +349,12 @@
   justify-content: space-between;
   margin-top: 4px;
   padding-top: 4px;
-  border-top: 1px solid rgba(255,255,255,0.04);
+  border-top: 1px solid var(--border);
 }
 
 .spreadLabel {
   font-size: 10px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
 }
 
 /* Stack status */
@@ -372,8 +374,8 @@
 .confirmItem {
   font-size: 10px;
   font-weight: 600;
-  background: rgba(255,255,255,0.04);
-  border-radius: 4px;
+  background: var(--surface2);
+  border-radius: var(--r-sm);
   padding: 2px 7px;
 }
 
@@ -383,7 +385,7 @@
   gap: 10px;
   flex-wrap: wrap;
   font-size: 10px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
 }
 
 /* Actions */
@@ -395,43 +397,42 @@
 .journalBtn {
   font-size: 11px;
   font-weight: 700;
-  background: rgba(0,200,100,0.12);
-  border: 1px solid rgba(0,200,100,0.3);
-  color: #00c864;
-  border-radius: 5px;
+  background: var(--lime-dim);
+  border: 1px solid var(--lime-border);
+  color: var(--lime);
+  border-radius: var(--r-sm);
   padding: 5px 12px;
   cursor: pointer;
   text-decoration: none;
-  transition: all 0.15s;
+  transition: all var(--t-fast);
 }
 
 .journalBtn:hover {
-  background: rgba(0,200,100,0.2);
-  border-color: rgba(0,200,100,0.5);
+  opacity: 0.8;
 }
 
 .aiBtn {
   font-size: 11px;
   font-weight: 700;
-  background: rgba(68,136,255,0.1);
-  border: 1px solid rgba(68,136,255,0.25);
-  color: #4488ff;
-  border-radius: 5px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  border-radius: var(--r-sm);
   padding: 5px 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--t-fast);
 }
 
 .aiBtn:hover {
-  background: rgba(68,136,255,0.2);
+  opacity: 0.8;
 }
 
 .aiPanel {
   font-size: 11px;
-  color: rgba(255,255,255,0.7);
-  background: rgba(0,0,0,0.3);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 6px;
+  color: var(--text-dim);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 10px 12px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -439,13 +440,13 @@
 
 /* ── States ───────────────────────────────────────────────── */
 .loading, .error {
-  padding: 40px 16px;
+  padding: 40px var(--page-px);
   text-align: center;
   font-size: 13px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
 }
 
-.error { color: #ff6666; }
+.error { color: var(--red); }
 
 .empty {
   display: flex;
@@ -464,11 +465,11 @@
 .emptyTitle {
   font-size: 14px;
   font-weight: 600;
-  color: rgba(255,255,255,0.6);
+  color: var(--text-dim);
   max-width: 340px;
 }
 
 .emptyHint {
   font-size: 12px;
-  color: var(--text-muted, #555);
+  color: var(--text-muted);
 }

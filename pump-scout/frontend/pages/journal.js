@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
+import AppNav from '../components/AppNav';
 import JournalModal from '../components/JournalModal';
 import styles from '../styles/Journal.module.css';
 
@@ -361,16 +361,7 @@ export default function Journal() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
       <div className={styles.container}>
-        {/* Nav */}
-        <nav className={styles.nav}>
-          <Link href="/" className={styles.backLink}>← Scanner</Link>
-          <span className={styles.navTitle}>📔 TRADE JOURNAL</span>
-          <div className={styles.navActions}>
-            <Link href="/ai-portfolio" className={`${styles.btn} ${styles.btnGold}`}>🤖 AI Portfolio</Link>
-            <button className={styles.btn} onClick={() => window.location.href = `${API_URL}/api/journal/export`}>↓ CSV</button>
-            <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => setShowAdd(true)}>+ Add Trade</button>
-          </div>
-        </nav>
+        <AppNav />
 
         {/* Stats */}
         {stats && (

@@ -1,7 +1,7 @@
 .container {
-  background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 10px 14px;
   margin: 0 0 8px;
 }
@@ -23,7 +23,7 @@
 
 .source {
   font-size: 9px;
-  color: rgba(255,255,255,0.25);
+  color: var(--text-muted);
   letter-spacing: 0.05em;
 }
 
@@ -53,23 +53,23 @@
 .barWrap {
   flex: 1;
   height: 5px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 3px;
+  background: var(--border);
+  border-radius: var(--r-sm);
   overflow: hidden;
 }
 
 .bar {
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   transition: width 0.4s ease;
 }
 
 .barUp {
-  background: linear-gradient(90deg, #00c864, #00ff88);
+  background: linear-gradient(90deg, var(--lime), #00ff88);
 }
 
 .barDown {
-  background: linear-gradient(90deg, #ff4444, #ff6666);
+  background: linear-gradient(90deg, var(--red), #ff6666);
 }
 
 .pct {
@@ -81,9 +81,9 @@
 }
 
 .pctUp {
-  color: #00c864;
+  color: var(--lime);
 }
 
 .pctDown {
-  color: #ff4444;
+  color: var(--red);
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
+import AppNav from '../components/AppNav';
 import styles from '../styles/Journal.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -156,26 +156,7 @@ export default function AIPortfolio() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
       <div className={styles.container}>
-        {/* Nav */}
-        <nav className={styles.nav}>
-          <Link href="/" className={styles.backLink}>← Scanner</Link>
-          <span className={styles.navTitle}>🤖 AI PORTFOLIO</span>
-          <div className={styles.navActions}>
-            <Link href="/journal" className={styles.btn}>📔 Journal</Link>
-            <button
-              className={styles.btn}
-              onClick={refreshPrices}
-              disabled={refreshing}
-              title="Fetch latest prices for all open positions"
-              style={{ color: refreshing ? '#555' : '#00c864', borderColor: '#00c86440' }}
-            >
-              {refreshing ? '⏳ Updating…' : '⟳ Refresh Prices'}
-            </button>
-            <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={runNow} disabled={running}>
-              {running ? '⏳ Running…' : '▶ Run Now'}
-            </button>
-          </div>
-        </nav>
+        <AppNav />
 
         {loading && <div className={styles.loading}><span className={styles.spinner} /> Loading portfolio…</div>}
 
