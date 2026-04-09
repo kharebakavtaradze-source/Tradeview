@@ -36,7 +36,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from scanner.runner import run_scan
 from scanner.universe_scan import run_universe_scan
-from database import save_scan, rotate_old_data
+from database import save_scan, rotate_old_data, upsert_macro_events
 from hype_monitor.monitor import run_hype_monitor
 from journal_autoclose import auto_close_journal, update_journal_prices_intraday
 from ai_portfolio import ai_portfolio_decisions, generate_daily_report, update_ai_positions_intraday
@@ -144,6 +144,18 @@ async def _run_sector_enrichment():
         await enrich_sector_cache()
     except Exception as e:
         logger.error(f"Sector enrichment job failed: {e}", exc_info=True)
+
+
+async def _run_trump_news_refresh():
+    """Fetch Trump-related news, classify events, upsert to DB."""
+    try:
+        from news.trump_news import fetch_and_classify_events
+        logger.info("Trump news bias refresh starting...")
+        events = await fetch_and_classify_events(use_manual=False)
+        inserted = await upsert_macro_events(events)
+        logger.info(f"Trump news refresh complete — {len(events)} classified, {inserted} new")
+    except Exception as e:
+        logger.error(f"Trump news refresh failed: {e}", exc_info=True)
 
 
 async def _run_universe_scan():
@@ -384,6 +396,18 @@ def start_scheduler():
         misfire_grace_time=3600,
     )
 
+    # ── MACRO EVENTS — Trump News Bias Layer (Version Alpha) ──────────────────
+
+    # Every 4 hours — refresh Trump news from RSS feeds
+    scheduler.add_job(
+        _run_trump_news_refresh,
+        trigger=CronTrigger(hour="*/4", minute=30, timezone=EASTERN_TZ),
+        id="trump_news_refresh",
+        name="Trump News Bias Refresh (every 4h)",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
+
     # ── WEEKLY ─────────────────────────────────────────────────────────────────
 
     # Sunday 02:00 ET (10:00 GMT+4) — Data Rotation
@@ -403,7 +427,8 @@ def start_scheduler():
         "PIPELINE 2: Intraday scans 16:00, 17:30, 20:00 GMT+4 | "
         "Hype: 17:10, 20:10, 23:20 GMT+4 | "
         "AI decisions 17:15 GMT+4 (pre-open) | "
-        "Post-close 00:10–00:35 GMT+4 | Sun 10:00 rotation"
+        "Post-close 00:10–00:35 GMT+4 | "
+        "Trump news bias every 4h | Sun 10:00 rotation"
     )
 
 

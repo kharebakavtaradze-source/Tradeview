@@ -356,6 +356,38 @@ class RibbonCandidate(Base):
     scanned_at  = Column(DateTime, default=datetime.utcnow)
 
 
+class MacroEventBias(Base):
+    """
+    Trump News Event Bias Layer — Version Alpha.
+    Read-only contextual intelligence. Never affects scores/tiers/rankings.
+    One row per unique event_id (SHA1 of title+date). Idempotent upsert.
+    """
+    __tablename__ = "macro_event_bias"
+
+    id               = Column(Integer, primary_key=True, index=True)
+    event_id         = Column(String(12), unique=True, nullable=False, index=True)  # SHA1[:12]
+    title            = Column(Text, nullable=False)
+    source_url       = Column(Text, nullable=True)
+    published_at     = Column(DateTime, nullable=False, index=True)
+    fetched_at       = Column(DateTime, default=datetime.utcnow)
+    relevance_score  = Column(Integer, nullable=False)       # 0–100
+    event_classes    = Column(Text, nullable=True)           # JSON list
+    primary_class    = Column(String(40), nullable=False, index=True)
+    market_bias      = Column(String(20), nullable=False)    # BULLISH/BEARISH/RISK_OFF/MIXED/NEUTRAL
+    time_horizon     = Column(String(10), nullable=True)     # SHORT/MEDIUM/LONG
+    confidence       = Column(Integer, nullable=True)        # 0–100
+    surprise_level   = Column(Integer, nullable=True)        # 0–100
+    volatility_bias  = Column(String(10), nullable=True)     # LOW/MEDIUM/HIGH/VERY_HIGH
+    oil_bias         = Column(String(10), nullable=True)     # BULLISH/BEARISH/NEUTRAL
+    rates_bias       = Column(String(10), nullable=True)     # BULLISH/BEARISH/NEUTRAL
+    dollar_bias      = Column(String(10), nullable=True)     # BULLISH/BEARISH/NEUTRAL
+    bullish_sectors  = Column(Text, nullable=True)           # JSON list
+    bearish_sectors  = Column(Text, nullable=True)           # JSON list
+    bullish_industries = Column(Text, nullable=True)         # JSON list
+    bearish_industries = Column(Text, nullable=True)         # JSON list
+    is_active        = Column(Boolean, default=True)         # still within time_horizon
+
+
 _SCAN_CANDIDATE_MIGRATIONS = [
     ("vol_score",       "FLOAT"),
     ("accum_score",     "FLOAT"),
@@ -2032,3 +2064,159 @@ async def rotate_old_data() -> dict:
         + ", ".join(f"{tbl}={n}" for tbl, n in deleted.items())
     )
     return deleted
+
+
+# ─── Macro Event Bias (Trump News Layer — Version Alpha) ──────────────────────
+
+def _macro_event_to_dict(ev: MacroEventBias) -> dict:
+    import json as _json
+    def _parse(val):
+        if isinstance(val, list):
+            return val
+        try:
+            return _json.loads(val) if val else []
+        except Exception:
+            return []
+
+    return {
+        "id":                 ev.id,
+        "event_id":           ev.event_id,
+        "title":              ev.title,
+        "source_url":         ev.source_url,
+        "published_at":       ev.published_at.isoformat() if ev.published_at else None,
+        "fetched_at":         ev.fetched_at.isoformat() if ev.fetched_at else None,
+        "relevance_score":    ev.relevance_score,
+        "event_classes":      _parse(ev.event_classes),
+        "primary_class":      ev.primary_class,
+        "market_bias":        ev.market_bias,
+        "time_horizon":       ev.time_horizon,
+        "confidence":         ev.confidence,
+        "surprise_level":     ev.surprise_level,
+        "volatility_bias":    ev.volatility_bias,
+        "oil_bias":           ev.oil_bias,
+        "rates_bias":         ev.rates_bias,
+        "dollar_bias":        ev.dollar_bias,
+        "bullish_sectors":    _parse(ev.bullish_sectors),
+        "bearish_sectors":    _parse(ev.bearish_sectors),
+        "bullish_industries": _parse(ev.bullish_industries),
+        "bearish_industries": _parse(ev.bearish_industries),
+        "is_active":          ev.is_active,
+    }
+
+
+async def upsert_macro_events(events: list[dict]) -> int:
+    """
+    Idempotent upsert of classified macro events.
+    Uses event_id (SHA1 of title+date) to detect duplicates.
+    Returns count of newly inserted rows.
+    """
+    import json as _json
+    if not events:
+        return 0
+
+    inserted = 0
+    async with get_session_factory()() as session:
+        for ev in events:
+            try:
+                result = await session.execute(
+                    select(MacroEventBias).where(MacroEventBias.event_id == ev["event_id"])
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    # Update is_active status (might change as events age)
+                    existing.is_active = ev.get("is_active", True)
+                    continue
+
+                # Parse published_at
+                try:
+                    pub = datetime.fromisoformat(ev["published_at"].replace("Z", "+00:00"))
+                    pub = pub.replace(tzinfo=None)  # store as UTC naive
+                except Exception:
+                    pub = datetime.utcnow()
+
+                row = MacroEventBias(
+                    event_id        = ev["event_id"],
+                    title           = ev["title"],
+                    source_url      = ev.get("source_url", ""),
+                    published_at    = pub,
+                    fetched_at      = datetime.utcnow(),
+                    relevance_score = ev.get("relevance_score", 50),
+                    event_classes   = _json.dumps(ev.get("event_classes", [])),
+                    primary_class   = ev.get("primary_class", "GENERAL_POLITICAL_NOISE"),
+                    market_bias     = ev.get("market_bias", "NEUTRAL"),
+                    time_horizon    = ev.get("time_horizon", "SHORT"),
+                    confidence      = ev.get("confidence", 50),
+                    surprise_level  = ev.get("surprise_level", 20),
+                    volatility_bias = ev.get("volatility_bias", "LOW"),
+                    oil_bias        = ev.get("oil_bias", "NEUTRAL"),
+                    rates_bias      = ev.get("rates_bias", "NEUTRAL"),
+                    dollar_bias     = ev.get("dollar_bias", "NEUTRAL"),
+                    bullish_sectors   = _json.dumps(ev.get("bullish_sectors", [])),
+                    bearish_sectors   = _json.dumps(ev.get("bearish_sectors", [])),
+                    bullish_industries= _json.dumps(ev.get("bullish_industries", [])),
+                    bearish_industries= _json.dumps(ev.get("bearish_industries", [])),
+                    is_active       = ev.get("is_active", True),
+                )
+                session.add(row)
+                inserted += 1
+            except Exception as e:
+                logger.warning(f"upsert_macro_events failed for event_id={ev.get('event_id')}: {e}")
+
+        await session.commit()
+
+    logger.info(f"upsert_macro_events: {inserted} new events inserted (of {len(events)} total)")
+    return inserted
+
+
+async def get_macro_events_latest(limit: int = 20) -> list[dict]:
+    """Return the most recent macro events ordered by published_at desc."""
+    try:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(MacroEventBias)
+                .order_by(MacroEventBias.published_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+            return [_macro_event_to_dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"get_macro_events_latest failed: {e}")
+        return []
+
+
+async def get_macro_events_history(days: int = 7, limit: int = 100) -> list[dict]:
+    """Return events from the last N days."""
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(MacroEventBias)
+                .where(MacroEventBias.published_at >= cutoff)
+                .order_by(MacroEventBias.published_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+            return [_macro_event_to_dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"get_macro_events_history failed: {e}")
+        return []
+
+
+async def get_macro_events_active(max_age_days: int = 3) -> list[dict]:
+    """Return events that are still within their active window."""
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(MacroEventBias)
+                .where(
+                    (MacroEventBias.published_at >= cutoff) &
+                    (MacroEventBias.is_active == True)  # noqa: E712
+                )
+                .order_by(MacroEventBias.relevance_score.desc(), MacroEventBias.published_at.desc())
+            )
+            rows = result.scalars().all()
+            return [_macro_event_to_dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"get_macro_events_active failed: {e}")
+        return []
