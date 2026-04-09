@@ -6,8 +6,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
 import styles from '../styles/MacroEvents.module.css';
+import AppNav from '../components/AppNav';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 min
@@ -432,24 +432,7 @@ export default function MacroEventsPage() {
       </Head>
       <div className={styles.page}>
 
-        {/* Nav */}
-        <nav className={styles.nav}>
-          {[
-            ['/', 'Scanner'],
-            ['/ribbon', 'Ribbon'],
-            ['/ignition', 'Ignition'],
-            ['/sectors', 'Sectors'],
-            ['/journal', 'Journal'],
-            ['/ai-portfolio', 'AI Portfolio'],
-            ['/macro-events', 'Macro Events'],
-            ['/admin', 'Admin'],
-          ].map(([href, label]) => (
-            <Link key={href} href={href}
-              className={`${styles.navLink} ${href === '/macro-events' ? styles.navLinkActive : ''}`}>
-              {label}
-            </Link>
-          ))}
-        </nav>
+        <AppNav />
 
         {/* Header */}
         <div className={styles.header}>

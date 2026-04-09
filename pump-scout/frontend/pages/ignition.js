@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
 import styles from '../styles/Ignition.module.css';
+import AppNav from '../components/AppNav';
 import JournalModal from '../components/JournalModal';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -293,16 +293,7 @@ export default function IgnitionPage() {
         <title>⚡ Early Ignition — Pump Scout</title>
       </Head>
       <div className={styles.page}>
-        {/* ── Nav ── */}
-        <nav className={styles.nav}>
-          <Link href="/" className={styles.navLink}>Dashboard</Link>
-          <Link href="/ribbon" className={styles.navLink}>Ribbon</Link>
-          <Link href="/ignition" className={`${styles.navLink} ${styles.navLinkActive}`}>⚡ Ignition</Link>
-          <Link href="/sectors" className={styles.navLink}>Sectors</Link>
-          <Link href="/journal" className={styles.navLink}>Journal</Link>
-          <Link href="/macro-events" className={styles.navLink}>🌐 Macro</Link>
-          <Link href="/admin" className={styles.navLink}>Admin</Link>
-        </nav>
+        <AppNav />
 
         {/* ── Header ── */}
         <header className={styles.header}>

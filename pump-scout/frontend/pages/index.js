@@ -5,6 +5,7 @@ import TickerCard from '../components/TickerCard';
 import Scanner from '../components/Scanner';
 import MarketRegimeBanner from '../components/MarketRegimeBanner';
 import SectorBar from '../components/SectorBar';
+import AppNav from '../components/AppNav';
 import styles from '../styles/Home.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -398,17 +399,13 @@ export default function Home() {
       </Head>
 
       <div className={styles.container}>
+        <AppNav />
         {/* Header */}
         <header className={styles.header}>
           <div className={styles.logo}>
             <span className={styles.logoIcon}>🔍</span>
             PUMP SCOUT
             <span className={styles.version}>{VERSION}</span>
-            <Link href="/how-it-works" className={styles.howLink}>how it works</Link>
-            <Link href="/ribbon" className={styles.howLink}>🎀 ribbon</Link>
-            <Link href="/journal" className={styles.howLink}>📔 journal</Link>
-            <Link href="/sectors" className={styles.howLink}>🗂 sectors</Link>
-            <Link href="/macro-events" className={styles.howLink}>🌐 macro</Link>
             <button
               className={styles.eodLogBtn}
               onClick={() => window.open(`${API_URL}/api/eod-log/latest`, '_blank')}

@@ -1,8 +1,9 @@
 .chartWrapper {
   background: var(--surface2);
-  border-radius: 4px;
+  border-radius: var(--r-md);
   overflow: hidden;
   position: relative;
+  font-family: var(--font-ui);
 }
 
 .chartContainer {
@@ -17,6 +18,7 @@
   height: 260px;
   color: var(--text-muted);
   font-size: 11px;
+  font-family: var(--font-ui);
 }
 
 .chartError {
@@ -26,4 +28,5 @@
   height: 200px;
   color: var(--text-muted);
   font-size: 11px;
+  font-family: var(--font-ui);
 }

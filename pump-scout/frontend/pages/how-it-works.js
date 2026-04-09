@@ -1,5 +1,6 @@
 import Head from 'next/head';
 import Link from 'next/link';
+import AppNav from '../components/AppNav';
 import styles from '../styles/HowItWorks.module.css';
 
 function Section({ id, title, children }) {
@@ -56,11 +57,12 @@ export default function HowItWorks() {
       </Head>
 
       <div className={styles.container}>
-        {/* Nav */}
-        <nav className={styles.nav}>
+        <AppNav />
+        {/* Breadcrumb */}
+        <div className={styles.nav}>
           <Link href="/" className={styles.backLink}>← Back to Scanner</Link>
           <span className={styles.navTitle}>HOW IT WORKS</span>
-        </nav>
+        </div>
 
         <div className={styles.hero}>
           <h1 className={styles.heroTitle}>🔍 PUMP SCOUT</h1>

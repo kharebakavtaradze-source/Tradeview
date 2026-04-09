@@ -1,11 +1,10 @@
 .container {
-  max-width: 1000px;
   margin: 0 auto;
   padding: 16px 12px 48px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  color: #e0e0e0;
+  font-family: var(--font-ui);
+  color: var(--text);
   min-height: 100vh;
-  background: #0a0a0f;
+  background: var(--bg);
 }
 
 /* ── Header ── */
@@ -18,11 +17,11 @@
 
 .back {
   font-size: 11px;
-  color: rgba(255,255,255,0.4);
+  color: var(--text-muted);
   text-decoration: none;
-  transition: color 0.15s;
+  transition: color var(--t-fast);
 }
-.back:hover { color: #fff; }
+.back:hover { color: var(--text); }
 
 .title {
   font-size: 16px;
@@ -33,7 +32,7 @@
 
 .timestamp {
   font-size: 10px;
-  color: rgba(255,255,255,0.3);
+  color: var(--text-muted);
   margin-left: auto;
 }
 
@@ -43,9 +42,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 10px 14px;
   margin-bottom: 8px;
   flex-wrap: wrap;
@@ -66,7 +65,7 @@
 
 .regimeEtfs {
   font-size: 11px;
-  color: rgba(255,255,255,0.5);
+  color: var(--text-dim);
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -74,9 +73,9 @@
 
 .cycleBlock {
   padding: 4px 10px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
 }
 
 /* ── Rotation Row ── */
@@ -119,7 +118,7 @@
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.12em;
-  color: rgba(255,255,255,0.3);
+  color: var(--text-muted);
   margin-bottom: 6px;
   text-transform: uppercase;
 }
@@ -137,7 +136,7 @@
 
 .etfBox {
   border: 1px solid;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   padding: 6px 8px;
   text-align: center;
 }
@@ -146,13 +145,13 @@
   display: block;
   font-size: 10px;
   font-weight: 700;
-  color: rgba(255,255,255,0.4);
+  color: var(--text-muted);
 }
 
 .etfLabel {
   display: block;
   font-size: 8px;
-  color: rgba(255,255,255,0.25);
+  color: var(--text-muted);
   margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
@@ -187,16 +186,16 @@
 
 .momCard {
   border: 1px solid;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   padding: 8px 10px;
-  transition: background 0.15s;
+  transition: background var(--t-fast);
 }
-.momCard:hover { background: rgba(255,255,255,0.04) !important; }
+.momCard:hover { background: var(--surface2) !important; }
 
 /* ── Sector Table ── */
 .loading, .empty {
   text-align: center;
-  color: rgba(255,255,255,0.35);
+  color: var(--text-muted);
   padding: 30px;
   font-size: 12px;
 }
@@ -214,16 +213,16 @@
 .table th {
   text-align: left;
   padding: 5px 8px;
-  color: rgba(255,255,255,0.35);
+  color: var(--text-muted);
   font-weight: 600;
   letter-spacing: 0.06em;
   font-size: 9px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+  border-bottom: 1px solid var(--border);
 }
 
 .table td {
   padding: 7px 8px;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
 
@@ -231,8 +230,8 @@
   cursor: pointer;
   transition: background 0.1s;
 }
-.row:hover { background: rgba(255,255,255,0.03); }
-.rowSelected { background: rgba(68,136,255,0.05); }
+.row:hover { background: var(--surface); }
+.rowSelected { background: var(--accent-dim); }
 
 .sectorName {
   font-weight: 700;
@@ -247,7 +246,7 @@
 .weakTag {
   margin-left: 5px;
   font-size: 10px;
-  color: #ff8800;
+  color: var(--amber);
 }
 
 .scoreCell {
@@ -258,8 +257,8 @@
 
 .scoreBar {
   height: 5px;
-  background: linear-gradient(90deg, #4488ff, #00c8ff);
-  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--cyan));
+  border-radius: var(--r-sm);
   min-width: 3px;
   flex-shrink: 0;
   max-width: 90px;
@@ -267,19 +266,19 @@
 
 .leader {
   font-weight: 700;
-  color: #4488ff;
+  color: var(--accent);
 }
 
 /* ── Detail Expand ── */
 .detailCell {
   padding: 8px 12px 12px;
-  background: rgba(255,255,255,0.015);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 .detailLoading {
   font-size: 11px;
-  color: rgba(255,255,255,0.35);
+  color: var(--text-muted);
 }
 
 .tickerGrid {
@@ -293,7 +292,7 @@
   align-items: center;
   gap: 8px;
   padding: 3px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 
@@ -307,25 +306,25 @@
 .tickerTier {
   font-size: 9px;
   font-weight: 700;
-  background: rgba(255,255,255,0.06);
-  border-radius: 3px;
+  background: var(--surface2);
+  border-radius: var(--r-sm);
   padding: 1px 5px;
-  color: rgba(255,255,255,0.4);
+  color: var(--text-dim);
 }
 
 .tickerScore {
   font-size: 11px;
   font-weight: 700;
-  color: #4488ff;
+  color: var(--accent);
 }
 
 .sympathyTag {
   font-size: 9px;
   font-weight: 700;
-  background: rgba(0,229,255,0.07);
-  border: 1px solid rgba(0,229,255,0.2);
-  color: #00e5ff;
-  border-radius: 3px;
+  background: var(--cyan-dim);
+  border: 1px solid var(--cyan-border);
+  color: var(--cyan);
+  border-radius: var(--r-sm);
   padding: 1px 5px;
 }
 
@@ -338,19 +337,19 @@
 }
 
 .refreshBtn {
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #fff;
-  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  border-radius: var(--r-sm);
   padding: 5px 14px;
   font-size: 11px;
   cursor: pointer;
   font-family: inherit;
-  transition: all 0.15s;
+  transition: all var(--t-fast);
 }
-.refreshBtn:hover { background: rgba(255,255,255,0.1); }
+.refreshBtn:hover { background: var(--surface2); }
 
 .footerNote {
   font-size: 10px;
-  color: rgba(255,255,255,0.35);
+  color: var(--text-muted);
 }

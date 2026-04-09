@@ -1,7 +1,7 @@
 .container {
-  max-width: 860px;
+  max-width: 920px;
   margin: 0 auto;
-  padding: 0 16px 60px;
+  padding: 0 var(--page-px) 60px;
 }
 
 /* ── Nav ────────────────────────────────────────── */

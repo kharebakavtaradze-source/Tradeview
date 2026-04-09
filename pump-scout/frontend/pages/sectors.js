@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
 import styles from '../styles/Sectors.module.css';
+import AppNav from '../components/AppNav';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -169,9 +169,10 @@ export default function Sectors() {
       <Head><title>Pump Scout — Sector Intelligence</title></Head>
       <div className={styles.container}>
 
+        <AppNav />
+
         {/* ── Header ── */}
         <header className={styles.header}>
-          <Link href="/" className={styles.back}>← Scanner</Link>
           <h1 className={styles.title}>🗂 Sector Intelligence</h1>
           {lastUpdated && (
             <span className={styles.timestamp}>

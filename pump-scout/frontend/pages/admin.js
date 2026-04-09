@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
+import AppNav from '../components/AppNav';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -100,9 +100,9 @@ export default function AdminPage() {
     }
   }
 
-  const card = { marginBottom: 24, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: 16 };
-  const label = { margin: '0 0 10px', fontSize: 11, fontWeight: 700, letterSpacing: '0.09em', color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase' };
-  const pre = { margin: '12px 0 0', fontSize: 10, color: '#a0e0a0', background: 'rgba(0,0,0,0.35)', borderRadius: 4, padding: 10, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' };
+  const card = { marginBottom: 24, background: '#0d0d1e', border: '1px solid #1a1a32', borderRadius: 8, padding: '20px 20px' };
+  const label = { margin: '0 0 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.09em', color: '#56567a', textTransform: 'uppercase' };
+  const pre = { margin: '12px 0 0', fontSize: 10, color: '#28d971', background: 'rgba(0,0,0,0.4)', borderRadius: 4, padding: 10, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: "'SF Mono', monospace" };
 
   return (
     <>
@@ -110,17 +110,17 @@ export default function AdminPage() {
         <title>Admin — Pump Scout</title>
         <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
       </Head>
-      <div style={{ maxWidth: 820, margin: '0 auto', padding: '24px 16px', fontFamily: "'JetBrains Mono', monospace", color: '#e0e0e0', background: '#0a0a0f', minHeight: '100vh' }}>
+      <div style={{ padding: '0 0 60px', minHeight: '100vh', background: '#07070f', color: '#eaeaf6', fontFamily: "'Inter', system-ui, sans-serif" }}>
 
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 28 }}>
-          <Link href="/" style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textDecoration: 'none' }}>← back</Link>
-          <h1 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '0.08em' }}>ADMIN PANEL</h1>
+        <AppNav />
+        <div style={{ padding: '24px 28px 12px', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h1 style={{ margin: 0, fontSize: 16, fontWeight: 800, letterSpacing: '0.08em', color: '#eaeaf6' }}>ADMIN PANEL</h1>
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', background: 'rgba(138,92,246,0.15)', border: '1px solid rgba(138,92,246,0.4)', borderRadius: 3, padding: '2px 7px', color: '#a78bfa' }}>Timezone: GMT+4</span>
-            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>{API_URL}</span>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', background: 'rgba(124,90,245,0.12)', border: '1px solid rgba(124,90,245,0.35)', borderRadius: 4, padding: '2px 7px', color: '#c084fc' }}>GMT+4</span>
+            <span style={{ fontSize: 10, color: '#56567a' }}>{API_URL}</span>
           </span>
         </div>
+        <div style={{ padding: '0 28px' }}>
 
         {/* ── Automation Flow ── */}
         <div style={{ ...card, marginBottom: 24 }}>
@@ -167,16 +167,16 @@ export default function AdminPage() {
             ]},
           ].map(({ group, items }) => (
             <div key={group} style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.25)', marginBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 4 }}>
+              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.12em', color: '#56567a', marginBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 4 }}>
                 {group}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {items.map((item, i) => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 56px 1fr', gap: 8, alignItems: 'start', padding: '7px 10px', background: 'rgba(255,255,255,0.02)', borderRadius: 4, border: `1px solid ${item.color}18` }}>
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 56px 1fr', gap: 8, alignItems: 'start', padding: '7px 10px', background: '#0d0d1e', borderRadius: 4, border: `1px solid ${item.color}18` }}>
                     {/* Time (GMT+4 primary) */}
                     <div>
                       <div style={{ fontSize: 10, fontWeight: 700, color: item.color, whiteSpace: 'nowrap' }}>{item.gmt4}</div>
-                      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', whiteSpace: 'nowrap' }}>{item.et} ET</div>
+                      <div style={{ fontSize: 9, color: '#56567a', whiteSpace: 'nowrap' }}>{item.et} ET</div>
                     </div>
                     {/* Tag */}
                     <div style={{ paddingTop: 1 }}>
@@ -186,8 +186,8 @@ export default function AdminPage() {
                     </div>
                     {/* Name + desc */}
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: '#e0e0e0', marginBottom: 2 }}>{item.name}</div>
-                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{item.desc}</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#eaeaf6', marginBottom: 2 }}>{item.name}</div>
+                      <div style={{ fontSize: 10, color: '#9898c0', lineHeight: 1.5 }}>{item.desc}</div>
                     </div>
                   </div>
                 ))}
@@ -199,9 +199,9 @@ export default function AdminPage() {
         {/* ── Run Universe Scan ── */}
         <div style={card}>
           <p style={label}>Run Universe Scan (Massive EOD)</p>
-          <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
+          <p style={{ margin: '0 0 12px', fontSize: 11, color: '#9898c0', lineHeight: 1.6 }}>
             Fetches all US stocks (~5–8K) from Polygon → filters by price ($1.50–$500) and volume (&gt;200K) → takes top 3000 by dollar volume → full indicator scoring.<br />
-            <span style={{ color: 'rgba(255,255,255,0.25)' }}>Batched 40 concurrent Polygon calls. Covers virtually the entire filtered universe (~2,500–3,000 stocks) in ~4–6 min.</span><br />
+            <span style={{ color: '#56567a' }}>Batched 40 concurrent Polygon calls. Covers virtually the entire filtered universe (~2,500–3,000 stocks) in ~4–6 min.</span><br />
             Scheduled: 06:00 GMT+4 Mon–Fri (= 22:00 ET). Sector enrichment runs automatically after.
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -209,7 +209,7 @@ export default function AdminPage() {
               value={scanDate}
               onChange={e => setScanDate(e.target.value)}
               placeholder="Date YYYY-MM-DD (blank = today)"
-              style={{ flex: 1, minWidth: 200, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '6px 10px', color: '#e0e0e0', fontFamily: 'inherit', fontSize: 11 }}
+              style={{ flex: 1, minWidth: 200, background: 'rgba(255,255,255,0.06)', border: '1px solid #1a1a32', borderRadius: 4, padding: '6px 10px', color: '#eaeaf6', fontFamily: 'inherit', fontSize: 11 }}
             />
             <button
               onClick={() => {
@@ -219,7 +219,7 @@ export default function AdminPage() {
                 call('universe', url);
               }}
               disabled={loading.universe}
-              style={{ background: 'rgba(68,170,255,0.15)', border: '1px solid rgba(68,170,255,0.4)', borderRadius: 4, padding: '7px 18px', color: '#44aaff', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}
+              style={{ background: 'rgba(0,212,245,0.15)', border: '1px solid rgba(0,212,245,0.4)', borderRadius: 4, padding: '7px 18px', color: '#00d4f5', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}
             >
               {loading.universe ? '⏳ Starting…' : '📊 Run Universe Scan'}
             </button>
@@ -227,7 +227,7 @@ export default function AdminPage() {
               href={`${API_URL}/api/scan/universe/latest`}
               target="_blank"
               rel="noreferrer"
-              style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', textDecoration: 'none' }}
+              style={{ fontSize: 10, color: '#56567a', textDecoration: 'none' }}
             >
               view results ↗
             </a>
@@ -239,24 +239,24 @@ export default function AdminPage() {
 
           {/* ── Live progress widget ── */}
           {scanStatus && scanStatus.phase !== 'idle' && (
-            <div style={{ marginTop: 14, background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '12px 14px', border: `1px solid ${scanStatus.running ? 'rgba(68,170,255,0.3)' : scanStatus.phase === 'done' ? 'rgba(68,255,100,0.25)' : 'rgba(255,100,100,0.25)'}` }}>
+            <div style={{ marginTop: 14, background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '12px 14px', border: `1px solid ${scanStatus.running ? 'rgba(0,212,245,0.3)' : scanStatus.phase === 'done' ? 'rgba(40,217,113,0.25)' : 'rgba(255,100,100,0.25)'}` }}>
               {/* Phase + running indicator */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                {scanStatus.running && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#44aaff', boxShadow: '0 0 6px #44aaff', display: 'inline-block', animation: 'pulse 1.2s infinite' }} />}
+                {scanStatus.running && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#00d4f5', boxShadow: '0 0 6px #00d4f5', display: 'inline-block', animation: 'pulse 1.2s infinite' }} />}
                 {!scanStatus.running && scanStatus.phase === 'done' && <span style={{ color: '#44ff64', fontSize: 13 }}>✓</span>}
                 {!scanStatus.running && scanStatus.phase === 'error' && <span style={{ color: '#ff6b6b', fontSize: 13 }}>✗</span>}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#ddd' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#eaeaf6' }}>
                     {PHASE_LABELS[scanStatus.phase] || scanStatus.phase}
                   </span>
                   {PHASE_HINTS[scanStatus.phase] && scanStatus.candidates_total === 0 && (
-                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontStyle: 'italic' }}>
+                    <span style={{ fontSize: 10, color: '#56567a', fontStyle: 'italic' }}>
                       Expected: {PHASE_HINTS[scanStatus.phase]}
                     </span>
                   )}
                 </div>
                 {scanStatus.target_date && (
-                  <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: '#56567a', flexShrink: 0 }}>
                     {scanStatus.target_date}
                   </span>
                 )}
@@ -268,7 +268,7 @@ export default function AdminPage() {
                 const done      = scanStatus.candidates_done;
                 const remaining = Math.max(0, total - done);
                 const pct       = Math.min(100, Math.round((done / total) * 100));
-                const barColor  = scanStatus.running ? '#44aaff' : '#44ff64';
+                const barColor  = scanStatus.running ? '#00d4f5' : '#28d971';
                 return (
                   <div style={{ marginBottom: 4 }}>
                     {/* Big 3 numbers */}
@@ -276,10 +276,10 @@ export default function AdminPage() {
                       {[
                         { label: 'Started',   val: total.toLocaleString(),     color: '#aaa'    },
                         { label: 'Scanned',   val: done.toLocaleString(),      color: barColor  },
-                        { label: 'Remaining', val: remaining.toLocaleString(), color: remaining === 0 ? '#44ff64' : '#ffd700' },
+                        { label: 'Remaining', val: remaining.toLocaleString(), color: remaining === 0 ? '#28d971' : '#ffd700' },
                       ].map(({ label, val, color }) => (
-                        <div key={label} style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 5, padding: '7px 10px', textAlign: 'center', border: `1px solid ${color}22` }}>
-                          <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginBottom: 3, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{label}</div>
+                        <div key={label} style={{ background: '#0d0d1e', borderRadius: 5, padding: '7px 10px', textAlign: 'center', border: `1px solid ${color}22` }}>
+                          <div style={{ fontSize: 9, color: '#56567a', marginBottom: 3, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{label}</div>
                           <div style={{ fontSize: 18, fontWeight: 800, color, lineHeight: 1 }}>{val}</div>
                         </div>
                       ))}
@@ -407,15 +407,16 @@ export default function AdminPage() {
             ].map(([path, desc]) => (
               <div key={path} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
                 <a href={`${API_URL}${path}`} target="_blank" rel="noreferrer"
-                  style={{ fontSize: 10, color: '#4488ff', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                  style={{ fontSize: 10, color: '#00d4f5', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                   {path}
                 </a>
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>— {desc}</span>
+                <span style={{ fontSize: 10, color: '#56567a' }}>— {desc}</span>
               </div>
             ))}
           </div>
         </div>
 
+        </div>
       </div>
     </>
   );
