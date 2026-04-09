@@ -336,6 +336,7 @@ export default function RibbonPage() {
           <Link href="/" className={styles.navLink}>← Dashboard</Link>
           <Link href="/journal" className={styles.navLink}>📔 Journal</Link>
           <Link href="/sectors" className={styles.navLink}>🗂 Sectors</Link>
+          <Link href="/macro-events" className={styles.navLink}>🌐 Macro</Link>
         </div>
 
         {/* Header */}

@@ -56,6 +56,10 @@ from database import (
     update_journal_entry,
     get_eod_log,
     get_latest_eod_log,
+    get_macro_events_latest,
+    get_macro_events_history,
+    get_macro_events_active,
+    upsert_macro_events,
 )
 from scanner.runner import run_scan
 from scheduler import start_scheduler, stop_scheduler
@@ -1440,6 +1444,73 @@ async def earnings_for_symbol(symbol: str):
     if not is_configured():
         return {"has_earnings": False, "note": "FINNHUB_API_KEY not configured"}
     return await get_earnings_for_symbol(symbol.upper())
+
+
+# ─── Macro Events — Trump News Bias Layer (Version Alpha) ────────────────────
+#
+# Read-only contextual intelligence. NEVER modifies scores, tiers, or rankings.
+# Display-only layer for informational market context.
+
+@app.get("/api/events/trump/latest")
+async def trump_events_latest(limit: int = 20):
+    """
+    Latest Trump-related macro events (most recent first).
+    Returns up to `limit` events regardless of age.
+    """
+    events = await get_macro_events_latest(limit=min(limit, 50))
+    return {"events": events, "count": len(events)}
+
+
+@app.get("/api/events/trump/history")
+async def trump_events_history(days: int = 7, limit: int = 100):
+    """
+    Historical Trump macro events from the last N days.
+    Useful for reviewing the event timeline.
+    """
+    events = await get_macro_events_history(days=min(days, 30), limit=min(limit, 200))
+    return {"events": events, "count": len(events), "days": days}
+
+
+@app.get("/api/events/trump/active-bias")
+async def trump_active_bias(max_age_days: int = 3):
+    """
+    Aggregated active macro bias from recent Trump events (last 1–3 days).
+    Returns:
+      - overall_market_bias: BULLISH / BEARISH / RISK_OFF / MIXED / NEUTRAL
+      - overall_volatility: LOW / MEDIUM / HIGH / VERY_HIGH
+      - top_bullish_sectors, top_bearish_sectors
+      - active_classes: which event categories are active
+      - regime_summary: human-readable sentence
+      - recent_events: raw event list feeding into the bias
+    """
+    from news.trump_news import compute_active_bias
+
+    active_events = await get_macro_events_active(max_age_days=min(max_age_days, 7))
+    bias = compute_active_bias(active_events, max_age_days=min(max_age_days, 7))
+    return {
+        **bias,
+        "recent_events": active_events,
+    }
+
+
+@app.post("/api/events/trump/refresh")
+async def trump_events_refresh(background_tasks: BackgroundTasks):
+    """
+    Manually trigger a Trump news fetch + classify + upsert cycle.
+    Runs in background; returns immediately with {ok: true, message: str}.
+    """
+    async def _do_refresh():
+        try:
+            from news.trump_news import fetch_and_classify_events
+            logger.info("Manual Trump news refresh triggered")
+            events = await fetch_and_classify_events(use_manual=True)
+            inserted = await upsert_macro_events(events)
+            logger.info(f"Trump news refresh: {len(events)} classified, {inserted} new")
+        except Exception as e:
+            logger.error(f"Trump news refresh failed: {e}", exc_info=True)
+
+    background_tasks.add_task(_do_refresh)
+    return {"ok": True, "message": "News refresh started in background"}
 
 
 # ─── Admin ─────────────────────────────────────────────────────────────────────

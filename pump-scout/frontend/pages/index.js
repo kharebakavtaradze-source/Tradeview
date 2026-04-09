@@ -408,6 +408,7 @@ export default function Home() {
             <Link href="/ribbon" className={styles.howLink}>🎀 ribbon</Link>
             <Link href="/journal" className={styles.howLink}>📔 journal</Link>
             <Link href="/sectors" className={styles.howLink}>🗂 sectors</Link>
+            <Link href="/macro-events" className={styles.howLink}>🌐 macro</Link>
             <button
               className={styles.eodLogBtn}
               onClick={() => window.open(`${API_URL}/api/eod-log/latest`, '_blank')}
