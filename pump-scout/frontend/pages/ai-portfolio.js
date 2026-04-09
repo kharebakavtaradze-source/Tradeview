@@ -20,9 +20,10 @@ function HealthBadge({ health }) {
 
 function PnlBadge({ pct, size = 14 }) {
   if (pct == null) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  const color = pct > 0 ? 'var(--lime)' : pct < 0 ? 'var(--red)' : 'var(--text-muted)';
   return (
-    <span style={{ fontWeight: 700, fontSize: size, color: pct >= 0 ? 'var(--green)' : 'var(--red)' }}>
-      {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+    <span style={{ fontWeight: 700, fontSize: size, color }}>
+      {pct > 0 ? '+' : ''}{pct.toFixed(2)}%
     </span>
   );
 }
@@ -35,7 +36,7 @@ function RiskBadge({ pos }) {
     const distToStop = ((price - stop) / stop * 100);
     if (distToStop < 2) return <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 2, background: 'rgba(255,68,68,0.2)', color: 'var(--red)' }}>⚠️ NEAR STOP</span>;
   }
-  if (pnl >= 10) return <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 2, background: 'rgba(0,200,100,0.15)', color: 'var(--green)' }}>🎯 NEAR TARGET</span>;
+  if (pnl >= 10) return <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 2, background: 'rgba(0,200,100,0.15)', color: 'var(--lime)' }}>🎯 NEAR TARGET</span>;
   if (pnl <= -5) return <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 2, background: 'rgba(255,68,68,0.12)', color: '#ff6666' }}>📉 LOSING</span>;
   return null;
 }
@@ -60,10 +61,10 @@ function PositionProgressBar({ pos }) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginTop: 2, color: 'var(--text-muted)' }}>
         <span style={{ color: 'var(--red)' }}>Stop ${stop.toFixed(2)}</span>
-        <span style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
+        <span style={{ color: pnl >= 0 ? 'var(--lime)' : 'var(--red)', fontWeight: 700 }}>
           {price.toFixed(2)} ({pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}%)
         </span>
-        <span style={{ color: 'var(--green)' }}>Target ${target.toFixed(2)}</span>
+        <span style={{ color: 'var(--lime)' }}>Target ${target.toFixed(2)}</span>
       </div>
     </div>
   );
@@ -214,8 +215,8 @@ export default function AIPortfolio() {
               <span>💵 Cash: <b style={{ color: 'var(--text-primary)' }}>${cash.toFixed(2)}</b></span>
               <span>📈 Invested: <b style={{ color: 'var(--text-primary)' }}>${invested.toFixed(2)}</b></span>
               <span>Started: <b>$1,000.00</b></span>
-              {aiWinRate !== null && <span>AI WR: <b style={{ color: aiWinRate >= 50 ? 'var(--green)' : 'var(--red)' }}>{aiWinRate}%</b> ({aiWins.length}W/{aiLosses.length}L)</span>}
-              {aiAvgPnl !== null && <span>Avg trade: <b style={{ color: parseFloat(aiAvgPnl) >= 0 ? 'var(--green)' : 'var(--red)' }}>{parseFloat(aiAvgPnl) >= 0 ? '+' : ''}{aiAvgPnl}%</b></span>}
+              {aiWinRate !== null && <span>AI WR: <b style={{ color: aiWinRate >= 50 ? 'var(--lime)' : 'var(--red)' }}>{aiWinRate}%</b> ({aiWins.length}W/{aiLosses.length}L)</span>}
+              {aiAvgPnl !== null && <span>Avg trade: <b style={{ color: parseFloat(aiAvgPnl) >= 0 ? 'var(--lime)' : 'var(--red)' }}>{parseFloat(aiAvgPnl) >= 0 ? '+' : ''}{aiAvgPnl}%</b></span>}
             </div>
 
             {/* Value history sparkline */}
@@ -244,7 +245,7 @@ export default function AIPortfolio() {
             <div style={{ fontWeight: 700, color: 'var(--cyan)', marginBottom: 6 }}>📋 Today's Report</div>
             <div style={{ lineHeight: 1.6 }}>{report.report.summary}</div>
             {report.report.best_position && report.report.best_position !== 'null' && (
-              <div style={{ marginTop: 6, color: 'var(--green)' }}>🏆 {report.report.best_position}</div>
+              <div style={{ marginTop: 6, color: 'var(--lime)' }}>🏆 {report.report.best_position}</div>
             )}
             {report.report.concern && report.report.concern !== 'null' && (
               <div style={{ marginTop: 4, color: '#ffa500' }}>⚠️ {report.report.concern}</div>
@@ -285,17 +286,32 @@ export default function AIPortfolio() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10, marginBottom: 20 }}>
           {positions.map(p => {
             const pnl = p.pnl_pct || 0;
-            const borderColor = pnl > 5 ? 'var(--green)' : pnl < -3 ? 'var(--red)' : 'rgba(255,255,255,0.15)';
+            const isWinning = pnl > 0;
+            const isLosing = pnl < 0;
+            const pnlColor = isWinning ? 'var(--lime)' : isLosing ? 'var(--red)' : 'var(--text-muted)';
+            const borderColor = pnl >= 3 ? 'var(--lime)' : pnl <= -2 ? 'var(--red)' : isWinning ? 'rgba(40,217,113,0.4)' : isLosing ? 'rgba(240,62,92,0.4)' : 'var(--border2)';
+            const bgColor = pnl >= 3 ? 'rgba(40,217,113,0.04)' : pnl <= -2 ? 'rgba(240,62,92,0.04)' : 'var(--surface)';
             return (
               <div key={p.id} style={{
-                background: 'rgba(255,255,255,0.03)',
-                border: `1px solid rgba(255,255,255,0.08)`,
+                background: bgColor,
+                border: `1px solid var(--border)`,
                 borderLeft: `3px solid ${borderColor}`,
                 borderRadius: 6, padding: '10px 12px',
               }}>
                 {/* Header row */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontWeight: 700, fontSize: 15 }}>{p.symbol}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>{p.symbol}</span>
+                    {pnl !== 0 && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 3,
+                        background: isWinning ? 'rgba(40,217,113,0.15)' : 'rgba(240,62,92,0.15)',
+                        color: pnlColor, letterSpacing: '0.05em',
+                      }}>
+                        {isWinning ? '▲ WINNING' : '▼ LOSING'}
+                      </span>
+                    )}
+                  </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <RiskBadge pos={p} />
                     <PnlBadge pct={pnl} size={14} />
@@ -305,7 +321,7 @@ export default function AIPortfolio() {
                 {/* Price row */}
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', gap: 10, marginBottom: 2, flexWrap: 'wrap' }}>
                   <span>Entry <b style={{ color: 'var(--text-primary)' }}>${p.entry_price?.toFixed(2)}</b></span>
-                  <span>Now <b style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>${(p.current_price || p.entry_price)?.toFixed(2)}</b></span>
+                  <span>Now <b style={{ color: pnl >= 0 ? 'var(--lime)' : 'var(--red)' }}>${(p.current_price || p.entry_price)?.toFixed(2)}</b></span>
                   <span>Invested <b>${p.invested_usd?.toFixed(0)}</b></span>
                   <span>Day <b>{p.days_held}</b></span>
                 </div>
@@ -329,7 +345,7 @@ export default function AIPortfolio() {
                 {/* Peak/trough */}
                 {(p.max_gain_pct !== 0 || p.max_loss_pct !== 0) && (
                   <div style={{ fontSize: 9, color: 'var(--text-muted)', display: 'flex', gap: 8, marginBottom: 2 }}>
-                    <span>Peak: <b style={{ color: 'var(--green)' }}>{p.max_gain_pct >= 0 ? '+' : ''}{(p.max_gain_pct || 0).toFixed(1)}%</b></span>
+                    <span>Peak: <b style={{ color: 'var(--lime)' }}>{p.max_gain_pct >= 0 ? '+' : ''}{(p.max_gain_pct || 0).toFixed(1)}%</b></span>
                     <span>Low: <b style={{ color: 'var(--red)' }}>{(p.max_loss_pct || 0).toFixed(1)}%</b></span>
                   </div>
                 )}
@@ -366,7 +382,7 @@ export default function AIPortfolio() {
                 <div key={p.id} style={{
                   display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px',
                   background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
-                  borderLeft: `3px solid ${(p.pnl_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)'}`,
+                  borderLeft: `3px solid ${(p.pnl_pct || 0) >= 0 ? 'var(--lime)' : 'var(--red)'}`,
                   borderRadius: 4, fontSize: 11,
                 }}>
                   <span style={{ fontWeight: 700, minWidth: 50 }}>{p.symbol}</span>
@@ -395,7 +411,7 @@ export default function AIPortfolio() {
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>📔 YOUR JOURNAL</div>
               {journalStats ? (
                 <>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: (journalStats.total_pnl_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: (journalStats.total_pnl_pct || 0) >= 0 ? 'var(--lime)' : 'var(--red)' }}>
                     {(journalStats.total_pnl_pct || 0) >= 0 ? '+' : ''}{(journalStats.total_pnl_pct || 0).toFixed(1)}%
                   </div>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
@@ -421,7 +437,7 @@ export default function AIPortfolio() {
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>${totalValue.toFixed(0)} value</div>
               {aiWinRate !== null && (
                 <div style={{ fontSize: 10, marginTop: 2 }}>
-                  WR: <b style={{ color: aiWinRate >= 50 ? 'var(--green)' : 'var(--red)' }}>{aiWinRate}%</b> · {closedPositions.length} closed
+                  WR: <b style={{ color: aiWinRate >= 50 ? 'var(--lime)' : 'var(--red)' }}>{aiWinRate}%</b> · {closedPositions.length} closed
                 </div>
               )}
             </div>
@@ -438,7 +454,7 @@ export default function AIPortfolio() {
           {journalStats && journalStats.closed_trades > 0 && (
             <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
               {(journalStats.total_pnl_pct || 0) > totalPnl
-                ? <span>🏆 <b style={{ color: 'var(--green)' }}>Ваш журнал</b> опережает AI портфель на <b>{((journalStats.total_pnl_pct || 0) - totalPnl).toFixed(1)}%</b></span>
+                ? <span>🏆 <b style={{ color: 'var(--lime)' }}>Ваш журнал</b> опережает AI портфель на <b>{((journalStats.total_pnl_pct || 0) - totalPnl).toFixed(1)}%</b></span>
                 : (journalStats.total_pnl_pct || 0) < totalPnl
                 ? <span>🤖 <b style={{ color: 'var(--cyan)' }}>AI портфель</b> опережает ваш журнал на <b>{(totalPnl - (journalStats.total_pnl_pct || 0)).toFixed(1)}%</b></span>
                 : <span>Ничья между журналом и AI портфелем.</span>

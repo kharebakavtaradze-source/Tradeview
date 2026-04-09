@@ -29,25 +29,64 @@ YAHOO_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
 }
+
+_YAHOO_V8_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 
 
 async def _fetch_price(symbol: str) -> float | None:
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    """Fetch current price via Yahoo Finance v8 chart API (same as the scanner)."""
+    url = f"{_YAHOO_V8_BASE}/{symbol.upper()}"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                url,
-                params={"symbols": symbol.upper(), "fields": "regularMarketPrice"},
-                headers=YAHOO_HEADERS,
-            )
+        async with httpx.AsyncClient(timeout=10.0, headers=YAHOO_HEADERS) as client:
+            resp = await client.get(url, params={"interval": "1d", "range": "1d"})
             if resp.status_code == 200:
-                quotes = resp.json().get("quoteResponse", {}).get("result", [])
-                if quotes:
-                    return quotes[0].get("regularMarketPrice")
+                meta = resp.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+                price = meta.get("regularMarketPrice") or meta.get("previousClose")
+                return float(price) if price else None
     except Exception as e:
         logger.warning(f"Portfolio price fetch failed for {symbol}: {e}")
     return None
+
+
+async def _fetch_prices_batch(symbols: list[str]) -> dict[str, float]:
+    """
+    Fetch current prices for multiple symbols concurrently via v8 chart API.
+    Returns {symbol: price} for all successful fetches.
+    Uses the same v8 endpoint as the scanner (more reliable than v7 quote batch).
+    """
+    import asyncio
+    semaphore = asyncio.Semaphore(5)  # max 5 concurrent requests
+
+    async def _fetch_one(symbol: str, client: httpx.AsyncClient) -> tuple[str, float | None]:
+        async with semaphore:
+            url = f"{_YAHOO_V8_BASE}/{symbol.upper()}"
+            for attempt in range(2):
+                try:
+                    resp = await client.get(url, params={"interval": "1d", "range": "1d"}, timeout=10.0)
+                    if resp.status_code == 429:
+                        await asyncio.sleep(1.5 ** attempt)
+                        continue
+                    if resp.status_code == 200:
+                        meta = resp.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+                        price = meta.get("regularMarketPrice") or meta.get("previousClose")
+                        if price:
+                            return symbol, float(price)
+                except Exception as e:
+                    logger.debug(f"Price fetch {symbol} attempt {attempt+1}: {e}")
+            return symbol, None
+
+    prices: dict[str, float] = {}
+    async with httpx.AsyncClient(headers=YAHOO_HEADERS) as client:
+        tasks = [_fetch_one(sym, client) for sym in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, tuple) and r[1] is not None:
+                prices[r[0]] = r[1]
+
+    logger.info(f"Price batch fetch: {len(prices)}/{len(symbols)} symbols resolved")
+    return prices
 
 
 def _filter_ai_candidates(scan_results: list) -> list:
@@ -122,24 +161,10 @@ async def update_ai_positions_intraday():
     symbols = [p["symbol"] for p in positions]
     symbol_to_pos = {p["symbol"]: p for p in positions}
 
-    # Batch fetch all prices at once
-    prices: dict[str, float] = {}
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                url,
-                params={"symbols": ",".join(symbols), "fields": "regularMarketPrice"},
-                headers=YAHOO_HEADERS,
-            )
-            if resp.status_code == 200:
-                for q in resp.json().get("quoteResponse", {}).get("result", []):
-                    sym = q.get("symbol")
-                    price = q.get("regularMarketPrice")
-                    if sym and price:
-                        prices[sym] = price
-    except Exception as e:
-        logger.warning(f"Intraday AI price batch fetch failed: {e}")
+    # Batch fetch all prices via v8 chart API (concurrent, same as scanner)
+    prices = await _fetch_prices_batch(symbols)
+    if not prices:
+        logger.warning("Intraday AI price batch fetch returned no prices — skipping update")
         return
 
     state = await get_portfolio_state()
