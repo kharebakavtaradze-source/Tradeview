@@ -167,15 +167,16 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
 
 
 # ── Non-stock exclusion cache ─────────────────────────────────────────────────
-# Covers: ETF, ETN, ETV (exchange-traded vehicles), FUND (open-end / closed-end),
-# plus a hardcoded safety net for leveraged/inverse products and crypto spot ETFs
-# that Polygon may list under unusual types.
+# Covers: ETF, ETN, ETV (exchange-traded vehicles), FUND (open-end funds),
+# CEF (closed-end funds — Polygon's dedicated type), plus a hardcoded safety
+# net for leveraged/inverse products and crypto spot ETFs that Polygon may
+# list under unusual types or CS (common stock).
 
 # Polygon security types to exclude (all are non-equity instruments)
-_EXCLUDED_POLYGON_TYPES = ("ETF", "ETN", "ETV", "FUND")
+_EXCLUDED_POLYGON_TYPES = ("ETF", "ETN", "ETV", "FUND", "CEF")
 
-# Known leveraged/inverse products and crypto spot ETFs — safety net for any
-# that slip through the API type filter (misclassified or new listings).
+# Known leveraged/inverse products, crypto spot ETFs, and other non-stock
+# instruments — safety net for anything misclassified or newly listed.
 _HARDCODED_EXCLUSIONS: set[str] = {
     # ── Leveraged / inverse (ProShares) ──────────────────────────────────────
     "TQQQ", "SQQQ", "UPRO", "SPXU", "SPXL", "SPXS",
@@ -186,17 +187,32 @@ _HARDCODED_EXCLUSIONS: set[str] = {
     "UGAZ", "GUSH", "DRIP", "NAIL", "SOXL", "SOXS",
     "FNGU", "FNGD", "TECL", "TECS", "DPST", "FAZ",
     "FAS",  "ERX",  "ERY",  "RETL", "SHLD",
+    "ROM",  "RXL",  "DDM",  "MVV",  "UWM",  "SAA",
+    "USD",  "UYG",  "EFO",  "EET",  "EZJ",  "MIDU",
+    "UMDD", "URPIX","UTSL", "UBOT", "LBAY", "HIBS",
     # ── Leveraged / inverse (Direxion) ───────────────────────────────────────
     "TMF",  "TMV",  "TBF",  "TBT",  "TBX",
     "EDC",  "EDZ",  "INDL", "BRZU", "MEXI",
     "DRN",  "DRV",  "CURE", "PILL",
+    "DFEN", "DDUP", "WEBL", "WEBS", "WANT", "TPOR",
+    "DUSL", "BULZ", "BERZ", "HIBL", "HIBS",
     # ── Crypto spot ETFs ─────────────────────────────────────────────────────
     "GBTC", "ETHE", "IBIT", "FBTC", "BITB", "BTCO",
     "ARKB", "BRRR", "HODL", "EZBC", "DEFI",
     "ETHW", "CETH", "ETHV", "QETH", "FETH",
+    "BTCW", "SBTC", "YBTC", "MAXI", "BITU", "BITX",
+    "BITI", "ETHU", "METH", "SETH",
     # ── Volatility products ───────────────────────────────────────────────────
     "VXX",  "UVXY", "SVXY", "VIXY", "VIXM",
     "TVIX", "TVIZ", "XIV",  "ZIV",
+    # ── Broad-market / sector ETFs that sometimes appear ────────────────────
+    "SPY",  "QQQ",  "IWM",  "DIA",  "MDY",  "IJH",  "IJR",
+    "XLF",  "XLE",  "XLV",  "XLU",  "XLK",  "XLI",  "XLY",
+    "XLP",  "XLB",  "XLRE", "XLC",
+    "GLD",  "SLV",  "GDX",  "GDXJ", "USO",  "UGA",
+    "TLT",  "IEF",  "SHY",  "HYG",  "LQD",  "AGG",  "BND",
+    "EEM",  "EFA",  "VWO",  "VEA",  "VTI",  "VOO",  "VXF",
+    "ARKK", "ARKG", "ARKF", "ARKQ", "ARKX", "ARKW",
 }
 
 _excluded_cache: set[str] = set()
@@ -206,8 +222,8 @@ _excluded_cache_date: Optional[str] = None
 async def get_us_etf_symbols() -> set[str]:
     """
     Fetch all non-stock securities from Polygon reference API.
-    Covers ETF, ETN, ETV, FUND types + hardcoded leveraged/inverse/crypto safety net.
-    Cached in memory for 7 days.
+    Covers ETF, ETN, ETV, FUND, CEF types + hardcoded leveraged/inverse/crypto
+    safety net. Cached in memory for 7 days.
     Returns set of uppercase ticker strings.
 
     Kept as get_us_etf_symbols() for backwards-compat with all call sites.
@@ -263,7 +279,7 @@ async def get_us_etf_symbols() -> set[str]:
         _excluded_cache      = excluded
         _excluded_cache_date = today
         logger.info(f"Exclusion cache refreshed: {len(excluded)} total symbols "
-                    f"(ETF/ETN/ETV/FUND + {len(_HARDCODED_EXCLUSIONS)} hardcoded)")
+                    f"(ETF/ETN/ETV/FUND/CEF + {len(_HARDCODED_EXCLUSIONS)} hardcoded)")
     else:
         logger.warning("Polygon returned 0 results — using hardcoded exclusions only")
         _excluded_cache      = excluded   # still use the hardcoded set
