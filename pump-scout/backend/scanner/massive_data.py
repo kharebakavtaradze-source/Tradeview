@@ -345,6 +345,31 @@ async def fetch_candles_massive(symbol: str, days: int = 200) -> list:
 
 # ── Ticker Details (sector / market_cap enrichment) ───────────────────────────
 
+# Polygon security types considered true equities (stocks + ADRs).
+# Anything NOT in this set is a non-stock instrument (ETF, fund, ETN, warrant…).
+EQUITY_TYPES: frozenset[str] = frozenset({"CS", "ADR", "ADRC", "ADRW", "ADRR"})
+
+
+async def fetch_ticker_type(symbol: str) -> str | None:
+    """
+    Fetch the Polygon security type for one symbol (e.g. 'CS', 'ETF', 'CEF').
+    Used as a per-symbol safeguard against instruments misclassified as CS.
+    Returns None on any failure (caller should treat as unknown / allow through).
+    """
+    if not MASSIVE_API_KEY:
+        return None
+
+    url = f"{MASSIVE_BASE}/v3/reference/tickers/{symbol.upper()}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
+            resp = await client.get(url, params=_params())
+        if resp.status_code != 200:
+            return None
+        return (resp.json().get("results") or {}).get("type") or None
+    except Exception:
+        return None
+
+
 async def fetch_ticker_details(symbol: str) -> dict | None:
     """
     Fetch sector (sic_description), market_cap, exchange for one symbol.
