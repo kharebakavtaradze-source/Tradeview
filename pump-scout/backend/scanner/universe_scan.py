@@ -27,6 +27,8 @@ from scanner.massive_data import (
     fetch_grouped_daily,
     fetch_candles_massive,
     fetch_ticker_details,
+    fetch_ticker_type,
+    EQUITY_TYPES,
     get_last_trading_day,
     get_us_etf_symbols,
 )
@@ -212,14 +214,32 @@ async def run_universe_scan(target_date: str = None) -> dict:
         # Will compute properly after candle fetch; use EOD approximation
         spy_pct_5d = 0.0  # updated below after SPY candles fetched
 
+    skip_type = 0  # count of symbols removed by per-symbol type verification
+
     for i in range(0, len(candidates), BATCH_SIZE):
         batch = candidates[i : i + BATCH_SIZE]
 
-        # Fetch candle history concurrently for this batch
+        # Fetch candle history AND Polygon security type concurrently.
+        # Type check runs in parallel — no added wall-clock time.
+        # This catches ETFs/funds that Polygon mis-classifies as CS in its
+        # reference data, which the bulk exclusion list cannot catch.
         candle_tasks = [fetch_candles_massive(sym, days=200) for sym in batch]
-        candle_results = await asyncio.gather(*candle_tasks, return_exceptions=True)
+        type_tasks   = [fetch_ticker_type(sym)               for sym in batch]
+        all_gathered = await asyncio.gather(*candle_tasks, *type_tasks, return_exceptions=True)
+        candle_results = all_gathered[:len(batch)]
+        type_results   = all_gathered[len(batch):]
 
-        for sym, candles in zip(batch, candle_results):
+        for sym, candles, ticker_type in zip(batch, candle_results, type_results):
+            # Per-symbol type guard: if Polygon returns a non-equity type,
+            # reject even if the bulk exclusion list missed it.
+            # None / Exception means unknown — allow through (conservative).
+            if (not isinstance(ticker_type, Exception)
+                    and ticker_type is not None
+                    and ticker_type not in EQUITY_TYPES):
+                logger.info(f"Skipping {sym}: Polygon type={ticker_type!r} (non-equity)")
+                skip_type += 1
+                continue
+
             if isinstance(candles, Exception):
                 logger.warning(f"Candles exception for {sym}: {candles}")
                 errors += 1
@@ -294,7 +314,7 @@ async def run_universe_scan(target_date: str = None) -> dict:
         # Brief pause between batches to be polite to Polygon API
         await asyncio.sleep(0.3)
 
-    logger.info(f"Scoring complete: {len(results)} scored, {errors} errors")
+    logger.info(f"Scoring complete: {len(results)} scored, {errors} errors, {skip_type} skipped by type check")
     _update(phase="enriching")
 
     # ── STEP 8: Sector enrichment via get_sectors_batch ─────────────────────
