@@ -62,6 +62,8 @@ from database import (
     upsert_macro_events,
 )
 from scanner.runner import run_scan
+from scanner.massive_data import get_us_etf_symbols
+from scanner.sector_map import NON_STOCK_SECURITIES
 from scheduler import start_scheduler, stop_scheduler
 from alerts.telegram import get_status as telegram_status
 from alerts.telegram import send_scan_alert, send_test_alert
@@ -107,6 +109,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─── Non-stock exclusion helper ──────────────────────────────────────────────
+
+async def _get_exclusion_set() -> set[str]:
+    """
+    Return the union of the Polygon-sourced ETF/ETN/ETV/FUND list and the
+    static NON_STOCK_SECURITIES set (CEFs + ETNs).  Result is cached for 7
+    days inside get_us_etf_symbols() — subsequent calls within the same day
+    are essentially free.
+    """
+    try:
+        etf_syms = await get_us_etf_symbols()
+    except Exception:
+        etf_syms = set()
+    return etf_syms | {s.upper() for s in NON_STOCK_SECURITIES}
+
+
+def _strip_non_stocks(results: list[dict], exclusions: set[str]) -> list[dict]:
+    """Remove ETF / ETN / CEF / fund / leveraged / crypto entries from a result list."""
+    return [r for r in results if r.get("symbol", "").upper() not in exclusions]
+
 
 # ─── Background scan state ────────────────────────────────────────────────────
 
@@ -217,13 +240,9 @@ async def get_latest():
             "tier_counts": {},
             "message": "No scan data yet. Trigger a manual scan or wait for the scheduled run.",
         }
-    # Strip heavy candle data from list response
-    results = data.get("results", [])
-    slim = []
-    for r in results:
-        entry = {k: v for k, v in r.items() if k != "candles"}
-        slim.append(entry)
-
+    exclusions = await _get_exclusion_set()
+    results = _strip_non_stocks(data.get("results", []), exclusions)
+    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
     return {
         **{k: v for k, v in data.items() if k != "results"},
         "results": slim,
@@ -247,7 +266,8 @@ async def get_universe_scan_latest():
             "scan_type": "massive_eod",
             "message": "No EOD universe scan yet. Runs at 17:00 ET Mon–Fri.",
         }
-    results = data.get("results", [])
+    exclusions = await _get_exclusion_set()
+    results = _strip_non_stocks(data.get("results", []), exclusions)
     slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
     return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
 
@@ -262,7 +282,8 @@ async def get_intraday_scan_latest():
             "scan_type": "yahoo_intraday",
             "message": "No intraday scan yet. Runs at 8:00, 9:30, 12:00 ET Mon–Fri.",
         }
-    results = data.get("results", [])
+    exclusions = await _get_exclusion_set()
+    results = _strip_non_stocks(data.get("results", []), exclusions)
     slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
     return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
 
@@ -991,20 +1012,15 @@ async def get_ribbon_scanner(
     mode: 'all' | 'compression' | 'breakout' | 'stack'
     """
     from database import get_ribbon_candidates
-    from scanner.massive_data import get_us_etf_symbols
-    from scanner.sector_map import NON_STOCK_SECURITIES
 
     scan = await get_latest_scan()
     main_results = scan.get("results", []) if scan else []
 
-    # ETF exclusion — filter stale DB rows that pre-date the ETF fix
-    try:
-        etf_symbols = await get_us_etf_symbols()
-    except Exception:
-        etf_symbols = set()
+    # ETF/ETN/CEF/fund/leveraged/crypto exclusion (cached — fast after first call)
+    exclusions = await _get_exclusion_set()
 
     def _is_etf(sym: str) -> bool:
-        return sym.upper() in etf_symbols or sym.upper() in NON_STOCK_SECURITIES
+        return sym.upper() in exclusions
 
     # SOURCE 2: ribbon candidates table (last 1 day)
     ribbon_rows = await get_ribbon_candidates(days_back=1)
@@ -1139,6 +1155,11 @@ async def get_ignition_scan(
 
     # SOURCE 2: Ribbon candidates (compression setups, last 1 day)
     ribbon_rows = await get_ribbon_candidates(days_back=1)
+
+    # Filter ETF / ETN / CEF / fund / leveraged / crypto from all sources
+    exclusions = await _get_exclusion_set()
+    combined_main = _strip_non_stocks(combined_main, exclusions)
+    ribbon_rows   = [r for r in ribbon_rows if r.get("symbol", "").upper() not in exclusions]
 
     result = build_ignition_response(
         main_results=combined_main,
