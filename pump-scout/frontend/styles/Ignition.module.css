@@ -499,9 +499,187 @@
   white-space: pre-wrap;
 }
 
+/* ── Unified badge ───────────────────────────────────────── */
+.unifiedBadge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border: 1px solid;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+}
+
+/* ── Weight hint ─────────────────────────────────────────── */
+.weightHint {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* ── Expand button ───────────────────────────────────────── */
+.expandBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  transition: color var(--t-fast);
+}
+
+.expandBtn:hover { color: var(--text-dim); }
+
+/* ── Score breakdown ─────────────────────────────────────── */
+.scoreBreakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 2px;
+}
+
+.scoreBarRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scoreBarLabel {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  width: 50px;
+  flex-shrink: 0;
+}
+
+.scoreBarTrack {
+  flex: 1;
+  height: 4px;
+  background: var(--surface2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.scoreBarFill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.scoreBarVal {
+  font-size: 10px;
+  font-weight: 700;
+  width: 38px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Factor tags ─────────────────────────────────────────── */
+.factorTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.factorTag {
+  font-size: 8px;
+  color: var(--text-muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  letter-spacing: 0.04em;
+}
+
+/* ── Context grid (sector · hype · macro) ────────────────── */
+.contextGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.ctxBlock {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ctxBlockTitle {
+  font-size: 8px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 2px;
+}
+
+.ctxRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ctxIcon { font-size: 9px; flex-shrink: 0; }
+.ctxLabel { font-size: 8px; color: var(--text-muted); flex-shrink: 0; }
+.ctxValue { font-size: 9px; font-weight: 700; flex-shrink: 0; }
+.ctxSub   { font-size: 8px; color: var(--text-muted); opacity: 0.7; }
+
+/* ── AI signal panel ─────────────────────────────────────── */
+.aiSignalPanel {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.aiSignalHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.aiSignalBadge {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border: 1px solid;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+}
+
+.aiConfidence { font-size: 9px; color: var(--text-muted); }
+
+.aiCatalyst {
+  font-size: 9px;
+  color: var(--text-muted);
+  background: var(--surface3);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  text-transform: capitalize;
+}
+
+.aiThesis { font-size: 10px; color: var(--text-dim); line-height: 1.4; }
+.aiRisk   { font-size: 10px; color: var(--amber);    line-height: 1.4; }
+
+/* ── AI active filter ────────────────────────────────────── */
+.aiActive { color: var(--accent); }
+
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 600px) {
   .grid { grid-template-columns: 1fr; }
   .summaryBar { gap: 0; }
   .summaryItem { padding: 4px 10px; }
+  .contextGrid { grid-template-columns: 1fr; }
 }

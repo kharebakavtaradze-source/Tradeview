@@ -1113,69 +1113,64 @@ async def get_ribbon_scanner(
 
 @app.get("/api/scan/ignition")
 async def get_ignition_scan(
-    mode: str = "all",
-    min_volume: int = 200_000,
-    min_quality: int = 0,
+    mode:         str  = "all",
+    min_volume:   int  = 200_000,
+    min_quality:  int  = 0,
     bullish_only: bool = False,
-    max_results: int = 100,
+    max_results:  int  = 100,
+    with_ai:      bool = False,
 ):
     """
-    Early Pump Ignition Layer — pre-breakout detection.
+    Unified Ignition Scanner — standalone pre-breakout detection engine.
 
-    Merges main scan results (volume-anomaly confirmed) + ribbon_candidates
-    (EMA compression setups), applies ignition scoring, and returns ranked
-    pre-breakout setups.
+    Combines five scoring layers (max 100 pts):
+      ribbon=35  ignition=25  sector=15  hype=15  macro=10
+
+    Unified signals:
+      STRONG_BUY ≥85  |  BUY ≥65  |  WATCH ≥45  |  NEUTRAL ≥25  |  AVOID
 
     mode: 'all' | 'confirmed' | 'early' | 'watch'
       all       — all signals including NO_IGNITION
-      confirmed — IGNITION_CONFIRMED only (quality≥60, 4+ signals)
+      confirmed — IGNITION_CONFIRMED only (ignition_quality ≥ 60)
       early     — IGNITION_CONFIRMED + EARLY_IGNITION
       watch     — all except NO_IGNITION
 
-    min_quality: 0–100, filter by ignition_quality
-    bullish_only: true = exclude bearish stack tickers
-    max_results: cap result count (max 200)
+    with_ai: true → run Claude Haiku signal on top-10 (unified_score ≥ 65).
+             Adds entry_thesis, key_risk, catalyst_type, confidence per result.
     """
-    from scanner.early_ignition import build_ignition_response
+    from scanner.ignition_engine import run_ignition_engine
     from database import get_ribbon_candidates
 
     max_results = min(max_results, 200)
 
-    # SOURCE 1: Main scan results (last Yahoo intraday or EOD scan)
-    scan = await get_latest_scan()
-    main_results = scan.get("results", []) if scan else []
+    # SOURCE 1: main scan + EOD universe (merged, intraday takes priority)
+    scan       = await get_latest_scan()
+    eod_scan   = await get_latest_scan_by_type("massive_eod")
+    main_res   = scan.get("results", [])     if scan     else []
+    eod_res    = eod_scan.get("results", []) if eod_scan else []
+    main_syms  = {r["symbol"] for r in main_res}
+    combined   = main_res + [r for r in eod_res if r["symbol"] not in main_syms]
 
-    # Also include EOD universe scan results for broader coverage
-    eod_scan = await get_latest_scan_by_type("massive_eod")
-    eod_results = eod_scan.get("results", []) if eod_scan else []
-
-    # Merge both scans — main scan (intraday) takes priority over EOD
-    main_symbols = {r["symbol"] for r in main_results}
-    combined_main = main_results + [r for r in eod_results if r["symbol"] not in main_symbols]
-
-    # SOURCE 2: Ribbon candidates (compression setups, last 1 day)
+    # SOURCE 2: ribbon candidates (EMA compression setups, last 1 day)
     ribbon_rows = await get_ribbon_candidates(days_back=1)
 
-    # Filter ETF / ETN / CEF / fund / leveraged / crypto from all sources
-    exclusions = await _get_exclusion_set()
-    combined_main = _strip_non_stocks(combined_main, exclusions)
-    ribbon_rows   = [r for r in ribbon_rows if r.get("symbol", "").upper() not in exclusions]
+    # Strip ETF / ETN / CEF / fund / leveraged / crypto
+    exclusions  = await _get_exclusion_set()
+    combined    = _strip_non_stocks(combined, exclusions)
+    ribbon_rows = [r for r in ribbon_rows if r.get("symbol", "").upper() not in exclusions]
 
-    result = build_ignition_response(
-        main_results=combined_main,
-        ribbon_results=ribbon_rows,
-        mode=mode,
-        min_volume=min_volume,
-        min_quality=min_quality,
-        bullish_only=bullish_only,
-        max_results=max_results,
+    result = await run_ignition_engine(
+        main_results   = combined,
+        ribbon_results = ribbon_rows,
+        mode           = mode,
+        min_volume     = min_volume,
+        min_quality    = min_quality,
+        bullish_only   = bullish_only,
+        max_results    = max_results,
+        with_ai        = with_ai,
     )
 
-    scanned_at = None
-    if scan:
-        scanned_at = scan.get("scanned_at")
-    elif eod_scan:
-        scanned_at = eod_scan.get("scanned_at")
+    scanned_at = (scan or eod_scan or {}).get("scanned_at") if (scan or eod_scan) else None
 
     return {
         **result,
@@ -1186,6 +1181,7 @@ async def get_ignition_scan(
             "min_quality": min_quality,
             "bullish_only": bullish_only,
             "max_results": max_results,
+            "with_ai":     with_ai,
         },
     }
 
