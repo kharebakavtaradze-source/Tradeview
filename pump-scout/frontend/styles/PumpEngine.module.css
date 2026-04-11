@@ -1,0 +1,459 @@
+.page {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  padding: 0 0 var(--sp-10);
+  font-family: var(--font-ui);
+}
+
+/* ── Header ──────────────────────────────────────────────── */
+.header { padding: 20px var(--page-px) 8px; }
+
+.title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.subtitle {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+
+.disclaimer {
+  margin: 0 0 4px;
+  font-size: 10px;
+  color: var(--text-dim, #555);
+  font-style: italic;
+}
+
+.scanTime { font-size: 10px; color: var(--text-muted); opacity: 0.5; }
+
+/* ── Summary bar ─────────────────────────────────────────── */
+.summaryBar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 10px var(--page-px);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.summaryItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 16px;
+  border-right: 1px solid var(--border);
+}
+.summaryItem:last-child { border-right: none; }
+
+.summaryNum {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+}
+
+.summaryLbl {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+
+.summaryDivider {
+  width: 1px;
+  height: 32px;
+  background: var(--border2);
+  margin: 0 8px;
+}
+
+/* ── Tabs ────────────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px var(--page-px) 0;
+  overflow-x: auto;
+}
+
+.tab {
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--t-fast);
+}
+
+.tab:hover { color: var(--text); background: var(--surface2); }
+
+.tabActive {
+  color: #ff8800;
+  border-color: #ff880066;
+  background: rgba(255, 136, 0, 0.08);
+}
+
+/* ── Filters ─────────────────────────────────────────────── */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px var(--page-px);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.filterGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.filterLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 2px;
+}
+
+.filterBtn {
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.filterBtn:hover { color: var(--text); background: var(--surface2); }
+
+.filterBtnActive {
+  color: #ff8800;
+  border-color: #ff880066;
+  background: rgba(255, 136, 0, 0.1);
+}
+
+.checkLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.checkInput {
+  width: 12px;
+  height: 12px;
+  accent-color: #ff8800;
+}
+
+.refreshBtn {
+  margin-left: auto;
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+.refreshBtn:hover { color: var(--text); background: var(--surface2); }
+
+/* ── Content ─────────────────────────────────────────────── */
+.content {
+  padding: 16px var(--page-px);
+}
+
+.statusMsg, .errorMsg, .emptyMsg {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.errorMsg { color: #ff4444; }
+
+.emptyIcon {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+
+.emptyHint {
+  font-size: 11px;
+  color: var(--text-dim, #555);
+  margin-top: 6px;
+}
+
+.resultsHeader {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+/* ── Grid ────────────────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+/* ── Card ────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color var(--t-fast);
+}
+
+.card[data-signal="PUMP_ACTIVE"] {
+  border-color: rgba(255, 68, 0, 0.35);
+}
+.card[data-signal="PUMP_BUILDING"] {
+  border-color: rgba(255, 136, 0, 0.25);
+}
+.card[data-signal="PUMP_EARLY"] {
+  border-color: rgba(255, 214, 0, 0.18);
+}
+
+/* ── Card header ─────────────────────────────────────────── */
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.symbolBlock {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.symbol {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.price {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.sectorTag {
+  font-size: 9px;
+  color: var(--text-dim, #555);
+  background: var(--surface2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badgesBlock {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tierBadge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid;
+  letter-spacing: 0.05em;
+}
+
+.pumpBadge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* ── Quality bar ─────────────────────────────────────────── */
+.qualityRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qualityLabel {
+  font-size: 9px;
+  color: var(--text-dim, #555);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  min-width: 70px;
+}
+
+.qualityTrack {
+  flex: 1;
+  height: 4px;
+  background: var(--surface2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.qualityFill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.qualityScore {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 40px;
+  text-align: right;
+}
+
+/* ── Reason ──────────────────────────────────────────────── */
+.reason {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  padding: 0 2px;
+}
+
+/* ── Metrics row ─────────────────────────────────────────── */
+.metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.metric {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.metricLabel {
+  font-size: 9px;
+  color: var(--text-dim, #555);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.metricVal {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* ── Badges (ribbon, toxicity) ───────────────────────────── */
+.ribbonBadge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid;
+  letter-spacing: 0.04em;
+}
+
+.toxicBadge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+
+/* ── Expand button ───────────────────────────────────────── */
+.expandBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #555);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+  transition: color var(--t-fast);
+}
+.expandBtn:hover { color: var(--text-muted); }
+
+/* ── Details (expanded) ──────────────────────────────────── */
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.confirmList, .warnList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.confirmItem {
+  font-size: 10px;
+  color: #00c864;
+  line-height: 1.4;
+}
+
+.warnItem {
+  font-size: 10px;
+  color: #ff8800;
+  line-height: 1.4;
+}
+
+.toxicFlags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.toxicFlag {
+  font-size: 9px;
+  color: #ff4444;
+  background: rgba(255, 68, 68, 0.08);
+  border: 1px solid rgba(255, 68, 68, 0.2);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.bucketNote {
+  font-size: 10px;
+  color: var(--text-dim, #555);
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.sourceNote {
+  color: var(--text-dim, #555);
+  font-weight: 400;
+}
