@@ -140,7 +140,10 @@ export default function ReplayPage() {
   async function loadHistory() {
     try {
       const r = await fetch(`${API_URL}/api/replay/history?limit=20`);
-      if (r.ok) setHistory(await r.json());
+      if (r.ok) {
+        const data = await r.json();
+        setHistory(Array.isArray(data) ? data : (data.runs || []));
+      }
     } catch (_) {}
   }
 
@@ -153,7 +156,10 @@ export default function ReplayPage() {
         fetch(`${API_URL}/api/replay/${runId}/summary`),
       ]);
       if (runR.ok)  setActiveRun(await runR.json());
-      if (candR.ok) setCandidates(await candR.json());
+      if (candR.ok) {
+        const data = await candR.json();
+        setCandidates(Array.isArray(data) ? data : (data.candidates || []));
+      }
       if (summR.ok) setSummary(await summR.json());
     } catch (_) {}
     setLoadingDetail(false);
@@ -162,14 +168,20 @@ export default function ReplayPage() {
   async function loadOutcomes(runId) {
     try {
       const r = await fetch(`${API_URL}/api/replay/${runId}/outcomes?limit=500`);
-      if (r.ok) setOutcomes(await r.json());
+      if (r.ok) {
+        const data = await r.json();
+        setOutcomes(Array.isArray(data) ? data : (data.outcomes || []));
+      }
     } catch (_) {}
   }
 
   async function loadMissed(runId) {
     try {
       const r = await fetch(`${API_URL}/api/replay/${runId}/missed?limit=100`);
-      if (r.ok) setMissed(await r.json());
+      if (r.ok) {
+        const data = await r.json();
+        setMissed(Array.isArray(data) ? data : (data.missed_movers || []));
+      }
     } catch (_) {}
   }
 
@@ -645,7 +657,7 @@ export default function ReplayPage() {
                     <div className={styles.emptyMsg}>No summary available yet.</div>
                   ) : (
                     <>
-                      {/* KPI grid */}
+                      {/* KPI grid — keys match API: total_candidates, total_outcomes, missed_movers, avg_returns */}
                       <div className={styles.summaryGrid}>
                         <div className={styles.summaryKPI}>
                           <div className={styles.kpiValue}>{summary.total_candidates ?? 0}</div>
@@ -656,35 +668,37 @@ export default function ReplayPage() {
                           <div className={styles.kpiLabel}>Outcomes</div>
                         </div>
                         <div className={styles.summaryKPI}>
-                          <div className={styles.kpiValue}>{summary.total_missed ?? 0}</div>
+                          <div className={styles.kpiValue}>{summary.missed_movers ?? 0}</div>
                           <div className={styles.kpiLabel}>Missed Movers</div>
                         </div>
-                        {summary.avg_return_5d != null && (
+                        {summary.avg_returns?.['5d'] != null && (
                           <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
-                            <div className={`${styles.kpiValue} ${summary.avg_return_5d >= 0 ? styles.returnPositive : styles.returnNegative}`}>
-                              {summary.avg_return_5d >= 0 ? '+' : ''}{fmt(summary.avg_return_5d)}%
+                            <div className={`${styles.kpiValue} ${summary.avg_returns['5d'] >= 0 ? styles.returnPositive : styles.returnNegative}`}>
+                              {summary.avg_returns['5d'] >= 0 ? '+' : ''}{fmt(summary.avg_returns['5d'])}%
                             </div>
                             <div className={styles.kpiLabel}>Avg 5d Return</div>
                           </div>
                         )}
-                        {summary.avg_alpha_5d != null && (
+                        {summary.avg_returns?.['1d'] != null && (
                           <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
-                            <div className={`${styles.kpiValue} ${summary.avg_alpha_5d >= 0 ? styles.returnPositive : styles.returnNegative}`}>
-                              {summary.avg_alpha_5d >= 0 ? '+' : ''}{fmt(summary.avg_alpha_5d)}%
+                            <div className={`${styles.kpiValue} ${summary.avg_returns['1d'] >= 0 ? styles.returnPositive : styles.returnNegative}`}>
+                              {summary.avg_returns['1d'] >= 0 ? '+' : ''}{fmt(summary.avg_returns['1d'])}%
                             </div>
-                            <div className={styles.kpiLabel}>Avg α vs SPY</div>
+                            <div className={styles.kpiLabel}>Avg 1d Return</div>
                           </div>
                         )}
-                        {summary.win_rate_5d != null && (
-                          <div className={styles.summaryKPI}>
-                            <div className={styles.kpiValue}>{fmt(summary.win_rate_5d)}%</div>
-                            <div className={styles.kpiLabel}>Win Rate (5d)</div>
+                        {summary.avg_returns?.['10d'] != null && (
+                          <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
+                            <div className={`${styles.kpiValue} ${summary.avg_returns['10d'] >= 0 ? styles.returnPositive : styles.returnNegative}`}>
+                              {summary.avg_returns['10d'] >= 0 ? '+' : ''}{fmt(summary.avg_returns['10d'])}%
+                            </div>
+                            <div className={styles.kpiLabel}>Avg 10d Return</div>
                           </div>
                         )}
                       </div>
 
-                      {/* Outcome distribution */}
-                      {summary.label_distribution && Object.keys(summary.label_distribution).length > 0 && (
+                      {/* Outcome distribution — API key: outcome_labels */}
+                      {summary.outcome_labels && Object.keys(summary.outcome_labels).length > 0 && (
                         <div className={styles.outcomeSection}>
                           <div className={styles.sectionTitle} style={{ marginBottom: 10 }}>
                             Outcome Distribution
@@ -692,7 +706,7 @@ export default function ReplayPage() {
                           <div className={styles.outcomeGrid}>
                             <div className={styles.outcomeBlock}>
                               <div className={styles.outcomeBlockTitle}>Label Counts</div>
-                              {Object.entries(summary.label_distribution).map(([label, count]) => (
+                              {Object.entries(summary.outcome_labels).map(([label, count]) => (
                                 <div key={label} className={styles.outcomeRow}>
                                   <span className={styles.outcomeLabel}>
                                     <OutcomeLabel label={label} />
@@ -702,15 +716,15 @@ export default function ReplayPage() {
                               ))}
                             </div>
 
-                            {(summary.best_5 || summary.worst_5) && (
+                            {summary.best_5?.length > 0 && (
                               <div className={styles.outcomeBlock}>
                                 <div className={styles.outcomeBlockTitle}>Best Performers (5d)</div>
-                                {(summary.best_5 || []).map((r, i) => (
+                                {summary.best_5.map((r, i) => (
                                   <div key={i} className={styles.outcomeRow}>
-                                    <span className={styles.outcomeLabel} style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 10 }}>
                                       {r.symbol}
                                     </span>
-                                    <span>{pctCell(r.return_pct)}</span>
+                                    <span>{pctCell(r.return_5d)}</span>
                                   </div>
                                 ))}
                               </div>
