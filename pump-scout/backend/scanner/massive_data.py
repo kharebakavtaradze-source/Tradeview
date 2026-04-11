@@ -288,18 +288,24 @@ async def get_us_etf_symbols() -> set[str]:
     return _excluded_cache
 
 
-async def fetch_candles_massive(symbol: str, days: int = 200) -> list:
+async def fetch_candles_massive(symbol: str, days: int = 200, as_of_date: Optional[str] = None) -> list:
     """
     Fetch up to `days` daily OHLCV bars for one symbol.
     Handles Massive pagination via next_url.
     Returns list sorted oldest→newest, same format as Yahoo candles.
     Returns [] on failure.
+
+    as_of_date (YYYY-MM-DD): if provided, data is cut at this date.
+        Used by Historical Replay mode to prevent future leakage.
+        Live scans leave this None and get today's data as before.
     """
     if not MASSIVE_API_KEY:
         return []
 
-    end_date   = date.today().strftime("%Y-%m-%d")
-    start_date = (date.today() - timedelta(days=days + 60)).strftime("%Y-%m-%d")
+    # ── Time cutoff (future-leakage prevention for replay mode) ──────────────
+    _cutoff = date.fromisoformat(as_of_date) if as_of_date else date.today()
+    end_date   = _cutoff.strftime("%Y-%m-%d")
+    start_date = (_cutoff - timedelta(days=days + 60)).strftime("%Y-%m-%d")
     url = f"{MASSIVE_BASE}/v2/aggs/ticker/{symbol.upper()}/range/1/day/{start_date}/{end_date}"
 
     candles: list = []

@@ -69,6 +69,14 @@ from database import (
     get_ai_reviews,
     save_ai_insights,
     get_ai_insights,
+    # Historical Replay Layer
+    create_replay_run,
+    update_replay_run,
+    get_replay_run,
+    get_replay_history,
+    get_replay_candidates,
+    get_replay_outcomes,
+    get_replay_missed_movers,
 )
 from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
@@ -1727,3 +1735,216 @@ async def ai_insights_latest(limit: int = 20):
 async def ai_insights_history(limit: int = 50):
     results = await get_ai_insights(limit=min(limit, 100))
     return {"results": results, "count": len(results)}
+
+
+# ─── Historical Replay Layer ──────────────────────────────────────────────────
+# Research-only mode. Completely isolated from live production data.
+# Results stored in replay_* tables only. Live scan/journal never touched.
+#
+# LIVE vs REPLAY separation:
+#   - All replay data is under /api/replay/ — never mixed into /api/scan/
+#   - Replay runs use a separate progress tracker (_replay_progress)
+#   - No replay data is written to Scan, ScanCandidate, or Journal tables
+#
+# Future leakage prevention:
+#   - fetch_candles_massive(as_of_date=...) cuts data at the scan date
+#   - grouped_daily is fetched for the exact as_of_date
+#   - No live market_regime or sector_performance data used during replay
+
+@app.post("/api/replay/run")
+async def replay_run(body: dict, background_tasks: BackgroundTasks):
+    """
+    Start a historical replay run.
+
+    Single date:
+        {"as_of_date": "2026-03-05"}
+        {"as_of_date": "2026-03-05", "universe_mode": "approx"}
+
+    Date range:
+        {"start_date": "2026-03-01", "end_date": "2026-03-31"}
+        {"start_date": "2026-03-01", "end_date": "2026-03-31", "universe_mode": "approx"}
+
+    Returns immediately with run_id. Poll /api/replay/status for progress.
+    """
+    from replay.replay_engine import get_replay_progress
+
+    # Guard: one replay at a time
+    prog = get_replay_progress()
+    if prog.get("running"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Replay already running (run_id={prog.get('run_id')}). "
+                   "Wait for it to finish or check /api/replay/status."
+        )
+
+    universe_mode = body.get("universe_mode", "approx")
+    as_of_date    = body.get("as_of_date")
+    start_date    = body.get("start_date")
+    end_date      = body.get("end_date")
+
+    # Validate inputs
+    if as_of_date:
+        try:
+            from datetime import date as _d
+            _d.fromisoformat(as_of_date)
+        except ValueError:
+            raise HTTPException(400, detail=f"Invalid as_of_date: {as_of_date!r} (use YYYY-MM-DD)")
+
+        async def _run_single():
+            try:
+                from replay.replay_engine import run_single_day_replay
+                await run_single_day_replay(as_of_date, universe_mode=universe_mode)
+            except Exception as e:
+                logger.error(f"Replay single-day failed: {e}", exc_info=True)
+
+        background_tasks.add_task(_run_single)
+        return {
+            "ok":           True,
+            "mode":         "single_day",
+            "as_of_date":   as_of_date,
+            "universe_mode":universe_mode,
+            "message":      f"Replay started for {as_of_date}. Poll /api/replay/status for progress.",
+        }
+
+    elif start_date and end_date:
+        try:
+            from datetime import date as _d
+            _d.fromisoformat(start_date)
+            _d.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(400, detail="Invalid start_date or end_date (use YYYY-MM-DD)")
+
+        if start_date > end_date:
+            raise HTTPException(400, detail="start_date must be <= end_date")
+
+        async def _run_range():
+            try:
+                from replay.replay_engine import run_date_range_replay
+                await run_date_range_replay(start_date, end_date, universe_mode=universe_mode)
+            except Exception as e:
+                logger.error(f"Replay date-range failed: {e}", exc_info=True)
+
+        background_tasks.add_task(_run_range)
+        return {
+            "ok":           True,
+            "mode":         "date_range",
+            "start_date":   start_date,
+            "end_date":     end_date,
+            "universe_mode":universe_mode,
+            "message":      f"Replay started for {start_date}→{end_date}. Poll /api/replay/status.",
+        }
+
+    else:
+        raise HTTPException(
+            400,
+            detail="Provide either 'as_of_date' (single day) or 'start_date'+'end_date' (range)."
+        )
+
+
+@app.get("/api/replay/status")
+async def replay_status():
+    """Live progress of the currently running (or last completed) replay."""
+    from replay.replay_engine import get_replay_progress
+    return get_replay_progress()
+
+
+@app.get("/api/replay/history")
+async def replay_history(limit: int = 20):
+    """List of past replay runs, newest first."""
+    runs = await get_replay_history(limit=min(limit, 50))
+    return {"runs": runs, "count": len(runs)}
+
+
+@app.get("/api/replay/{run_id}")
+async def replay_get_run(run_id: int):
+    """Full detail for one replay run."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    return run
+
+
+@app.get("/api/replay/{run_id}/candidates")
+async def replay_get_candidates(run_id: int, limit: int = 500):
+    """All signal candidates found during a replay run, sorted by score."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    candidates = await get_replay_candidates(run_id, limit=min(limit, 1000))
+    return {"run_id": run_id, "candidates": candidates, "count": len(candidates)}
+
+
+@app.get("/api/replay/{run_id}/outcomes")
+async def replay_get_outcomes(run_id: int):
+    """Forward outcome rows for all candidates in a replay run."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    outcomes = await get_replay_outcomes(run_id)
+    return {"run_id": run_id, "outcomes": outcomes, "count": len(outcomes)}
+
+
+@app.get("/api/replay/{run_id}/missed")
+async def replay_get_missed(run_id: int):
+    """Missed mover analysis for a replay run."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    missed = await get_replay_missed_movers(run_id)
+    return {"run_id": run_id, "missed_movers": missed, "count": len(missed)}
+
+
+@app.get("/api/replay/{run_id}/summary")
+async def replay_get_summary(run_id: int):
+    """
+    Aggregated summary for one replay run: outcome distribution,
+    avg returns by horizon, best/worst setups, missed movers count.
+    """
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    candidates = await get_replay_candidates(run_id, limit=5000)
+    outcomes   = await get_replay_outcomes(run_id)
+    missed     = await get_replay_missed_movers(run_id)
+
+    # Aggregate by horizon
+    from collections import defaultdict
+    by_horizon: dict = defaultdict(list)
+    for o in outcomes:
+        if o.get("return_pct") is not None:
+            by_horizon[o["horizon"]].append(o["return_pct"])
+
+    avg_returns = {}
+    for h, vals in by_horizon.items():
+        avg_returns[h] = round(sum(vals) / len(vals), 2) if vals else None
+
+    # Outcome label distribution (5d only)
+    label_dist: dict = defaultdict(int)
+    for o in outcomes:
+        if o.get("horizon") == "5d" and o.get("outcome_label"):
+            label_dist[o["outcome_label"]] += 1
+
+    # Best / worst 5 by 5d return
+    five_d = [o for o in outcomes if o.get("horizon") == "5d" and o.get("return_pct") is not None]
+    five_d.sort(key=lambda x: x["return_pct"], reverse=True)
+    best5  = [{"symbol": o["symbol"], "return_5d": o["return_pct"], "label": o.get("outcome_label")} for o in five_d[:5]]
+    worst5 = [{"symbol": o["symbol"], "return_5d": o["return_pct"], "label": o.get("outcome_label")} for o in five_d[-5:]]
+
+    # Tier distribution of candidates
+    tier_dist: dict = defaultdict(int)
+    for c in candidates:
+        tier_dist[c.get("tier", "?")] += 1
+
+    return {
+        "run_id":            run_id,
+        "run":               run,
+        "total_candidates":  len(candidates),
+        "total_outcomes":    len(outcomes),
+        "missed_movers":     len(missed),
+        "avg_returns":       avg_returns,
+        "outcome_labels":    dict(label_dist),
+        "tier_distribution": dict(tier_dist),
+        "best_5":            best5,
+        "worst_5":           worst5,
+    }
