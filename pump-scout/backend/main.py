@@ -1203,6 +1203,81 @@ async def get_ignition_scan(
     }
 
 
+@app.get("/api/scan/pump")
+async def get_pump_scan(
+    mode:         str  = "all",
+    min_volume:   int  = 200_000,
+    max_toxicity: int  = 80,
+    min_quality:  int  = 0,
+    bullish_only: bool = False,
+    max_results:  int  = 100,
+):
+    """
+    Pump Engine — Explosive / speculative mover detection.
+
+    Separate from the main scanner. Scores velocity, volume wakeup, price
+    behavior, theme context, and toxicity risk.  Never modifies main scanner
+    tiers or total_score.
+
+    Pump signals:
+      PUMP_ACTIVE      — velocity + volume confirmed, price behavior positive
+      PUMP_BUILDING    — velocity building, volume rising
+      PUMP_EARLY       — early signs, incomplete confirmation
+      PUMP_SPECULATIVE — speculative, lower conviction
+      NO_PUMP_SIGNAL   — no meaningful pump signal
+
+    mode: 'all' | 'active' | 'building' | 'early' | 'speculative'
+    max_toxicity: 0–100; default 80 blocks only EXTREME toxicity
+    min_quality: minimum pump_quality score (0–100)
+    """
+    from scanner.pump_engine import run_pump_engine
+    from database import get_ribbon_candidates
+
+    max_results = min(max_results, 200)
+
+    # SOURCE 1: main scan + EOD universe (merged, intraday takes priority)
+    scan       = await get_latest_scan()
+    eod_scan   = await get_latest_scan_by_type("massive_eod")
+    main_res   = scan.get("results", [])     if scan     else []
+    eod_res    = eod_scan.get("results", []) if eod_scan else []
+    main_syms  = {r["symbol"] for r in main_res}
+    combined   = main_res + [r for r in eod_res if r["symbol"] not in main_syms]
+
+    # SOURCE 2: ribbon candidates (EMA compression setups, last 1 day)
+    ribbon_rows = await get_ribbon_candidates(days_back=1)
+
+    # Strip ETF / ETN / CEF / fund / leveraged / crypto
+    exclusions  = await _get_exclusion_set()
+    combined    = _strip_non_stocks(combined, exclusions)
+    ribbon_rows = [r for r in ribbon_rows if r.get("symbol", "").upper() not in exclusions]
+
+    result = run_pump_engine(
+        main_results   = combined,
+        ribbon_results = ribbon_rows,
+        mode           = mode,
+        min_volume     = min_volume,
+        max_toxicity   = max_toxicity,
+        min_quality    = min_quality,
+        bullish_only   = bullish_only,
+        max_results    = max_results,
+    )
+
+    scanned_at = (scan or eod_scan or {}).get("scanned_at") if (scan or eod_scan) else None
+
+    return {
+        **result,
+        "scanned_at": scanned_at,
+        "filter": {
+            "mode":         mode,
+            "min_volume":   min_volume,
+            "max_toxicity": max_toxicity,
+            "min_quality":  min_quality,
+            "bullish_only": bullish_only,
+            "max_results":  max_results,
+        },
+    }
+
+
 @app.get("/api/sector-performance/latest")
 async def sector_performance_latest():
     """Return live Finviz sector performance (daily change%). Cached up to 4 hours."""

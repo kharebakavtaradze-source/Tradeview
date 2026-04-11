@@ -9,6 +9,7 @@ const NAV_LINKS = [
   { href: '/',             label: 'Scanner' },
   { href: '/ribbon',       label: 'Ribbon' },
   { href: '/ignition',     label: 'Ignition' },
+  { href: '/pump-engine',  label: 'Pump Engine' },
   { href: '/sectors',      label: 'Sectors' },
   { href: '/journal',      label: 'Journal' },
   { href: '/ai-portfolio', label: 'AI Portfolio' },

@@ -315,6 +315,7 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
     from scanner.indicators import calc_all
     from scanner.scoring import score_ticker
     from scanner.wyckoff import detect_regime
+    from scanner.early_ignition import calc_ignition
 
     # Try to import sector_map NON_STOCK_SECURITIES; safe fallback if unavailable
     try:
@@ -406,6 +407,13 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             except Exception:
                 pass
 
+            # Compute ignition signal (calc_all does NOT include this — must call separately)
+            ignition_result = {}
+            try:
+                ignition_result = calc_ignition(indicators, wyckoff)
+            except Exception:
+                pass
+
             # Sector from cache (best-effort, not time-sensitive for training)
             sector = None
             if _get_sector:
@@ -415,7 +423,7 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 except Exception:
                     pass
 
-            snapshot = {**indicators, **scored, "wyckoff": wyckoff}
+            snapshot = {**indicators, **scored, "wyckoff": wyckoff, **ignition_result}
             # Remove non-serialisable items from snapshot (keep it JSON-safe)
             clean_snapshot = {
                 k: v for k, v in snapshot.items()
@@ -423,15 +431,15 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             }
 
             return {
-                "symbol":         sym,
-                "price":          eod.get("close", 0),
-                "tier":           tier,
-                "total_score":    scored.get("total_score", 0),
-                "wyckoff_state":  wyckoff.get("state", ""),
-                "ignition_signal":bool(indicators.get("ignition_signal", False)),
-                "ribbon_signal":  bool(indicators.get("compression_and_bullish", False)),
-                "sector":         sector,
-                "snapshot":       clean_snapshot,
+                "symbol":          sym,
+                "price":           eod.get("close", 0),
+                "tier":            tier,
+                "total_score":     scored.get("total_score", 0),
+                "wyckoff_state":   wyckoff.get("state", ""),
+                "ignition_signal": ignition_result.get("ignition_signal", "NO_IGNITION"),
+                "ribbon_signal":   bool(indicators.get("compression_and_bullish", False)),
+                "sector":          sector,
+                "snapshot":        clean_snapshot,
             }
         except Exception as exc:
             logger.debug(f"[REPLAY] {sym} on {as_of_date} skipped: {exc}")
