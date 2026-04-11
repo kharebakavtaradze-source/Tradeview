@@ -16,6 +16,7 @@ const NAV_LINKS = [
   { href: '/ai-analyst',   label: 'AI Analyst' },
   { href: '/ai-review',    label: 'AI Review' },
   { href: '/ai-insights',  label: 'AI Insights' },
+  { href: '/replay',         label: 'Replay' },
   { href: '/admin',          label: 'Admin' },
   { href: '/design-system',  label: 'Design System' },
 ];
