@@ -2480,3 +2480,327 @@ async def get_ai_insights(limit: int = 20) -> list[dict]:
         )
         rows = result.scalars().all()
         return [_insight_to_dict(r) for r in rows]
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  HISTORICAL REPLAY — DB MODELS + CRUD                                      ║
+# ║  Strictly isolated from live production tables.                             ║
+# ║  Live scan/journal/portfolio data is never touched.                         ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+class ReplayRun(Base):
+    """
+    One historical replay run (single date OR date range).
+    Tracks status, progress counters, and completion metadata.
+    """
+    __tablename__ = "replay_runs"
+
+    id                  = Column(Integer, primary_key=True)
+    mode                = Column(String(20),  default="single_day")   # single_day | date_range
+    status              = Column(String(20),  default="running")       # running | completed | failed | cancelled
+    universe_mode       = Column(String(10),  default="approx")        # strict | approx
+    as_of_date          = Column(String(10),  nullable=True)           # YYYY-MM-DD  (single_day)
+    start_date          = Column(String(10),  nullable=True)           # range start
+    end_date            = Column(String(10),  nullable=True)           # range end
+    total_days          = Column(Integer,     default=0)
+    days_completed      = Column(Integer,     default=0)
+    total_symbols       = Column(Integer,     default=0)
+    total_candidates    = Column(Integer,     default=0)
+    outcomes_computed   = Column(Integer,     default=0)
+    missed_movers_found = Column(Integer,     default=0)
+    error_message       = Column(Text,        nullable=True)
+    notes               = Column(Text,        nullable=True)
+    started_at          = Column(DateTime(timezone=True), nullable=True)
+    finished_at         = Column(DateTime(timezone=True), nullable=True)
+    created_at          = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ReplaySignalCandidate(Base):
+    """
+    One ticker signal generated during a historical replay scan.
+    Stores the full indicator snapshot as-of the replay date.
+    Never mixed with live ScanCandidate rows.
+    """
+    __tablename__ = "replay_signal_candidates"
+
+    id                    = Column(Integer, primary_key=True)
+    replay_run_id         = Column(Integer, nullable=False, index=True)
+    scan_date             = Column(String(10), nullable=False, index=True)
+    symbol                = Column(String(10), nullable=False)
+    price                 = Column(Float,      nullable=True)
+    tier                  = Column(String(10), nullable=True)
+    total_score           = Column(Float,      nullable=True)
+    wyckoff_state         = Column(String(20), nullable=True)
+    ignition_signal       = Column(Boolean,    default=False)
+    ribbon_signal         = Column(Boolean,    default=False)
+    sector                = Column(String(60), nullable=True)
+    candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
+    created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ReplayOutcome(Base):
+    """
+    Forward return outcome for one replay candidate at one time horizon.
+    One candidate produces up to 4 rows (1d / 3d / 5d / 10d).
+    """
+    __tablename__ = "replay_outcomes"
+
+    id                  = Column(Integer,     primary_key=True)
+    replay_candidate_id = Column(Integer,     nullable=False, index=True)
+    replay_run_id       = Column(Integer,     nullable=False, index=True)
+    scan_date           = Column(String(10),  nullable=False)
+    symbol              = Column(String(10),  nullable=False)
+    horizon             = Column(String(5),   nullable=False)  # 1d | 3d | 5d | 10d
+    entry_price         = Column(Float,       nullable=True)
+    exit_price          = Column(Float,       nullable=True)
+    return_pct          = Column(Float,       nullable=True)
+    max_gain_pct        = Column(Float,       nullable=True)
+    max_drawdown_pct    = Column(Float,       nullable=True)
+    alpha_vs_spy        = Column(Float,       nullable=True)
+    outcome_label       = Column(String(30),  nullable=True)   # SUCCESSFUL_BREAKOUT | FAILED_BREAKOUT | etc.
+    created_at          = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ReplayMissedMover(Base):
+    """
+    Strong movers that the scanner failed to flag on a given replay date.
+    Populated by the missed-opportunity analysis pass.
+    """
+    __tablename__ = "replay_missed_movers"
+
+    id                  = Column(Integer,     primary_key=True)
+    replay_run_id       = Column(Integer,     nullable=False, index=True)
+    scan_date           = Column(String(10),  nullable=False)
+    symbol              = Column(String(10),  nullable=False)
+    price_on_date       = Column(Float,       nullable=True)
+    future_return_3d    = Column(Float,       nullable=True)
+    future_return_5d    = Column(Float,       nullable=True)
+    future_return_10d   = Column(Float,       nullable=True)
+    why_missed          = Column(String(40),  nullable=True)
+    details_json        = Column(Text,        nullable=True)
+    created_at          = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+# ── Replay CRUD ───────────────────────────────────────────────────────────────
+
+async def create_replay_run(data: dict) -> int:
+    """Insert a new replay run row. Returns the new run id."""
+    async with get_session_factory()() as session:
+        row = ReplayRun(
+            mode                = data.get("mode", "single_day"),
+            status              = data.get("status", "running"),
+            universe_mode       = data.get("universe_mode", "approx"),
+            as_of_date          = data.get("as_of_date"),
+            start_date          = data.get("start_date"),
+            end_date            = data.get("end_date"),
+            total_days          = data.get("total_days", 0),
+            notes               = data.get("notes"),
+            started_at          = datetime.utcnow(),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def update_replay_run(run_id: int, data: dict) -> None:
+    """Patch an existing replay run row with any fields from data."""
+    async with get_session_factory()() as session:
+        result = await session.execute(select(ReplayRun).where(ReplayRun.id == run_id))
+        row = result.scalar_one_or_none()
+        if not row:
+            return
+        for k, v in data.items():
+            if k == "finished_at" and isinstance(v, str):
+                v = datetime.fromisoformat(v)
+            if hasattr(row, k):
+                setattr(row, k, v)
+        await session.commit()
+
+
+async def get_replay_run(run_id: int) -> Optional[dict]:
+    """Return a single replay run as dict, or None."""
+    async with get_session_factory()() as session:
+        result = await session.execute(select(ReplayRun).where(ReplayRun.id == run_id))
+        row = result.scalar_one_or_none()
+        return _replay_run_to_dict(row) if row else None
+
+
+async def get_replay_history(limit: int = 20) -> list[dict]:
+    """Return the most recent replay runs, newest first."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplayRun).order_by(ReplayRun.created_at.desc()).limit(limit)
+        )
+        return [_replay_run_to_dict(r) for r in result.scalars().all()]
+
+
+async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[dict]) -> int:
+    """Bulk-insert replay signal candidates. Returns count inserted."""
+    if not candidates:
+        return 0
+    async with get_session_factory()() as session:
+        for c in candidates:
+            row = ReplaySignalCandidate(
+                replay_run_id           = run_id,
+                scan_date               = scan_date,
+                symbol                  = c.get("symbol", ""),
+                price                   = c.get("price"),
+                tier                    = c.get("tier"),
+                total_score             = c.get("total_score"),
+                wyckoff_state           = c.get("wyckoff_state"),
+                ignition_signal         = bool(c.get("ignition_signal", False)),
+                ribbon_signal           = bool(c.get("ribbon_signal", False)),
+                sector                  = c.get("sector"),
+                candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
+            )
+            session.add(row)
+        await session.commit()
+    return len(candidates)
+
+
+async def get_replay_candidates(run_id: int, limit: int = 500) -> list[dict]:
+    """Return all candidates for a replay run."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplaySignalCandidate)
+            .where(ReplaySignalCandidate.replay_run_id == run_id)
+            .order_by(ReplaySignalCandidate.total_score.desc())
+            .limit(limit)
+        )
+        return [_replay_candidate_to_dict(r) for r in result.scalars().all()]
+
+
+async def save_replay_outcomes(outcomes: list[dict]) -> int:
+    """Bulk-insert outcome rows. Returns count inserted."""
+    if not outcomes:
+        return 0
+    async with get_session_factory()() as session:
+        for o in outcomes:
+            row = ReplayOutcome(
+                replay_candidate_id = o["replay_candidate_id"],
+                replay_run_id       = o["replay_run_id"],
+                scan_date           = o["scan_date"],
+                symbol              = o["symbol"],
+                horizon             = o["horizon"],
+                entry_price         = o.get("entry_price"),
+                exit_price          = o.get("exit_price"),
+                return_pct          = o.get("return_pct"),
+                max_gain_pct        = o.get("max_gain_pct"),
+                max_drawdown_pct    = o.get("max_drawdown_pct"),
+                alpha_vs_spy        = o.get("alpha_vs_spy"),
+                outcome_label       = o.get("outcome_label"),
+            )
+            session.add(row)
+        await session.commit()
+    return len(outcomes)
+
+
+async def get_replay_outcomes(run_id: int) -> list[dict]:
+    """Return all outcomes for a replay run."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplayOutcome)
+            .where(ReplayOutcome.replay_run_id == run_id)
+            .order_by(ReplayOutcome.scan_date, ReplayOutcome.symbol, ReplayOutcome.horizon)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id, "replay_candidate_id": r.replay_candidate_id,
+                "scan_date": r.scan_date, "symbol": r.symbol,
+                "horizon": r.horizon, "entry_price": r.entry_price,
+                "exit_price": r.exit_price, "return_pct": r.return_pct,
+                "max_gain_pct": r.max_gain_pct, "max_drawdown_pct": r.max_drawdown_pct,
+                "alpha_vs_spy": r.alpha_vs_spy, "outcome_label": r.outcome_label,
+            }
+            for r in rows
+        ]
+
+
+async def save_replay_missed_movers(run_id: int, movers: list[dict]) -> int:
+    """Bulk-insert missed mover rows. Returns count inserted."""
+    if not movers:
+        return 0
+    async with get_session_factory()() as session:
+        for m in movers:
+            row = ReplayMissedMover(
+                replay_run_id    = run_id,
+                scan_date        = m["scan_date"],
+                symbol           = m["symbol"],
+                price_on_date    = m.get("price_on_date"),
+                future_return_3d = m.get("future_return_3d"),
+                future_return_5d = m.get("future_return_5d"),
+                future_return_10d= m.get("future_return_10d"),
+                why_missed       = m.get("why_missed"),
+                details_json     = json.dumps(m.get("details") or {}),
+            )
+            session.add(row)
+        await session.commit()
+    return len(movers)
+
+
+async def get_replay_missed_movers(run_id: int) -> list[dict]:
+    """Return missed movers for a replay run, sorted by forward return."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplayMissedMover)
+            .where(ReplayMissedMover.replay_run_id == run_id)
+            .order_by(ReplayMissedMover.future_return_5d.desc().nullslast())
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id, "scan_date": r.scan_date, "symbol": r.symbol,
+                "price_on_date": r.price_on_date,
+                "future_return_3d": r.future_return_3d,
+                "future_return_5d": r.future_return_5d,
+                "future_return_10d": r.future_return_10d,
+                "why_missed": r.why_missed,
+                "details": json.loads(r.details_json or "{}"),
+            }
+            for r in rows
+        ]
+
+
+# ── Serialisers ───────────────────────────────────────────────────────────────
+
+def _replay_run_to_dict(r: ReplayRun) -> dict:
+    return {
+        "id":                   r.id,
+        "mode":                 r.mode,
+        "status":               r.status,
+        "universe_mode":        r.universe_mode,
+        "as_of_date":           r.as_of_date,
+        "start_date":           r.start_date,
+        "end_date":             r.end_date,
+        "total_days":           r.total_days,
+        "days_completed":       r.days_completed,
+        "total_symbols":        r.total_symbols,
+        "total_candidates":     r.total_candidates,
+        "outcomes_computed":    r.outcomes_computed,
+        "missed_movers_found":  r.missed_movers_found,
+        "error_message":        r.error_message,
+        "notes":                r.notes,
+        "started_at":           r.started_at.isoformat() if r.started_at else None,
+        "finished_at":          r.finished_at.isoformat() if r.finished_at else None,
+        "created_at":           r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
+    return {
+        "id":               r.id,
+        "replay_run_id":    r.replay_run_id,
+        "scan_date":        r.scan_date,
+        "symbol":           r.symbol,
+        "price":            r.price,
+        "tier":             r.tier,
+        "total_score":      r.total_score,
+        "wyckoff_state":    r.wyckoff_state,
+        "ignition_signal":  r.ignition_signal,
+        "ribbon_signal":    r.ribbon_signal,
+        "sector":           r.sector,
+        "snapshot":         json.loads(r.candidate_snapshot_json or "{}"),
+        "created_at":       r.created_at.isoformat() if r.created_at else None,
+    }
