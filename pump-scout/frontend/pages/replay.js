@@ -76,6 +76,334 @@ function OutcomeLabel({ label }) {
   );
 }
 
+// ── Bundle Tab component ──────────────────────────────────────────────────────
+
+function BucketTable({ data }) {
+  if (!data || data.length === 0) return <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No data</div>;
+  return (
+    <table className={styles.bucketTable}>
+      <thead>
+        <tr>
+          <th>Bucket</th>
+          <th>#</th>
+          <th>Avg 5d</th>
+          <th>Win%</th>
+          <th>Avg 10d</th>
+          <th>Avg DD</th>
+          <th>α/SPY 5d</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((b, i) => (
+          <tr key={i}>
+            <td className={styles.bucketName}>{b.bucket}</td>
+            <td style={{ fontFamily: 'var(--font-mono)' }}>{b.count}</td>
+            <td>{pctCell(b.avg_return_5d)}</td>
+            <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
+              {b.win_rate_5d != null ? `${b.win_rate_5d}%` : '—'}
+            </td>
+            <td>{pctCell(b.avg_return_10d)}</td>
+            <td>{pctCell(b.avg_max_drawdown_pct)}</td>
+            <td>{pctCell(b.alpha_vs_spy_5d)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function PatternReview({ review }) {
+  if (!review) return null;
+  const sections = [
+    { key: 'what_worked',          label: 'What Worked',       itemCls: styles.patternItemWorked },
+    { key: 'what_failed',          label: 'What Failed',       itemCls: styles.patternItemFailed },
+    { key: 'missed_patterns',      label: 'Missed Patterns',   itemCls: styles.patternItem },
+    { key: 'likely_strict_filters',label: 'Too Strict',        itemCls: styles.patternItemStrict },
+    { key: 'likely_noisy_filters', label: 'Too Noisy',         itemCls: styles.patternItemStrict },
+    { key: 'suggested_focus',      label: 'Suggested Focus',   itemCls: styles.patternItemFocus },
+  ];
+  const nonEmpty = sections.filter(s => (review[s.key] || []).length > 0);
+  if (!nonEmpty.length) return <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>Insufficient data for pattern analysis.</div>;
+  return (
+    <div className={styles.patternGrid}>
+      {nonEmpty.map(({ key, label, itemCls }) => (
+        <div key={key} className={styles.patternCard}>
+          <div className={styles.patternCardTitle}>{label}</div>
+          {(review[key] || []).map((item, i) => (
+            <div key={i} className={`${styles.patternItem} ${itemCls}`}>{item}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ExperimentCard({ exp, idx }) {
+  const confCls = {
+    HIGH:   styles.confHigh,
+    MEDIUM: styles.confMedium,
+    LOW:    styles.confLow,
+  }[exp.confidence] || styles.confLow;
+  return (
+    <div className={`${styles.experimentCard} ${confCls}`}>
+      <div className={styles.experimentTitle}>{idx}. {exp.title}</div>
+      <div className={styles.experimentMeta}>
+        <span className={styles.experimentType}>{exp.experiment_type}</span>
+        <span className={styles.experimentConf}>{exp.confidence}</span>
+      </div>
+      <div className={styles.experimentDesc}>{exp.description}</div>
+      {exp.evidence && <div className={styles.experimentEvidence}>Evidence: {exp.evidence}</div>}
+    </div>
+  );
+}
+
+function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyMarkdown() {
+    try {
+      const r = await fetch(`${apiUrl}/api/replay/${runId}/research-bundle/markdown`);
+      if (r.ok) {
+        await navigator.clipboard.writeText(await r.text());
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    } catch (_) {}
+  }
+
+  function downloadJSON() {
+    window.open(`${apiUrl}/api/replay/${runId}/research-bundle/download?format=json`);
+  }
+
+  function downloadMarkdown() {
+    window.open(`${apiUrl}/api/replay/${runId}/research-bundle/download?format=markdown`);
+  }
+
+  if (loading) return <div className={styles.statusMsg}>Building research bundle…</div>;
+  if (!bundle) return (
+    <div className={styles.emptyMsg}>
+      Research bundle not loaded.
+      <div className={styles.emptyHint}>
+        <button className={styles.runBtn} style={{ width: 'auto', marginTop: 8 }} onClick={onReload}>
+          Build Bundle
+        </button>
+      </div>
+    </div>
+  );
+
+  const s    = bundle.summary || {};
+  const pr   = bundle.pattern_review || {};
+  const exps = bundle.suggested_experiments || [];
+  const fps  = bundle.false_positives || [];
+  const mm   = bundle.missed_movers || [];
+  const lc   = s.outcome_label_counts || {};
+
+  return (
+    <div className={styles.bundleWrap}>
+      {/* Export bar */}
+      <div className={styles.exportRow}>
+        <div className={styles.researchWarning}>⚠ Research Only — No auto-apply</div>
+        <button className={`${styles.exportBtn} ${styles.exportBtnPrimary}`} onClick={copyMarkdown}>
+          {copied ? '✓ Copied' : 'Copy Markdown'}
+        </button>
+        <button className={styles.exportBtn} onClick={downloadJSON}>Download JSON</button>
+        <button className={styles.exportBtn} onClick={downloadMarkdown}>Download .md</button>
+        <button className={styles.exportBtn} onClick={onReload}>Rebuild</button>
+      </div>
+
+      {/* Summary KPIs */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>Replay Overview</div>
+        <div className={styles.summaryGrid}>
+          <div className={styles.summaryKPI}>
+            <div className={styles.kpiValue}>{s.total_candidates ?? 0}</div>
+            <div className={styles.kpiLabel}>Candidates</div>
+          </div>
+          <div className={styles.summaryKPI}>
+            <div className={styles.kpiValue}>{s.total_outcomes_5d ?? 0}</div>
+            <div className={styles.kpiLabel}>5d Outcomes</div>
+          </div>
+          <div className={styles.summaryKPI}>
+            <div className={styles.kpiValue}>{s.total_missed_movers ?? 0}</div>
+            <div className={styles.kpiLabel}>Missed Movers</div>
+          </div>
+          {s.avg_return_5d != null && (
+            <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
+              <div className={`${styles.kpiValue} ${s.avg_return_5d >= 0 ? styles.returnPositive : styles.returnNegative}`}>
+                {s.avg_return_5d >= 0 ? '+' : ''}{fmt(s.avg_return_5d)}%
+              </div>
+              <div className={styles.kpiLabel}>Avg 5d Return</div>
+            </div>
+          )}
+          {s.win_rate_5d != null && (
+            <div className={styles.summaryKPI}>
+              <div className={styles.kpiValue}>{fmt(s.win_rate_5d)}%</div>
+              <div className={styles.kpiLabel}>Win Rate 5d</div>
+            </div>
+          )}
+          {s.avg_alpha_vs_spy_5d != null && (
+            <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
+              <div className={`${styles.kpiValue} ${s.avg_alpha_vs_spy_5d >= 0 ? styles.returnPositive : styles.returnNegative}`}>
+                {s.avg_alpha_vs_spy_5d >= 0 ? '+' : ''}{fmt(s.avg_alpha_vs_spy_5d)}%
+              </div>
+              <div className={styles.kpiLabel}>α vs SPY 5d</div>
+            </div>
+          )}
+        </div>
+
+        {/* Outcome label pills */}
+        {s.total_outcomes_5d > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+            {[
+              ['SUCCESSFUL_BREAKOUT', lc.SUCCESSFUL_BREAKOUT, 'var(--lime)'],
+              ['EARLY_WINNER',        lc.EARLY_WINNER,        'var(--cyan)'],
+              ['NO_FOLLOW_THROUGH',   lc.NO_FOLLOW_THROUGH,   'var(--text-muted)'],
+              ['LATE_SIGNAL',         lc.LATE_SIGNAL,         'var(--amber)'],
+              ['FAILED_BREAKOUT',     lc.FAILED_BREAKOUT,     'var(--red)'],
+              ['FALSE_POSITIVE',      lc.FALSE_POSITIVE,      '#ff4466'],
+            ].filter(([, v]) => v > 0).map(([label, count, color]) => (
+              <span key={label} style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+                padding: '2px 8px', borderRadius: 'var(--r-pill)',
+                background: `${color}18`, border: `1px solid ${color}44`, color,
+              }}>
+                {label.replace('_', ' ')}: {count}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Performance by Tier */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>Performance by Tier</div>
+        <BucketTable data={bundle.performance_by_tier} />
+      </div>
+
+      {/* Performance by Signal Combo */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>Performance by Signal Combination</div>
+        <BucketTable data={bundle.performance_by_source} />
+      </div>
+
+      {/* Performance: Ignition + Ribbon side by side */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle}>By Ignition Signal</div>
+          <BucketTable data={bundle.performance_by_ignition_signal} />
+        </div>
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle}>By Ribbon Signal</div>
+          <BucketTable data={bundle.performance_by_ribbon_signal} />
+        </div>
+      </div>
+
+      {/* False Positives */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>Top False Positives / Failures</div>
+        {fps.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No significant false positives in this run.</div>
+        ) : (
+          <table className={styles.fpTable}>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Date</th>
+                <th>Tier</th>
+                <th>Score</th>
+                <th>3d Ret</th>
+                <th>5d Ret</th>
+                <th>Max DD</th>
+                <th>Label</th>
+                <th>Ign</th>
+                <th>Rib</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fps.slice(0, 15).map((fp, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{fp.symbol}</td>
+                  <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>{fp.scan_date || '—'}</td>
+                  <td><TierBadge tier={fp.tier} /></td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>{fp.total_score != null ? fmt(fp.total_score, 1) : '—'}</td>
+                  <td>{pctCell(fp.return_3d)}</td>
+                  <td>{pctCell(fp.return_5d)}</td>
+                  <td>{pctCell(fp.max_drawdown_pct)}</td>
+                  <td>{fp.outcome_label ? <OutcomeLabel label={fp.outcome_label} /> : '—'}</td>
+                  <td style={{ color: fp.ignition_signal ? 'var(--lime)' : 'var(--text-muted)' }}>
+                    {fp.ignition_signal ? '✓' : '—'}
+                  </td>
+                  <td style={{ color: fp.ribbon_signal ? 'var(--cyan)' : 'var(--text-muted)' }}>
+                    {fp.ribbon_signal ? '✓' : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Missed Movers */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>Top Missed Movers</div>
+        {mm.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No significant missed movers in this run.</div>
+        ) : (
+          <table className={styles.fpTable}>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Date</th>
+                <th>Price</th>
+                <th>3d Ret</th>
+                <th>5d Ret</th>
+                <th>10d Ret</th>
+                <th>Why Missed</th>
+                <th>Pre-filtered</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mm.slice(0, 15).map((m, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{m.symbol}</td>
+                  <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>{m.scan_date || '—'}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>{m.price_on_date != null ? `$${fmt(m.price_on_date, 2)}` : '—'}</td>
+                  <td>{pctCell(m.future_return_3d)}</td>
+                  <td>{pctCell(m.future_return_5d)}</td>
+                  <td>{pctCell(m.future_return_10d)}</td>
+                  <td><span className={styles.whyMissed}>{m.why_missed || '—'}</span></td>
+                  <td style={{ color: m.was_filtered_pre_score ? 'var(--amber)' : 'var(--text-muted)', fontSize: 10 }}>
+                    {m.was_filtered_pre_score ? 'Yes' : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Pattern Review */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>Pattern Review</div>
+        <PatternReview review={pr} />
+      </div>
+
+      {/* Suggested Experiments */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>Suggested Experiments</div>
+        <div className={styles.researchWarning}>⚠ Proposals only — not auto-applied</div>
+        {exps.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No experiments suggested — run may have insufficient data.</div>
+        ) : (
+          <div className={styles.experimentsGrid}>
+            {exps.map((exp, i) => <ExperimentCard key={i} exp={exp} idx={i + 1} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function ReplayPage() {
@@ -94,12 +422,14 @@ export default function ReplayPage() {
   // ── History + detail ────────────────────────────────────────────────────────
   const [history, setHistory]         = useState([]);
   const [activeRun, setActiveRun]     = useState(null);   // run object
-  const [tab, setTab]                 = useState('candidates'); // candidates | outcomes | missed | summary
+  const [tab, setTab]                 = useState('candidates'); // candidates | outcomes | missed | summary | bundle
 
   const [candidates, setCandidates]   = useState([]);
   const [outcomes, setOutcomes]       = useState([]);
   const [missed, setMissed]           = useState([]);
   const [summary, setSummary]         = useState(null);
+  const [bundle, setBundle]           = useState(null);
+  const [bundleLoading, setBundleLoading] = useState(false);
 
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [error, setError]             = useState('');
@@ -200,11 +530,21 @@ export default function ReplayPage() {
       .catch(() => {});
   }, []);
 
-  // Load outcomes/missed lazily on tab change
+  async function loadBundle(runId) {
+    setBundleLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/${runId}/research-bundle`);
+      if (r.ok) setBundle(await r.json());
+    } catch (_) {}
+    setBundleLoading(false);
+  }
+
+  // Load outcomes/missed/bundle lazily on tab change
   useEffect(() => {
     if (!activeRun) return;
     if (tab === 'outcomes' && outcomes.length === 0) loadOutcomes(activeRun.id);
     if (tab === 'missed'   && missed.length   === 0) loadMissed(activeRun.id);
+    if (tab === 'bundle'   && !bundle)               loadBundle(activeRun.id);
   }, [tab, activeRun]);
 
   // ── Actions ──────────────────────────────────────────────────────────────────
@@ -249,6 +589,7 @@ export default function ReplayPage() {
     setOutcomes([]);
     setMissed([]);
     setSummary(null);
+    setBundle(null);
     setTab('candidates');
     loadRunDetail(run.id);
   }
@@ -483,7 +824,7 @@ export default function ReplayPage() {
 
                 {/* Tabs */}
                 <div className={styles.tabRow}>
-                  {['candidates', 'outcomes', 'missed', 'summary'].map(t => (
+                  {['candidates', 'outcomes', 'missed', 'summary', 'bundle'].map(t => (
                     <button
                       key={t}
                       className={`${styles.tab} ${tab === t ? styles.tabActive : ''}`}
@@ -493,6 +834,7 @@ export default function ReplayPage() {
                       {t === 'outcomes'   && `Outcomes (${outcomes.length})`}
                       {t === 'missed'     && `Missed Movers (${missed.length})`}
                       {t === 'summary'    && 'Summary'}
+                      {t === 'bundle'     && 'Research Bundle'}
                     </button>
                   ))}
                 </div>
@@ -757,6 +1099,15 @@ export default function ReplayPage() {
                     </>
                   )
                 )}
+
+                {/* ── Research Bundle tab ───────────────────────────────── */}
+                {tab === 'bundle' && <BundleTab
+                  bundle={bundle}
+                  loading={bundleLoading}
+                  runId={activeRun.id}
+                  onReload={() => { setBundle(null); loadBundle(activeRun.id); }}
+                  apiUrl={API_URL}
+                />}
               </div>
             )}
           </div>

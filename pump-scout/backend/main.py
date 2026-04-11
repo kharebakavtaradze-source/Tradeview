@@ -1948,3 +1948,84 @@ async def replay_get_summary(run_id: int):
         "best_5":            best5,
         "worst_5":           worst5,
     }
+
+
+# ── Research Bundle endpoints ─────────────────────────────────────────────────
+# Read-only reporting layer. Never modifies live scanner, scoring, or journal.
+
+@app.get("/api/replay/{run_id}/research-bundle")
+async def replay_research_bundle(run_id: int):
+    """
+    Build and return the full structured research bundle for a replay run.
+    Covers: summary, performance by bucket, false positives, missed movers,
+    pattern review, and suggested experiments (proposals only).
+    """
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    from replay.research_bundle import build_research_bundle
+    try:
+        bundle = await build_research_bundle(run_id)
+        return bundle
+    except Exception as exc:
+        logger.error(f"[BUNDLE] run_id={run_id} build failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Bundle build failed: {str(exc)[:200]}")
+
+
+@app.get("/api/replay/{run_id}/research-bundle/markdown")
+async def replay_research_bundle_markdown(run_id: int):
+    """
+    Return the research bundle as a human-readable Markdown report.
+    Suitable for pasting into AI chat or saving as a .md file.
+    """
+    from fastapi.responses import PlainTextResponse
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    from replay.research_bundle import build_research_bundle, render_research_bundle_markdown
+    try:
+        bundle   = await build_research_bundle(run_id)
+        markdown = render_research_bundle_markdown(bundle)
+        return PlainTextResponse(content=markdown, media_type="text/markdown")
+    except Exception as exc:
+        logger.error(f"[BUNDLE/MD] run_id={run_id} failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Markdown render failed: {str(exc)[:200]}")
+
+
+@app.get("/api/replay/{run_id}/research-bundle/download")
+async def replay_research_bundle_download(run_id: int, format: str = "json"):
+    """
+    Download the research bundle as a JSON or Markdown file.
+    ?format=json  (default) — downloads bundle.json
+    ?format=markdown         — downloads bundle.md
+    """
+    import json as _json
+    from fastapi.responses import Response
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    from replay.research_bundle import build_research_bundle, render_research_bundle_markdown
+    try:
+        bundle = await build_research_bundle(run_id)
+        if format == "markdown":
+            content  = render_research_bundle_markdown(bundle)
+            filename = f"replay_{run_id}_research_bundle.md"
+            return Response(
+                content=content,
+                media_type="text/markdown",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        else:
+            content  = _json.dumps(bundle, indent=2, default=str)
+            filename = f"replay_{run_id}_research_bundle.json"
+            return Response(
+                content=content,
+                media_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+    except Exception as exc:
+        logger.error(f"[BUNDLE/DL] run_id={run_id} failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Download failed: {str(exc)[:200]}")
