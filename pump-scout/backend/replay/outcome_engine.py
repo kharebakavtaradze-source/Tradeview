@@ -250,7 +250,8 @@ async def detect_missed_movers(
 
     Returns list of missed mover dicts (also persisted to replay_missed_movers).
     """
-    from scanner.massive_data import fetch_grouped_daily, get_us_etf_symbols
+    from scanner.massive_data import fetch_grouped_daily, fetch_ticker_type, get_us_etf_symbols
+    from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
     from database import save_replay_missed_movers
 
     try:
@@ -320,6 +321,24 @@ async def detect_missed_movers(
             # 10d return (if available)
             idx_10d = min(len(forwards) - 1, 9)
             ret_10d = round((forwards[idx_10d]["c"] - entry_price) / entry_price * 100, 2) if len(forwards) > 5 else None
+
+            # Hard allowlist: confirm this is a common stock before recording
+            # as a missed mover.  ETFs/funds that evaded the bulk exclusion
+            # list should not appear in missed-mover research output.
+            # Only called here (after threshold check) — not for the full universe.
+            try:
+                ticker_type = await fetch_ticker_type(sym)
+                if ticker_type is not None:
+                    meta = {"type": ticker_type}
+                    if not is_common_stock(meta):
+                        reason = get_universe_filter_reason(meta)
+                        logger.info(
+                            f"[MISSED] {sym} excluded: "
+                            f"type={ticker_type!r} universe_filter_reason={reason}"
+                        )
+                        return
+            except Exception:
+                pass   # type lookup failure → allow through (conservative)
 
             # Diagnose why missed
             why = _diagnose_why_missed(sym, bar, all_bars, found_symbols,

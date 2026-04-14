@@ -310,8 +310,10 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
     from scanner.massive_data import (
         fetch_grouped_daily,
         fetch_candles_massive,
+        fetch_ticker_type,
         get_us_etf_symbols,
     )
+    from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
     from scanner.indicators import calc_all
     from scanner.scoring import score_ticker
     from scanner.wyckoff import detect_regime
@@ -388,6 +390,21 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
 
     async def _process(sym: str, eod: dict) -> Optional[dict]:
         try:
+            # Hard allowlist: verify this is a common stock before fetching
+            # full candle history.  Saves API calls for ETFs/funds that slip
+            # through the bulk exclusion list.
+            # None = type lookup failed → allow through (conservative).
+            ticker_type = await fetch_ticker_type(sym)
+            if ticker_type is not None:
+                meta = {"type": ticker_type}
+                if not is_common_stock(meta):
+                    reason = get_universe_filter_reason(meta)
+                    logger.debug(
+                        f"[REPLAY] {sym} excluded: "
+                        f"type={ticker_type!r} universe_filter_reason={reason}"
+                    )
+                    return None
+
             candles = await fetch_candles_massive(sym, days=200, as_of_date=as_of_date)
             if not candles or len(candles) < 30:
                 return None
