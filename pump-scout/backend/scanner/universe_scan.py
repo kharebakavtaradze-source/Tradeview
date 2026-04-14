@@ -28,10 +28,10 @@ from scanner.massive_data import (
     fetch_candles_massive,
     fetch_ticker_details,
     fetch_ticker_type,
-    EQUITY_TYPES,
     get_last_trading_day,
     get_us_etf_symbols,
 )
+from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
 from scanner.indicators import calc_all
 from scanner.wyckoff import detect_regime
 from scanner.scoring import score_ticker
@@ -230,15 +230,18 @@ async def run_universe_scan(target_date: str = None) -> dict:
         type_results   = all_gathered[len(batch):]
 
         for sym, candles, ticker_type in zip(batch, candle_results, type_results):
-            # Per-symbol type guard: if Polygon returns a non-equity type,
-            # reject even if the bulk exclusion list missed it.
-            # None / Exception means unknown — allow through (conservative).
-            if (not isinstance(ticker_type, Exception)
-                    and ticker_type is not None
-                    and ticker_type not in EQUITY_TYPES):
-                logger.info(f"Skipping {sym}: Polygon type={ticker_type!r} (non-equity)")
-                skip_type += 1
-                continue
+            # Per-symbol type guard: hard allowlist — only common stocks.
+            # None / Exception means type lookup failed → allow through (conservative).
+            if not isinstance(ticker_type, Exception) and ticker_type is not None:
+                meta = {"type": ticker_type}
+                if not is_common_stock(meta):
+                    reason = get_universe_filter_reason(meta)
+                    logger.info(
+                        f"Skipping {sym}: type={ticker_type!r} "
+                        f"universe_filter_reason={reason}"
+                    )
+                    skip_type += 1
+                    continue
 
             if isinstance(candles, Exception):
                 logger.warning(f"Candles exception for {sym}: {candles}")

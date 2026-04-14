@@ -1342,11 +1342,13 @@ async def admin_test_massive(symbol: str = "AAPL"):
     """
     Test the Massive/Polygon connection.
     Fetches a sample from grouped daily data + ticker details for one symbol.
+    Also returns universe filter classification for the requested symbol.
     """
     from scanner.massive_data import (
-        fetch_grouped_daily, fetch_ticker_details,
+        fetch_grouped_daily, fetch_ticker_details, fetch_ticker_type,
         get_last_trading_day, MASSIVE_API_KEY,
     )
+    from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
     if not MASSIVE_API_KEY:
         return {"error": "MASSIVE_API_KEY not set in environment", "api_key_set": False}
 
@@ -1359,6 +1361,12 @@ async def admin_test_massive(symbol: str = "AAPL"):
 
     # Also test ticker details for the requested symbol
     details = await fetch_ticker_details(symbol.upper())
+
+    # Universe filter classification for the requested symbol
+    ticker_type     = await fetch_ticker_type(symbol.upper())
+    meta            = {"type": ticker_type} if ticker_type else {}
+    filter_reason   = get_universe_filter_reason(meta) if ticker_type else "UNKNOWN_SECURITY_TYPE"
+    is_stock        = is_common_stock(meta) if ticker_type else False
 
     # Check DB cache
     from database import get_sector_full_from_db
@@ -1373,6 +1381,55 @@ async def admin_test_massive(symbol: str = "AAPL"):
         "sample":         sample,
         "ticker_details": details,
         "db_cached":      cached,
+        "universe_filter": {
+            "symbol":                symbol.upper(),
+            "security_type":         ticker_type,
+            "is_common_stock":       is_stock,
+            "universe_filter_reason": filter_reason,
+        },
+    }
+
+
+@app.get("/api/admin/universe-filter/check")
+async def admin_universe_filter_check(symbols: str = "AAPL,SPY,TQQQ,GLD"):
+    """
+    Audit the universe filter classification for a comma-separated list of symbols.
+    Returns security_type, is_common_stock, and universe_filter_reason for each.
+
+    Example: /api/admin/universe-filter/check?symbols=AAPL,SPY,TQQQ,GLD,GBTC
+    """
+    from scanner.massive_data import fetch_ticker_type
+    from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
+
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:30]
+
+    import asyncio as _asyncio
+    type_results = await _asyncio.gather(
+        *[fetch_ticker_type(s) for s in sym_list],
+        return_exceptions=True,
+    )
+
+    output = []
+    for sym, t in zip(sym_list, type_results):
+        if isinstance(t, Exception):
+            t = None
+        meta   = {"type": t} if t else {}
+        reason = get_universe_filter_reason(meta) if t else "UNKNOWN_SECURITY_TYPE"
+        output.append({
+            "symbol":                sym,
+            "security_type":         t,
+            "is_common_stock":       is_common_stock(meta) if t else False,
+            "universe_filter_reason": reason,
+        })
+
+    included = [r for r in output if r["is_common_stock"]]
+    excluded = [r for r in output if not r["is_common_stock"]]
+
+    return {
+        "checked":  len(output),
+        "included": len(included),
+        "excluded": len(excluded),
+        "results":  output,
     }
 
 
