@@ -2804,3 +2804,570 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "snapshot":         json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":       r.created_at.isoformat() if r.created_at else None,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4x PUMP STUDY — Replay-only research tables
+# All tables are additive; no existing table is modified.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class PumpStudyRun(Base):
+    """
+    One pump study run covering a date range.
+    Tracks status, parameters, and completion counts.
+    Replay-only — never touches live scan data.
+    """
+    __tablename__ = "pump_study_runs"
+
+    id              = Column(Integer,     primary_key=True)
+    status          = Column(String(20),  default="running")   # running | completed | failed
+    start_date      = Column(String(10),  nullable=False)
+    end_date        = Column(String(10),  nullable=False)
+    window_days     = Column(Integer,     default=14)           # look-ahead window
+    min_multiple    = Column(Float,       default=4.0)          # e.g. 4.0 = 4x
+    universe_limit  = Column(Integer,     default=500)          # 0 = no limit
+    episodes_found  = Column(Integer,     default=0)
+    symbols_scanned = Column(Integer,     default=0)
+    error_message   = Column(Text,        nullable=True)
+    notes           = Column(Text,        nullable=True)
+    started_at      = Column(DateTime(timezone=True), nullable=True)
+    finished_at     = Column(DateTime(timezone=True), nullable=True)
+    created_at      = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PumpEpisode(Base):
+    """
+    One confirmed pump episode (deduplicated).
+    One row per canonical pump event per symbol.
+    """
+    __tablename__ = "pump_episodes"
+
+    id                       = Column(Integer,     primary_key=True)
+    run_id                   = Column(Integer,     nullable=False, index=True)
+    cluster_id               = Column(String(30),  nullable=True,  index=True)
+    symbol                   = Column(String(10),  nullable=False, index=True)
+    pump_start_date          = Column(String(10),  nullable=False)
+    pump_peak_date           = Column(String(10),  nullable=False)
+    pump_window_days         = Column(Integer,     nullable=True)
+    start_price              = Column(Float,       nullable=False)
+    peak_price               = Column(Float,       nullable=False)
+    pump_multiple            = Column(Float,       nullable=False)
+    pump_return_pct          = Column(Float,       nullable=False)
+    days_to_peak             = Column(Integer,     nullable=True)
+    days_to_double           = Column(Integer,     nullable=True)
+    max_drawdown_before_peak = Column(Float,       nullable=True)
+    pump_type                = Column(String(40),  nullable=True)
+    was_in_universe          = Column(Boolean,     default=False)
+    was_flagged_by_scanner   = Column(Boolean,     default=False)
+    filter_reason            = Column(String(80),  nullable=True)
+    had_ribbon               = Column(Boolean,     default=False)
+    had_ignition             = Column(Boolean,     default=False)
+    strongest_wyckoff_state  = Column(String(20),  nullable=True)
+    strongest_retest_before  = Column(String(20),  nullable=True)
+    max_volume_anomaly       = Column(Float,       nullable=True)
+    largest_gap_pct          = Column(Float,       nullable=True)
+    sector                   = Column(String(60),  nullable=True)
+    industry                 = Column(String(60),  nullable=True)
+    summary_json             = Column(Text,        nullable=True)
+    created_at               = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PumpEpisodeSnapshot(Base):
+    """
+    Daily OHLCV + technical indicators for one day inside an episode window.
+    Three phases: pre (40d before pump), pump (start→peak), post (10-20d after).
+    """
+    __tablename__ = "pump_episode_snapshots"
+
+    id                = Column(Integer,     primary_key=True)
+    episode_id        = Column(Integer,     nullable=False, index=True)
+    run_id            = Column(Integer,     nullable=False, index=True)
+    symbol            = Column(String(10),  nullable=False)
+    date              = Column(String(10),  nullable=False)
+    window_phase      = Column(String(6),   nullable=True)   # pre | pump | post
+    # OHLCV
+    open              = Column(Float,       nullable=True)
+    high              = Column(Float,       nullable=True)
+    low               = Column(Float,       nullable=True)
+    close             = Column(Float,       nullable=True)
+    volume            = Column(BigInteger,  nullable=True)
+    # Derived OHLCV
+    gap_pct           = Column(Float,       nullable=True)
+    intraday_range_pct= Column(Float,       nullable=True)
+    close_position    = Column(Float,       nullable=True)   # 0-1 position in bar
+    daily_return_pct  = Column(Float,       nullable=True)
+    cum_return_pct    = Column(Float,       nullable=True)
+    # Volume
+    volume_vs_avg20   = Column(Float,       nullable=True)
+    volume_zscore     = Column(Float,       nullable=True)
+    # Technicals
+    atr_pct           = Column(Float,       nullable=True)
+    bb_width          = Column(Float,       nullable=True)
+    bb_squeeze        = Column(Boolean,     nullable=True)
+    rsi               = Column(Float,       nullable=True)
+    cmf               = Column(Float,       nullable=True)
+    # Structure
+    ribbon_class      = Column(String(30),  nullable=True)
+    wyckoff_state     = Column(String(20),  nullable=True)
+    # Full snapshot for auditing
+    snapshot_json     = Column(Text,        nullable=True)
+    created_at        = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PumpEpisodeEvent(Base):
+    """
+    Key timeline milestones detected inside an episode window.
+    """
+    __tablename__ = "pump_episode_events"
+
+    id               = Column(Integer,     primary_key=True)
+    episode_id       = Column(Integer,     nullable=False, index=True)
+    run_id           = Column(Integer,     nullable=False, index=True)
+    symbol           = Column(String(10),  nullable=False)
+    event_date       = Column(String(10),  nullable=False)
+    event_type       = Column(String(50),  nullable=False)
+    event_note       = Column(Text,        nullable=True)
+    days_before_pump = Column(Integer,     nullable=True)   # negative = before, positive = after
+    created_at       = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PumpCluster(Base):
+    """
+    Symbol-level pump clustering record.
+    Multiple overlapping raw detections collapse into one cluster.
+    """
+    __tablename__ = "pump_clusters"
+
+    id                   = Column(Integer,     primary_key=True)
+    run_id               = Column(Integer,     nullable=False, index=True)
+    cluster_id           = Column(String(30),  nullable=False, index=True)
+    symbol               = Column(String(10),  nullable=False)
+    canonical_episode_id = Column(Integer,     nullable=True)
+    cluster_start_date   = Column(String(10),  nullable=True)
+    cluster_end_date     = Column(String(10),  nullable=True)
+    canonical_start_date = Column(String(10),  nullable=True)
+    canonical_peak_date  = Column(String(10),  nullable=True)
+    raw_row_count        = Column(Integer,     default=1)
+    created_at           = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PumpComparisonGroup(Base):
+    """
+    Statistical comparison between pump groups (4x vs normal vs FP vs missed).
+    """
+    __tablename__ = "pump_comparison_groups"
+
+    id          = Column(Integer,     primary_key=True)
+    run_id      = Column(Integer,     nullable=False, index=True)
+    group_name  = Column(String(30),  nullable=False)   # 4x_pump | normal_winner | false_positive | missed
+    count       = Column(Integer,     default=0)
+    stats_json  = Column(Text,        nullable=True)    # feature distributions dict
+    created_at  = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PumpAiRecommendation(Base):
+    """
+    AI-generated recommendation for one pump study run.
+    Based purely on deterministic evidence — never auto-applied.
+    """
+    __tablename__ = "pump_ai_recommendations"
+
+    id               = Column(Integer,     primary_key=True)
+    run_id           = Column(Integer,     nullable=False, unique=True, index=True)
+    recommendation   = Column(String(120), nullable=True)
+    engine_suggestion= Column(String(120), nullable=True)
+    confidence       = Column(String(10),  nullable=True)   # HIGH | MEDIUM | LOW
+    patterns_json    = Column(Text,        nullable=True)   # list of repeated patterns
+    raw_text         = Column(Text,        nullable=True)   # full AI response
+    created_at       = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+# ── Pump Study CRUD ───────────────────────────────────────────────────────────
+
+async def create_pump_study_run(data: dict) -> int:
+    async with get_session_factory()() as session:
+        row = PumpStudyRun(
+            status         = "running",
+            start_date     = data["start_date"],
+            end_date       = data["end_date"],
+            window_days    = data.get("window_days",    14),
+            min_multiple   = data.get("min_multiple",   4.0),
+            universe_limit = data.get("universe_limit", 500),
+            notes          = data.get("notes"),
+            started_at     = datetime.utcnow(),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def update_pump_study_run(run_id: int, data: dict) -> None:
+    async with get_session_factory()() as session:
+        result = await session.execute(select(PumpStudyRun).where(PumpStudyRun.id == run_id))
+        row = result.scalar_one_or_none()
+        if not row:
+            return
+        for k, v in data.items():
+            if hasattr(row, k):
+                setattr(row, k, v)
+        await session.commit()
+
+
+async def get_pump_study_run(run_id: int) -> Optional[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(select(PumpStudyRun).where(PumpStudyRun.id == run_id))
+        row = result.scalar_one_or_none()
+        return _pump_study_run_to_dict(row) if row else None
+
+
+async def get_pump_study_runs(limit: int = 20) -> list[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpStudyRun).order_by(PumpStudyRun.created_at.desc()).limit(limit)
+        )
+        return [_pump_study_run_to_dict(r) for r in result.scalars().all()]
+
+
+async def save_pump_episodes(run_id: int, episodes: list[dict]) -> list[int]:
+    """Bulk-insert pump episodes. Returns list of inserted IDs."""
+    ids = []
+    async with get_session_factory()() as session:
+        for ep in episodes:
+            row = PumpEpisode(
+                run_id                   = run_id,
+                cluster_id               = ep.get("cluster_id"),
+                symbol                   = ep["symbol"],
+                pump_start_date          = ep["pump_start_date"],
+                pump_peak_date           = ep["pump_peak_date"],
+                pump_window_days         = ep.get("pump_window_days"),
+                start_price              = ep["start_price"],
+                peak_price               = ep["peak_price"],
+                pump_multiple            = ep["pump_multiple"],
+                pump_return_pct          = ep["pump_return_pct"],
+                days_to_peak             = ep.get("days_to_peak"),
+                days_to_double           = ep.get("days_to_double"),
+                max_drawdown_before_peak = ep.get("max_drawdown_before_peak"),
+                pump_type                = ep.get("pump_type"),
+                was_in_universe          = ep.get("was_in_universe", False),
+                was_flagged_by_scanner   = ep.get("was_flagged_by_scanner", False),
+                filter_reason            = ep.get("filter_reason"),
+                had_ribbon               = ep.get("had_ribbon", False),
+                had_ignition             = ep.get("had_ignition", False),
+                strongest_wyckoff_state  = ep.get("strongest_wyckoff_state"),
+                strongest_retest_before  = ep.get("strongest_retest_before"),
+                max_volume_anomaly       = ep.get("max_volume_anomaly"),
+                largest_gap_pct          = ep.get("largest_gap_pct"),
+                sector                   = ep.get("sector"),
+                industry                 = ep.get("industry"),
+                summary_json             = json.dumps(ep.get("summary") or {}),
+            )
+            session.add(row)
+            await session.flush()
+            ids.append(row.id)
+        await session.commit()
+    return ids
+
+
+async def get_pump_episodes(run_id: int, limit: int = 200) -> list[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisode)
+            .where(PumpEpisode.run_id == run_id)
+            .order_by(PumpEpisode.pump_multiple.desc())
+            .limit(limit)
+        )
+        return [_pump_episode_to_dict(r) for r in result.scalars().all()]
+
+
+async def get_pump_episode(episode_id: int) -> Optional[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisode).where(PumpEpisode.id == episode_id)
+        )
+        row = result.scalar_one_or_none()
+        return _pump_episode_to_dict(row) if row else None
+
+
+async def save_pump_episode_snapshots(snapshots: list[dict]) -> int:
+    if not snapshots:
+        return 0
+    async with get_session_factory()() as session:
+        for s in snapshots:
+            row = PumpEpisodeSnapshot(
+                episode_id        = s["episode_id"],
+                run_id            = s["run_id"],
+                symbol            = s["symbol"],
+                date              = s["date"],
+                window_phase      = s.get("window_phase"),
+                open              = s.get("open"),
+                high              = s.get("high"),
+                low               = s.get("low"),
+                close             = s.get("close"),
+                volume            = s.get("volume"),
+                gap_pct           = s.get("gap_pct"),
+                intraday_range_pct= s.get("intraday_range_pct"),
+                close_position    = s.get("close_position"),
+                daily_return_pct  = s.get("daily_return_pct"),
+                cum_return_pct    = s.get("cum_return_pct"),
+                volume_vs_avg20   = s.get("volume_vs_avg20"),
+                volume_zscore     = s.get("volume_zscore"),
+                atr_pct           = s.get("atr_pct"),
+                bb_width          = s.get("bb_width"),
+                bb_squeeze        = s.get("bb_squeeze"),
+                rsi               = s.get("rsi"),
+                cmf               = s.get("cmf"),
+                ribbon_class      = s.get("ribbon_class"),
+                wyckoff_state     = s.get("wyckoff_state"),
+                snapshot_json     = json.dumps(s.get("snapshot") or {}),
+            )
+            session.add(row)
+        await session.commit()
+    return len(snapshots)
+
+
+async def get_pump_episode_snapshots(episode_id: int) -> list[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisodeSnapshot)
+            .where(PumpEpisodeSnapshot.episode_id == episode_id)
+            .order_by(PumpEpisodeSnapshot.date)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id, "episode_id": r.episode_id, "symbol": r.symbol,
+                "date": r.date, "window_phase": r.window_phase,
+                "open": r.open, "high": r.high, "low": r.low,
+                "close": r.close, "volume": r.volume,
+                "gap_pct": r.gap_pct, "intraday_range_pct": r.intraday_range_pct,
+                "close_position": r.close_position,
+                "daily_return_pct": r.daily_return_pct,
+                "cum_return_pct": r.cum_return_pct,
+                "volume_vs_avg20": r.volume_vs_avg20,
+                "volume_zscore": r.volume_zscore,
+                "atr_pct": r.atr_pct, "bb_width": r.bb_width,
+                "bb_squeeze": r.bb_squeeze, "rsi": r.rsi, "cmf": r.cmf,
+                "ribbon_class": r.ribbon_class, "wyckoff_state": r.wyckoff_state,
+                "snapshot": json.loads(r.snapshot_json or "{}"),
+            }
+            for r in rows
+        ]
+
+
+async def save_pump_episode_events(events: list[dict]) -> int:
+    if not events:
+        return 0
+    async with get_session_factory()() as session:
+        for ev in events:
+            row = PumpEpisodeEvent(
+                episode_id       = ev["episode_id"],
+                run_id           = ev["run_id"],
+                symbol           = ev["symbol"],
+                event_date       = ev["event_date"],
+                event_type       = ev["event_type"],
+                event_note       = ev.get("event_note"),
+                days_before_pump = ev.get("days_before_pump"),
+            )
+            session.add(row)
+        await session.commit()
+    return len(events)
+
+
+async def get_pump_episode_events(episode_id: int) -> list[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisodeEvent)
+            .where(PumpEpisodeEvent.episode_id == episode_id)
+            .order_by(PumpEpisodeEvent.event_date)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id, "episode_id": r.episode_id, "symbol": r.symbol,
+                "event_date": r.event_date, "event_type": r.event_type,
+                "event_note": r.event_note, "days_before_pump": r.days_before_pump,
+            }
+            for r in rows
+        ]
+
+
+async def get_pump_study_timeline(run_id: int) -> list[dict]:
+    """All timeline events for a study run, sorted by symbol + date."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisodeEvent)
+            .where(PumpEpisodeEvent.run_id == run_id)
+            .order_by(PumpEpisodeEvent.symbol, PumpEpisodeEvent.event_date)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "episode_id": r.episode_id, "symbol": r.symbol,
+                "event_date": r.event_date, "event_type": r.event_type,
+                "event_note": r.event_note, "days_before_pump": r.days_before_pump,
+            }
+            for r in rows
+        ]
+
+
+async def save_pump_clusters(clusters: list[dict]) -> int:
+    if not clusters:
+        return 0
+    async with get_session_factory()() as session:
+        for c in clusters:
+            row = PumpCluster(
+                run_id               = c["run_id"],
+                cluster_id           = c["cluster_id"],
+                symbol               = c["symbol"],
+                canonical_episode_id = c.get("canonical_episode_id"),
+                cluster_start_date   = c.get("cluster_start_date"),
+                cluster_end_date     = c.get("cluster_end_date"),
+                canonical_start_date = c.get("canonical_start_date"),
+                canonical_peak_date  = c.get("canonical_peak_date"),
+                raw_row_count        = c.get("raw_row_count", 1),
+            )
+            session.add(row)
+        await session.commit()
+    return len(clusters)
+
+
+async def get_pump_clusters(run_id: int) -> list[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpCluster)
+            .where(PumpCluster.run_id == run_id)
+            .order_by(PumpCluster.symbol)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id, "cluster_id": r.cluster_id, "symbol": r.symbol,
+                "canonical_episode_id": r.canonical_episode_id,
+                "cluster_start_date": r.cluster_start_date,
+                "cluster_end_date": r.cluster_end_date,
+                "canonical_start_date": r.canonical_start_date,
+                "canonical_peak_date": r.canonical_peak_date,
+                "raw_row_count": r.raw_row_count,
+            }
+            for r in rows
+        ]
+
+
+async def save_pump_comparison_groups(run_id: int, groups: list[dict]) -> int:
+    if not groups:
+        return 0
+    async with get_session_factory()() as session:
+        for g in groups:
+            row = PumpComparisonGroup(
+                run_id     = run_id,
+                group_name = g["group_name"],
+                count      = g.get("count", 0),
+                stats_json = json.dumps(g.get("stats") or {}),
+            )
+            session.add(row)
+        await session.commit()
+    return len(groups)
+
+
+async def get_pump_comparison_groups(run_id: int) -> list[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpComparisonGroup).where(PumpComparisonGroup.run_id == run_id)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id, "group_name": r.group_name, "count": r.count,
+                "stats": json.loads(r.stats_json or "{}"),
+            }
+            for r in rows
+        ]
+
+
+async def save_pump_ai_recommendation(run_id: int, rec: dict) -> None:
+    async with get_session_factory()() as session:
+        row = PumpAiRecommendation(
+            run_id            = run_id,
+            recommendation    = rec.get("recommendation"),
+            engine_suggestion = rec.get("engine_suggestion"),
+            confidence        = rec.get("confidence"),
+            patterns_json     = json.dumps(rec.get("patterns") or []),
+            raw_text          = rec.get("raw_text"),
+        )
+        session.add(row)
+        await session.commit()
+
+
+async def get_pump_ai_recommendation(run_id: int) -> Optional[dict]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpAiRecommendation)
+            .where(PumpAiRecommendation.run_id == run_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return None
+        return {
+            "run_id": row.run_id,
+            "recommendation": row.recommendation,
+            "engine_suggestion": row.engine_suggestion,
+            "confidence": row.confidence,
+            "patterns": json.loads(row.patterns_json or "[]"),
+            "raw_text": row.raw_text,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+
+# ── Pump Study serialisers ────────────────────────────────────────────────────
+
+def _pump_study_run_to_dict(r: PumpStudyRun) -> dict:
+    return {
+        "id":              r.id,
+        "status":          r.status,
+        "start_date":      r.start_date,
+        "end_date":        r.end_date,
+        "window_days":     r.window_days,
+        "min_multiple":    r.min_multiple,
+        "universe_limit":  r.universe_limit,
+        "episodes_found":  r.episodes_found,
+        "symbols_scanned": r.symbols_scanned,
+        "error_message":   r.error_message,
+        "notes":           r.notes,
+        "started_at":      r.started_at.isoformat()  if r.started_at  else None,
+        "finished_at":     r.finished_at.isoformat() if r.finished_at else None,
+        "created_at":      r.created_at.isoformat()  if r.created_at  else None,
+    }
+
+
+def _pump_episode_to_dict(r: PumpEpisode) -> dict:
+    return {
+        "id":                       r.id,
+        "run_id":                   r.run_id,
+        "cluster_id":               r.cluster_id,
+        "symbol":                   r.symbol,
+        "pump_start_date":          r.pump_start_date,
+        "pump_peak_date":           r.pump_peak_date,
+        "pump_window_days":         r.pump_window_days,
+        "start_price":              r.start_price,
+        "peak_price":               r.peak_price,
+        "pump_multiple":            r.pump_multiple,
+        "pump_return_pct":          r.pump_return_pct,
+        "days_to_peak":             r.days_to_peak,
+        "days_to_double":           r.days_to_double,
+        "max_drawdown_before_peak": r.max_drawdown_before_peak,
+        "pump_type":                r.pump_type,
+        "was_in_universe":          r.was_in_universe,
+        "was_flagged_by_scanner":   r.was_flagged_by_scanner,
+        "filter_reason":            r.filter_reason,
+        "had_ribbon":               r.had_ribbon,
+        "had_ignition":             r.had_ignition,
+        "strongest_wyckoff_state":  r.strongest_wyckoff_state,
+        "strongest_retest_before":  r.strongest_retest_before,
+        "max_volume_anomaly":       r.max_volume_anomaly,
+        "largest_gap_pct":          r.largest_gap_pct,
+        "sector":                   r.sector,
+        "industry":                 r.industry,
+        "summary":                  json.loads(r.summary_json or "{}"),
+        "created_at":               r.created_at.isoformat() if r.created_at else None,
+    }
