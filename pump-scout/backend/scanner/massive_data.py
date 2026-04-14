@@ -351,9 +351,9 @@ async def fetch_candles_massive(symbol: str, days: int = 200, as_of_date: Option
 
 # ── Ticker Details (sector / market_cap enrichment) ───────────────────────────
 
-# Polygon security types considered true equities (stocks + ADRs).
-# Anything NOT in this set is a non-stock instrument (ETF, fund, ETN, warrant…).
-EQUITY_TYPES: frozenset[str] = frozenset({"CS", "ADR", "ADRC", "ADRW", "ADRR"})
+# EQUITY_TYPES: canonical allowlist imported from stock_universe_filter.
+# Re-exported here for backwards-compatibility with existing import sites.
+from scanner.stock_universe_filter import COMMON_STOCK_TYPES as EQUITY_TYPES  # noqa: E402
 
 
 async def fetch_ticker_type(symbol: str) -> str | None:
