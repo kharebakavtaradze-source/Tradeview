@@ -1,8 +1,10 @@
 """
-Pump Study Engine — Phase 3A: Raw Detection
-============================================
+Pump Study Engine — Phase 3C: PRE/PUMP/POST Snapshots
+======================================================
 
-Detects raw 4x pump candidates in historical price data using a sliding window.
+Detects raw 4x pump candidates in historical price data using a sliding window,
+clusters overlapping detections, and builds daily indicator snapshots for each
+canonical episode across three phases: PRE, PUMP, POST.
 
 Algorithm (per symbol)
 ----------------------
@@ -22,8 +24,8 @@ Phase scope
 -----------
 Phase 3A  ✓  Raw detection → pump_episode_detections
 Phase 3B  ✓  Clustering → pump_clusters + pump_episodes; back-fill detections
-Phase 3C  ✗  Snapshots / events (not yet)
-Phase 3D  ✗  Comparison groups  (not yet)
+Phase 3C  ✓  PRE / PUMP / POST daily snapshots → pump_episode_snapshots
+Phase 3D  ✗  Timeline events / comparison groups (not yet)
 """
 
 import asyncio
@@ -407,6 +409,274 @@ def _build_episode_from_cluster(run_id: int, cluster: dict) -> dict:
     }
 
 
+# ── Phase 3C: snapshot helpers ───────────────────────────────────────────────
+
+# PRE window: N trading days before canonical_start_date
+_PRE_WINDOW_DAYS: int  = 40
+# POST window: N trading days after canonical_peak_date
+_POST_WINDOW_DAYS: int = 15
+# Minimum candles needed for calc_all() (Bollinger / CMF need ~20)
+_MIN_CANDLES_INDICATORS: int = 20
+# Minimum candles needed for detect_regime() (Wyckoff needs ~60)
+_MIN_CANDLES_REGIME: int = 60
+
+
+def _to_scanner_fmt(candle: dict) -> dict:
+    """
+    Convert a candle dict from _fetch_candles_range format to scanner format.
+
+    _fetch_candles_range → {date, open, high, low, close, volume}
+    calc_all() expects  → {o, h, l, c, v}
+    """
+    return {
+        "o": candle.get("open"),
+        "h": candle.get("high"),
+        "l": candle.get("low"),
+        "c": candle.get("close"),
+        "v": candle.get("volume"),
+    }
+
+
+def _build_snapshots(
+    episode_id: int,
+    run_id:     int,
+    symbol:     str,
+    episode:    dict,
+    all_candles: list[dict],
+) -> list[dict]:
+    """
+    Build daily PRE/PUMP/POST indicator snapshots for one canonical episode.
+
+    PRE  = _PRE_WINDOW_DAYS  trading days before pump_start_date (exclusive)
+    PUMP = pump_start_date through pump_peak_date (inclusive on both ends)
+    POST = _POST_WINDOW_DAYS trading days after  pump_peak_date  (exclusive)
+
+    For each day in the combined window we:
+      1. Convert a trailing slice of candles (ending on that day) to scanner fmt
+      2. Call calc_all()       → core indicators (needs >= _MIN_CANDLES_INDICATORS bars)
+      3. Call detect_regime()  → wyckoff state   (needs >= _MIN_CANDLES_REGIME bars)
+      4. Call classify_ribbon()→ ribbon class
+      5. Call calc_ignition()  → ignition bucket
+      6. Call score_toxicity() → toxicity score / level
+      7. Call score_pump()     → pump_bucket
+
+    Fields that do not exist in the current codebase
+    (sequence_type, structural_bias, retest_*, bearish_state, bearish_quality,
+     bullish_quality, accumulation_bonus_hint, distribution_penalty_hint,
+     MACD_state, sector, industry, market_regime) are stored as None —
+    pending future enrichment in a later phase.
+
+    Parameters
+    ----------
+    episode_id  : DB id for the saved PumpEpisode row
+    run_id      : associated run id
+    symbol      : ticker
+    episode     : dict with pump_start_date / pump_peak_date / start_price
+    all_candles : complete candle list for this symbol fetched during detection
+                  (sorted asc, format: {date, open, high, low, close, volume})
+
+    Returns
+    -------
+    List of snapshot dicts ready for save_pump_episode_snapshots().
+    """
+    from scanner.indicators   import calc_all
+    from scanner.wyckoff      import detect_regime
+    from scanner.ribbon_engine import classify_ribbon
+    from scanner.early_ignition import calc_ignition
+    from scanner.toxic_filter  import score_toxicity
+    from scanner.pump_engine   import score_pump
+
+    pump_start = episode["pump_start_date"]
+    pump_peak  = episode["pump_peak_date"]
+    start_price = episode.get("start_price") or 0.0
+
+    # Index candles by date for O(1) lookup
+    date_to_idx: dict[str, int] = {c["date"]: i for i, c in enumerate(all_candles)}
+
+    # Identify the continuous trading-day sequence in all_candles
+    all_dates = [c["date"] for c in all_candles]
+
+    # Find indices for start and peak in the candle list
+    start_idx = date_to_idx.get(pump_start)
+    peak_idx  = date_to_idx.get(pump_peak)
+
+    if start_idx is None or peak_idx is None:
+        logger.warning(
+            f"[PUMP_STUDY][3C] {symbol}: episode dates not in candle range "
+            f"(start={pump_start}, peak={pump_peak})"
+        )
+        return []
+
+    # Build the three windows as index slices into all_dates
+    pre_start_idx  = max(0, start_idx - _PRE_WINDOW_DAYS)
+    post_end_idx   = min(len(all_dates) - 1, peak_idx + _POST_WINDOW_DAYS)
+
+    window_dates = all_dates[pre_start_idx : post_end_idx + 1]
+
+    snapshots: list[dict] = []
+
+    for d in window_dates:
+        idx = date_to_idx[d]
+        candle = all_candles[idx]
+
+        # ── Determine phase and relative offsets ──────────────────────────────
+        if d < pump_start:
+            phase = "PRE"
+        elif d <= pump_peak:
+            phase = "PUMP"
+        else:
+            phase = "POST"
+
+        # relative_day_from_start: negative = before start, 0 = start day, positive = after
+        # Compute as trading-day offset from start_idx
+        rel_from_start = idx - start_idx
+
+        # relative_day_from_peak: negative = before peak, 0 = peak day, positive = after
+        rel_from_peak  = idx - peak_idx
+
+        # ── Build trailing candle slice for indicator computation ─────────────
+        # Use all candles up to and including this bar (gives indicators full history)
+        trailing_raw = all_candles[: idx + 1]
+        trailing_sc  = [_to_scanner_fmt(c) for c in trailing_raw]
+
+        # ── Raw OHLCV for this bar ────────────────────────────────────────────
+        o_price = candle.get("open")
+        h_price = candle.get("high")
+        l_price = candle.get("low")
+        c_price = candle.get("close")
+        volume  = candle.get("volume")
+
+        # ── Derived price fields ──────────────────────────────────────────────
+        # gap_pct: open vs prior close
+        gap_pct: Optional[float] = None
+        if idx > 0 and o_price and all_candles[idx - 1].get("close"):
+            prior_close = all_candles[idx - 1]["close"]
+            if prior_close:
+                gap_pct = round((o_price - prior_close) / prior_close * 100, 4)
+
+        intraday_range_pct: Optional[float] = None
+        if h_price and l_price and l_price > 0:
+            intraday_range_pct = round((h_price - l_price) / l_price * 100, 4)
+
+        close_position_in_bar: Optional[float] = None
+        if h_price and l_price and c_price and (h_price - l_price) > 0:
+            close_position_in_bar = round(
+                (c_price - l_price) / (h_price - l_price), 4
+            )
+
+        daily_return_pct: Optional[float] = None
+        if c_price and o_price and o_price > 0:
+            daily_return_pct = round((c_price - o_price) / o_price * 100, 4)
+
+        cum_return_pct: Optional[float] = None
+        if c_price and start_price and start_price > 0:
+            cum_return_pct = round((c_price - start_price) / start_price * 100, 4)
+
+        # ── Indicators ────────────────────────────────────────────────────────
+        indicators: dict = {}
+        regime:     dict = {}
+        ribbon_class:    Optional[str] = None
+        ignition:        dict = {}
+        toxicity:        dict = {}
+        pump_result:     dict = {}
+
+        n_trailing = len(trailing_sc)
+
+        if n_trailing >= _MIN_CANDLES_INDICATORS:
+            try:
+                indicators = calc_all(trailing_sc) or {}
+            except Exception as exc:
+                logger.debug(f"[PUMP_STUDY][3C] {symbol}/{d} calc_all: {exc}")
+                indicators = {}
+
+            try:
+                ribbon_class = classify_ribbon(indicators)
+            except Exception:
+                ribbon_class = None
+
+            try:
+                toxicity = score_toxicity(indicators, price=c_price or 0.0) or {}
+            except Exception:
+                toxicity = {}
+
+            try:
+                pump_result = score_pump(indicators, price=c_price or 0.0) or {}
+            except Exception:
+                pump_result = {}
+
+        if n_trailing >= _MIN_CANDLES_REGIME:
+            try:
+                regime = detect_regime(trailing_sc) or {}
+            except Exception as exc:
+                logger.debug(f"[PUMP_STUDY][3C] {symbol}/{d} detect_regime: {exc}")
+                regime = {}
+
+            if indicators and regime:
+                try:
+                    ignition = calc_ignition(indicators, regime) or {}
+                except Exception:
+                    ignition = {}
+
+        # ── Extract individual indicator fields ───────────────────────────────
+        rsi_data  = indicators.get("rsi", {}) or {}
+        obv_data  = indicators.get("obv", {}) or {}
+
+        # volume_vs_avg20: vol_z and avg_vol_20 from calc_all
+        avg_vol_20      = indicators.get("avg_vol_20") or None
+        volume_vs_avg20: Optional[float] = None
+        if volume and avg_vol_20 and avg_vol_20 > 0:
+            volume_vs_avg20 = round(volume / avg_vol_20, 4)
+
+        # ── Full snapshot dict ────────────────────────────────────────────────
+        # snapshot_json stores the raw indicator sub-dicts for deep-dive queries
+        snapshot_detail = {
+            "indicators":    indicators,
+            "regime":        regime,
+            "ignition":      ignition,
+            "toxicity":      toxicity,
+            "pump":          pump_result,
+        }
+
+        snapshots.append({
+            "episode_id":             episode_id,
+            "run_id":                 run_id,
+            "symbol":                 symbol,
+            "date":                   d,
+            "window_phase":           phase,
+            "relative_day_from_start": rel_from_start,
+            "relative_day_from_peak":  rel_from_peak,
+            # OHLCV
+            "open":                   o_price,
+            "high":                   h_price,
+            "low":                    l_price,
+            "close":                  c_price,
+            "volume":                 volume,
+            # Derived price fields
+            "gap_pct":                gap_pct,
+            "intraday_range_pct":     intraday_range_pct,
+            "close_position":         close_position_in_bar,
+            "daily_return_pct":       daily_return_pct,
+            "cum_return_pct":         cum_return_pct,
+            # Volume
+            "volume_vs_avg20":        volume_vs_avg20,
+            "volume_zscore":          indicators.get("vol_z"),
+            # Volatility
+            "atr_pct":                indicators.get("atr_pct"),
+            "bb_width":               indicators.get("bb_width"),
+            "bb_squeeze":             indicators.get("bb_squeeze"),
+            # Momentum
+            "rsi":                    rsi_data.get("value"),
+            "cmf":                    indicators.get("cmf"),
+            # Structure
+            "ribbon_class":           ribbon_class,
+            "wyckoff_state":          regime.get("state"),
+            # snapshot_json stores all sub-dicts for deep inspection
+            "snapshot":               snapshot_detail,
+        })
+
+    return snapshots
+
+
 # ── Universe builder ──────────────────────────────────────────────────────────
 
 async def _build_universe(
@@ -474,7 +744,7 @@ async def _build_universe(
 
 async def run_pump_study(run_id: int, params: dict) -> None:
     """
-    Phase 3B entry point.
+    Phase 3C entry point.
 
     Params:
         start_date      str   YYYY-MM-DD  scan window start
@@ -487,7 +757,7 @@ async def run_pump_study(run_id: int, params: dict) -> None:
     ---------------
     1. Build symbol universe
     2. Per-symbol (parallel, Semaphore 8):
-         a. Fetch candles
+         a. Fetch candles  (kept in candle_map for Phase 3C)
          b. Detect raw pumps → in-memory hits
          c. Cluster hits → in-memory clusters
          d. Back-fill cluster_id / is_canonical on hit dicts (in memory)
@@ -496,11 +766,12 @@ async def run_pump_study(run_id: int, params: dict) -> None:
     5. Build episode dicts from each cluster's canonical detection
     6. Save episodes → receive inserted IDs
     7. Back-fill canonical_episode_id on each cluster row
-    8. Update run counts (raw_detection_count, cluster_count, episode_count)
+    8. Build PRE/PUMP/POST daily snapshots for each episode (Phase 3C)
+    9. Save snapshots in batches
+    10. Update run counts + advance status to snapshots_complete
 
-    Not done yet (Phase 3C+):
-        ✗ PRE / PUMP / POST snapshots
-        ✗ Timeline events
+    Not done yet (Phase 3D+):
+        ✗ Timeline milestone events
         ✗ Comparison groups
     """
     global _pump_study_progress
@@ -510,6 +781,7 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         save_pump_episode_detections,
         save_pump_clusters,
         save_pump_episodes,
+        save_pump_episode_snapshots,
         update_pump_cluster_episode_id,
     )
 
@@ -522,6 +794,7 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         "raw_detections": 0,
         "clusters":       0,
         "episodes":       0,
+        "snapshots":      0,
         "error":          None,
     })
 
@@ -537,14 +810,17 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         min_multiple = float(params.get("min_multiple", 4.0))
         univ_limit   = int(params.get("universe_limit", 0))
 
-        # Candle fetch range: a few days before scan start (for close[t0] at
-        # the very first scan date) and enough after scan end to cover the
-        # full forward window for the last scan date.
+        # Candle fetch range:
+        #   - PRE window needs _PRE_WINDOW_DAYS trading days before start_date
+        #     AND detect_regime() needs _MIN_CANDLES_REGIME bars of history.
+        #     We fetch 100 calendar days before start to safely cover both.
+        #   - POST window needs _POST_WINDOW_DAYS trading days after peak_date,
+        #     and the peak can be at most window_days*2 trading bars after end_date.
         fetch_from = (
-            date.fromisoformat(start_date) - timedelta(days=5)
+            date.fromisoformat(start_date) - timedelta(days=100)
         ).isoformat()
         fetch_to = (
-            date.fromisoformat(end_date) + timedelta(days=window_days * 2)
+            date.fromisoformat(end_date) + timedelta(days=window_days * 2 + 30)
         ).isoformat()
 
         # ── 1. Universe ───────────────────────────────────────────────────────
@@ -558,10 +834,11 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         # ── 2. Per-symbol: detect + cluster (parallel) ────────────────────────
         _pump_study_progress["phase"] = "DETECTION"
 
-        # These lists are written from concurrent coroutines; asyncio is
-        # single-threaded so list.extend / list.append are safe here.
-        all_detections: list[dict] = []   # enriched with cluster_id/is_canonical
-        all_clusters:   list[dict] = []   # cluster metadata (one per cluster)
+        # asyncio is single-threaded; list.extend / dict assignment are safe here.
+        all_detections: list[dict] = []
+        all_clusters:   list[dict] = []
+        # Keep full candle lists for snapshot building in Phase 3C
+        candle_map: dict[str, list[dict]] = {}
 
         sem = asyncio.Semaphore(8)
 
@@ -586,9 +863,11 @@ async def run_pump_study(run_id: int, params: dict) -> None:
 
                 # Phase 3B: cluster + back-fill cluster_id/is_canonical in memory
                 clusters = _cluster_detections(sym, hits)
-                # _cluster_detections mutates each hit dict with cluster_id/is_canonical
                 all_detections.extend(hits)
                 all_clusters.extend(clusters)
+
+                # Phase 3C: retain candles for snapshot building
+                candle_map[sym] = candles
 
                 _pump_study_progress["symbols_done"]   += 1
                 _pump_study_progress["raw_detections"]  = len(all_detections)
@@ -617,13 +896,12 @@ async def run_pump_study(run_id: int, params: dict) -> None:
                 "canonical_start_date": cl["canonical_start_date"],
                 "canonical_peak_date":  cl["canonical_peak_date"],
                 "raw_detection_count":  cl["raw_detection_count"],
-                # canonical_episode_id back-filled after episodes are saved
             }
             for cl in all_clusters
         ]
         await save_pump_clusters(cluster_rows)
 
-        # ── 5 & 6. Build + save canonical episodes ─────────────────────────────
+        # ── 5 & 6. Build + save canonical episodes ────────────────────────────
         _pump_study_progress["phase"] = "SAVING_EPISODES"
         episode_dicts = [
             _build_episode_from_cluster(run_id, cl) for cl in all_clusters
@@ -636,31 +914,57 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         for cl, ep_id in zip(all_clusters, episode_ids):
             await update_pump_cluster_episode_id(run_id, cl["cluster_id"], ep_id)
 
-        # ── 8. Finalise run ───────────────────────────────────────────────────
+        # ── 8 & 9. Build + save PRE/PUMP/POST snapshots (Phase 3C) ───────────
+        _pump_study_progress["phase"] = "SNAPSHOTS"
+        total_snapshots = 0
+
+        for cl, ep_id in zip(all_clusters, episode_ids):
+            sym = cl["symbol"]
+            sym_candles = candle_map.get(sym)
+            if not sym_candles:
+                continue
+
+            # Reconstruct episode dict needed by _build_snapshots
+            canon = cl["canonical"]
+            ep_dict = {
+                "pump_start_date": canon["window_start_date"],
+                "pump_peak_date":  canon["window_peak_date"],
+                "start_price":     canon["start_price"],
+            }
+
+            snaps = _build_snapshots(ep_id, run_id, sym, ep_dict, sym_candles)
+            if snaps:
+                saved_snaps = await save_pump_episode_snapshots(snaps)
+                total_snapshots += saved_snaps
+                _pump_study_progress["snapshots"] = total_snapshots
+
+        # ── 10. Finalise run ──────────────────────────────────────────────────
         await update_pump_study_run(run_id, {
-            "status":             "clustering_complete",
-            "symbols_scanned":    len(symbols),
+            "status":              "snapshots_complete",
+            "symbols_scanned":     len(symbols),
             "raw_detection_count": saved_det,
-            "cluster_count":      len(all_clusters),
-            "episode_count":      len(episode_ids),
-            "finished_at":        datetime.utcnow(),
+            "cluster_count":       len(all_clusters),
+            "episode_count":       len(episode_ids),
+            "snapshot_count":      total_snapshots,
+            "finished_at":         datetime.utcnow(),
             "notes": (
-                f"Phase 3B complete: {len(symbols)} symbols, "
+                f"Phase 3C complete: {len(symbols)} symbols, "
                 f"{saved_det} raw detections, {len(all_clusters)} clusters, "
-                f"{len(episode_ids)} canonical episodes. "
-                f"Snapshots / events / comparison groups pending (Phase 3C+)."
+                f"{len(episode_ids)} episodes, {total_snapshots} snapshots. "
+                f"Timeline events / comparison groups pending (Phase 3D+)."
             ),
         })
 
         _pump_study_progress.update({
             "running": False,
-            "phase":   "CLUSTERING_COMPLETE",
+            "phase":   "SNAPSHOTS_COMPLETE",
         })
 
         logger.info(
-            f"[PUMP_STUDY] run_id={run_id} Phase 3B done: "
+            f"[PUMP_STUDY] run_id={run_id} Phase 3C done: "
             f"{len(symbols)} symbols, {saved_det} detections, "
-            f"{len(all_clusters)} clusters, {len(episode_ids)} episodes"
+            f"{len(all_clusters)} clusters, {len(episode_ids)} episodes, "
+            f"{total_snapshots} snapshots"
         )
 
     except Exception as exc:
