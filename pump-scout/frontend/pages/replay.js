@@ -434,6 +434,11 @@ export default function ReplayPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [error, setError]             = useState('');
 
+  // ── Delete state ────────────────────────────────────────────────────────────
+  const [deleteTarget,   setDeleteTarget]   = useState(null);   // run object to confirm
+  const [deleting,       setDeleting]       = useState(false);
+  const [deleteError,    setDeleteError]    = useState('');
+
   // ── Polling ─────────────────────────────────────────────────────────────────
 
   const stopPolling = useCallback(() => {
@@ -475,6 +480,35 @@ export default function ReplayPage() {
         setHistory(Array.isArray(data) ? data : (data.runs || []));
       }
     } catch (_) {}
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      const res = await fetch(`${API_URL}/api/replay/${deleteTarget.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      // Clear selection if deleted run was active
+      if (activeRun?.id === deleteTarget.id) {
+        setActiveRun(null);
+        setCandidates([]);
+        setOutcomes([]);
+        setMissed([]);
+        setSummary(null);
+        setBundle(null);
+        stopPolling();
+      }
+      setHistory(prev => prev.filter(r => r.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteError(err.message || 'Delete failed');
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function loadRunDetail(runId) {
@@ -784,6 +818,7 @@ export default function ReplayPage() {
                       <th>Outcomes</th>
                       <th>Status</th>
                       <th>Started</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -805,6 +840,15 @@ export default function ReplayPage() {
                         <td><StatusBadge status={run.status} /></td>
                         <td style={{ color: 'var(--text-muted)', fontSize: 10 }}>
                           {run.created_at ? new Date(run.created_at).toLocaleString() : '—'}
+                        </td>
+                        <td onClick={e => e.stopPropagation()}>
+                          <button
+                            className={styles.btnDanger}
+                            style={{ padding: '3px 10px', fontSize: 10 }}
+                            onClick={() => { setDeleteTarget(run); setDeleteError(''); }}
+                          >
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1113,6 +1157,32 @@ export default function ReplayPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Delete confirmation modal ──────────────────────────────────────── */}
+      {deleteTarget && (
+        <div className={styles.modalOverlay} onClick={() => !deleting && setDeleteTarget(null)}>
+          <div className={styles.modalBox} onClick={e => e.stopPropagation()}>
+            <div className={styles.modalTitle}>Permanently Delete Run #{deleteTarget.id}?</div>
+            <div className={styles.modalBody}>
+              This will remove the run and <strong>all linked DB rows</strong>:
+              candidates, outcomes, missed movers, and any AI summaries.
+              <br /><br />
+              <strong>This cannot be undone.</strong>
+            </div>
+            {deleteError && (
+              <div style={{ fontSize: 11, color: 'var(--red, #f87171)' }}>{deleteError}</div>
+            )}
+            <div className={styles.modalActions}>
+              <button className={styles.btnCancel} onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                Cancel
+              </button>
+              <button className={styles.btnDanger} onClick={handleDeleteConfirm} disabled={deleting}>
+                {deleting ? 'Deleting…' : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

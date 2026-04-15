@@ -2653,6 +2653,78 @@ async def get_replay_history(limit: int = 20) -> list[dict]:
         return [_replay_run_to_dict(r) for r in result.scalars().all()]
 
 
+async def delete_replay_run(run_id: int) -> dict:
+    """
+    Hard-delete a replay run and all its linked child records.
+    Returns deleted row counts per table.
+    Raises ValueError if run does not exist.
+    """
+    async with get_session_factory()() as session:
+        run = (await session.execute(
+            select(ReplayRun).where(ReplayRun.id == run_id)
+        )).scalar_one_or_none()
+        if not run:
+            raise ValueError(f"Replay run {run_id} not found")
+
+        counts = {}
+
+        # Children — delete in dependency order (no FK constraints enforced by SQLite,
+        # but order matters for Postgres if constraints are ever added)
+        for Model, label, fk in [
+            (ReplaySignalCandidate, "candidates",   ReplaySignalCandidate.replay_run_id),
+            (ReplayOutcome,         "outcomes",     ReplayOutcome.replay_run_id),
+            (ReplayMissedMover,     "missed_movers", ReplayMissedMover.replay_run_id),
+        ]:
+            result = await session.execute(select(Model).where(fk == run_id))
+            rows   = result.scalars().all()
+            for r in rows:
+                await session.delete(r)
+            counts[label] = len(rows)
+
+        await session.delete(run)
+        counts["run"] = 1
+        await session.commit()
+        return counts
+
+
+async def delete_pump_study_run(run_id: int) -> dict:
+    """
+    Hard-delete a pump-study run and all its linked child records.
+    Returns deleted row counts per table.
+    Raises ValueError if run does not exist.
+    """
+    async with get_session_factory()() as session:
+        run = (await session.execute(
+            select(PumpStudyRun).where(PumpStudyRun.id == run_id)
+        )).scalar_one_or_none()
+        if not run:
+            raise ValueError(f"Pump study run {run_id} not found")
+
+        counts = {}
+
+        # Leaf tables first — snapshot and event rows hang off episodes
+        for Model, label, fk in [
+            (PumpEpisodeSnapshot,   "snapshots",     PumpEpisodeSnapshot.run_id),
+            (PumpEpisodeEvent,      "events",        PumpEpisodeEvent.run_id),
+            (PumpEpisodeDetection,  "detections",    PumpEpisodeDetection.run_id),
+            (PumpComparisonMember,  "cmp_members",   PumpComparisonMember.run_id),
+            (PumpComparisonGroup,   "cmp_groups",    PumpComparisonGroup.run_id),
+            (PumpCluster,           "clusters",      PumpCluster.run_id),
+            (PumpEpisode,           "episodes",      PumpEpisode.run_id),
+            (PumpStudyAISummary,    "ai_summaries",  PumpStudyAISummary.run_id),
+        ]:
+            result = await session.execute(select(Model).where(fk == run_id))
+            rows   = result.scalars().all()
+            for r in rows:
+                await session.delete(r)
+            counts[label] = len(rows)
+
+        await session.delete(run)
+        counts["run"] = 1
+        await session.commit()
+        return counts
+
+
 async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[dict]) -> int:
     """Bulk-insert replay signal candidates. Returns count inserted."""
     if not candidates:
