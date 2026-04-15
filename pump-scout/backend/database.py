@@ -3393,6 +3393,25 @@ async def get_pump_clusters(run_id: int) -> list[dict]:
         ]
 
 
+async def update_pump_cluster_episode_id(
+    run_id: int,
+    cluster_id: str,
+    episode_id: int,
+) -> None:
+    """Back-fill canonical_episode_id on a cluster row after the episode is saved."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpCluster).where(
+                PumpCluster.run_id     == run_id,
+                PumpCluster.cluster_id == cluster_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.canonical_episode_id = episode_id
+            await session.commit()
+
+
 # ── Comparison groups + members ───────────────────────────────────────────────
 
 async def save_pump_comparison_group(run_id: int, group: dict) -> int:
