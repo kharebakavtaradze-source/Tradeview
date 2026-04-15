@@ -80,6 +80,39 @@ function PumpTypeBadge({ type }) {
   );
 }
 
+// ── Phase tag ─────────────────────────────────────────────────────────────────
+
+const PHASE_COLOR = { PRE: 'var(--cyan)', PUMP: 'var(--lime)', POST: 'var(--amber)' };
+
+function PhaseTag({ phase }) {
+  const color = PHASE_COLOR[phase] || 'var(--text-muted)';
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.07em',
+      padding: '1px 6px', borderRadius: 'var(--r-sm)',
+      border: `1px solid ${color}55`, background: `${color}18`,
+      whiteSpace: 'nowrap',
+    }}>{phase}</span>
+  );
+}
+
+// ── Event type config ─────────────────────────────────────────────────────────
+
+const EVENT_CFG = {
+  first_abnormal_volume_day:     { color: 'var(--amber)',  label: 'ABNORMAL VOL'    },
+  first_compression_day:         { color: 'var(--cyan)',   label: 'BB COMPRESSION'  },
+  first_ribbon_constructive_day: { color: 'var(--lime)',   label: 'RIBBON QUAL'     },
+  first_ignition_day:            { color: '#ffd600',       label: 'IGNITION'        },
+  first_accumulation_like_day:   { color: 'var(--accent)', label: 'ACCUMULATION'    },
+  first_spring_test_lps_day:     { color: '#80aaff',       label: 'SPRING/LPS'      },
+  breakout_day:                  { color: 'var(--lime)',   label: 'BREAKOUT'        },
+  retest_day:                    { color: 'var(--amber)',  label: 'RETEST'          },
+  first_vertical_expansion_day:  { color: '#ff8800',       label: 'VERT EXPANSION'  },
+  peak_day:                      { color: 'var(--red)',    label: 'PEAK'            },
+  fade_day:                      { color: 'var(--red)',    label: 'FADE'            },
+  dump_day:                      { color: '#ff4444',       label: 'DUMP'            },
+};
+
 // ── Status badge ──────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }) {
@@ -93,6 +126,371 @@ function StatusBadge({ status }) {
   }[status] || '';
   return (
     <span className={`${styles.statusBadge} ${cls}`}>{status || 'unknown'}</span>
+  );
+}
+
+// ── Episode Detail (Phase 5C) ─────────────────────────────────────────────────
+
+function EpisodeDetail({ runId, episodeId, onClose }) {
+  const [ep,       setEp]       = useState(null);
+  const [snaps,    setSnaps]    = useState([]);
+  const [events,   setEvents]   = useState([]);
+  const [cluster,  setCluster]  = useState(null);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
+  const [innerTab, setInnerTab] = useState('events');
+
+  useEffect(() => {
+    if (!runId || !episodeId) return;
+    setLoading(true);
+    setError('');
+    setEp(null); setSnaps([]); setEvents([]); setCluster(null);
+
+    Promise.all([
+      fetch(`${API_URL}/api/replay/pump-study/${runId}/episodes/${episodeId}`)
+        .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)),
+      fetch(`${API_URL}/api/replay/pump-study/${runId}/daily-snapshots?episode_id=${episodeId}&limit=300`)
+        .then(r => r.ok ? r.json() : { snapshots: [] }),
+      fetch(`${API_URL}/api/replay/pump-study/${runId}/timeline?episode_id=${episodeId}`)
+        .then(r => r.ok ? r.json() : { events: [] }),
+      fetch(`${API_URL}/api/replay/pump-study/${runId}/clusters`)
+        .then(r => r.ok ? r.json() : { clusters: [] }),
+    ])
+      .then(([epData, snapData, evData, clData]) => {
+        const episode = epData.episode || epData;
+        setEp(episode);
+        setSnaps(snapData.snapshots || []);
+        setEvents(evData.events || []);
+        // Find the matching cluster by symbol + date proximity
+        const allClusters = clData.clusters || [];
+        const match = allClusters.find(c =>
+          c.symbol === episode.symbol &&
+          (c.id === episode.cluster_id ||
+           (c.primary_start && episode.pump_start_date &&
+            c.primary_start.slice(0, 10) === episode.pump_start_date.slice(0, 10)))
+        );
+        setCluster(match || null);
+      })
+      .catch(err => setError(String(err)))
+      .finally(() => setLoading(false));
+  }, [runId, episodeId]);
+
+  if (loading) {
+    return (
+      <div className={styles.episodeDetail}>
+        <div className={styles.statusMsg}>Loading episode #{episodeId}…</div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className={styles.episodeDetail}>
+        <div className={styles.errorMsg}>{error}</div>
+        <button className={styles.closeBtn} onClick={onClose}>Close</button>
+      </div>
+    );
+  }
+  if (!ep) return null;
+
+  // ── Section A: build KPI list ───────────────────────────────────────────────
+  const caught = ep.caught_by_scanner;
+  const summaryKPIs = [
+    { label: 'Multiple',      val: fmtX(ep.pump_multiple),                           color: 'var(--lime)' },
+    { label: 'Return',        val: ep.pump_return_pct != null ? fmtPct(ep.pump_return_pct, true) : '—', color: 'var(--lime)' },
+    { label: 'Days to Peak',  val: ep.pump_days_to_peak ?? '—' },
+    { label: 'Days to 2×',    val: ep.days_to_double ?? '—' },
+    { label: 'Caught',        val: caught == null ? '—' : caught ? 'CAUGHT' : 'MISSED',
+                              color: caught == null ? null : caught ? 'var(--lime)' : 'var(--red)' },
+    { label: 'Ribbon',        val: ep.had_ribbon ? 'YES' : 'NO',
+                              color: ep.had_ribbon ? 'var(--lime)' : 'var(--text-muted)' },
+    { label: 'Ignition',      val: ep.had_ignition ? 'YES' : 'NO',
+                              color: ep.had_ignition ? 'var(--cyan)' : 'var(--text-muted)' },
+    { label: 'Wyckoff',       val: ep.strongest_wyckoff_state || '—' },
+    { label: 'Max Gap',       val: ep.largest_gap_pct != null ? fmtPct(ep.largest_gap_pct) : '—' },
+    { label: 'Max Vol',       val: ep.max_volume_anomaly != null ? `${Number(ep.max_volume_anomaly).toFixed(1)}×` : '—',
+                              color: ep.max_volume_anomaly >= 3 ? 'var(--amber)' : null },
+    { label: 'Ignition Q',    val: ep.ignition_quality ?? '—' },
+    { label: 'Ign Bucket',    val: ep.ignition_bucket || '—' },
+    { label: 'Avg Tox PRE',   val: ep.avg_toxicity_pre != null ? Number(ep.avg_toxicity_pre).toFixed(0) : '—' },
+    { label: 'Max Tox PRE',   val: ep.max_toxicity_pre != null ? Number(ep.max_toxicity_pre).toFixed(0) : '—' },
+  ];
+
+  // Phase counts
+  const phaseCounts = { PRE: 0, PUMP: 0, POST: 0 };
+  snaps.forEach(s => { if (phaseCounts[s.window_phase] != null) phaseCounts[s.window_phase]++; });
+
+  const INNER_TABS = [
+    { key: 'events',    label: `Events (${events.length})` },
+    { key: 'snapshots', label: `Snapshots (${snaps.length})` },
+    { key: 'cluster',   label: 'Cluster' },
+  ];
+
+  return (
+    <div className={styles.episodeDetail}>
+
+      {/* ── Header row ─────────────────────────────────────────────────────── */}
+      <div className={styles.detailHeader}>
+        <div>
+          <span className={styles.detailSymbol}>{ep.symbol}</span>
+          <span className={styles.detailMeta}>
+            {fmtDate(ep.pump_start_date)} → {fmtDate(ep.pump_peak_date)}
+          </span>
+          <PumpTypeBadge type={ep.pump_type} />
+        </div>
+        <button className={styles.closeBtn} onClick={onClose}>✕ Close</button>
+      </div>
+
+      {/* ── Section A: KPI summary ─────────────────────────────────────────── */}
+      <div className={styles.detailKPIGrid}>
+        {summaryKPIs.map(k => (
+          <div key={k.label} className={styles.detailKPI}>
+            <div className={styles.kpiLabel}>{k.label}</div>
+            <div className={styles.kpiValue}
+              style={{ fontSize: 15, color: k.color || 'var(--text)', fontFamily: 'var(--font-mono)' }}>
+              {k.val}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Phase bar */}
+      <div className={styles.phaseBar}>
+        {['PRE', 'PUMP', 'POST'].map(ph => (
+          <span key={ph} className={styles.phaseSegment}>
+            <PhaseTag phase={ph} />
+            <span style={{ fontFamily: 'var(--font-mono)', marginLeft: 5, fontSize: 11, fontWeight: 700 }}>
+              {phaseCounts[ph]}d
+            </span>
+          </span>
+        ))}
+        {ep.worst_post_return_from_start != null && (
+          <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>
+            worst POST from start:&nbsp;
+            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--amber)', fontWeight: 700 }}>
+              {fmtPct(ep.worst_post_return_from_start, true)}
+            </span>
+          </span>
+        )}
+      </div>
+
+      {/* ── Inner tabs ────────────────────────────────────────────────────── */}
+      <div className={styles.tabRow}>
+        {INNER_TABS.map(t => (
+          <button key={t.key}
+            className={`${styles.tab} ${innerTab === t.key ? styles.tabActive : ''}`}
+            onClick={() => setInnerTab(t.key)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Section B: Timeline events ─────────────────────────────────────── */}
+      {innerTab === 'events' && (
+        <div className={styles.eventsWrap}>
+          {events.length === 0 && <div className={styles.emptyMsg}>No timeline events recorded.</div>}
+          {events.map((ev, i) => {
+            const cfg   = EVENT_CFG[ev.event_type] || { color: 'var(--text-muted)', label: ev.event_type };
+            const color = cfg.color;
+            return (
+              <div key={i} className={styles.eventCard} style={{ borderLeftColor: color }}>
+                <div className={styles.eventTop}>
+                  <span className={styles.eventType} style={{ color }}>{cfg.label}</span>
+                  <span className={styles.eventDate}>{fmtDate(ev.event_date)}</span>
+                  {ev.days_before_pump != null && (
+                    <span className={styles.eventDays}>
+                      {ev.days_before_pump < 0
+                        ? `+${Math.abs(ev.days_before_pump)}d after start`
+                        : ev.days_before_pump === 0 ? 'start day'
+                        : `${ev.days_before_pump}d before start`}
+                    </span>
+                  )}
+                  {ev.event_value != null && (
+                    <span className={styles.eventVal} style={{ color, marginLeft: 'auto' }}>
+                      {typeof ev.event_value === 'number'
+                        ? Number(ev.event_value).toFixed(2)
+                        : ev.event_value}
+                    </span>
+                  )}
+                </div>
+                {ev.event_note && (
+                  <div className={styles.eventNote}>{ev.event_note}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Section C: Daily snapshots ─────────────────────────────────────── */}
+      {innerTab === 'snapshots' && (
+        <div style={{ overflowX: 'auto' }}>
+          {snaps.length === 0 && <div className={styles.emptyMsg}>No snapshot data.</div>}
+          {snaps.length > 0 && (
+            <table className={styles.snapTable}>
+              <thead>
+                <tr>
+                  <th>Phase</th>
+                  <th>Date</th>
+                  <th title="Relative to pump start">Day</th>
+                  <th title="Relative to peak">↑Peak</th>
+                  <th>Close</th>
+                  <th>Vol</th>
+                  <th title="Overnight gap %">Gap%</th>
+                  <th title="Daily return">Day%</th>
+                  <th title="Cumulative return from start">Cum%</th>
+                  <th>Ribbon</th>
+                  <th>Wyckoff</th>
+                  <th title="Ignition signal">Ign</th>
+                  <th title="Sequence type">Seq</th>
+                  <th title="Structural bias">Bias</th>
+                  <th title="Toxicity score">Tox</th>
+                </tr>
+              </thead>
+              <tbody>
+                {snaps.map((s, i) => {
+                  const bg = s.window_phase === 'PUMP' ? 'rgba(0,255,136,0.025)'
+                           : s.window_phase === 'POST' ? 'rgba(255,180,0,0.025)' : undefined;
+                  const dayNum  = s.relative_day_from_start;
+                  const peakNum = s.relative_day_from_peak;
+                  // Extended fields — try direct first, then snapshot sub-dict
+                  const sd      = s.snapshot_data || s.snapshot || {};
+                  const ign     = s.ignition_signal ?? sd.ignition?.ignition_signal ?? sd.ignition_signal ?? '—';
+                  const seqType = s.sequence_type   ?? sd.regime?.sequence_type    ?? '—';
+                  const bias    = s.structural_bias ?? sd.regime?.structural_bias  ?? '—';
+                  const tox     = s.toxicity_score  ?? sd.toxicity?.toxicity_score ?? null;
+                  const ribbon  = (s.ribbon_class || '—').replace('RIBBON_', '');
+                  return (
+                    <tr key={i} className={styles.snapRow} style={{ background: bg }}>
+                      <td><PhaseTag phase={s.window_phase} /></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10, whiteSpace: 'nowrap' }}>
+                        {fmtDate(s.date)}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
+                        {dayNum != null ? (dayNum >= 0 ? `+${dayNum}` : dayNum) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textAlign: 'right' }}>
+                        {peakNum != null ? (peakNum >= 0 ? `+${peakNum}` : peakNum) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                        {s.close != null ? `$${Number(s.close).toFixed(2)}` : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
+                        {s.volume != null ? fmtNum(s.volume) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)',
+                                   color: s.gap_pct > 0 ? 'var(--lime)' : s.gap_pct < 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                        {s.gap_pct != null ? fmtPct(s.gap_pct, true) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)',
+                                   color: s.daily_return_pct > 0 ? 'var(--lime)' : s.daily_return_pct < 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                        {s.daily_return_pct != null ? fmtPct(s.daily_return_pct, true) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700,
+                                   color: (s.cum_return_pct || s.cumulative_return_from_start) > 0 ? 'var(--lime)' : 'var(--red)' }}>
+                        {(s.cum_return_pct ?? s.cumulative_return_from_start) != null
+                          ? fmtPct(s.cum_return_pct ?? s.cumulative_return_from_start, true) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9,
+                                   color: ribbon !== '—' && ribbon !== 'NONE' ? 'var(--lime)' : 'var(--text-muted)' }}>
+                        {ribbon}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)' }}>
+                        {s.wyckoff_state || '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>
+                        {String(ign).replace('_IGNITION', '').replace('IGNITION_', '')}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>
+                        {seqType !== '—' ? String(seqType).slice(0, 8) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>
+                        {bias !== '—' ? String(bias).slice(0, 6) : '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9,
+                                   color: tox >= 45 ? 'var(--red)' : tox >= 20 ? 'var(--amber)' : 'var(--text-muted)' }}>
+                        {tox != null ? tox : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ── Section D: Cluster info ─────────────────────────────────────────── */}
+      {innerTab === 'cluster' && (
+        <div>
+          {!cluster && (
+            <div className={styles.emptyMsg}>
+              No cluster match found for this episode.
+              <div className={styles.emptyHint}>
+                cluster_id: {ep.cluster_id ?? '—'} · symbol: {ep.symbol}
+              </div>
+            </div>
+          )}
+          {cluster && (
+            <div className={styles.clusterCard}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
+                            letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>
+                Cluster
+              </div>
+              {[
+                ['Cluster ID',     cluster.id ?? '—'],
+                ['Symbol',         cluster.symbol],
+                ['Cluster Start',  fmtDate(cluster.cluster_start)],
+                ['Cluster End',    fmtDate(cluster.cluster_end)],
+                ['Primary Start',  fmtDate(cluster.primary_start)],
+                ['Primary Peak',   fmtDate(cluster.primary_peak)],
+                ['Raw Detections', Array.isArray(cluster.raw_detections)
+                                    ? cluster.raw_detections.length : '—'],
+              ].map(([label, val]) => (
+                <div key={label} className={styles.clusterRow}>
+                  <span className={styles.clusterRowLabel}>{label}</span>
+                  <span className={styles.clusterRowVal}>{val}</span>
+                </div>
+              ))}
+
+              {/* Raw detections sub-table */}
+              {Array.isArray(cluster.raw_detections) && cluster.raw_detections.length > 0 && (
+                <>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)',
+                                letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 10 }}>
+                    Raw Detections ({cluster.raw_detections.length})
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className={styles.rawDetTable}>
+                      <thead>
+                        <tr>
+                          <th>Start</th>
+                          <th>Peak</th>
+                          <th>Multiple</th>
+                          <th>Return</th>
+                          <th>Days</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cluster.raw_detections.map((d, i) => (
+                          <tr key={i}>
+                            <td>{fmtDate(d.start_date)}</td>
+                            <td>{fmtDate(d.peak_date)}</td>
+                            <td style={{ color: 'var(--lime)', fontWeight: 700 }}>{fmtX(d.multiple)}</td>
+                            <td>{d.return_pct != null ? fmtPct(d.return_pct, true) : '—'}</td>
+                            <td>{d.days_to_peak ?? '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+    </div>
   );
 }
 
@@ -417,6 +815,9 @@ export default function PumpStudyPage() {
   const [selectedEpId, setSelectedEpId] = useState(null);
   const epFiltersRef = useRef({ symbol: '', pump_type: '', min_multiple: '', caught_mode: 'all' });
 
+  // Episode detail state (Phase 5C)
+  const [detailEpId, setDetailEpId] = useState(null);
+
   // ── Load runs list ────────────────────────────────────────────────────────
 
   const loadRuns = useCallback(async () => {
@@ -509,22 +910,26 @@ export default function PumpStudyPage() {
     }
   }, [selectedRun?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load episodes whenever a run is selected (reset filters)
+  // Load episodes whenever a run is selected (reset filters + detail)
   useEffect(() => {
     if (!selectedId) { setEpisodes([]); return; }
     epFiltersRef.current = { symbol: '', pump_type: '', min_multiple: '', caught_mode: 'all' };
     setSelectedEpId(null);
+    setDetailEpId(null);
     loadEpisodes(selectedId);
   }, [selectedId, loadEpisodes]);
 
   function handleSelectRun(runId) {
-    if (selectedId === runId) return; // already selected
+    if (selectedId === runId) return;
     setSelectedId(runId);
     setSelectedRun(null);
+    setDetailEpId(null);
   }
 
   function handleSelectEp(epId) {
-    setSelectedEpId(prev => prev === epId ? null : epId); // toggle
+    // Toggle: clicking the same row closes detail; new row opens it
+    setSelectedEpId(prev => prev === epId ? null : epId);
+    setDetailEpId(prev => prev === epId ? null : epId);
   }
 
   function handleEpReload(filters) {
@@ -586,17 +991,7 @@ export default function PumpStudyPage() {
           {/* Episodes table */}
           {selectedId && (
             <div className={styles.bundleSection}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <div className={styles.bundleSectionTitle} style={{ margin: 0, border: 'none', padding: 0 }}>
-                  EPISODES
-                </div>
-                {selectedEpId && (
-                  <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
-                    episode #{selectedEpId} selected — detail coming in Phase 5C
-                  </span>
-                )}
-              </div>
-              <div style={{ height: 1, background: 'var(--border)', margin: '10px 0 14px' }} />
+              <div className={styles.bundleSectionTitle}>EPISODES</div>
               <EpisodesTable
                 runId={selectedId}
                 episodes={episodes}
@@ -607,6 +1002,15 @@ export default function PumpStudyPage() {
                 onReload={handleEpReload}
               />
             </div>
+          )}
+
+          {/* Episode detail (Phase 5C) */}
+          {selectedId && detailEpId && (
+            <EpisodeDetail
+              runId={selectedId}
+              episodeId={detailEpId}
+              onClose={() => { setDetailEpId(null); setSelectedEpId(null); }}
+            />
           )}
 
         </div>
