@@ -852,13 +852,28 @@ function AISummarySection({ runId, runStatus }) {
   async function handleGenerate() {
     setLoading(true);
     setError('');
+    // Clear any cached parse_failed result so backend regenerates
+    setData(null);
+    setTried(false);
     try {
+      // If previous attempt is cached as parse_failed, delete it first
+      // by calling with force=true query param (backend ignores unknown params,
+      // deletion happens automatically when we re-POST — but we call GET here,
+      // so we must clear the stale row via a DELETE first if supported).
+      // Simpler: backend already re-persists on every GET when not cached.
+      // The cached parse_failed row will be overwritten on next generation call.
+      // To force regeneration we need to delete the stale row.
+      await fetch(`${API_URL}/api/replay/pump-study/${runId}/ai-summary`, {
+        method: 'DELETE',
+      }).catch(() => {}); // ok if DELETE not supported — backend will overwrite
+
       const res = await fetch(`${API_URL}/api/replay/pump-study/${runId}/ai-summary`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+      // 200 with ok:false means parse_failed — not a network error
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok && !body.parse_failed) {
         throw new Error(body.detail || `HTTP ${res.status}`);
       }
-      setData(await res.json());
+      setData(body);
       setTried(true);
     } catch (err) {
       setError(err.message);
@@ -894,6 +909,31 @@ function AISummarySection({ runId, runStatus }) {
   }
 
   if (!data) return null;
+
+  // ── Parse-failed state ────────────────────────────────────────────────────
+  if (data.parse_failed) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className={styles.errorMsg} style={{ maxWidth: 520 }}>
+          AI returned malformed structured output and could not be parsed.
+          {data.parse_error && (
+            <span style={{ display: 'block', fontSize: 10, color: 'var(--text-muted)',
+                           marginTop: 4, fontFamily: 'var(--font-mono)' }}>
+              {data.parse_error}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <button className={styles.aiGenerateBtn} onClick={handleGenerate} disabled={loading}>
+            {loading ? 'Retrying…' : 'Retry Generation'}
+          </button>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            Previous attempt stored for audit · model: {data.model_used || 'claude-haiku'}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   const a = data.analysis || {};
   const ev = data.evidence_summary || {};

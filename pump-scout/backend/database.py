@@ -476,6 +476,12 @@ _AI_PORTFOLIO_MIGRATIONS = [
     ("price_updated_at", "TIMESTAMP"),
 ]
 
+_PUMP_AI_SUMMARY_MIGRATIONS = [
+    ("parse_failed", "BOOLEAN DEFAULT FALSE"),
+    ("raw_response", "TEXT"),
+    ("parse_error",  "TEXT"),
+]
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -534,6 +540,11 @@ async def _run_migrations(conn):
             await conn.execute(text("ALTER TABLE scans ADD COLUMN scan_type VARCHAR(30)"))
         except Exception:
             pass
+        for col, coltype in _PUMP_AI_SUMMARY_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE pump_study_ai_summaries ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -569,6 +580,13 @@ async def _run_migrations(conn):
             ))
         except Exception as e:
             logger.warning(f"Migration scans.scan_type failed (non-fatal): {e}")
+        for col, coltype in _PUMP_AI_SUMMARY_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE pump_study_ai_summaries ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration pump_study_ai_summaries.{col} failed (non-fatal): {e}")
 
 
 async def init_db():
@@ -3066,6 +3084,10 @@ class PumpStudyAISummary(Base):
     # Limitations paragraph (missing catalyst/news note)
     limitations    = Column(Text,        nullable=True)
     model_used     = Column(String(60),  nullable=True)
+    # Parse-failure audit columns (added post-initial-deployment via migration)
+    parse_failed   = Column(Boolean,     default=False, nullable=True)
+    raw_response   = Column(Text,        nullable=True)   # raw model text on failure
+    parse_error    = Column(Text,        nullable=True)   # exception string on failure
     created_at     = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -3697,6 +3719,9 @@ async def save_pump_ai_summary(run_id: int, data: dict) -> int:
             evidence_json  = json.dumps(data.get("evidence") or {}),
             limitations    = data.get("limitations", ""),
             model_used     = data.get("model_used", ""),
+            parse_failed   = data.get("parse_failed", False),
+            raw_response   = data.get("raw_response"),
+            parse_error    = data.get("parse_error"),
         )
         session.add(row)
         await session.commit()
@@ -3720,5 +3745,8 @@ async def get_pump_ai_summary(run_id: int) -> dict | None:
             "evidence":       json.loads(row.evidence_json or "{}"),
             "limitations":    row.limitations,
             "model_used":     row.model_used,
+            "parse_failed":   bool(row.parse_failed) if row.parse_failed is not None else False,
+            "raw_response":   row.raw_response,
+            "parse_error":    row.parse_error,
             "created_at":     row.created_at.isoformat() if row.created_at else None,
         }

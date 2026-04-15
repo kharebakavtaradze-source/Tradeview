@@ -2709,6 +2709,67 @@ async def pump_study_export(run_id: int, format: str = "json"):
     )
 
 
+def _repair_json(raw: str) -> str:
+    """
+    Lightweight single-pass JSON repair.
+    Handles the most common model failure modes:
+      - trailing comma before } or ]
+      - unterminated string at end of output (truncation)
+      - accidental markdown code fences (```json ... ```)
+    Returns a repaired string — caller still must json.loads() it.
+    """
+    import re
+
+    # Strip markdown fences
+    s = raw.strip()
+    if s.startswith("```"):
+        lines = s.splitlines()
+        # drop first line (```json or ```) and last line if it's ```
+        start = 1
+        end   = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
+        s = "\n".join(lines[start:end]).strip()
+
+    # Remove trailing commas before } or ]
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+
+    # If string appears truncated (odd number of unescaped quotes → unterminated string),
+    # try to close it cleanly by appending closing punctuation.
+    # Count unescaped double-quotes
+    unescaped = len(re.findall(r'(?<!\\)"', s))
+    if unescaped % 2 != 0:
+        # Unterminated string — close it, then close any open structures
+        s = s.rstrip()
+        # Close the open string
+        s += '"'
+        # Count unclosed { and [ by simple depth tracking
+        depth_brace   = s.count("{") - s.count("}")
+        depth_bracket = s.count("[") - s.count("]")
+        # Close innermost open arrays first, then objects
+        s += "]" * max(0, depth_bracket) + "}" * max(0, depth_brace)
+
+    return s
+
+
+@app.delete("/api/replay/pump-study/{run_id}/ai-summary")
+async def pump_study_delete_ai_summary(run_id: int):
+    """
+    Delete a stored AI summary so it can be regenerated.
+    Used by the frontend Retry button to clear a cached parse_failed row.
+    """
+    from database import PumpStudyAISummary, get_session_factory
+    from sqlalchemy import select as sa_select
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            sa_select(PumpStudyAISummary).where(PumpStudyAISummary.run_id == run_id)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            await session.delete(row)
+            await session.commit()
+    return {"ok": True, "deleted": True, "run_id": run_id}
+
+
 @app.get("/api/replay/pump-study/{run_id}/ai-summary")
 async def pump_study_ai_summary(run_id: int):
     """
@@ -2752,6 +2813,19 @@ async def pump_study_ai_summary(run_id: int):
     # ── Return cached result if available ─────────────────────────────────────
     cached = await get_pump_ai_summary(run_id)
     if cached:
+        # If previous attempt failed to parse, surface that clearly so UI can retry
+        if cached.get("parse_failed"):
+            return {
+                "ok":          False,
+                "parse_failed": True,
+                "run_id":      run_id,
+                "message":     "AI summary could not be parsed — model returned malformed JSON.",
+                "parse_error": cached.get("parse_error"),
+                "raw_text":    (cached.get("raw_response") or "")[:500],
+                "model_used":  cached.get("model_used"),
+                "cached":      True,
+            }
+        cached["ok"]           = True
         cached["cached"]       = True
         cached["generated_at"] = cached.get("created_at")
         return cached
@@ -2805,96 +2879,124 @@ async def pump_study_ai_summary(run_id: int):
         },
     }
 
-    # ── Prompt ────────────────────────────────────────────────────────────────
+    # ── Prompt (compact — reduces token count and truncation risk) ────────────
+    # Evidence is serialised as compact JSON (no indent) to minimise tokens.
+    evidence_compact = json.dumps(evidence, separators=(",", ":"), default=str)
+
+    # Keep each bullet short (≤10 words) to prevent unterminated-string truncation.
     prompt = (
-        "You are a quantitative research assistant analyzing historical pump patterns.\n"
-        "All evidence is derived from price/volume/indicator calculations only.\n"
-        "No news, catalyst, or fundamental data is available.\n\n"
-        "EVIDENCE BUNDLE (deterministic — no external data sources):\n"
-        f"{json.dumps(evidence, indent=2, default=str)}\n\n"
-        "Answer these 6 research questions using ONLY the evidence above.\n"
-        "1. What patterns repeated most often before 4× pumps? "
-        "(cite specific event_type_frequency counts and group_stats values)\n"
-        "2. What signals appeared earliest before the pump? "
-        "(reference event types and any days_before_pump context)\n"
-        "3. What separated true 4× pumps from false positives? "
-        "(compare group_stats for 4x_pump vs false_positive directly)\n"
-        "4. What separated true 4× pumps from normal winners (1.4–3.99×)? "
-        "(compare group_stats for 4x_pump vs normal_winner directly)\n"
-        "5. Which existing engine is closest to the needed detection logic? "
-        "Choose from: Pump Engine, Ignition Engine, Ribbon Engine, Base Scanner\n"
-        "6. What engine should be built next? Choose EXACTLY ONE:\n"
-        "   - Build Catalyst Ignition Engine\n"
-        "   - Build Low-Float Velocity Engine\n"
-        "   - Build Post-Compression Expansion Engine\n"
-        "   - Build Sector Sympathy Engine\n"
-        "   - Build Hybrid Pump Engine\n"
-        "   - Improve existing Pump Engine with specific changes\n\n"
-        "RULES:\n"
-        "- Do NOT invent catalysts, news events, or external reasons.\n"
-        "- Explicitly note that cause analysis is partial because catalyst/news "
-        "data is unavailable.\n"
-        "- Cite specific numbers and field names from the evidence.\n"
-        "- If group_stats is empty, say the data is insufficient.\n\n"
-        "Respond in this exact JSON structure (no markdown, no prose outside JSON):\n"
-        "{\n"
-        '  "patterns": ["..."],\n'
-        '  "earliest_signals": ["..."],\n'
-        '  "true_vs_false_positive": ["..."],\n'
-        '  "true_vs_normal_winner": ["..."],\n'
-        '  "closest_existing_engine": "...",\n'
-        '  "recommendation": "EXACT option text from list above",\n'
-        '  "recommendation_rationale": "1–2 sentences citing evidence",\n'
-        '  "limitations": ["..."]\n'
-        "}"
+        "EVIDENCE (price/volume/indicator only, no news):\n"
+        f"{evidence_compact}\n\n"
+        "Answer 6 questions using ONLY the evidence. "
+        "Keep each array item under 15 words. No newlines inside strings.\n"
+        "Q1: Patterns before 4x pumps (cite event_type_frequency counts).\n"
+        "Q2: Earliest signals (reference event types).\n"
+        "Q3: 4x_pump vs false_positive (cite group_stats numbers).\n"
+        "Q4: 4x_pump vs normal_winner (cite group_stats numbers).\n"
+        "Q5: Closest existing engine — one of: "
+        "Pump Engine|Ignition Engine|Ribbon Engine|Base Scanner.\n"
+        "Q6: Engine to build next — EXACTLY one of: "
+        "Build Catalyst Ignition Engine|"
+        "Build Low-Float Velocity Engine|"
+        "Build Post-Compression Expansion Engine|"
+        "Build Sector Sympathy Engine|"
+        "Build Hybrid Pump Engine|"
+        "Improve existing Pump Engine with specific changes.\n\n"
+        "Rules: no invented catalysts. Note data limitations. "
+        "If group_stats empty, say insufficient data.\n\n"
+        "Output ONLY this JSON object — no markdown, no prose, no code fences:\n"
+        '{"patterns":["..."],'
+        '"earliest_signals":["..."],'
+        '"true_vs_false_positive":["..."],'
+        '"true_vs_normal_winner":["..."],'
+        '"closest_existing_engine":"...",'
+        '"recommendation":"EXACT option",'
+        '"recommendation_rationale":"1 sentence",'
+        '"limitations":["..."]}'
     )
 
+    _MODEL = "claude-haiku-4-5-20251001"
+
     # ── Call Claude ───────────────────────────────────────────────────────────
+    raw_text = ""
     try:
         ai_client = anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0)
         response  = await ai_client.messages.create(
-            model      = "claude-haiku-4-5-20251001",
-            max_tokens = 1500,
+            model      = _MODEL,
+            max_tokens = 1200,
             system     = (
                 "You are a quantitative research assistant. "
-                "Respond only with valid JSON — no markdown code fences, no prose."
+                "Output only a single valid JSON object — "
+                "no markdown fences, no prose, no newlines inside string values."
             ),
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text.strip()
-        # Strip accidental markdown code fences
-        if raw.startswith("```"):
-            lines = raw.split("\n")
-            raw   = "\n".join(
-                lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-            )
-        analysis = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.error("pump_study_ai_summary: JSON parse error: %s", exc)
-        raise HTTPException(status_code=500, detail=f"AI response parse error: {exc}")
+        raw_text = response.content[0].text.strip()
     except Exception as exc:
-        logger.error("pump_study_ai_summary: generation error: %s", exc)
+        logger.error("pump_study_ai_summary: API call failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
+    # ── Safe JSON parse with one repair attempt ───────────────────────────────
+    analysis = None
+    parse_err = None
+    try:
+        analysis = json.loads(raw_text)
+    except json.JSONDecodeError as exc1:
+        logger.warning("pump_study_ai_summary: initial JSON parse failed (%s); attempting repair", exc1)
+        try:
+            repaired  = _repair_json(raw_text)
+            analysis  = json.loads(repaired)
+            logger.info("pump_study_ai_summary: JSON repair succeeded")
+        except json.JSONDecodeError as exc2:
+            parse_err = str(exc2)
+            logger.error("pump_study_ai_summary: JSON repair also failed: %s", exc2)
+
     # ── Persist ───────────────────────────────────────────────────────────────
+    if analysis is None:
+        # Store the failure for audit; do NOT crash the route
+        await save_pump_ai_summary(run_id, {
+            "analysis":      {},
+            "recommendation": "",
+            "evidence":      evidence,
+            "limitations":   "",
+            "model_used":    _MODEL,
+            "parse_failed":  True,
+            "raw_response":  raw_text,
+            "parse_error":   parse_err,
+        })
+        return {
+            "ok":          False,
+            "parse_failed": True,
+            "run_id":      run_id,
+            "message":     "AI summary could not be parsed — model returned malformed JSON.",
+            "parse_error": parse_err,
+            "raw_text":    raw_text[:500] if raw_text else "",
+            "model_used":  _MODEL,
+            "cached":      False,
+        }
+
     limitations_text = "\n".join(analysis.get("limitations", []))
     await save_pump_ai_summary(run_id, {
         "analysis":       analysis,
         "recommendation": analysis.get("recommendation", ""),
         "evidence":       evidence,
         "limitations":    limitations_text,
-        "model_used":     "claude-haiku-4-5-20251001",
+        "model_used":     _MODEL,
+        "parse_failed":   False,
+        "raw_response":   None,
+        "parse_error":    None,
     })
 
     return {
-        "run_id":   run_id,
+        "ok":      True,
+        "run_id":  run_id,
         "analysis": analysis,
         "evidence_summary": {
             "episodes_analyzed": len(episodes),
             "event_types_found": len(event_freq),
             "groups_found":      len(groups),
         },
-        "model_used":    "claude-haiku-4-5-20251001",
+        "model_used":    _MODEL,
         "generated_at":  datetime.utcnow().isoformat() + "Z",
         "cached":        False,
     }
