@@ -77,6 +77,9 @@ from database import (
     get_replay_candidates,
     get_replay_outcomes,
     get_replay_missed_movers,
+    # Pump Study AI Layer
+    get_pump_ai_summary,
+    save_pump_ai_summary,
 )
 from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
@@ -2697,3 +2700,194 @@ async def pump_study_export(run_id: int, format: str = "json"):
                 f'attachment; filename="pump_study_{run_id}_full.json"'
         },
     )
+
+
+@app.get("/api/replay/pump-study/{run_id}/ai-summary")
+async def pump_study_ai_summary(run_id: int):
+    """
+    Lazy AI pattern-analysis for a completed pump-study run.
+
+    On first request: builds a deterministic evidence bundle from stored DB
+    data, calls Claude, stores the result, and returns it.
+    On subsequent requests: returns the cached row immediately.
+
+    Evidence is 100% price/volume/indicator-derived.  No external news or
+    catalyst data is ingested.  The model is explicitly instructed to flag
+    this limitation and not invent catalysts.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    from database import (
+        get_pump_study_run,
+        get_pump_episodes,
+        get_pump_comparison_groups,
+        get_pump_study_timeline,
+        get_pump_ai_summary,
+        save_pump_ai_summary,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    terminal = ("completed", "comparison_complete")
+    if run.get("status") not in terminal:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run {run_id} status is '{run.get('status')}'. "
+                "AI summary requires a completed run."
+            ),
+        )
+
+    # ── Return cached result if available ─────────────────────────────────────
+    cached = await get_pump_ai_summary(run_id)
+    if cached:
+        cached["cached"]       = True
+        cached["generated_at"] = cached.get("created_at")
+        return cached
+
+    # ── Build deterministic evidence bundle ───────────────────────────────────
+    episodes = await get_pump_episodes(run_id, limit=500)
+    groups   = await get_pump_comparison_groups(run_id)
+    events   = await get_pump_study_timeline(run_id)
+
+    # Event type frequencies across all episodes
+    event_freq: dict[str, int] = {}
+    for ev in events:
+        t = ev.get("event_type", "unknown")
+        event_freq[t] = event_freq.get(t, 0) + 1
+
+    # Catch / miss breakdown
+    caught = sum(1 for ep in episodes if ep.get("caught_by_scanner") is True)
+    missed = sum(1 for ep in episodes if ep.get("caught_by_scanner") is False)
+    total  = caught + missed
+
+    # Family distribution
+    family_counts: dict[str, int] = {}
+    for ep in episodes:
+        k = ep.get("pump_type") or "UNKNOWN"
+        family_counts[k] = family_counts.get(k, 0) + 1
+
+    # Group stats index (group_name → stats dict)
+    group_stats = {g["group_name"]: g.get("stats", {}) for g in groups}
+
+    evidence = {
+        "run_params": {
+            "date_range":    f"{run.get('start_date')} to {run.get('end_date')}",
+            "min_multiple":  run.get("min_multiple"),
+            "window_days":   run.get("window_days"),
+            "episode_count": run.get("episode_count"),
+        },
+        "catch_rate": {
+            "caught":   caught,
+            "missed":   missed,
+            "rate_pct": round(caught / max(1, total) * 100, 1),
+        },
+        "family_distribution": family_counts,
+        "event_type_frequency": event_freq,
+        "group_stats": group_stats,
+        "data_limitations": {
+            "catalyst_news_available": False,
+            "note": (
+                "No external news or catalyst data was ingested. "
+                "Analysis is limited to price, volume, and indicator-derived features."
+            ),
+        },
+    }
+
+    # ── Prompt ────────────────────────────────────────────────────────────────
+    prompt = (
+        "You are a quantitative research assistant analyzing historical pump patterns.\n"
+        "All evidence is derived from price/volume/indicator calculations only.\n"
+        "No news, catalyst, or fundamental data is available.\n\n"
+        "EVIDENCE BUNDLE (deterministic — no external data sources):\n"
+        f"{json.dumps(evidence, indent=2, default=str)}\n\n"
+        "Answer these 6 research questions using ONLY the evidence above.\n"
+        "1. What patterns repeated most often before 4× pumps? "
+        "(cite specific event_type_frequency counts and group_stats values)\n"
+        "2. What signals appeared earliest before the pump? "
+        "(reference event types and any days_before_pump context)\n"
+        "3. What separated true 4× pumps from false positives? "
+        "(compare group_stats for 4x_pump vs false_positive directly)\n"
+        "4. What separated true 4× pumps from normal winners (1.4–3.99×)? "
+        "(compare group_stats for 4x_pump vs normal_winner directly)\n"
+        "5. Which existing engine is closest to the needed detection logic? "
+        "Choose from: Pump Engine, Ignition Engine, Ribbon Engine, Base Scanner\n"
+        "6. What engine should be built next? Choose EXACTLY ONE:\n"
+        "   - Build Catalyst Ignition Engine\n"
+        "   - Build Low-Float Velocity Engine\n"
+        "   - Build Post-Compression Expansion Engine\n"
+        "   - Build Sector Sympathy Engine\n"
+        "   - Build Hybrid Pump Engine\n"
+        "   - Improve existing Pump Engine with specific changes\n\n"
+        "RULES:\n"
+        "- Do NOT invent catalysts, news events, or external reasons.\n"
+        "- Explicitly note that cause analysis is partial because catalyst/news "
+        "data is unavailable.\n"
+        "- Cite specific numbers and field names from the evidence.\n"
+        "- If group_stats is empty, say the data is insufficient.\n\n"
+        "Respond in this exact JSON structure (no markdown, no prose outside JSON):\n"
+        "{\n"
+        '  "patterns": ["..."],\n'
+        '  "earliest_signals": ["..."],\n'
+        '  "true_vs_false_positive": ["..."],\n'
+        '  "true_vs_normal_winner": ["..."],\n'
+        '  "closest_existing_engine": "...",\n'
+        '  "recommendation": "EXACT option text from list above",\n'
+        '  "recommendation_rationale": "1–2 sentences citing evidence",\n'
+        '  "limitations": ["..."]\n'
+        "}"
+    )
+
+    # ── Call Claude ───────────────────────────────────────────────────────────
+    try:
+        ai_client = anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0)
+        response  = await ai_client.messages.create(
+            model      = "claude-haiku-4-5-20251001",
+            max_tokens = 1500,
+            system     = (
+                "You are a quantitative research assistant. "
+                "Respond only with valid JSON — no markdown code fences, no prose."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # Strip accidental markdown code fences
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            raw   = "\n".join(
+                lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+            )
+        analysis = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error("pump_study_ai_summary: JSON parse error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"AI response parse error: {exc}")
+    except Exception as exc:
+        logger.error("pump_study_ai_summary: generation error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # ── Persist ───────────────────────────────────────────────────────────────
+    limitations_text = "\n".join(analysis.get("limitations", []))
+    await save_pump_ai_summary(run_id, {
+        "analysis":       analysis,
+        "recommendation": analysis.get("recommendation", ""),
+        "evidence":       evidence,
+        "limitations":    limitations_text,
+        "model_used":     "claude-haiku-4-5-20251001",
+    })
+
+    return {
+        "run_id":   run_id,
+        "analysis": analysis,
+        "evidence_summary": {
+            "episodes_analyzed": len(episodes),
+            "event_types_found": len(event_freq),
+            "groups_found":      len(groups),
+        },
+        "model_used":    "claude-haiku-4-5-20251001",
+        "generated_at":  datetime.utcnow().isoformat() + "Z",
+        "cached":        False,
+    }

@@ -3047,6 +3047,28 @@ class PumpComparisonMember(Base):
     created_at     = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class PumpStudyAISummary(Base):
+    """
+    AI-generated pattern analysis for one pump-study run.
+    Generated lazily on first request; immutable after creation.
+    Run-scoped, replay-scoped only — never touches live scanner state.
+    """
+    __tablename__ = "pump_study_ai_summaries"
+
+    id             = Column(Integer,     primary_key=True)
+    run_id         = Column(Integer,     nullable=False, unique=True, index=True)
+    # Parsed analysis object as JSON string
+    analysis_json  = Column(Text,        nullable=True)
+    # Top-level recommendation string (one of the allowed slugs)
+    recommendation = Column(String(100), nullable=True)
+    # Serialised evidence bundle fed to the model (for auditing)
+    evidence_json  = Column(Text,        nullable=True)
+    # Limitations paragraph (missing catalyst/news note)
+    limitations    = Column(Text,        nullable=True)
+    model_used     = Column(String(60),  nullable=True)
+    created_at     = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 # ── Pump Study CRUD ───────────────────────────────────────────────────────────
 
 async def create_pump_study_run(data: dict) -> int:
@@ -3619,3 +3641,51 @@ def _event_to_dict(r: PumpEpisodeEvent) -> dict:
         "event_note":       r.event_note,
         "days_before_pump": r.days_before_pump,
     }
+
+
+# ── Pump Study AI Summary CRUD ────────────────────────────────────────────────
+
+async def save_pump_ai_summary(run_id: int, data: dict) -> int:
+    """Persist an AI-generated analysis for a pump-study run (insert or replace)."""
+    async with get_session_factory()() as session:
+        # Delete any stale row first so we can re-insert cleanly
+        existing = await session.execute(
+            select(PumpStudyAISummary).where(PumpStudyAISummary.run_id == run_id)
+        )
+        old = existing.scalar_one_or_none()
+        if old:
+            await session.delete(old)
+            await session.flush()
+
+        row = PumpStudyAISummary(
+            run_id         = run_id,
+            analysis_json  = json.dumps(data.get("analysis") or {}),
+            recommendation = data.get("recommendation", ""),
+            evidence_json  = json.dumps(data.get("evidence") or {}),
+            limitations    = data.get("limitations", ""),
+            model_used     = data.get("model_used", ""),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def get_pump_ai_summary(run_id: int) -> dict | None:
+    """Return a stored AI summary or None if not yet generated."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpStudyAISummary).where(PumpStudyAISummary.run_id == run_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return None
+        return {
+            "run_id":         row.run_id,
+            "analysis":       json.loads(row.analysis_json or "{}"),
+            "recommendation": row.recommendation,
+            "evidence":       json.loads(row.evidence_json or "{}"),
+            "limitations":    row.limitations,
+            "model_used":     row.model_used,
+            "created_at":     row.created_at.isoformat() if row.created_at else None,
+        }

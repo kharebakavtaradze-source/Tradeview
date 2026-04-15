@@ -2,6 +2,9 @@
  * Pump Study — 4× Historical Pump Research
  * Phase 5A: page shell + runs list + run selection.
  * Phase 5B: episodes table with filters + row selection.
+ * Phase 5C: episode detail panel.
+ * Phase 5D: global summary — family distribution, comparison groups, pre-pump signals.
+ * Phase 6:  AI recommendation layer.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
@@ -742,6 +745,164 @@ function RunsList({ runs, selectedId, onSelect, loading }) {
   );
 }
 
+// ── AI Recommendation Section (Phase 6) ──────────────────────────────────────
+
+const TERMINAL_STATUSES = new Set(['completed', 'comparison_complete']);
+
+function AISummarySection({ runId, runStatus }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [tried,   setTried]   = useState(false);
+
+  const canGenerate = TERMINAL_STATUSES.has(runStatus);
+
+  // Auto-fetch cached result (no generation) on mount
+  useEffect(() => {
+    if (!runId || !canGenerate) return;
+    setData(null); setError(''); setTried(false);
+    fetch(`${API_URL}/api/replay/pump-study/${runId}/ai-summary`)
+      .then(r => {
+        if (r.status === 404) return null;          // not generated yet — ok
+        if (r.status === 409) return null;          // run not complete — ok
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(d => { if (d) { setData(d); setTried(true); } })
+      .catch(err => setError(err.message));
+  }, [runId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleGenerate() {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_URL}/api/replay/pump-study/${runId}/ai-summary`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      setData(await res.json());
+      setTried(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Run not terminal
+  if (!canGenerate) {
+    return (
+      <div className={styles.statusMsg}>
+        AI summary available once run reaches completed status.
+      </div>
+    );
+  }
+
+  // Not yet generated
+  if (!data && !tried) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {error && <div className={styles.errorMsg}>{error}</div>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button className={styles.aiGenerateBtn} onClick={handleGenerate} disabled={loading}>
+            {loading ? 'Generating…' : 'Generate AI Summary'}
+          </button>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            Analyzes stored evidence — no live data fetched
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const a = data.analysis || {};
+  const ev = data.evidence_summary || {};
+
+  const SECTION_BLOCKS = [
+    { key: 'patterns',             title: 'Repeated Patterns Before 4× Pumps',         items: a.patterns },
+    { key: 'earliest_signals',     title: 'Earliest Appearing Signals',                 items: a.earliest_signals },
+    { key: 'true_vs_false_positive', title: 'True Pumps vs False Positives',            items: a.true_vs_false_positive },
+    { key: 'true_vs_normal_winner',  title: 'True 4× Pumps vs Normal Winners (1.4–3.99×)', items: a.true_vs_normal_winner },
+  ];
+
+  return (
+    <div className={styles.aiSection}>
+
+      {/* Recommendation badge */}
+      {a.recommendation && (
+        <div>
+          <div className={styles.bundleSectionTitle} style={{ marginBottom: 8 }}>ENGINE RECOMMENDATION</div>
+          <div className={styles.aiRecommendationBadge}>
+            {a.recommendation}
+          </div>
+          {a.recommendation_rationale && (
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+              {a.recommendation_rationale}
+            </div>
+          )}
+          {a.closest_existing_engine && (
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+              Closest existing engine: <span style={{ color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                {a.closest_existing_engine}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Analysis blocks */}
+      {SECTION_BLOCKS.map(({ key, title, items }) => (
+        Array.isArray(items) && items.length > 0 ? (
+          <div key={key} className={styles.aiBlock}>
+            <div className={styles.aiBlockTitle}>{title}</div>
+            {items.map((item, i) => (
+              <div key={i} className={styles.aiBullet}>{item}</div>
+            ))}
+          </div>
+        ) : null
+      ))}
+
+      {/* Limitations */}
+      {Array.isArray(a.limitations) && a.limitations.length > 0 && (
+        <div className={styles.aiBlock} style={{ borderColor: 'var(--amber-border)' }}>
+          <div className={styles.aiBlockTitle} style={{ color: 'var(--amber)' }}>
+            LIMITATIONS &amp; MISSING DATA
+          </div>
+          {a.limitations.map((lim, i) => (
+            <div key={i} className={styles.aiLimitation}>{lim}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Meta footer */}
+      <div className={styles.aiMeta}>
+        Model: {data.model_used || 'claude-haiku'}
+        {ev.episodes_analyzed != null && ` · ${ev.episodes_analyzed} episodes analyzed`}
+        {ev.event_types_found  != null && ` · ${ev.event_types_found} event types`}
+        {ev.groups_found       != null && ` · ${ev.groups_found} comparison groups`}
+        {data.cached && ' · cached result'}
+        {data.generated_at && ` · ${String(data.generated_at).slice(0, 16).replace('T', ' ')}`}
+      </div>
+
+      {/* Re-generate option (only if cached) */}
+      {data.cached && (
+        <div>
+          <button
+            className={styles.exportBtn}
+            onClick={() => { setData(null); setTried(false); }}
+          >
+            Re-generate
+          </button>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
 // ── Global Summary helpers (Phase 5D) ────────────────────────────────────────
 
 // Safely read one stat from group_stats or stats_json
@@ -1298,6 +1459,17 @@ export default function PumpStudyPage() {
               episodeId={detailEpId}
               onClose={() => { setDetailEpId(null); setSelectedEpId(null); }}
             />
+          )}
+
+          {/* AI Recommendation (Phase 6) */}
+          {selectedId && (
+            <div className={styles.bundleSection}>
+              <div className={styles.bundleSectionTitle}>AI RECOMMENDATION</div>
+              <AISummarySection
+                runId={selectedId}
+                runStatus={selectedRun?.status}
+              />
+            </div>
           )}
 
         </div>
