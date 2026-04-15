@@ -2166,6 +2166,32 @@ async def replay_research_bundle_download(run_id: int, format: str = "json"):
         raise HTTPException(500, detail=f"Download failed: {str(exc)[:200]}")
 
 
+@app.delete("/api/replay/{run_id}")
+async def delete_replay_run_endpoint(run_id: int):
+    """
+    Permanently delete a replay run and all its linked child records.
+
+    Cascade order:
+        replay_signal_candidates → replay_outcomes → replay_missed_movers
+        → replay_runs
+
+    Returns deleted row counts per table.
+    """
+    from database import delete_replay_run
+    try:
+        counts = await delete_replay_run(run_id)
+    except ValueError:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    except Exception as exc:
+        logger.error("delete_replay_run run_id=%s error: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "deleted": counts,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  4× PUMP STUDY API  —  Phase 4
 #  All endpoints are replay-only.  No live scanner logic is touched.
@@ -2707,6 +2733,33 @@ async def pump_study_export(run_id: int, format: str = "json"):
                 f'attachment; filename="pump_study_{run_id}_full.json"'
         },
     )
+
+
+@app.delete("/api/replay/pump-study/{run_id}")
+async def delete_pump_study_run_endpoint(run_id: int):
+    """
+    Permanently delete a pump-study run and all its linked child records.
+
+    Cascade order:
+        pump_episode_snapshots → pump_episode_events → pump_episode_detections
+        → pump_comparison_members → pump_comparison_groups → pump_clusters
+        → pump_episodes → pump_study_ai_summaries → pump_study_runs
+
+    Returns deleted row counts per table.
+    """
+    from database import delete_pump_study_run
+    try:
+        counts = await delete_pump_study_run(run_id)
+    except ValueError:
+        raise HTTPException(404, detail=f"Pump study run {run_id} not found")
+    except Exception as exc:
+        logger.error("delete_pump_study_run run_id=%s error: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "deleted": counts,
+    }
 
 
 def _repair_json(raw: str) -> str:
