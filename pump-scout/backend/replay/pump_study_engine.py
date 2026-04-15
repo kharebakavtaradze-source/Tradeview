@@ -1,5 +1,5 @@
 """
-Pump Study Engine — Phase 3D: Timeline Milestone Events
+Pump Study Engine — Phase 3E: Pump Family Classification + Comparison Groups
 ======================================================
 
 Detects raw 4x pump candidates in historical price data using a sliding window,
@@ -26,10 +26,11 @@ Phase 3A  ✓  Raw detection → pump_episode_detections
 Phase 3B  ✓  Clustering → pump_clusters + pump_episodes; back-fill detections
 Phase 3C  ✓  PRE / PUMP / POST daily snapshots → pump_episode_snapshots
 Phase 3D  ✓  Timeline milestone events → pump_episode_events
-Phase 3E  ✗  Comparison groups (not yet)
+Phase 3E  ✓  Pump family classification + comparison groups
 """
 
 import asyncio
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -994,6 +995,428 @@ def _detect_timeline_events(
     return events
 
 
+# ── Phase 3E: pump family classification + comparison groups ──────────────────
+
+# All valid pump family labels (ordered from most- to least-specific)
+_PUMP_FAMILIES = (
+    "ACCUMULATION_TO_EXPANSION",
+    "POST_COMPRESSION_BREAKOUT",
+    "CATALYST_IGNITION",
+    "GAP_AND_GO",
+    "LOW_FLOAT_VELOCITY",
+    "CHAOTIC_SPECULATIVE",
+    "SECTOR_SYMPATHY",
+    "UNKNOWN",
+)
+
+# Secondary scan for normal_winner comparison group:
+# minimum and maximum multiple (exclusive of 4x threshold)
+_NORMAL_WINNER_MIN_MULTIPLE: float = 1.40
+_NORMAL_WINNER_MAX_MULTIPLE: float = 3.99
+
+# false_positive rule: any POST snapshot with the worst close below
+# start_price × this threshold qualifies the episode as a severe post-reversal.
+# 2.0 means the price fell from 4x+ peak back to below 2x from start.
+_POST_REVERSAL_THRESHOLD: float = 2.00
+
+# Wyckoff state quality ordering (higher = more advanced accumulation)
+_WYK_PRIORITY: dict[str, int] = {
+    "FIRE":        6,
+    "ARM":         5,
+    "STEALTH_ARM": 4,
+    "STEALTH_BASE":3,
+    "BASE":        2,
+    "STEALTH":     1,
+    "NONE":        0,
+}
+
+# Ribbon classes that count as "constructive or better"
+_RIBBON_QUALIFY: frozenset = frozenset({"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE"})
+
+
+def _compute_stats(values: list) -> dict:
+    """
+    Compute distribution statistics over a list of numeric values.
+    Returns {count, mean, median, p25, p75, p90}.
+    None values are silently skipped.
+    """
+    cleaned = sorted(v for v in values if v is not None)
+    n = len(cleaned)
+    if n == 0:
+        return {
+            "count": 0, "mean": None, "median": None,
+            "p25": None, "p75": None, "p90": None,
+        }
+
+    mean = sum(cleaned) / n
+
+    def pct(p: int) -> float:
+        idx = min(n - 1, max(0, int(n * p / 100)))
+        return round(cleaned[idx], 4)
+
+    return {
+        "count":  n,
+        "mean":   round(mean, 4),
+        "median": pct(50),
+        "p25":    pct(25),
+        "p75":    pct(75),
+        "p90":    pct(90),
+    }
+
+
+def _build_group_stats(members: list[dict]) -> dict:
+    """
+    Build aggregate stats dict for one comparison group.
+    Each member dict must have a 'features' sub-dict.
+    Stats are computed for all major numeric fields.
+    """
+    feats = [m.get("features") or {} for m in members]
+
+    def stat_for(field: str) -> dict:
+        return _compute_stats([f.get(field) for f in feats])
+
+    return {
+        "pump_multiple":                stat_for("pump_multiple"),
+        "days_to_peak":                 stat_for("days_to_peak"),
+        "max_drawdown_before_peak":     stat_for("max_drawdown_before_peak"),
+        "max_volume_anomaly":           stat_for("max_volume_anomaly"),
+        "largest_gap_pct":              stat_for("largest_gap_pct"),
+        "max_toxicity_score":           stat_for("max_toxicity_score"),
+        "avg_toxicity_score":           stat_for("avg_toxicity_score"),
+        "ignition_quality":             stat_for("ignition_quality"),
+        "worst_post_return_from_start": stat_for("worst_post_return_from_start"),
+    }
+
+
+def _extract_episode_features(
+    ep_dict: dict,
+    snaps:   list[dict],
+    evs:     list[dict],
+) -> dict:
+    """
+    Derive the key comparison feature vector for one episode.
+
+    Must be called while snapshots are still in memory (inside the episode loop)
+    because it reads indicator sub-dicts from snap["snapshot"].
+
+    Features stored (None when unavailable):
+      pump_multiple, pump_return_pct, days_to_peak, days_to_double,
+      max_drawdown_before_peak, max_volume_anomaly, largest_gap_pct,
+      first_pump_gap_pct, had_ribbon, had_ignition, had_compression,
+      strongest_wyckoff_state, max_toxicity_score, avg_toxicity_score,
+      worst_post_return_from_start, ignition_quality, ignition_bucket,
+      sector, industry
+    """
+    pre_snaps  = [s for s in snaps if s["window_phase"] == "PRE"]
+    pump_snaps = [s for s in snaps if s["window_phase"] == "PUMP"]
+    post_snaps = [s for s in snaps if s["window_phase"] == "POST"]
+    event_types = {e["event_type"] for e in evs}
+
+    # ── Volume anomaly ────────────────────────────────────────────────────────
+    vol_ratios = [
+        s["volume_vs_avg20"] for s in pump_snaps
+        if s.get("volume_vs_avg20") is not None
+    ]
+    max_vol_anomaly = round(max(vol_ratios), 3) if vol_ratios else None
+
+    # ── Gap ───────────────────────────────────────────────────────────────────
+    gap_pcts = [abs(s.get("gap_pct") or 0) for s in pump_snaps if s.get("gap_pct")]
+    largest_gap     = round(max(gap_pcts), 3) if gap_pcts else None
+    first_pump_gap  = pump_snaps[0].get("gap_pct") if pump_snaps else None
+    if first_pump_gap is not None:
+        first_pump_gap = round(first_pump_gap, 3)
+
+    # ── Structural signals ────────────────────────────────────────────────────
+    had_ribbon = any(
+        (s.get("ribbon_class") or "") in _RIBBON_QUALIFY
+        for s in pre_snaps + pump_snaps
+    )
+    had_ignition   = "first_ignition_day"   in event_types
+    had_compression = "first_compression_day" in event_types
+
+    # ── Wyckoff: strongest state seen in PRE + early PUMP ────────────────────
+    wyk_states = [
+        s.get("wyckoff_state") or "NONE"
+        for s in pre_snaps + pump_snaps
+    ]
+    strongest_wyckoff = max(wyk_states, key=lambda s: _WYK_PRIORITY.get(s, 0))
+    if strongest_wyckoff == "NONE":
+        strongest_wyckoff = None
+
+    # ── Toxicity ──────────────────────────────────────────────────────────────
+    tox_scores: list[float] = []
+    for s in pump_snaps:
+        tox = (s.get("snapshot") or {}).get("toxicity") or {}
+        ts  = tox.get("toxicity_score")
+        if ts is not None:
+            tox_scores.append(float(ts))
+    max_tox = max(tox_scores)                                   if tox_scores else None
+    avg_tox = round(sum(tox_scores) / len(tox_scores), 1)      if tox_scores else None
+
+    # ── POST reversal: worst close in POST vs start_price ────────────────────
+    start_price = ep_dict.get("start_price") or 0.0
+    worst_post_return_from_start: Optional[float] = None
+    if post_snaps and start_price > 0:
+        post_closes = [s["close"] for s in post_snaps if s.get("close")]
+        if post_closes:
+            worst_close = min(post_closes)
+            worst_post_return_from_start = round(
+                (worst_close - start_price) / start_price * 100, 2
+            )
+
+    # ── Ignition ──────────────────────────────────────────────────────────────
+    ignition_quality: Optional[float] = None
+    ignition_bucket:  Optional[str]   = None
+    for e in evs:
+        if e["event_type"] == "first_ignition_day":
+            ignition_quality = e.get("event_value")
+            ignition_bucket  = (e.get("event_detail") or {}).get("ignition_bucket")
+            break
+
+    return {
+        "pump_multiple":                ep_dict.get("pump_multiple"),
+        "pump_return_pct":              ep_dict.get("pump_return_pct"),
+        "days_to_peak":                 ep_dict.get("days_to_peak"),
+        "days_to_double":               ep_dict.get("days_to_double"),
+        "max_drawdown_before_peak":     ep_dict.get("max_drawdown_before_peak"),
+        "max_volume_anomaly":           max_vol_anomaly,
+        "largest_gap_pct":              largest_gap,
+        "first_pump_gap_pct":           first_pump_gap,
+        "had_ribbon":                   had_ribbon,
+        "had_ignition":                 had_ignition,
+        "had_compression":              had_compression,
+        "strongest_wyckoff_state":      strongest_wyckoff,
+        "max_toxicity_score":           max_tox,
+        "avg_toxicity_score":           avg_tox,
+        "worst_post_return_from_start": worst_post_return_from_start,
+        "ignition_quality":             ignition_quality,
+        "ignition_bucket":              ignition_bucket,
+        # Not yet enriched (pending future phases)
+        "sector":                       ep_dict.get("sector"),
+        "industry":                     ep_dict.get("industry"),
+    }
+
+
+def _classify_pump_family(
+    ep_dict:  dict,
+    features: dict,
+    evs:      list[dict],
+) -> tuple[str, str]:
+    """
+    Assign exactly one deterministic pump family to a canonical episode.
+
+    Priority (first matching rule wins):
+      1. ACCUMULATION_TO_EXPANSION  — strong Wyckoff + structural convergence
+      2. POST_COMPRESSION_BREAKOUT  — BB squeeze before move + breakout
+      3. CATALYST_IGNITION           — early strong ignition signal
+      4. GAP_AND_GO                  — large gap on first PUMP day, no prior base
+      5. LOW_FLOAT_VELOCITY          — fast peak (≤5 days) + high volume shock
+      6. CHAOTIC_SPECULATIVE         — high toxicity, no structure
+      7. SECTOR_SYMPATHY             — sector-aligned (requires sector data; skipped)
+      8. UNKNOWN                     — fallback
+
+    Returns (family_label, explanation_string).
+    """
+    event_types    = {e["event_type"] for e in evs}
+    days_to_peak   = features.get("days_to_peak") or 999
+    max_vol        = features.get("max_volume_anomaly") or 0.0
+    had_ribbon     = features.get("had_ribbon", False)
+    had_ignition   = features.get("had_ignition", False)
+    had_compression = features.get("had_compression", False)
+    strongest_wyk  = features.get("strongest_wyckoff_state") or "NONE"
+    first_gap      = features.get("first_pump_gap_pct") or 0.0
+    max_tox        = features.get("max_toxicity_score") or 0
+    avg_tox        = features.get("avg_toxicity_score") or 0
+    ign_qual       = features.get("ignition_quality") or 0
+    ign_bucket     = features.get("ignition_bucket") or "NONE"
+    ign_evt        = next(
+        (e for e in evs if e["event_type"] == "first_ignition_day"), None
+    )
+
+    # ── 1. ACCUMULATION_TO_EXPANSION ─────────────────────────────────────────
+    # Convergence of multiple accumulation signals before the explosive move.
+    acc_score = 0
+    if "first_accumulation_like_day"   in event_types: acc_score += 2
+    if "first_spring_test_lps_day"     in event_types: acc_score += 2
+    if "first_ribbon_constructive_day" in event_types: acc_score += 1
+    if had_ribbon:                                      acc_score += 1
+    if strongest_wyk in ("FIRE", "ARM"):                acc_score += 2
+    if strongest_wyk in ("STEALTH_ARM", "STEALTH_BASE"): acc_score += 1
+    if had_compression and "breakout_day" in event_types: acc_score += 1
+
+    if acc_score >= 5:
+        return (
+            "ACCUMULATION_TO_EXPANSION",
+            f"Convergent accumulation: state={strongest_wyk}, ribbon={had_ribbon}, "
+            f"spring={'yes' if 'first_spring_test_lps_day' in event_types else 'no'}, "
+            f"acc_score={acc_score}",
+        )
+
+    # ── 2. POST_COMPRESSION_BREAKOUT ─────────────────────────────────────────
+    # BB squeeze in PRE followed by breakout (+optional ribbon confirmation).
+    pcb_score = 0
+    if had_compression:                                 pcb_score += 3
+    if "breakout_day" in event_types:                   pcb_score += 2
+    if "first_ribbon_constructive_day" in event_types:  pcb_score += 1
+    if had_ribbon:                                      pcb_score += 1
+    if acc_score >= 2:                                  pcb_score += 1
+
+    if pcb_score >= 5 and had_compression:
+        return (
+            "POST_COMPRESSION_BREAKOUT",
+            f"Squeeze before move: compression={had_compression}, "
+            f"breakout={'yes' if 'breakout_day' in event_types else 'no'}, "
+            f"ribbon={had_ribbon}, pcb_score={pcb_score}",
+        )
+
+    # ── 3. CATALYST_IGNITION ─────────────────────────────────────────────────
+    # Early strong ignition signal — quality >= 30, preferably in PRE phase.
+    if had_ignition and ign_qual >= 30:
+        ign_rel_day = ign_evt.get("days_before_pump") if ign_evt else None
+        is_early    = ign_rel_day is not None and ign_rel_day <= 2
+        if is_early or ign_qual >= 50:
+            return (
+                "CATALYST_IGNITION",
+                f"Early strong ignition: quality={ign_qual:.0f}, bucket={ign_bucket}, "
+                f"days_from_start={ign_rel_day}",
+            )
+
+    # ── 4. GAP_AND_GO ─────────────────────────────────────────────────────────
+    # Large gap on first PUMP day with minimal prior base-building.
+    if abs(first_gap) >= 8.0:
+        return (
+            "GAP_AND_GO",
+            f"Extreme gap start: first_pump_gap={first_gap:.1f}%",
+        )
+    if abs(first_gap) >= 5.0 and not had_compression:
+        return (
+            "GAP_AND_GO",
+            f"Gap-led move: first_pump_gap={first_gap:.1f}%, no prior compression",
+        )
+
+    # ── 5. LOW_FLOAT_VELOCITY ────────────────────────────────────────────────
+    # Short-duration explosive move with high volume anomaly — classic microcap.
+    if days_to_peak <= 3:
+        return (
+            "LOW_FLOAT_VELOCITY",
+            f"Ultra-fast peak: {days_to_peak} trading days to peak",
+        )
+    if days_to_peak <= 5 and max_vol >= 4.0:
+        return (
+            "LOW_FLOAT_VELOCITY",
+            f"High-velocity: peak in {days_to_peak} days, vol_anomaly={max_vol:.1f}x avg",
+        )
+
+    # ── 6. CHAOTIC_SPECULATIVE ────────────────────────────────────────────────
+    # Explosive but structurally dirty: high toxicity and no prior structural setup.
+    no_structure = (
+        not had_ribbon
+        and not had_ignition
+        and "first_accumulation_like_day" not in event_types
+    )
+    chaotic = no_structure and (avg_tox >= 40 or max_tox >= 60 or max_vol >= 5.0)
+    if chaotic:
+        return (
+            "CHAOTIC_SPECULATIVE",
+            f"Unstructured explosive move: avg_tox={avg_tox}, max_tox={max_tox}, "
+            f"vol={max_vol:.1f}x avg, no prior setup",
+        )
+
+    # ── 7. SECTOR_SYMPATHY ────────────────────────────────────────────────────
+    # Cannot be determined without sector context (always None in Phase 3E).
+    # Reserved for future enrichment.
+
+    # ── Late-catch: partial evidence rules ────────────────────────────────────
+    if had_ignition:
+        return (
+            "CATALYST_IGNITION",
+            f"Ignition-assisted (moderate): quality={ign_qual:.0f}, bucket={ign_bucket}",
+        )
+    if acc_score >= 2:
+        return (
+            "ACCUMULATION_TO_EXPANSION",
+            f"Partial accumulation evidence: acc_score={acc_score}",
+        )
+    if had_compression:
+        return (
+            "POST_COMPRESSION_BREAKOUT",
+            "Compression detected before move (limited breakout confirmation)",
+        )
+
+    return ("UNKNOWN", "Insufficient or mixed evidence for family classification")
+
+
+def _build_normal_winner_members(
+    run_id:      int,
+    candle_map:  dict[str, list[dict]],
+    start_date:  str,
+    end_date:    str,
+    window_days: int,
+) -> list[dict]:
+    """
+    Derive normal_winner comparison group members via a secondary detection pass.
+
+    Definition
+    ----------
+    A normal_winner is the strongest single window per symbol where
+    _NORMAL_WINNER_MIN_MULTIPLE (1.40) <= multiple < 4.0 during the scan period.
+
+    Data source: candle_map (already loaded for 4x detection) — no extra API calls.
+    Since candle_map only contains symbols that had at least one 4x+ hit, this
+    group represents "other strong-but-sub-4x windows from the same stocks."
+    This is useful for comparing what a strong non-4x move looks like in the same
+    universe vs. the detected 4x episodes.
+
+    Note: A symbol can appear in both 4x_pump and normal_winner groups because
+    they capture DIFFERENT time windows (different t0 dates).
+
+    Features stored are detection-level only (no snapshot-derived indicators,
+    since running a second indicator pass would double the computation cost).
+    """
+    members: list[dict] = []
+
+    for sym, candles in candle_map.items():
+        # Detect all moves >= _NORMAL_WINNER_MIN_MULTIPLE in the same scan window
+        all_hits = _detect_raw_pumps(
+            sym, candles,
+            scan_start   = start_date,
+            scan_end     = end_date,
+            window_days  = window_days,
+            min_multiple = _NORMAL_WINNER_MIN_MULTIPLE,
+        )
+        # Keep only sub-4x windows (exclude windows that are 4x+ detections)
+        sub4x = [h for h in all_hits if h["multiple"] < 4.0]
+        if not sub4x:
+            continue
+
+        # One representative per symbol: highest multiple in the sub-4x set
+        best = max(sub4x, key=lambda h: h["multiple"])
+
+        members.append({
+            "run_id":          run_id,
+            "group_name":      "normal_winner",
+            "symbol":          sym,
+            "episode_id":      None,
+            "pump_multiple":   best["multiple"],
+            "pump_return_pct": best["return_pct"],
+            "days_to_peak":    best["days_to_peak"],
+            "pump_type":       None,
+            "features": {
+                "pump_multiple":            best["multiple"],
+                "pump_return_pct":          best["return_pct"],
+                "days_to_peak":             best["days_to_peak"],
+                "max_drawdown_before_peak": best.get("max_drawdown_before_peak"),
+                "start_price":              best["start_price"],
+                "peak_price":               best["peak_price"],
+                "window_start_date":        best["window_start_date"],
+                "window_peak_date":         best["window_peak_date"],
+                # Indicator-level features not computed (no snapshot pass for sub-4x)
+            },
+        })
+
+    return members
+
+
 # ── Universe builder ──────────────────────────────────────────────────────────
 
 async def _build_universe(
@@ -1061,7 +1484,7 @@ async def _build_universe(
 
 async def run_pump_study(run_id: int, params: dict) -> None:
     """
-    Phase 3D entry point.
+    Phase 3E entry point (final deterministic engine phase).
 
     Params:
         start_date      str   YYYY-MM-DD  scan window start
@@ -1072,24 +1495,29 @@ async def run_pump_study(run_id: int, params: dict) -> None:
 
     Execution order
     ---------------
-    1. Build symbol universe
-    2. Per-symbol (parallel, Semaphore 8):
-         a. Fetch candles  (kept in candle_map for Phase 3C/3D)
-         b. Detect raw pumps → in-memory hits
-         c. Cluster hits → in-memory clusters
-         d. Back-fill cluster_id / is_canonical on hit dicts (in memory)
-    3. Save enriched detections (cluster_id + is_canonical already set)
-    4. Save cluster records (canonical_episode_id = None initially)
-    5. Build episode dicts from each cluster's canonical detection
-    6. Save episodes → receive inserted IDs
-    7. Back-fill canonical_episode_id on each cluster row
-    8. Per episode: build PRE/PUMP/POST snapshots (Phase 3C)
-    9. Per episode: detect timeline milestones from in-memory snapshots (Phase 3D)
-    10. Save snapshots + events
-    11. Update run counts + advance status to events_complete
-
-    Not done yet (Phase 3E+):
-        ✗ Comparison groups
+    1.  Build symbol universe
+    2.  Per-symbol (parallel, Semaphore 8):
+          a. Fetch candles  (kept in candle_map)
+          b. Detect raw pumps → in-memory hits
+          c. Cluster hits → in-memory clusters
+          d. Back-fill cluster_id / is_canonical on hit dicts (in memory)
+    3.  Save enriched detections (cluster_id + is_canonical already set)
+    4.  Save cluster records (canonical_episode_id = None initially)
+    5.  Build episode dicts from each cluster's canonical detection
+    6.  Save episodes → receive inserted IDs
+    7.  Back-fill canonical_episode_id on each cluster row
+    8.  Per episode (sequential):
+          a. Build PRE/PUMP/POST snapshots (Phase 3C)
+          b. Detect timeline milestones from in-memory snapshots (Phase 3D)
+          c. Extract feature vector + classify pump family (Phase 3E)
+          d. Back-fill pump_type + enriched fields on episode row
+    9.  Build 4 comparison groups from in-memory episode data (Phase 3E):
+          4x_pump       — all canonical episodes
+          normal_winner — secondary scan for 1.40–3.99x moves (same symbols)
+          false_positive — 4x episodes with severe POST reversal
+          missed_mover  — universe symbols with no 4x hit
+    10. Save comparison groups + members
+    11. Update run counts; advance status to comparison_complete
     """
     global _pump_study_progress
 
@@ -1101,20 +1529,24 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         save_pump_episode_snapshots,
         save_pump_episode_events,
         update_pump_cluster_episode_id,
+        update_pump_episode_enrichment,
+        save_pump_comparison_group,
+        save_pump_comparison_members,
     )
 
     _pump_study_progress.update({
-        "running":        True,
-        "run_id":         run_id,
-        "phase":          "INIT",
-        "symbols_total":  0,
-        "symbols_done":   0,
-        "raw_detections": 0,
-        "clusters":       0,
-        "episodes":       0,
-        "snapshots":      0,
-        "events":         0,
-        "error":          None,
+        "running":              True,
+        "run_id":               run_id,
+        "phase":                "INIT",
+        "symbols_total":        0,
+        "symbols_done":         0,
+        "raw_detections":       0,
+        "clusters":             0,
+        "episodes":             0,
+        "snapshots":            0,
+        "events":               0,
+        "comparison_members":   0,
+        "error":                None,
     })
 
     try:
@@ -1233,46 +1665,202 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         for cl, ep_id in zip(all_clusters, episode_ids):
             await update_pump_cluster_episode_id(run_id, cl["cluster_id"], ep_id)
 
-        # ── 8 & 9. Build + save PRE/PUMP/POST snapshots (Phase 3C) ───────────
-        # ── 10. Detect + save timeline milestone events  (Phase 3D) ──────────
-        _pump_study_progress["phase"] = "SNAPSHOTS"
+        # ── 8–11. Per-episode: snapshots (3C), events (3D), family+features (3E) ─
+        _pump_study_progress["phase"] = "ENRICH"
         total_snapshots = 0
         total_events    = 0
+
+        # all_ep_data accumulates per-episode enrichment for comparison groups
+        all_ep_data: list[dict] = []
 
         for cl, ep_id in zip(all_clusters, episode_ids):
             sym = cl["symbol"]
             sym_candles = candle_map.get(sym)
-            if not sym_candles:
-                continue
 
             canon = cl["canonical"]
             ep_dict = {
-                "pump_start_date": canon["window_start_date"],
-                "pump_peak_date":  canon["window_peak_date"],
-                "start_price":     canon["start_price"],
-                "peak_price":      canon["peak_price"],
+                "pump_start_date":          canon["window_start_date"],
+                "pump_peak_date":           canon["window_peak_date"],
+                "start_price":              canon["start_price"],
+                "peak_price":               canon["peak_price"],
+                "pump_multiple":            canon["multiple"],
+                "pump_return_pct":          canon["return_pct"],
+                "days_to_peak":             canon["days_to_peak"],
+                "days_to_double":           canon.get("days_to_double"),
+                "max_drawdown_before_peak": canon.get("max_drawdown_before_peak"),
+                "sector":                   None,
+                "industry":                 None,
             }
 
-            # Phase 3C: snapshots
-            snaps = _build_snapshots(ep_id, run_id, sym, ep_dict, sym_candles)
-            if snaps:
-                saved_snaps = await save_pump_episode_snapshots(snaps)
-                total_snapshots += saved_snaps
-                _pump_study_progress["snapshots"] = total_snapshots
+            snaps: list[dict] = []
+            evs:   list[dict] = []
 
-            # Phase 3D: milestone events (derived from in-memory snapshots)
-            if snaps:
-                _pump_study_progress["phase"] = "EVENTS"
-                evs = _detect_timeline_events(ep_id, run_id, sym, ep_dict, snaps)
-                if evs:
-                    saved_evs = await save_pump_episode_events(evs)
-                    total_events += saved_evs
-                    _pump_study_progress["events"] = total_events
-                _pump_study_progress["phase"] = "SNAPSHOTS"
+            if sym_candles:
+                # Phase 3C: PRE/PUMP/POST indicator snapshots
+                snaps = _build_snapshots(ep_id, run_id, sym, ep_dict, sym_candles)
+                if snaps:
+                    await save_pump_episode_snapshots(snaps)
+                    total_snapshots += len(snaps)
 
-        # ── 11. Finalise run ──────────────────────────────────────────────────
+                # Phase 3D: timeline milestone events (from in-memory snapshots)
+                if snaps:
+                    evs = _detect_timeline_events(ep_id, run_id, sym, ep_dict, snaps)
+                    if evs:
+                        await save_pump_episode_events(evs)
+                        total_events += len(evs)
+
+            # Phase 3E: feature extraction + family classification
+            features = _extract_episode_features(ep_dict, snaps, evs)
+            family, family_reason = _classify_pump_family(ep_dict, features, evs)
+
+            # Back-fill enriched fields onto the saved PumpEpisode row
+            await update_pump_episode_enrichment(ep_id, {
+                "pump_type":               family,
+                "had_ribbon":              features.get("had_ribbon", False),
+                "had_ignition":            features.get("had_ignition", False),
+                "strongest_wyckoff_state": features.get("strongest_wyckoff_state"),
+                "max_volume_anomaly":      features.get("max_volume_anomaly"),
+                "largest_gap_pct":         features.get("largest_gap_pct"),
+                "summary_json":            json.dumps({"family_reason": family_reason}),
+            })
+
+            all_ep_data.append({
+                "episode_id":    ep_id,
+                "symbol":        sym,
+                "ep_dict":       ep_dict,
+                "features":      features,
+                "family":        family,
+                "family_reason": family_reason,
+            })
+
+            _pump_study_progress["snapshots"] = total_snapshots
+            _pump_study_progress["events"]    = total_events
+
+            logger.debug(
+                f"[PUMP_STUDY][3E] {sym} ep={ep_id}: family={family}, "
+                f"snaps={len(snaps)}, evs={len(evs)}"
+            )
+
+        # ── 12. Build + save comparison groups (Phase 3E) ────────────────────
+        _pump_study_progress["phase"] = "COMPARISON"
+        total_comparison_members = 0
+
+        # Group A — 4x_pump: all canonical episodes from this run
+        group_a = [
+            {
+                "run_id":          run_id,
+                "group_name":      "4x_pump",
+                "symbol":          ed["symbol"],
+                "episode_id":      ed["episode_id"],
+                "pump_multiple":   ed["features"].get("pump_multiple"),
+                "pump_return_pct": ed["features"].get("pump_return_pct"),
+                "days_to_peak":    ed["features"].get("days_to_peak"),
+                "pump_type":       ed["family"],
+                "features":        ed["features"],
+            }
+            for ed in all_ep_data
+        ]
+
+        # Group B — normal_winner: secondary scan on candle_map for 1.40–3.99x moves.
+        # Same symbols as 4x_pump (only 4x symbols have candles), but different
+        # time windows — useful for comparing strong-but-sub-4x behaviour.
+        group_b = _build_normal_winner_members(
+            run_id, candle_map, start_date, end_date, window_days,
+        )
+
+        # Group C — false_positive: canonical 4x episodes where the worst POST
+        # close fell back below start_price × _POST_REVERSAL_THRESHOLD (default 2.0×).
+        # These pumped to 4x+ then rapidly reversed most gains — "short-lived" pumps.
+        group_c = [
+            {
+                "run_id":          run_id,
+                "group_name":      "false_positive",
+                "symbol":          ed["symbol"],
+                "episode_id":      ed["episode_id"],
+                "pump_multiple":   ed["features"].get("pump_multiple"),
+                "pump_return_pct": ed["features"].get("pump_return_pct"),
+                "days_to_peak":    ed["features"].get("days_to_peak"),
+                "pump_type":       ed["family"],
+                "features": {
+                    **ed["features"],
+                    "classification_note": (
+                        f"POST reversal below {_POST_REVERSAL_THRESHOLD}× start: "
+                        f"worst_post_return={ed['features'].get('worst_post_return_from_start'):.1f}%"
+                        if ed["features"].get("worst_post_return_from_start") is not None
+                        else "POST reversal"
+                    ),
+                },
+            }
+            for ed in all_ep_data
+            if (
+                ed["features"].get("worst_post_return_from_start") is not None
+                and ed["features"]["worst_post_return_from_start"]
+                    < (_POST_REVERSAL_THRESHOLD - 1.0) * 100
+                # e.g., < 100 means price fell below 2× start (returned < 100% from start)
+            )
+        ]
+
+        # Group D — missed_mover: universe symbols with no 4x detection.
+        # These passed volume/price filters but produced no 4x+ hit during the scan
+        # window. They represent the baseline "non-mover" universe population.
+        # Feature data is minimal (no candles loaded for them).
+        candle_map_syms = set(candle_map.keys())
+        group_d = [
+            {
+                "run_id":          run_id,
+                "group_name":      "missed_mover",
+                "symbol":          sym,
+                "episode_id":      None,
+                "pump_multiple":   None,
+                "pump_return_pct": None,
+                "days_to_peak":    None,
+                "pump_type":       None,
+                "features": {
+                    "in_universe":        True,
+                    "had_4x_detection":   False,
+                    "classification_note": "In universe; no 4x+ move detected in scan window",
+                },
+            }
+            for sym in symbols
+            if sym not in candle_map_syms
+        ]
+
+        # Save all four groups
+        for grp_name, grp_members in [
+            ("4x_pump",       group_a),
+            ("normal_winner", group_b),
+            ("false_positive", group_c),
+            ("missed_mover",  group_d),
+        ]:
+            if not grp_members:
+                logger.info(
+                    f"[PUMP_STUDY][3E] group '{grp_name}' is empty — skipping"
+                )
+                continue
+
+            stats  = _build_group_stats(grp_members)
+            grp_id = await save_pump_comparison_group(run_id, {
+                "group_name":   grp_name,
+                "member_count": len(grp_members),
+                "stats":        stats,
+            })
+            for m in grp_members:
+                m["group_id"] = grp_id
+            await save_pump_comparison_members(grp_members)
+            total_comparison_members += len(grp_members)
+
+            logger.info(
+                f"[PUMP_STUDY][3E] group '{grp_name}': {len(grp_members)} members saved"
+            )
+
+        # ── 13. Finalise run ──────────────────────────────────────────────────
+        family_counts: dict[str, int] = {}
+        for ed in all_ep_data:
+            fam = ed["family"]
+            family_counts[fam] = family_counts.get(fam, 0) + 1
+
         await update_pump_study_run(run_id, {
-            "status":              "events_complete",
+            "status":              "comparison_complete",
             "symbols_scanned":     len(symbols),
             "raw_detection_count": saved_det,
             "cluster_count":       len(all_clusters),
@@ -1281,24 +1869,27 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             "event_count":         total_events,
             "finished_at":         datetime.utcnow(),
             "notes": (
-                f"Phase 3D complete: {len(symbols)} symbols, "
+                f"Phase 3E complete: {len(symbols)} symbols, "
                 f"{saved_det} raw detections, {len(all_clusters)} clusters, "
                 f"{len(episode_ids)} episodes, {total_snapshots} snapshots, "
-                f"{total_events} timeline events. "
-                f"Comparison groups pending (Phase 3E+)."
+                f"{total_events} events, {total_comparison_members} comparison members. "
+                f"Families: {family_counts}."
             ),
         })
 
         _pump_study_progress.update({
-            "running": False,
-            "phase":   "EVENTS_COMPLETE",
+            "running":            False,
+            "phase":              "COMPARISON_COMPLETE",
+            "comparison_members": total_comparison_members,
         })
 
         logger.info(
-            f"[PUMP_STUDY] run_id={run_id} Phase 3D done: "
+            f"[PUMP_STUDY] run_id={run_id} Phase 3E done: "
             f"{len(symbols)} symbols, {saved_det} detections, "
             f"{len(all_clusters)} clusters, {len(episode_ids)} episodes, "
-            f"{total_snapshots} snapshots, {total_events} events"
+            f"{total_snapshots} snapshots, {total_events} events, "
+            f"{total_comparison_members} comparison members. "
+            f"Families: {family_counts}"
         )
 
     except Exception as exc:

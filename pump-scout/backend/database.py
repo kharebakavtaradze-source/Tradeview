@@ -3412,6 +3412,27 @@ async def update_pump_cluster_episode_id(
             await session.commit()
 
 
+async def update_pump_episode_enrichment(episode_id: int, data: dict) -> None:
+    """
+    Back-fill enriched fields on a PumpEpisode row after Phase 3C–3E analysis.
+
+    Updatable via this function:
+        pump_type, had_ribbon, had_ignition, strongest_wyckoff_state,
+        max_volume_anomaly, largest_gap_pct, summary_json
+    """
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisode).where(PumpEpisode.id == episode_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return
+        for k, v in data.items():
+            if hasattr(row, k):
+                setattr(row, k, v)
+        await session.commit()
+
+
 # ── Comparison groups + members ───────────────────────────────────────────────
 
 async def save_pump_comparison_group(run_id: int, group: dict) -> int:
