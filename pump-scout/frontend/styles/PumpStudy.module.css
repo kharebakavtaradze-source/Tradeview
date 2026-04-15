@@ -1,0 +1,828 @@
+/* ============================================================
+   PUMP STUDY — 4× Historical Pump Research Page
+   ============================================================ */
+
+.page {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  padding-bottom: 60px;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.header { padding: 20px var(--page-px) 10px; }
+
+.advisory {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--gold);
+  background: var(--gold-dim);
+  border: 1px solid var(--gold-border);
+  padding: 3px 10px;
+  border-radius: var(--r-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+
+/* ── Two-column layout ──────────────────────────────────── */
+.layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 20px;
+  padding: 0 var(--page-px);
+  align-items: start;
+}
+
+/* ── Side panel (left) ───────────────────────────────────── */
+.sidePanel {
+  position: sticky;
+  top: 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Run form panel ──────────────────────────────────────── */
+.runPanel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px;
+}
+
+.runPanelTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.formGroup { margin-bottom: 12px; }
+
+.formLabel {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.formInput {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  transition: border-color var(--t-fast);
+  box-sizing: border-box;
+}
+.formInput:focus { outline: none; border-color: var(--accent-border); }
+
+.formSelect {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: border-color var(--t-fast);
+}
+.formSelect:focus { outline: none; border-color: var(--accent-border); }
+
+.formHint {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.runBtn {
+  width: 100%;
+  padding: 9px;
+  border-radius: var(--r-md);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity var(--t-fast);
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+}
+.runBtn:hover { opacity: 0.8; }
+.runBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.errorMsg {
+  font-size: 10px;
+  color: var(--red);
+  background: var(--red-dim);
+  border: 1px solid var(--red-border);
+  border-radius: var(--r-sm);
+  padding: 6px 10px;
+  margin-bottom: 8px;
+}
+
+/* ── Runs list ───────────────────────────────────────────── */
+.runsWrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px;
+  overflow: hidden;
+}
+
+/* ── Main panel ──────────────────────────────────────────── */
+.mainPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── Run status bar ──────────────────────────────────────── */
+.runStatusBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+
+.runStatusMeta {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: 1;
+  min-width: 0;
+}
+
+.pulsingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* ── Tabs ────────────────────────────────────────────────── */
+.tabRow {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+
+.tab {
+  padding: 7px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all var(--t-fast);
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--text); }
+.tabActive {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── History / Runs table ────────────────────────────────── */
+.sectionTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.historyTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.historyHead th {
+  padding: 5px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  text-align: left;
+  border-bottom: 2px solid var(--border);
+}
+
+.historyRow {
+  border-bottom: 1px solid var(--border);
+  transition: background var(--t-fast);
+  cursor: pointer;
+}
+.historyRow:hover { background: var(--surface2); }
+.historyRowActive { background: var(--accent-dim) !important; }
+
+.historyRow td { padding: 7px 8px; vertical-align: middle; }
+
+.runId {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ── Status badges ───────────────────────────────────────── */
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.statusRunning   { color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber-border); }
+.statusCompleted { color: var(--lime);  background: var(--lime-dim);  border: 1px solid var(--lime-border); }
+.statusComplete2 { color: var(--cyan);  background: rgba(0,229,255,0.1); border: 1px solid rgba(0,229,255,0.3); }
+.statusFailed    { color: var(--red);   background: var(--red-dim);   border: 1px solid var(--red-border); }
+
+/* ── Global Summary ──────────────────────────────────────── */
+.bundleWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.summaryKPI {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 11px 13px;
+}
+
+.kpiValue {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 3px;
+  font-family: var(--font-mono);
+}
+
+.kpiLabel {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.bundleSection {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+}
+
+.bundleSectionTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Family distribution table */
+.familyTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.familyTable th {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 5px 8px;
+  border-bottom: 2px solid var(--border);
+  text-align: left;
+}
+
+.familyTable td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.familyTable tr:last-child td { border-bottom: none; }
+.familyTable tr:hover td { background: var(--surface2); }
+
+/* Comparison groups */
+.compGroups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.compGroupCard {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+}
+
+.compGroupName {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.compGroupCount { margin-bottom: 8px; }
+
+.compGroupStats { display: flex; flex-direction: column; gap: 4px; }
+
+.compStatRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  padding: 2px 0;
+}
+
+.compStatLabel { color: var(--text-muted); }
+.compStatVal { font-family: var(--font-mono); font-weight: 600; color: var(--text); }
+
+/* Info grid */
+.infoGrid { display: flex; flex-direction: column; gap: 6px; }
+
+.infoRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.infoRow:last-child { border-bottom: none; }
+
+.infoLabel { color: var(--text-muted); font-size: 10px; }
+.infoVal   { font-family: var(--font-mono); color: var(--text); font-size: 11px; }
+
+.notesBlock {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border-radius: var(--r-sm);
+  border-left: 3px solid var(--border2);
+}
+
+/* ── Filter row ──────────────────────────────────────────── */
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.filterInput {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 9px;
+  font-family: var(--font-mono);
+  width: 100px;
+  transition: border-color var(--t-fast);
+}
+.filterInput:focus { outline: none; border-color: var(--accent-border); }
+
+.filterSelect {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 9px;
+  cursor: pointer;
+  max-width: 180px;
+}
+.filterSelect:focus { outline: none; border-color: var(--accent-border); }
+
+.modeToggle { display: flex; gap: 3px; }
+
+.modeBtn {
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+.modeBtn:hover { color: var(--text); border-color: var(--border2); }
+.modeBtnActive {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* ── Episodes table ──────────────────────────────────────── */
+.episodeTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  min-width: 900px;
+}
+
+.episodeTable th {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.episodeTable td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.episodeRow {
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.episodeRow:hover { background: var(--surface2); }
+.episodeRowActive { background: var(--accent-dim) !important; }
+
+/* ── Episode Detail ──────────────────────────────────────── */
+.episodeDetail {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.detailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.detailSymbol {
+  font-size: 20px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  margin-right: 10px;
+}
+
+.detailMeta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.closeBtn {
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+.closeBtn:hover { color: var(--text); border-color: var(--border2); }
+
+.detailKPIGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 8px;
+}
+
+.detailKPI {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 9px 10px;
+}
+
+.phaseBar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  flex-wrap: wrap;
+}
+
+.phaseSegment {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Snapshot table ──────────────────────────────────────── */
+.snapTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  min-width: 800px;
+}
+
+.snapTable th {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 5px 7px;
+  border-bottom: 2px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.snapTable td {
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.snapRow:hover td { background: rgba(255,255,255,0.02); }
+
+/* ── Timeline events ─────────────────────────────────────── */
+.eventsWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.eventCard {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border2);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+}
+
+.eventTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.eventType {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.03em;
+}
+
+.eventDate {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.eventDays {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface3);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.eventNote {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.eventVal {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* ── Export row ──────────────────────────────────────────── */
+.exportRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.exportBtn {
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--t-fast);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-muted);
+}
+.exportBtn:hover { opacity: 0.8; color: var(--text); border-color: var(--border2); }
+
+/* ── Empty / loading ─────────────────────────────────────── */
+.emptyMsg {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.emptyHint {
+  font-size: 10px;
+  margin-top: 4px;
+}
+
+.statusMsg {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 12px 0;
+}
+
+/* ── Signal comparison table (Phase 5D) ─────────────────── */
+.signalTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.signalTable th {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-bottom: 2px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.signalTable td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.signalTable tr:last-child td { border-bottom: none; }
+.signalTable tr:hover td { background: var(--surface2); }
+
+.signalLabel {
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.signalVal4x  { min-width: 120px; }
+.signalValAlt { min-width: 100px; }
+
+/* ── Cluster info ────────────────────────────────────────── */
+.clusterCard {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.clusterRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.clusterRow:last-child { border-bottom: none; }
+.clusterRowLabel { color: var(--text-muted); font-size: 10px; }
+.clusterRowVal   { font-family: var(--font-mono); color: var(--text); }
+
+.rawDetTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  margin-top: 8px;
+}
+.rawDetTable th {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 4px 7px;
+  border-bottom: 2px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.rawDetTable td {
+  padding: 4px 7px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+.rawDetTable tr:last-child td { border-bottom: none; }
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidePanel { position: static; }
+  .compGroups { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .header   { padding: 16px; }
+  .layout   { padding: 0 12px; }
+  .summaryGrid { grid-template-columns: repeat(2, 1fr); }
+  .compGroups  { grid-template-columns: 1fr; }
+}
