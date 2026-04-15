@@ -2869,9 +2869,12 @@ class PumpEpisodeDetection(Base):
     peak_price        = Column(Float,      nullable=False)
     multiple          = Column(Float,      nullable=False)
     return_pct        = Column(Float,      nullable=False)
-    cluster_id        = Column(String(40), nullable=True,   index=True)  # set post-cluster
-    is_canonical      = Column(Boolean,    default=False)
-    created_at        = Column(DateTime(timezone=True), default=datetime.utcnow)
+    days_to_peak             = Column(Integer, nullable=True)   # trading days from start to peak
+    days_to_double           = Column(Integer, nullable=True)   # trading days to first 2x bar
+    max_drawdown_before_peak = Column(Float,   nullable=True)   # worst low vs start_price (%)
+    cluster_id               = Column(String(40), nullable=True, index=True)  # set post-cluster
+    is_canonical             = Column(Boolean, default=False)
+    created_at               = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class PumpEpisode(Base):
@@ -3099,17 +3102,20 @@ async def save_pump_episode_detections(run_id: int, detections: list[dict]) -> i
     async with get_session_factory()() as session:
         for d in detections:
             row = PumpEpisodeDetection(
-                run_id            = run_id,
-                symbol            = d["symbol"],
-                window_start_date = d["window_start_date"],
-                window_peak_date  = d["window_peak_date"],
-                window_days       = d.get("window_days"),
-                start_price       = d["start_price"],
-                peak_price        = d["peak_price"],
-                multiple          = d["multiple"],
-                return_pct        = d["return_pct"],
-                cluster_id        = d.get("cluster_id"),
-                is_canonical      = d.get("is_canonical", False),
+                run_id                   = run_id,
+                symbol                   = d["symbol"],
+                window_start_date        = d["window_start_date"],
+                window_peak_date         = d["window_peak_date"],
+                window_days              = d.get("window_days"),
+                start_price              = d["start_price"],
+                peak_price               = d["peak_price"],
+                multiple                 = d["multiple"],
+                return_pct               = d["return_pct"],
+                days_to_peak             = d.get("days_to_peak"),
+                days_to_double           = d.get("days_to_double"),
+                max_drawdown_before_peak = d.get("max_drawdown_before_peak"),
+                cluster_id               = d.get("cluster_id"),
+                is_canonical             = d.get("is_canonical", False),
             )
             session.add(row)
         await session.commit()
@@ -3126,16 +3132,20 @@ async def get_pump_episode_detections(run_id: int) -> list[dict]:
         rows = result.scalars().all()
         return [
             {
-                "id": r.id, "symbol": r.symbol,
-                "window_start_date": r.window_start_date,
-                "window_peak_date":  r.window_peak_date,
-                "window_days":       r.window_days,
-                "start_price":       r.start_price,
-                "peak_price":        r.peak_price,
-                "multiple":          r.multiple,
-                "return_pct":        r.return_pct,
-                "cluster_id":        r.cluster_id,
-                "is_canonical":      r.is_canonical,
+                "id":                       r.id,
+                "symbol":                   r.symbol,
+                "window_start_date":        r.window_start_date,
+                "window_peak_date":         r.window_peak_date,
+                "window_days":              r.window_days,
+                "start_price":              r.start_price,
+                "peak_price":               r.peak_price,
+                "multiple":                 r.multiple,
+                "return_pct":               r.return_pct,
+                "days_to_peak":             r.days_to_peak,
+                "days_to_double":           r.days_to_double,
+                "max_drawdown_before_peak": r.max_drawdown_before_peak,
+                "cluster_id":               r.cluster_id,
+                "is_canonical":             r.is_canonical,
             }
             for r in rows
         ]
