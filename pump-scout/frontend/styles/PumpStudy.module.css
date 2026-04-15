@@ -728,6 +728,22 @@
   padding: 12px 0;
 }
 
+/* ── Launch form ─────────────────────────────────────────── */
+.launchFormGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.launchSubmitRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 /* ── AI Recommendation section (Phase 6) ────────────────── */
 .aiSection {
   display: flex;

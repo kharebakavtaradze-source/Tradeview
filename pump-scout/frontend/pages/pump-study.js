@@ -665,20 +665,117 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
   );
 }
 
+// ── Launch form ───────────────────────────────────────────────────────────────
+
+function RunLaunchForm({ onLaunch, launching, launchError }) {
+  // Sensible defaults: 2-year window ending yesterday
+  const yesterday  = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+  const twoYrAgo   = new Date(); twoYrAgo.setFullYear(twoYrAgo.getFullYear() - 2);
+  const isoYday    = yesterday.toISOString().slice(0, 10);
+  const iso2yr     = twoYrAgo.toISOString().slice(0, 10);
+
+  const [startDate,      setStartDate]      = useState(iso2yr);
+  const [endDate,        setEndDate]        = useState(isoYday);
+  const [windowDays,     setWindowDays]     = useState(14);
+  const [minMultiple,    setMinMultiple]    = useState(4.0);
+  const [universeLimit,  setUniverseLimit]  = useState(0);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    onLaunch({
+      start_date:     startDate,
+      end_date:       endDate,
+      window_days:    Number(windowDays),
+      min_multiple:   Number(minMultiple),
+      universe_limit: Number(universeLimit),
+    });
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div className={styles.launchFormGrid}>
+        <div className={styles.formGroup} style={{ marginBottom: 0 }}>
+          <label className={styles.formLabel}>Start Date</label>
+          <input className={styles.formInput} type="date"
+            value={startDate} onChange={e => setStartDate(e.target.value)} required />
+        </div>
+        <div className={styles.formGroup} style={{ marginBottom: 0 }}>
+          <label className={styles.formLabel}>End Date</label>
+          <input className={styles.formInput} type="date"
+            value={endDate} onChange={e => setEndDate(e.target.value)} required />
+        </div>
+        <div className={styles.formGroup} style={{ marginBottom: 0 }}>
+          <label className={styles.formLabel}>Window (days)</label>
+          <select className={styles.formSelect} value={windowDays}
+            onChange={e => setWindowDays(e.target.value)}>
+            <option value={14}>14</option>
+            <option value={30}>30</option>
+            <option value={60}>60</option>
+            <option value={90}>90</option>
+          </select>
+        </div>
+        <div className={styles.formGroup} style={{ marginBottom: 0 }}>
+          <label className={styles.formLabel}>Min Multiple</label>
+          <select className={styles.formSelect} value={minMultiple}
+            onChange={e => setMinMultiple(e.target.value)}>
+            <option value={3.0}>3×</option>
+            <option value={4.0}>4×</option>
+            <option value={5.0}>5×</option>
+          </select>
+        </div>
+        <div className={styles.formGroup} style={{ marginBottom: 0 }}>
+          <label className={styles.formLabel} title="0 = full universe">Universe Limit</label>
+          <select className={styles.formSelect} value={universeLimit}
+            onChange={e => setUniverseLimit(e.target.value)}>
+            <option value={0}>All</option>
+            <option value={100}>100</option>
+            <option value={500}>500</option>
+            <option value={1000}>1000</option>
+          </select>
+        </div>
+      </div>
+      <div className={styles.launchSubmitRow}>
+        <button className={styles.runBtn} type="submit" disabled={launching}
+          style={{ width: 'auto', padding: '8px 24px' }}>
+          {launching ? 'Launching…' : 'Run Pump Study'}
+        </button>
+        {launchError && (
+          <span className={styles.errorMsg} style={{ padding: '4px 10px', margin: 0 }}>
+            {launchError}
+          </span>
+        )}
+      </div>
+    </form>
+  );
+}
+
 // ── Runs list ─────────────────────────────────────────────────────────────────
 
-function RunsList({ runs, selectedId, onSelect, loading }) {
+function RunsList({ runs, selectedId, onSelect, loading, error, onRetry }) {
   if (loading) {
     return <div className={styles.statusMsg}>Loading runs…</div>;
   }
+
+  // Backend unreachable or returned an error
+  if (error) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className={styles.errorMsg}>
+          Could not load runs: {error}
+        </div>
+        <button className={styles.exportBtn} onClick={onRetry} style={{ alignSelf: 'flex-start' }}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  // DB is genuinely empty
   if (!runs.length) {
     return (
       <div className={styles.emptyMsg}>
-        No runs found.
-        <div className={styles.emptyHint}>
-          Pump studies are launched via the backend API.<br />
-          POST /api/replay/pump-study/run
-        </div>
+        No pump study runs yet.
+        <div className={styles.emptyHint}>Use the form above to launch your first study.</div>
       </div>
     );
   }
@@ -707,9 +804,7 @@ function RunsList({ runs, selectedId, onSelect, loading }) {
               className={`${styles.historyRow} ${selectedId === r.id ? styles.historyRowActive : ''}`}
               onClick={() => onSelect(r.id)}
             >
-              <td>
-                <span className={styles.runId}>#{r.id}</span>
-              </td>
+              <td><span className={styles.runId}>#{r.id}</span></td>
               <td style={{ fontSize: 10, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
                 {fmtDate(r.created_at)}<br />
                 <span style={{ color: 'var(--text-muted)', fontSize: 9 }}>{ago(r.created_at)}</span>
@@ -719,21 +814,11 @@ function RunsList({ runs, selectedId, onSelect, loading }) {
                 {fmtDate(r.start_date)}<br />
                 <span style={{ color: 'var(--text-muted)', fontSize: 9 }}>→ {fmtDate(r.end_date)}</span>
               </td>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                {fmtNum(r.raw_detection_count)}
-              </td>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                {fmtNum(r.cluster_count)}
-              </td>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700 }}>
-                {fmtNum(r.episode_count)}
-              </td>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                {fmtNum(r.snapshot_count)}
-              </td>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                {fmtNum(r.event_count)}
-              </td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{fmtNum(r.raw_detection_count)}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{fmtNum(r.cluster_count)}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700 }}>{fmtNum(r.episode_count)}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{fmtNum(r.snapshot_count)}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{fmtNum(r.event_count)}</td>
               <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-dim)' }}>
                 {r.min_multiple != null ? `${r.min_multiple}×` : '—'}
               </td>
@@ -1208,10 +1293,15 @@ function RunDetailHeader({ run }) {
 export default function PumpStudyPage() {
   const [runs,        setRuns]        = useState([]);
   const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError,   setRunsError]   = useState('');
   const [selectedId,  setSelectedId]  = useState(null);
   const [selectedRun, setSelectedRun] = useState(null);
   const [runLoading,  setRunLoading]  = useState(false);
   const pollRef = useRef(null);
+
+  // Launch form state
+  const [launching,   setLaunching]   = useState(false);
+  const [launchError, setLaunchError] = useState('');
 
   // Episodes state
   const [episodes,    setEpisodes]    = useState([]);
@@ -1232,16 +1322,44 @@ export default function PumpStudyPage() {
 
   const loadRuns = useCallback(async () => {
     setRunsLoading(true);
+    setRunsError('');
     try {
       const res  = await fetch(`${API_URL}/api/replay/pump-study/runs?limit=30`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setRuns(data.runs || []);
-    } catch {
-      // network failure — leave existing list intact
+    } catch (err) {
+      setRunsError(err.message || 'Failed to load runs');
     } finally {
       setRunsLoading(false);
     }
   }, []);
+
+  // ── Launch a new run ──────────────────────────────────────────────────────
+
+  async function handleLaunch(params) {
+    setLaunching(true);
+    setLaunchError('');
+    try {
+      const res = await fetch(`${API_URL}/api/replay/pump-study/run`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(params),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      // Refresh list and auto-select the new run
+      await loadRuns();
+      if (data.run_id) setSelectedId(data.run_id);
+    } catch (err) {
+      setLaunchError(err.message || 'Launch failed');
+    } finally {
+      setLaunching(false);
+    }
+  }
 
   // ── Load single run detail ────────────────────────────────────────────────
 
@@ -1389,6 +1507,16 @@ export default function PumpStudyPage() {
         {/* ── Body ────────────────────────────────────────────────────────── */}
         <div style={{ padding: '0 var(--page-px)', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
+          {/* Launch form */}
+          <div className={styles.bundleSection}>
+            <div className={styles.bundleSectionTitle}>LAUNCH NEW STUDY</div>
+            <RunLaunchForm
+              onLaunch={handleLaunch}
+              launching={launching}
+              launchError={launchError}
+            />
+          </div>
+
           {/* Runs section */}
           <div className={styles.bundleSection}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
@@ -1409,6 +1537,8 @@ export default function PumpStudyPage() {
               selectedId={selectedId}
               onSelect={handleSelectRun}
               loading={runsLoading}
+              error={runsError}
+              onRetry={loadRuns}
             />
           </div>
 
