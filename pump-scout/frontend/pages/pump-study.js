@@ -742,7 +742,251 @@ function RunsList({ runs, selectedId, onSelect, loading }) {
   );
 }
 
-// ── Run detail header (Phase 5A only — no tabs/content yet) ──────────────────
+// ── Global Summary helpers (Phase 5D) ────────────────────────────────────────
+
+// Safely read one stat from group_stats or stats_json
+function gs(group, field, stat = 'mean') {
+  const src = group?.group_stats || group?.stats_json || {};
+  return src[field]?.[stat] ?? null;
+}
+
+function fmtRate(n) {
+  if (n == null) return '—';
+  return `${(Number(n) * 100).toFixed(0)}%`;
+}
+
+// Inline rate bar: value is 0–1 float
+function RateBar({ value }) {
+  if (value == null) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  const pct   = Math.min(100, Math.max(0, Number(value) * 100));
+  const color = pct >= 60 ? 'var(--lime)' : pct >= 30 ? 'var(--amber)' : 'var(--text-muted)';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 90 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', color, fontWeight: 700,
+                     fontSize: 11, minWidth: 34, textAlign: 'right' }}>
+        {fmtRate(value)}
+      </span>
+      <div style={{ flex: 1, height: 4, background: 'var(--border)',
+                    borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`,
+                      background: color, borderRadius: 'var(--r-pill)' }} />
+      </div>
+    </div>
+  );
+}
+
+const GROUP_ORDER = ['4x_pump', 'normal_winner', 'false_positive', 'missed_mover'];
+const GROUP_CFG = {
+  '4x_pump':      { label: '4× Pump',       color: 'var(--lime)'  },
+  normal_winner:  { label: 'Normal Winner',  color: 'var(--cyan)'  },
+  false_positive: { label: 'False Positive', color: 'var(--red)'   },
+  missed_mover:   { label: 'Missed Mover',   color: 'var(--amber)' },
+};
+
+// Signal rows for Section C — each row is one metric×stat combination
+const SIGNAL_ROWS = [
+  { key: 'had_ribbon',               label: 'Had Ribbon',          stat: 'mean',   isRate: true },
+  { key: 'had_ignition',             label: 'Had Ignition',        stat: 'mean',   isRate: true },
+  { key: 'max_volume_anomaly',       label: 'Max Vol Anomaly (avg)', stat: 'mean', fmt: v => v != null ? `${Number(v).toFixed(1)}×` : '—' },
+  { key: 'max_volume_anomaly',       label: 'Max Vol Anomaly (p90)', stat: 'p90',  fmt: v => v != null ? `${Number(v).toFixed(1)}×` : '—' },
+  { key: 'largest_gap_pct',          label: 'Largest Gap (avg)',   stat: 'mean',   fmt: v => fmtPct(v) },
+  { key: 'largest_gap_pct',          label: 'Largest Gap (p90)',   stat: 'p90',    fmt: v => fmtPct(v) },
+  { key: 'ignition_quality',         label: 'Ign Quality (avg)',   stat: 'mean',   fmt: v => v != null ? Number(v).toFixed(0) : '—' },
+  { key: 'ignition_quality',         label: 'Ign Quality (p90)',   stat: 'p90',    fmt: v => v != null ? Number(v).toFixed(0) : '—' },
+  { key: 'days_to_peak',             label: 'Days to Peak (med)',  stat: 'median', fmt: v => v != null ? `${Number(v).toFixed(0)}d` : '—' },
+  { key: 'max_drawdown_before_peak', label: 'Max DD Before (avg)', stat: 'mean',   fmt: v => fmtPct(v) },
+  { key: 'avg_toxicity_pre',         label: 'Avg Tox PRE (avg)',   stat: 'mean',   fmt: v => v != null ? Number(v).toFixed(0) : '—' },
+];
+
+// ── Global Summary component ──────────────────────────────────────────────────
+
+function GlobalSummary({ run, comparisons, episodes, loading, error }) {
+  if (!run) return null;
+
+  if (loading) return <div className={styles.statusMsg}>Loading summary…</div>;
+  if (error)   return <div className={styles.errorMsg}>{error}</div>;
+
+  // ── Section A: family distribution ────────────────────────────────────────
+  // Prefer run.pump_type_counts; fall back to deriving from loaded episodes
+  let familyCounts = {};
+  if (run.pump_type_counts && Object.keys(run.pump_type_counts).length > 0) {
+    familyCounts = run.pump_type_counts;
+  } else {
+    (episodes || []).forEach(ep => {
+      const k = ep.pump_type || 'UNKNOWN';
+      familyCounts[k] = (familyCounts[k] || 0) + 1;
+    });
+  }
+  const families   = Object.entries(familyCounts).sort((a, b) => b[1] - a[1]);
+  const totalFams  = families.reduce((s, [, v]) => s + v, 0);
+
+  // ── Section B: comparison groups ──────────────────────────────────────────
+  const groupMap = {};
+  (comparisons || []).forEach(g => { groupMap[g.group_name] = g; });
+
+  // ── Section C: signal table sources ───────────────────────────────────────
+  const pump4x  = groupMap['4x_pump'];
+  const normalW = groupMap['normal_winner'];
+  const falsePo = groupMap['false_positive'];
+  const hasSignals = !!pump4x;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+      {/* ── Section A: Pump family distribution ─────────────────────────── */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>PUMP FAMILY DISTRIBUTION</div>
+        {families.length === 0 ? (
+          <div className={styles.statusMsg}>
+            No family data yet — run must reach comparison_complete status.
+          </div>
+        ) : (
+          <table className={styles.familyTable}>
+            <thead>
+              <tr>
+                <th>Family</th>
+                <th style={{ textAlign: 'right' }}>Count</th>
+                <th style={{ textAlign: 'right' }}>Share</th>
+                <th style={{ minWidth: 140 }}>Bar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {families.map(([fam, cnt]) => {
+                const share = totalFams > 0 ? (cnt / totalFams) * 100 : 0;
+                const color = (PUMP_TYPE_CFG[fam] || {}).color || '#888';
+                return (
+                  <tr key={fam}>
+                    <td><PumpTypeBadge type={fam} /></td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, textAlign: 'right' }}>
+                      {cnt}
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
+                      {share.toFixed(0)}%
+                    </td>
+                    <td>
+                      <div style={{ height: 6, width: `${share}%`, minWidth: 2,
+                                    background: color, borderRadius: 'var(--r-pill)', opacity: 0.75 }} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Section B: Comparison groups ────────────────────────────────── */}
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle}>COMPARISON GROUPS</div>
+        {comparisons.length === 0 ? (
+          <div className={styles.statusMsg}>
+            Comparison groups not yet built — run must reach comparison_complete status.
+          </div>
+        ) : (
+          <div className={styles.compGroups}>
+            {GROUP_ORDER.map(gname => {
+              const g = groupMap[gname];
+              if (!g) return null;
+              const cfg = GROUP_CFG[gname] || { label: gname, color: 'var(--text-muted)' };
+              const rows = [
+                ['Members',       g.member_count ?? '—'],
+                ['Avg Multiple',  gs(g, 'pump_multiple') != null    ? fmtX(gs(g, 'pump_multiple'))                                       : '—'],
+                ['Median Days',   gs(g, 'days_to_peak', 'median') != null ? `${Number(gs(g, 'days_to_peak', 'median')).toFixed(0)}d`     : '—'],
+                ['Avg Max Vol',   gs(g, 'max_volume_anomaly') != null ? `${Number(gs(g, 'max_volume_anomaly')).toFixed(1)}×`              : '—'],
+                ['Ribbon Rate',   gs(g, 'had_ribbon')   != null ? fmtRate(gs(g, 'had_ribbon'))   : '—'],
+                ['Ignition Rate', gs(g, 'had_ignition') != null ? fmtRate(gs(g, 'had_ignition')) : '—'],
+                ['Ign Quality',   gs(g, 'ignition_quality')    != null ? Number(gs(g, 'ignition_quality')).toFixed(0)    : '—'],
+                ['Avg Tox PRE',   gs(g, 'avg_toxicity_pre')    != null ? Number(gs(g, 'avg_toxicity_pre')).toFixed(0)    : '—'],
+              ];
+              return (
+                <div key={gname} className={styles.compGroupCard}
+                  style={{ borderTop: `3px solid ${cfg.color}` }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em',
+                                color: cfg.color, textTransform: 'uppercase', marginBottom: 10 }}>
+                    {cfg.label}
+                  </div>
+                  <div className={styles.compGroupStats}>
+                    {rows.map(([label, val]) => (
+                      <div key={label} className={styles.compStatRow}>
+                        <span className={styles.compStatLabel}>{label}</span>
+                        <span className={styles.compStatVal}>{val}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Section C: Pre-pump signals comparison table ─────────────────── */}
+      {hasSignals && (
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle}>
+            PRE-PUMP SIGNAL FREQUENCIES — 4× PUMPS vs COMPARISON
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.signalTable}>
+              <thead>
+                <tr>
+                  <th>Signal / Stat</th>
+                  <th>4× Pump</th>
+                  {normalW && <th>Normal Winner</th>}
+                  {falsePo && <th>False Positive</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {SIGNAL_ROWS.map((row, i) => {
+                  const v4  = gs(pump4x, row.key, row.stat);
+                  const vNw = normalW ? gs(normalW, row.key, row.stat) : undefined;
+                  const vFp = falsePo ? gs(falsePo, row.key, row.stat) : undefined;
+                  const fmtFn = row.fmt || (v => v != null ? String(v) : '—');
+                  return (
+                    <tr key={`${row.key}-${row.stat}-${i}`}>
+                      <td className={styles.signalLabel}>{row.label}</td>
+                      <td className={styles.signalVal4x}>
+                        {row.isRate
+                          ? <RateBar value={v4} />
+                          : <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700,
+                                           color: 'var(--lime)' }}>{fmtFn(v4)}</span>}
+                      </td>
+                      {normalW !== undefined && (
+                        <td className={styles.signalValAlt}>
+                          {row.isRate
+                            ? <RateBar value={vNw} />
+                            : <span style={{ fontFamily: 'var(--font-mono)',
+                                             color: 'var(--text-dim)' }}>{fmtFn(vNw)}</span>}
+                        </td>
+                      )}
+                      {falsePo !== undefined && (
+                        <td className={styles.signalValAlt}>
+                          {row.isRate
+                            ? <RateBar value={vFp} />
+                            : <span style={{ fontFamily: 'var(--font-mono)',
+                                             color: 'var(--text-muted)' }}>{fmtFn(vFp)}</span>}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.5 }}>
+            Rates are % of members with the feature. All values derived deterministically from stored group stats.
+            n=4×: {pump4x.member_count ?? '?'}
+            {normalW ? ` · n=normal: ${normalW.member_count ?? '?'}` : ''}
+            {falsePo ? ` · n=fp: ${falsePo.member_count ?? '?'}` : ''}
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// ── Run detail header ─────────────────────────────────────────────────────────
 
 function RunDetailHeader({ run }) {
   if (!run) return null;
@@ -818,6 +1062,11 @@ export default function PumpStudyPage() {
   // Episode detail state (Phase 5C)
   const [detailEpId, setDetailEpId] = useState(null);
 
+  // Global summary state (Phase 5D)
+  const [comparisons,  setComparisons]  = useState([]);
+  const [cmpLoading,   setCmpLoading]   = useState(false);
+  const [cmpError,     setCmpError]     = useState('');
+
   // ── Load runs list ────────────────────────────────────────────────────────
 
   const loadRuns = useCallback(async () => {
@@ -876,6 +1125,25 @@ export default function PumpStudyPage() {
     }
   }, []);
 
+  // ── Load comparisons ─────────────────────────────────────────────────────
+
+  const loadComparisons = useCallback(async (runId) => {
+    if (!runId) return;
+    setCmpLoading(true);
+    setCmpError('');
+    try {
+      const res  = await fetch(`${API_URL}/api/replay/pump-study/${runId}/comparisons`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setComparisons(data.groups || []);
+    } catch (err) {
+      setCmpError(err.message || 'Failed to load comparisons');
+      setComparisons([]);
+    } finally {
+      setCmpLoading(false);
+    }
+  }, []);
+
   // ── Initial load ──────────────────────────────────────────────────────────
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
@@ -910,14 +1178,19 @@ export default function PumpStudyPage() {
     }
   }, [selectedRun?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load episodes whenever a run is selected (reset filters + detail)
+  // Load episodes + comparisons whenever a run is selected (reset all sub-state)
   useEffect(() => {
-    if (!selectedId) { setEpisodes([]); return; }
+    if (!selectedId) {
+      setEpisodes([]);
+      setComparisons([]);
+      return;
+    }
     epFiltersRef.current = { symbol: '', pump_type: '', min_multiple: '', caught_mode: 'all' };
     setSelectedEpId(null);
     setDetailEpId(null);
     loadEpisodes(selectedId);
-  }, [selectedId, loadEpisodes]);
+    loadComparisons(selectedId);
+  }, [selectedId, loadEpisodes, loadComparisons]);
 
   function handleSelectRun(runId) {
     if (selectedId === runId) return;
@@ -985,6 +1258,20 @@ export default function PumpStudyPage() {
                 <div className={styles.statusMsg}>Loading run #{selectedId}…</div>
               )}
               {selectedRun && <RunDetailHeader run={selectedRun} />}
+            </div>
+          )}
+
+          {/* Global Summary (Phase 5D) */}
+          {selectedId && (
+            <div className={styles.bundleSection}>
+              <div className={styles.bundleSectionTitle}>GLOBAL SUMMARY</div>
+              <GlobalSummary
+                run={selectedRun}
+                comparisons={comparisons}
+                episodes={episodes}
+                loading={cmpLoading}
+                error={cmpError}
+              />
             </div>
           )}
 

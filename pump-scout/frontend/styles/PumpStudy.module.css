@@ -728,6 +728,43 @@
   padding: 12px 0;
 }
 
+/* ── Signal comparison table (Phase 5D) ─────────────────── */
+.signalTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.signalTable th {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-bottom: 2px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.signalTable td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.signalTable tr:last-child td { border-bottom: none; }
+.signalTable tr:hover td { background: var(--surface2); }
+
+.signalLabel {
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.signalVal4x  { min-width: 120px; }
+.signalValAlt { min-width: 100px; }
+
 /* ── Cluster info ────────────────────────────────────────── */
 .clusterCard {
   background: var(--surface2);
