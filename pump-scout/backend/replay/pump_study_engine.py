@@ -1,5 +1,5 @@
 """
-Pump Study Engine — Phase 3C: PRE/PUMP/POST Snapshots
+Pump Study Engine — Phase 3D: Timeline Milestone Events
 ======================================================
 
 Detects raw 4x pump candidates in historical price data using a sliding window,
@@ -25,7 +25,8 @@ Phase scope
 Phase 3A  ✓  Raw detection → pump_episode_detections
 Phase 3B  ✓  Clustering → pump_clusters + pump_episodes; back-fill detections
 Phase 3C  ✓  PRE / PUMP / POST daily snapshots → pump_episode_snapshots
-Phase 3D  ✗  Timeline events / comparison groups (not yet)
+Phase 3D  ✓  Timeline milestone events → pump_episode_events
+Phase 3E  ✗  Comparison groups (not yet)
 """
 
 import asyncio
@@ -677,6 +678,322 @@ def _build_snapshots(
     return snapshots
 
 
+# ── Phase 3D: timeline milestone detection ────────────────────────────────────
+
+def _mk_event(
+    episode_id:  int,
+    run_id:      int,
+    symbol:      str,
+    snap:        dict,
+    event_type:  str,
+    value:       Optional[float],
+    note:        str,
+    detail:      Optional[dict] = None,
+) -> dict:
+    """Build a single event dict ready for save_pump_episode_events()."""
+    return {
+        "episode_id":     episode_id,
+        "run_id":         run_id,
+        "symbol":         symbol,
+        "event_date":     snap["date"],
+        "event_type":     event_type,
+        "event_value":    value,
+        "event_note":     note,
+        "event_detail":   detail or {},
+        "days_before_pump": snap.get("relative_day_from_start"),
+    }
+
+
+def _detect_timeline_events(
+    episode_id:  int,
+    run_id:      int,
+    symbol:      str,
+    episode:     dict,
+    snapshots:   list[dict],
+) -> list[dict]:
+    """
+    Detect deterministic timeline milestones for one canonical episode.
+
+    Uses in-memory snapshots already built by _build_snapshots() — no DB reads.
+
+    Event types (at most one per type unless noted):
+      first_abnormal_volume_day   — PRE/PUMP: volume_vs_avg20 >= 2.0 or vol_z >= 2.5
+      first_compression_day       — PRE:       BB squeeze active
+      first_ribbon_constructive_day — PRE/PUMP: ribbon_class >= CONSTRUCTIVE
+      first_ignition_day          — PRE/PUMP:  ignition_quality >= 20
+      first_accumulation_like_day — PRE:       in_acc=True or wyckoff BASE/ARM/STEALTH_*
+      first_spring_test_lps_day   — PRE:       SC detected inside accumulation
+      breakout_day                — PUMP:      regime breakout + volume + positive return
+      retest_day                  — PUMP/POST: first meaningful pullback after start
+      first_vertical_expansion_day— PUMP:      large intraday range + big return + volume
+      peak_day                    — PUMP:      canonical pump_peak_date (always present)
+      fade_day                    — POST:      first -3% day after peak
+      dump_day                    — POST:      first -8% day or -20% from peak
+    """
+    if not snapshots:
+        return []
+
+    pump_start = episode["pump_start_date"]
+    pump_peak  = episode["pump_peak_date"]
+    peak_price = episode.get("peak_price") or 0.0
+
+    events: list[dict] = []
+
+    # Partition snapshots by phase for targeted scans
+    pre_snaps  = [s for s in snapshots if s["window_phase"] == "PRE"]
+    pump_snaps = [s for s in snapshots if s["window_phase"] == "PUMP"]
+    post_snaps = [s for s in snapshots if s["window_phase"] == "POST"]
+
+    # Helper: safe float coerce
+    def _f(v) -> Optional[float]:
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    # ── 1. first_abnormal_volume_day ──────────────────────────────────────────
+    # Threshold: volume_vs_avg20 >= 2.0  OR  vol_z >= 2.5
+    # Scan PRE first; if not found in PRE, scan PUMP.
+    _abn_vol_found = False
+    for snap in pre_snaps + pump_snaps:
+        vr = _f(snap.get("volume_vs_avg20"))
+        vz = _f(snap.get("volume_zscore"))
+        if (vr is not None and vr >= 2.0) or (vz is not None and vz >= 2.5):
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "first_abnormal_volume_day",
+                value  = vr,
+                note   = f"Volume {vr:.1f}× avg-20 (z={vz:.1f})" if vr and vz else f"Volume {vr:.1f}× avg-20",
+                detail = {"volume_vs_avg20": vr, "volume_zscore": vz},
+            ))
+            _abn_vol_found = True
+            break
+
+    # ── 2. first_compression_day ──────────────────────────────────────────────
+    # PRE only: first BB squeeze bar
+    for snap in pre_snaps:
+        squeeze = snap.get("bb_squeeze")
+        if squeeze:
+            bw = _f(snap.get("bb_width"))
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "first_compression_day",
+                value  = bw,
+                note   = f"BB squeeze active, width={bw:.4f}" if bw else "BB squeeze active",
+                detail = {"bb_width": bw, "bb_squeeze": True},
+            ))
+            break
+
+    # ── 3. first_ribbon_constructive_day ─────────────────────────────────────
+    # First day ribbon reaches CONSTRUCTIVE or CONFIRMED level (PRE preferred, then PUMP)
+    _RIBBON_QUALIFY = {"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE"}
+    for snap in pre_snaps + pump_snaps:
+        rc = snap.get("ribbon_class") or ""
+        if rc in _RIBBON_QUALIFY:
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "first_ribbon_constructive_day",
+                value  = None,
+                note   = f"Ribbon class reached {rc}",
+                detail = {"ribbon_class": rc},
+            ))
+            break
+
+    # ── 4. first_ignition_day ─────────────────────────────────────────────────
+    # First day where ignition_quality >= 20 (meaningful, not noise)
+    for snap in pre_snaps + pump_snaps:
+        ig = (snap.get("snapshot") or {}).get("ignition") or {}
+        iq = ig.get("ignition_quality") or 0
+        ib = ig.get("ignition_bucket", "NONE")
+        sig = ig.get("ignition_signal", "NO_IGNITION")
+        if iq >= 20 and sig not in ("NO_IGNITION", "NONE", ""):
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "first_ignition_day",
+                value  = float(iq),
+                note   = f"Ignition signal: {sig} / bucket={ib} / quality={iq}",
+                detail = {"ignition_signal": sig, "ignition_bucket": ib, "ignition_quality": iq},
+            ))
+            break
+
+    # ── 5. first_accumulation_like_day ────────────────────────────────────────
+    # PRE only: first day with Wyckoff accumulation evidence
+    _ACC_STATES = {"BASE", "ARM", "STEALTH", "STEALTH_BASE", "STEALTH_ARM", "FIRE"}
+    for snap in pre_snaps:
+        regime = (snap.get("snapshot") or {}).get("regime") or {}
+        in_acc  = regime.get("in_acc", False)
+        state   = snap.get("wyckoff_state") or ""
+        conf    = regime.get("confidence", 0)
+        if in_acc or state in _ACC_STATES:
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "first_accumulation_like_day",
+                value  = float(conf) if conf else None,
+                note   = f"Wyckoff accumulation: state={state}, in_acc={in_acc}, confidence={conf}",
+                detail = {"state": state, "in_acc": in_acc, "confidence": conf},
+            ))
+            break
+
+    # ── 6. first_spring_test_lps_day ─────────────────────────────────────────
+    # PRE: selling climax (SC) detected inside accumulation context — best proxy
+    # for spring / test / LPS without explicit Wyckoff sub-phase labelling
+    for snap in pre_snaps:
+        regime = (snap.get("snapshot") or {}).get("regime") or {}
+        sc     = regime.get("sc", False)
+        in_acc = regime.get("in_acc", False)
+        if sc and in_acc:
+            tr_low = _f(regime.get("tr_low"))
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "first_spring_test_lps_day",
+                value  = tr_low,
+                note   = f"Selling climax in accumulation — spring/LPS proxy. TR low={tr_low}",
+                detail = {"sc": True, "in_acc": True, "tr_low": tr_low,
+                          "tr_high": _f(regime.get("tr_high"))},
+            ))
+            break
+
+    # ── 7. breakout_day ───────────────────────────────────────────────────────
+    # PUMP: first decisive up-move from pre-pump structure
+    # Primary: regime.breakout=True + vol >= 1.5× avg + daily_return > 2%
+    # Fallback: daily_return >= 5% (decisive move even without regime flag)
+    for snap in pump_snaps:
+        regime  = (snap.get("snapshot") or {}).get("regime") or {}
+        brk     = regime.get("breakout", False)
+        vr      = _f(snap.get("volume_vs_avg20"))
+        dr      = _f(snap.get("daily_return_pct"))
+        gap     = _f(snap.get("gap_pct"))
+        primary = brk and (vr is not None and vr >= 1.5) and (dr is not None and dr > 2.0)
+        fallback = dr is not None and dr >= 5.0
+        if primary or fallback:
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "breakout_day",
+                value  = dr,
+                note   = (
+                    f"Breakout: +{dr:.1f}%, vol {vr:.1f}× avg, gap={gap:.1f}%"
+                    if vr and gap else f"Breakout: +{dr:.1f}%"
+                ),
+                detail = {
+                    "daily_return_pct": dr, "volume_vs_avg20": vr,
+                    "gap_pct": gap, "regime_breakout": brk,
+                },
+            ))
+            break
+
+    # ── 8. retest_day ─────────────────────────────────────────────────────────
+    # First meaningful pullback after the first 3 PUMP bars while still elevated
+    # Condition: daily_return <= -3% AND close still > start_price * 1.05
+    start_price = episode.get("start_price") or 0.0
+    retest_floor = start_price * 1.05 if start_price else 0.0
+    # Skip the first 3 pump days (index 0,1,2 in pump_snaps)
+    for snap in pump_snaps[3:] + post_snaps:
+        dr = _f(snap.get("daily_return_pct"))
+        cl = _f(snap.get("close"))
+        if dr is not None and dr <= -3.0 and cl and cl > retest_floor:
+            vr = _f(snap.get("volume_vs_avg20"))
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "retest_day",
+                value  = dr,
+                note   = f"Retest pullback: {dr:.1f}% while above start×1.05 ({retest_floor:.2f})",
+                detail = {"daily_return_pct": dr, "close": cl, "volume_vs_avg20": vr,
+                          "retest_floor": retest_floor},
+            ))
+            break
+
+    # ── 9. first_vertical_expansion_day ──────────────────────────────────────
+    # PUMP: first day of true price acceleration
+    # Primary: intraday_range >= 8% AND daily_return >= 8% AND vol >= 2× avg
+    # Fallback: daily_return >= 15% alone
+    for snap in pump_snaps:
+        ir  = _f(snap.get("intraday_range_pct"))
+        dr  = _f(snap.get("daily_return_pct"))
+        vr  = _f(snap.get("volume_vs_avg20"))
+        primary  = (ir is not None and ir >= 8.0
+                    and dr is not None and dr >= 8.0
+                    and vr is not None and vr >= 2.0)
+        fallback = dr is not None and dr >= 15.0
+        if primary or fallback:
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "first_vertical_expansion_day",
+                value  = dr,
+                note   = (
+                    f"Vertical expansion: +{dr:.1f}%, range={ir:.1f}%, vol {vr:.1f}× avg"
+                    if ir and vr else f"Vertical expansion: +{dr:.1f}%"
+                ),
+                detail = {"daily_return_pct": dr, "intraday_range_pct": ir,
+                          "volume_vs_avg20": vr},
+            ))
+            break
+
+    # ── 10. peak_day ──────────────────────────────────────────────────────────
+    # Always present: canonical pump_peak_date
+    peak_snap = next((s for s in pump_snaps if s["date"] == pump_peak), None)
+    if peak_snap is None:
+        peak_snap = next((s for s in snapshots if s["date"] == pump_peak), None)
+    if peak_snap:
+        cr = _f(peak_snap.get("cum_return_pct"))
+        events.append(_mk_event(
+            episode_id, run_id, symbol, peak_snap,
+            "peak_day",
+            value  = cr,
+            note   = f"Canonical peak: cum_return={cr:.1f}% from start" if cr else "Canonical peak day",
+            detail = {
+                "peak_price": _f(peak_snap.get("close")),
+                "cum_return_pct": cr,
+                "pump_multiple": round(peak_price / start_price, 4) if start_price else None,
+            },
+        ))
+
+    # ── 11. fade_day ──────────────────────────────────────────────────────────
+    # POST: first -3% or worse day (close near lows also qualifies)
+    for snap in post_snaps:
+        dr  = _f(snap.get("daily_return_pct"))
+        cp  = _f(snap.get("close_position"))
+        qualifies = (dr is not None and dr <= -3.0) or (cp is not None and cp <= 0.25)
+        if qualifies:
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "fade_day",
+                value  = dr,
+                note   = (
+                    f"Post-peak fade: {dr:.1f}%, close_position={cp:.2f}"
+                    if dr and cp else f"Post-peak fade: {dr:.1f}%"
+                ),
+                detail = {"daily_return_pct": dr, "close_position": cp},
+            ))
+            break
+
+    # ── 12. dump_day ──────────────────────────────────────────────────────────
+    # POST: first severe down day (-8% daily) or -20% from peak
+    for snap in post_snaps:
+        dr  = _f(snap.get("daily_return_pct"))
+        cl  = _f(snap.get("close"))
+        # Compute return from peak
+        from_peak: Optional[float] = None
+        if cl and peak_price > 0:
+            from_peak = round((cl - peak_price) / peak_price * 100, 2)
+        severe_daily = dr is not None and dr <= -8.0
+        severe_peak  = from_peak is not None and from_peak <= -20.0
+        if severe_daily or severe_peak:
+            events.append(_mk_event(
+                episode_id, run_id, symbol, snap,
+                "dump_day",
+                value  = dr,
+                note   = (
+                    f"Dump: {dr:.1f}% daily, {from_peak:.1f}% from peak"
+                    if dr and from_peak else f"Dump: {dr:.1f}% daily"
+                ),
+                detail = {"daily_return_pct": dr, "return_from_peak_pct": from_peak,
+                          "close": cl, "peak_price": peak_price},
+            ))
+            break
+
+    return events
+
+
 # ── Universe builder ──────────────────────────────────────────────────────────
 
 async def _build_universe(
@@ -744,7 +1061,7 @@ async def _build_universe(
 
 async def run_pump_study(run_id: int, params: dict) -> None:
     """
-    Phase 3C entry point.
+    Phase 3D entry point.
 
     Params:
         start_date      str   YYYY-MM-DD  scan window start
@@ -757,7 +1074,7 @@ async def run_pump_study(run_id: int, params: dict) -> None:
     ---------------
     1. Build symbol universe
     2. Per-symbol (parallel, Semaphore 8):
-         a. Fetch candles  (kept in candle_map for Phase 3C)
+         a. Fetch candles  (kept in candle_map for Phase 3C/3D)
          b. Detect raw pumps → in-memory hits
          c. Cluster hits → in-memory clusters
          d. Back-fill cluster_id / is_canonical on hit dicts (in memory)
@@ -766,12 +1083,12 @@ async def run_pump_study(run_id: int, params: dict) -> None:
     5. Build episode dicts from each cluster's canonical detection
     6. Save episodes → receive inserted IDs
     7. Back-fill canonical_episode_id on each cluster row
-    8. Build PRE/PUMP/POST daily snapshots for each episode (Phase 3C)
-    9. Save snapshots in batches
-    10. Update run counts + advance status to snapshots_complete
+    8. Per episode: build PRE/PUMP/POST snapshots (Phase 3C)
+    9. Per episode: detect timeline milestones from in-memory snapshots (Phase 3D)
+    10. Save snapshots + events
+    11. Update run counts + advance status to events_complete
 
-    Not done yet (Phase 3D+):
-        ✗ Timeline milestone events
+    Not done yet (Phase 3E+):
         ✗ Comparison groups
     """
     global _pump_study_progress
@@ -782,6 +1099,7 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         save_pump_clusters,
         save_pump_episodes,
         save_pump_episode_snapshots,
+        save_pump_episode_events,
         update_pump_cluster_episode_id,
     )
 
@@ -795,6 +1113,7 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         "clusters":       0,
         "episodes":       0,
         "snapshots":      0,
+        "events":         0,
         "error":          None,
     })
 
@@ -915,8 +1234,10 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             await update_pump_cluster_episode_id(run_id, cl["cluster_id"], ep_id)
 
         # ── 8 & 9. Build + save PRE/PUMP/POST snapshots (Phase 3C) ───────────
+        # ── 10. Detect + save timeline milestone events  (Phase 3D) ──────────
         _pump_study_progress["phase"] = "SNAPSHOTS"
         total_snapshots = 0
+        total_events    = 0
 
         for cl, ep_id in zip(all_clusters, episode_ids):
             sym = cl["symbol"]
@@ -924,47 +1245,60 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             if not sym_candles:
                 continue
 
-            # Reconstruct episode dict needed by _build_snapshots
             canon = cl["canonical"]
             ep_dict = {
                 "pump_start_date": canon["window_start_date"],
                 "pump_peak_date":  canon["window_peak_date"],
                 "start_price":     canon["start_price"],
+                "peak_price":      canon["peak_price"],
             }
 
+            # Phase 3C: snapshots
             snaps = _build_snapshots(ep_id, run_id, sym, ep_dict, sym_candles)
             if snaps:
                 saved_snaps = await save_pump_episode_snapshots(snaps)
                 total_snapshots += saved_snaps
                 _pump_study_progress["snapshots"] = total_snapshots
 
-        # ── 10. Finalise run ──────────────────────────────────────────────────
+            # Phase 3D: milestone events (derived from in-memory snapshots)
+            if snaps:
+                _pump_study_progress["phase"] = "EVENTS"
+                evs = _detect_timeline_events(ep_id, run_id, sym, ep_dict, snaps)
+                if evs:
+                    saved_evs = await save_pump_episode_events(evs)
+                    total_events += saved_evs
+                    _pump_study_progress["events"] = total_events
+                _pump_study_progress["phase"] = "SNAPSHOTS"
+
+        # ── 11. Finalise run ──────────────────────────────────────────────────
         await update_pump_study_run(run_id, {
-            "status":              "snapshots_complete",
+            "status":              "events_complete",
             "symbols_scanned":     len(symbols),
             "raw_detection_count": saved_det,
             "cluster_count":       len(all_clusters),
             "episode_count":       len(episode_ids),
             "snapshot_count":      total_snapshots,
+            "event_count":         total_events,
             "finished_at":         datetime.utcnow(),
             "notes": (
-                f"Phase 3C complete: {len(symbols)} symbols, "
+                f"Phase 3D complete: {len(symbols)} symbols, "
                 f"{saved_det} raw detections, {len(all_clusters)} clusters, "
-                f"{len(episode_ids)} episodes, {total_snapshots} snapshots. "
-                f"Timeline events / comparison groups pending (Phase 3D+)."
+                f"{len(episode_ids)} episodes, {total_snapshots} snapshots, "
+                f"{total_events} timeline events. "
+                f"Comparison groups pending (Phase 3E+)."
             ),
         })
 
         _pump_study_progress.update({
             "running": False,
-            "phase":   "SNAPSHOTS_COMPLETE",
+            "phase":   "EVENTS_COMPLETE",
         })
 
         logger.info(
-            f"[PUMP_STUDY] run_id={run_id} Phase 3C done: "
+            f"[PUMP_STUDY] run_id={run_id} Phase 3D done: "
             f"{len(symbols)} symbols, {saved_det} detections, "
             f"{len(all_clusters)} clusters, {len(episode_ids)} episodes, "
-            f"{total_snapshots} snapshots"
+            f"{total_snapshots} snapshots, {total_events} events"
         )
 
     except Exception as exc:
