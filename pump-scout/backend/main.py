@@ -2161,3 +2161,539 @@ async def replay_research_bundle_download(run_id: int, format: str = "json"):
     except Exception as exc:
         logger.error(f"[BUNDLE/DL] run_id={run_id} failed: {exc}", exc_info=True)
         raise HTTPException(500, detail=f"Download failed: {str(exc)[:200]}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  4× PUMP STUDY API  —  Phase 4
+#  All endpoints are replay-only.  No live scanner logic is touched.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_pump_study_markdown(run: dict, episodes: list[dict]) -> str:
+    """
+    Deterministic markdown summary of a pump study run.
+    Pure data — no AI, no external calls.
+    """
+    lines: list[str] = [
+        f"# 4× Pump Study — Run {run['id']}",
+        "",
+        f"**Date range:** {run['start_date']} → {run['end_date']}  ",
+        f"**Status:** {run['status']}  ",
+        f"**Window:** {run['window_days']} trading days  "
+        f"|  **Min multiple:** {run['min_multiple']}×  ",
+        f"**Symbols scanned:** {run.get('symbols_scanned', 0)}  "
+        f"|  **Episodes:** {run.get('episode_count', 0)}  ",
+        f"**Snapshots:** {run.get('snapshot_count', 0)}  "
+        f"|  **Events:** {run.get('event_count', 0)}  ",
+        "",
+    ]
+
+    if run.get("error_message"):
+        lines += [f"> **Error:** {run['error_message']}", ""]
+    if run.get("notes"):
+        lines += [f"> {run['notes']}", ""]
+
+    # Pump family distribution
+    family_counts: dict[str, int] = {}
+    for ep in episodes:
+        fam = ep.get("pump_type") or "UNKNOWN"
+        family_counts[fam] = family_counts.get(fam, 0) + 1
+
+    if family_counts:
+        lines += ["## Pump Family Distribution", "", "| Family | Count |", "|---|---|"]
+        for fam, cnt in sorted(family_counts.items(), key=lambda x: -x[1]):
+            lines.append(f"| {fam} | {cnt} |")
+        lines.append("")
+
+    # Episode table (capped at 200 rows for readability)
+    if episodes:
+        lines += [
+            "## Canonical Episodes",
+            "",
+            "| # | Symbol | Family | Start | Peak | Multiple | Days | "
+            "Drawdown | Ribbon | Ignition | Wyckoff |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
+        shown = episodes[:200]
+        for i, ep in enumerate(shown, 1):
+            dd = ep.get("max_drawdown_before_peak")
+            dd_str = f"{dd:.1f}%" if dd is not None else "—"
+            lines.append(
+                f"| {i} | **{ep['symbol']}** | {ep.get('pump_type') or '?'} "
+                f"| {ep['pump_start_date']} | {ep['pump_peak_date']} "
+                f"| {ep['pump_multiple']:.2f}× | {ep.get('days_to_peak') or '?'} "
+                f"| {dd_str} "
+                f"| {'✓' if ep.get('had_ribbon') else '—'} "
+                f"| {'✓' if ep.get('had_ignition') else '—'} "
+                f"| {ep.get('strongest_wyckoff_state') or '—'} |"
+            )
+        if len(episodes) > 200:
+            lines.append(
+                f"| — | *(+{len(episodes) - 200} more — use /export?format=json)* "
+                "| | | | | | | | | |"
+            )
+        lines.append("")
+
+    lines += [
+        "---",
+        f"*Pump Scout deterministic export — no AI. Run ID: {run['id']}.  "
+        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}*",
+    ]
+    return "\n".join(lines)
+
+
+# ── 1. Launch a new pump study run ────────────────────────────────────────────
+
+@app.post("/api/replay/pump-study/run")
+async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
+    """
+    Launch a new 4× pump study background run.
+
+    Body (JSON):
+        start_date     str    YYYY-MM-DD  required
+        end_date       str    YYYY-MM-DD  required
+        window_days    int    default 14
+        min_multiple   float  default 4.0
+        universe_limit int    default 0   (0 = no limit)
+
+    Returns immediately with run_id.
+    Poll GET /api/replay/pump-study/{run_id} for progress.
+    """
+    from datetime import date as _d
+    from database import create_pump_study_run
+    from replay.pump_study_engine import get_pump_study_progress
+
+    prog = get_pump_study_progress()
+    if prog.get("running"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A pump study is already running (run_id={prog.get('run_id')}). "
+                "Wait for it to finish or check its status."
+            ),
+        )
+
+    start_date = body.get("start_date")
+    end_date   = body.get("end_date")
+    if not start_date or not end_date:
+        raise HTTPException(400, detail="start_date and end_date are required")
+
+    try:
+        _d.fromisoformat(start_date)
+        _d.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(400, detail="Invalid date format — use YYYY-MM-DD")
+
+    if start_date > end_date:
+        raise HTTPException(400, detail="start_date must be <= end_date")
+
+    params = {
+        "start_date":     start_date,
+        "end_date":       end_date,
+        "window_days":    int(body.get("window_days",    14)),
+        "min_multiple":   float(body.get("min_multiple", 4.0)),
+        "universe_limit": int(body.get("universe_limit", 0)),
+    }
+
+    run_id = await create_pump_study_run(params)
+
+    async def _run_bg():
+        try:
+            from replay.pump_study_engine import run_pump_study
+            await run_pump_study(run_id, params)
+        except Exception as exc:
+            logger.error(
+                f"[PUMP_STUDY] run_id={run_id} background task failed: {exc}",
+                exc_info=True,
+            )
+
+    background_tasks.add_task(_run_bg)
+
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "status":  "running",
+        "params":  params,
+        "message": (
+            f"Pump study launched (run_id={run_id}). "
+            f"Poll GET /api/replay/pump-study/{run_id} for live progress."
+        ),
+    }
+
+
+# ── 2. List all pump study runs ───────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/runs")
+async def pump_study_list_runs(limit: int = 20):
+    """
+    List all pump study runs, most recent first.
+    Each row includes status, counts, and date range.
+    """
+    from database import get_pump_study_runs
+    runs = await get_pump_study_runs(limit=limit)
+    return {"ok": True, "runs": runs, "count": len(runs)}
+
+
+# ── 3. Run metadata + live progress ──────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}")
+async def pump_study_run_detail(run_id: int):
+    """
+    Run metadata, counts, and live progress (if run is still active).
+
+    Response shape:
+        run:      PumpStudyRun fields
+        progress: live in-memory progress dict (only when this run is active)
+    """
+    from database import get_pump_study_run
+    from replay.pump_study_engine import get_pump_study_progress
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Pump study run {run_id} not found")
+
+    prog = get_pump_study_progress()
+    progress = prog if prog.get("run_id") == run_id else None
+
+    return {"ok": True, "run": run, "progress": progress}
+
+
+# ── 4. Canonical episodes ─────────────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/episodes")
+async def pump_study_episodes(
+    run_id:       int,
+    symbol:       Optional[str]   = None,
+    pump_type:    Optional[str]   = None,
+    min_multiple: Optional[float] = None,
+    caught_only:  bool = False,
+    missed_only:  bool = False,
+    limit:        int  = 200,
+):
+    """
+    List canonical pump episodes for a run.
+
+    Query params:
+        symbol        ticker filter (case-insensitive)
+        pump_type     family label filter (e.g. ACCUMULATION_TO_EXPANSION)
+        min_multiple  minimum pump multiple
+        caught_only   only scanner-flagged episodes
+        missed_only   only episodes NOT flagged by scanner
+        limit         max rows (default 200)
+    """
+    from database import get_pump_study_run, get_pump_episodes
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    episodes = await get_pump_episodes(
+        run_id,
+        limit        = min(limit, 2000),
+        symbol       = symbol.upper() if symbol else None,
+        pump_type    = pump_type,
+        min_multiple = min_multiple,
+        caught_only  = caught_only,
+        missed_only  = missed_only,
+    )
+    return {"ok": True, "run_id": run_id, "episodes": episodes, "count": len(episodes)}
+
+
+# ── 5. Episode detail (summary + snapshots + events + cluster) ────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/episodes/{episode_id}")
+async def pump_study_episode_detail(run_id: int, episode_id: int):
+    """
+    Full episode detail for one canonical episode.
+
+    Response shape:
+        episode:   PumpEpisode fields (enriched with pump_type, features)
+        snapshots: all daily PRE/PUMP/POST snapshots (ordered by date)
+        events:    all timeline milestone events (ordered by date)
+        cluster:   cluster metadata for this episode
+    """
+    from database import (
+        get_pump_study_run,
+        get_pump_episode,
+        get_pump_episode_snapshots,
+        get_pump_episode_events,
+        get_pump_clusters,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    episode = await get_pump_episode(episode_id)
+    if not episode or episode.get("run_id") != run_id:
+        raise HTTPException(404, detail=f"Episode {episode_id} not found in run {run_id}")
+
+    snapshots = await get_pump_episode_snapshots(episode_id)
+    events    = await get_pump_episode_events(episode_id)
+
+    clusters = await get_pump_clusters(run_id)
+    cluster  = next(
+        (c for c in clusters if c.get("canonical_episode_id") == episode_id), None
+    )
+
+    return {
+        "ok":       True,
+        "episode":  episode,
+        "snapshots": snapshots,
+        "events":   events,
+        "cluster":  cluster,
+    }
+
+
+# ── 6. Daily snapshots (run-level, with filters) ──────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/daily-snapshots")
+async def pump_study_daily_snapshots(
+    run_id:     int,
+    episode_id: Optional[int] = None,
+    phase:      Optional[str] = None,
+    limit:      int = 5000,
+):
+    """
+    Daily PRE/PUMP/POST indicator snapshots for a run (or one episode).
+
+    Query params:
+        episode_id   filter to a specific episode
+        phase        PRE | PUMP | POST
+        limit        max rows (default 5000)
+    """
+    from database import get_pump_study_run, get_run_snapshots
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    if phase and phase.upper() not in ("PRE", "PUMP", "POST"):
+        raise HTTPException(400, detail="phase must be PRE, PUMP, or POST")
+
+    snapshots = await get_run_snapshots(
+        run_id,
+        episode_id = episode_id,
+        phase      = phase.upper() if phase else None,
+        limit      = min(limit, 20000),
+    )
+    return {
+        "ok":        True,
+        "run_id":    run_id,
+        "snapshots": snapshots,
+        "count":     len(snapshots),
+    }
+
+
+# ── 7. Timeline milestone events ──────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/timeline")
+async def pump_study_timeline(run_id: int, episode_id: Optional[int] = None):
+    """
+    Timeline milestone events for a run (or one episode).
+
+    Query params:
+        episode_id   filter to a specific episode
+    """
+    from database import get_pump_study_run, get_pump_study_timeline
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    events = await get_pump_study_timeline(run_id, episode_id=episode_id)
+    return {
+        "ok":       True,
+        "run_id":   run_id,
+        "events":   events,
+        "count":    len(events),
+    }
+
+
+# ── 8. Cluster mapping ────────────────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/clusters")
+async def pump_study_clusters(run_id: int):
+    """
+    Raw detection clustering results — one row per cluster per symbol.
+    Each cluster maps to one canonical episode via canonical_episode_id.
+    Raw detections are nested under each cluster for full auditability.
+    """
+    from database import (
+        get_pump_study_run,
+        get_pump_clusters,
+        get_pump_episode_detections,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    clusters = await get_pump_clusters(run_id)
+    raw_dets = await get_pump_episode_detections(run_id)
+
+    # Index raw detections by cluster_id for O(1) grouping
+    det_by_cluster: dict[str, list] = {}
+    for d in raw_dets:
+        cid = d.get("cluster_id")
+        if cid:
+            det_by_cluster.setdefault(cid, []).append(d)
+
+    for cl in clusters:
+        cl["raw_detections"] = det_by_cluster.get(cl["cluster_id"], [])
+
+    return {
+        "ok":             True,
+        "run_id":         run_id,
+        "clusters":       clusters,
+        "cluster_count":  len(clusters),
+        "raw_det_count":  len(raw_dets),
+    }
+
+
+# ── 9. Comparison groups + members ───────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/comparisons")
+async def pump_study_comparisons(run_id: int):
+    """
+    Comparison groups with aggregate stats and individual member rows.
+
+    Groups:
+        4x_pump       all canonical episodes
+        normal_winner sub-4x moves from the same symbol universe
+        false_positive episodes with severe POST reversal
+        missed_mover  universe symbols with no 4x detection
+
+    Response shape:
+        groups[].stats    aggregate distribution stats (mean/median/p25/p75/p90)
+        groups[].members  individual member rows with features_json
+    """
+    from database import (
+        get_pump_study_run,
+        get_pump_comparison_groups,
+        get_pump_comparison_members,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    groups  = await get_pump_comparison_groups(run_id)
+    members = await get_pump_comparison_members(run_id)
+
+    # Nest members under their group by group_name
+    members_by_group: dict[str, list] = {}
+    for m in members:
+        members_by_group.setdefault(m["group_name"], []).append(m)
+
+    for g in groups:
+        g["members"] = members_by_group.get(g["group_name"], [])
+
+    return {
+        "ok":            True,
+        "run_id":        run_id,
+        "groups":        groups,
+        "total_members": len(members),
+    }
+
+
+# ── 10. Export ────────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/export")
+async def pump_study_export(run_id: int, format: str = "json"):
+    """
+    Download a pump study export.
+
+    ?format=json      Full structured JSON bundle (run + episodes + clusters +
+                      comparison groups + timeline events).
+                      Note: daily snapshots are large; fetch them separately via
+                      /daily-snapshots if needed.
+    ?format=csv       Flat CSV of canonical episodes (one row per episode).
+    ?format=markdown  Deterministic markdown summary — no AI, no external calls.
+    """
+    from fastapi.responses import Response
+    from database import (
+        get_pump_study_run,
+        get_pump_episodes,
+        get_pump_clusters,
+        get_pump_comparison_groups,
+        get_pump_comparison_members,
+        get_pump_study_timeline,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    fmt = format.lower()
+    if fmt not in ("json", "csv", "markdown"):
+        raise HTTPException(400, detail="format must be json, csv, or markdown")
+
+    episodes = await get_pump_episodes(run_id, limit=10000)
+
+    # ── CSV ───────────────────────────────────────────────────────────────────
+    if fmt == "csv":
+        fieldnames = [
+            "id", "symbol", "pump_type",
+            "pump_start_date", "pump_peak_date", "pump_window_days",
+            "start_price", "peak_price",
+            "pump_multiple", "pump_return_pct",
+            "days_to_peak", "days_to_double", "max_drawdown_before_peak",
+            "had_ribbon", "had_ignition",
+            "strongest_wyckoff_state", "max_volume_anomaly", "largest_gap_pct",
+            "was_in_universe", "was_flagged_by_scanner",
+            "sector", "industry",
+        ]
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(episodes)
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="pump_study_{run_id}_episodes.csv"'
+            },
+        )
+
+    # ── Markdown ──────────────────────────────────────────────────────────────
+    if fmt == "markdown":
+        content = _build_pump_study_markdown(run, episodes)
+        return Response(
+            content=content,
+            media_type="text/markdown",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="pump_study_{run_id}_summary.md"'
+            },
+        )
+
+    # ── JSON (full structured bundle) ────────────────────────────────────────
+    clusters = await get_pump_clusters(run_id)
+    groups   = await get_pump_comparison_groups(run_id)
+    members  = await get_pump_comparison_members(run_id)
+    timeline = await get_pump_study_timeline(run_id)
+
+    bundle = {
+        "export_type":        "pump_study_4x",
+        "run":                run,
+        "episodes":           episodes,
+        "clusters":           clusters,
+        "comparison_groups":  groups,
+        "comparison_members": members,
+        "timeline_events":    timeline,
+        "note":               (
+            "Daily snapshots omitted from JSON export (can be large). "
+            f"Fetch per episode via /api/replay/pump-study/{run_id}/daily-snapshots"
+            "?episode_id=<id>"
+        ),
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+    }
+    return Response(
+        content=json.dumps(bundle, indent=2, default=str),
+        media_type="application/json",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="pump_study_{run_id}_full.json"'
+        },
+    )
