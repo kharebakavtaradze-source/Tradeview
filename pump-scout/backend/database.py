@@ -3415,6 +3415,39 @@ async def get_pump_clusters(run_id: int) -> list[dict]:
         ]
 
 
+async def get_pump_cluster_detections(run_id: int, cluster_id: str) -> list[dict]:
+    """Return raw detections belonging to one specific cluster."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisodeDetection)
+            .where(
+                PumpEpisodeDetection.run_id     == run_id,
+                PumpEpisodeDetection.cluster_id == cluster_id,
+            )
+            .order_by(PumpEpisodeDetection.window_start_date)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id":                       r.id,
+                "symbol":                   r.symbol,
+                "window_start_date":        r.window_start_date,
+                "window_peak_date":         r.window_peak_date,
+                "window_days":              r.window_days,
+                "start_price":              r.start_price,
+                "peak_price":               r.peak_price,
+                "multiple":                 r.multiple,
+                "return_pct":               r.return_pct,
+                "days_to_peak":             r.days_to_peak,
+                "days_to_double":           r.days_to_double,
+                "max_drawdown_before_peak": r.max_drawdown_before_peak,
+                "cluster_id":               r.cluster_id,
+                "is_canonical":             r.is_canonical,
+            }
+            for r in rows
+        ]
+
+
 async def update_pump_cluster_episode_id(
     run_id: int,
     cluster_id: str,

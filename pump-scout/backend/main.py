@@ -2420,6 +2420,7 @@ async def pump_study_episode_detail(run_id: int, episode_id: int):
         get_pump_episode_snapshots,
         get_pump_episode_events,
         get_pump_clusters,
+        get_pump_cluster_detections,
     )
 
     run = await get_pump_study_run(run_id)
@@ -2437,6 +2438,12 @@ async def pump_study_episode_detail(run_id: int, episode_id: int):
     cluster  = next(
         (c for c in clusters if c.get("canonical_episode_id") == episode_id), None
     )
+
+    # Enrich cluster with its raw detection rows
+    if cluster:
+        cluster["raw_detections"] = await get_pump_cluster_detections(
+            run_id, cluster["cluster_id"]
+        )
 
     return {
         "ok":       True,

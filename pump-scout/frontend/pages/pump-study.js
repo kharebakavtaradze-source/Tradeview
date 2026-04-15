@@ -156,23 +156,14 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
         .then(r => r.ok ? r.json() : { snapshots: [] }),
       fetch(`${API_URL}/api/replay/pump-study/${runId}/timeline?episode_id=${episodeId}`)
         .then(r => r.ok ? r.json() : { events: [] }),
-      fetch(`${API_URL}/api/replay/pump-study/${runId}/clusters`)
-        .then(r => r.ok ? r.json() : { clusters: [] }),
     ])
-      .then(([epData, snapData, evData, clData]) => {
+      .then(([epData, snapData, evData]) => {
         const episode = epData.episode || epData;
         setEp(episode);
         setSnaps(snapData.snapshots || []);
         setEvents(evData.events || []);
-        // Find the matching cluster by symbol + date proximity
-        const allClusters = clData.clusters || [];
-        const match = allClusters.find(c =>
-          c.symbol === episode.symbol &&
-          (c.id === episode.cluster_id ||
-           (c.primary_start && episode.pump_start_date &&
-            c.primary_start.slice(0, 10) === episode.pump_start_date.slice(0, 10)))
-        );
-        setCluster(match || null);
+        // Cluster is returned directly by the episode detail endpoint
+        setCluster(epData.cluster || null);
       })
       .catch(err => setError(String(err)))
       .finally(() => setLoading(false));
@@ -440,14 +431,15 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                 Cluster
               </div>
               {[
-                ['Cluster ID',     cluster.id ?? '—'],
+                ['Cluster ID',     cluster.cluster_id ?? '—'],
                 ['Symbol',         cluster.symbol],
-                ['Cluster Start',  fmtDate(cluster.cluster_start)],
-                ['Cluster End',    fmtDate(cluster.cluster_end)],
-                ['Primary Start',  fmtDate(cluster.primary_start)],
-                ['Primary Peak',   fmtDate(cluster.primary_peak)],
+                ['Cluster Start',  fmtDate(cluster.cluster_start_date)],
+                ['Cluster End',    fmtDate(cluster.cluster_end_date)],
+                ['Canonical Start', fmtDate(cluster.canonical_start_date)],
+                ['Canonical Peak',  fmtDate(cluster.canonical_peak_date)],
                 ['Raw Detections', Array.isArray(cluster.raw_detections)
-                                    ? cluster.raw_detections.length : '—'],
+                                    ? cluster.raw_detections.length
+                                    : (cluster.raw_detection_count ?? '—')],
               ].map(([label, val]) => (
                 <div key={label} className={styles.clusterRow}>
                   <span className={styles.clusterRowLabel}>{label}</span>
@@ -476,8 +468,8 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                       <tbody>
                         {cluster.raw_detections.map((d, i) => (
                           <tr key={i}>
-                            <td>{fmtDate(d.start_date)}</td>
-                            <td>{fmtDate(d.peak_date)}</td>
+                            <td>{fmtDate(d.window_start_date)}</td>
+                            <td>{fmtDate(d.window_peak_date)}</td>
                             <td style={{ color: 'var(--lime)', fontWeight: 700 }}>{fmtX(d.multiple)}</td>
                             <td>{d.return_pct != null ? fmtPct(d.return_pct, true) : '—'}</td>
                             <td>{d.days_to_peak ?? '—'}</td>
