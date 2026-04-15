@@ -743,7 +743,7 @@ function RunLaunchForm({ onLaunch, launching, launchError }) {
 
 // ── Runs list ─────────────────────────────────────────────────────────────────
 
-function RunsList({ runs, selectedId, onSelect, loading, error, onRetry }) {
+function RunsList({ runs, selectedId, onSelect, loading, error, onRetry, onDelete }) {
   if (loading) {
     return <div className={styles.statusMsg}>Loading runs…</div>;
   }
@@ -787,6 +787,7 @@ function RunsList({ runs, selectedId, onSelect, loading, error, onRetry }) {
             <th title="Daily indicator snapshots">Snaps</th>
             <th title="Timeline milestone events">Events</th>
             <th>Min ×</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -813,6 +814,15 @@ function RunsList({ runs, selectedId, onSelect, loading, error, onRetry }) {
               <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{fmtNum(r.event_count)}</td>
               <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-dim)' }}>
                 {r.min_multiple != null ? `${r.min_multiple}×` : '—'}
+              </td>
+              <td onClick={e => e.stopPropagation()}>
+                <button
+                  className={styles.btnDanger}
+                  style={{ padding: '3px 10px', fontSize: 10 }}
+                  onClick={() => onDelete && onDelete(r.id)}
+                >
+                  Delete
+                </button>
               </td>
             </tr>
           ))}
@@ -1335,6 +1345,11 @@ export default function PumpStudyPage() {
   const [launching,   setLaunching]   = useState(false);
   const [launchError, setLaunchError] = useState('');
 
+  // Delete state
+  const [deleteTarget, setDeleteTarget] = useState(null);   // run id to confirm
+  const [deleting,     setDeleting]     = useState(false);
+  const [deleteError,  setDeleteError]  = useState('');
+
   // Episodes state
   const [episodes,    setEpisodes]    = useState([]);
   const [epLoading,   setEpLoading]   = useState(false);
@@ -1390,6 +1405,39 @@ export default function PumpStudyPage() {
       setLaunchError(err.message || 'Launch failed');
     } finally {
       setLaunching(false);
+    }
+  }
+
+  // ── Delete a run ─────────────────────────────────────────────────────────
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      const res = await fetch(`${API_URL}/api/replay/pump-study/${deleteTarget}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      // Clear all selection state if deleted run was active
+      if (selectedId === deleteTarget) {
+        setSelectedId(null);
+        setSelectedRun(null);
+        setEpisodes([]);
+        setComparisons([]);
+        setSelectedEpId(null);
+        setDetailEpId(null);
+        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      }
+      setRuns(prev => prev.filter(r => r.id !== deleteTarget));
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteError(err.message || 'Delete failed');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -1571,6 +1619,7 @@ export default function PumpStudyPage() {
               loading={runsLoading}
               error={runsError}
               onRetry={loadRuns}
+              onDelete={id => { setDeleteTarget(id); setDeleteError(''); }}
             />
           </div>
 
@@ -1636,6 +1685,33 @@ export default function PumpStudyPage() {
 
         </div>
       </div>
+
+      {/* ── Delete confirmation modal ──────────────────────────────────────── */}
+      {deleteTarget && (
+        <div className={styles.modalOverlay} onClick={() => !deleting && setDeleteTarget(null)}>
+          <div className={styles.modalBox} onClick={e => e.stopPropagation()}>
+            <div className={styles.modalTitle}>Permanently Delete Run #{deleteTarget}?</div>
+            <div className={styles.modalBody}>
+              This will remove the run and <strong>all linked DB rows</strong>:
+              episodes, snapshots, events, clusters, detections, comparison
+              groups &amp; members, and any AI summaries.
+              <br /><br />
+              <strong>This cannot be undone.</strong>
+            </div>
+            {deleteError && (
+              <div style={{ fontSize: 11, color: 'var(--red, #f87171)' }}>{deleteError}</div>
+            )}
+            <div className={styles.modalActions}>
+              <button className={styles.btnCancel} onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                Cancel
+              </button>
+              <button className={styles.btnDanger} onClick={handleDeleteConfirm} disabled={deleting}>
+                {deleting ? 'Deleting…' : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
