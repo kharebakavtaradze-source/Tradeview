@@ -1539,6 +1539,88 @@ async def build_raw_pattern_episode_features_timing(
     return total_rows
 
 
+async def build_raw_pattern_episode_features_candle(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-2: compute PRE-window candle anatomy and pattern-count aggregates
+    and patch them onto existing raw_pattern_episode_features rows.
+
+    Fields patched:
+        Candle anatomy:  avg_body_pct_pre, avg_upper_wick_pct_pre,
+                         avg_lower_wick_pct_pre, wide_range_bar_count_pre,
+                         narrow_range_bar_count_pre, strong_close_count_pre
+        Pattern counts:  bullish_engulfing_count_pre, bearish_engulfing_count_pre,
+                         inside_bar_count_pre, outside_bar_count_pre,
+                         reclaim_bar_count_pre, expansion_bar_count_pre
+
+    Reads from raw_pattern_daily_features (PRE phase only).
+    Updates existing rows via update_raw_pattern_episode_features().
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        update_raw_pattern_episode_features,
+    )
+
+    def _mean(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(sum(cleaned) / len(cleaned), 4) if cleaned else None
+
+    def _count_true(vals: list) -> int:
+        return sum(1 for v in vals if v)
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        pre_rows = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=500
+        )
+        if not pre_rows:
+            continue
+
+        # ── Candle anatomy averages ────────────────────────────────────────
+        avg_body        = _mean([r.get("body_pct")         for r in pre_rows])
+        avg_upper_wick  = _mean([r.get("upper_wick_pct")   for r in pre_rows])
+        avg_lower_wick  = _mean([r.get("lower_wick_pct")   for r in pre_rows])
+
+        # ── Candle classification counts ───────────────────────────────────
+        wide_count   = _count_true(r.get("wide_range_bar")       for r in pre_rows)
+        narrow_count = _count_true(r.get("narrow_range_bar")     for r in pre_rows)
+        strong_count = _count_true(r.get("strong_close_near_high") for r in pre_rows)
+
+        # ── Pattern counts ─────────────────────────────────────────────────
+        bull_eng  = _count_true(r.get("bullish_engulfing") for r in pre_rows)
+        bear_eng  = _count_true(r.get("bearish_engulfing") for r in pre_rows)
+        inside    = _count_true(r.get("inside_bar")        for r in pre_rows)
+        outside   = _count_true(r.get("outside_bar")       for r in pre_rows)
+        reclaim   = _count_true(r.get("reclaim_bar")       for r in pre_rows)
+        expansion = _count_true(r.get("expansion_bar")     for r in pre_rows)
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "avg_body_pct_pre":           avg_body,
+            "avg_upper_wick_pct_pre":     avg_upper_wick,
+            "avg_lower_wick_pct_pre":     avg_lower_wick,
+            "wide_range_bar_count_pre":   wide_count   or None,
+            "narrow_range_bar_count_pre": narrow_count or None,
+            "strong_close_count_pre":     strong_count or None,
+            "bullish_engulfing_count_pre": bull_eng  or None,
+            "bearish_engulfing_count_pre": bear_eng  or None,
+            "inside_bar_count_pre":        inside    or None,
+            "outside_bar_count_pre":       outside   or None,
+            "reclaim_bar_count_pre":       reclaim   or None,
+            "expansion_bar_count_pre":     expansion or None,
+        })
+        patched += 1
+
+    return patched
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.

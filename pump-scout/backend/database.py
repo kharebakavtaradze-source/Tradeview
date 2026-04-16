@@ -4324,6 +4324,34 @@ async def get_raw_pattern_episode_features(
         ]
 
 
+async def update_raw_pattern_episode_features(
+    run_id: int,
+    episode_id: int,
+    data: dict,
+) -> None:
+    """
+    Patch an existing raw_pattern_episode_features row identified by
+    (run_id, episode_id).  Only keys present in *data* are written;
+    unrelated columns are left unchanged.
+    """
+    if not data:
+        return
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(RawPatternEpisodeFeatures).where(
+                RawPatternEpisodeFeatures.run_id     == run_id,
+                RawPatternEpisodeFeatures.episode_id == episode_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        for key, value in data.items():
+            if hasattr(row, key):
+                setattr(row, key, value)
+        await session.commit()
+
+
 async def save_raw_pattern_comparison_rows(run_id: int, rows: list[dict]) -> int:
     """
     Bulk-insert per-feature comparison stats (one row per group × feature).
