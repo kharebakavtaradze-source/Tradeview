@@ -1251,6 +1251,167 @@ def snapshot_to_raw_daily_feature(
     }
 
 
+def _fill_prev_bar_flags(row: dict, snap: dict, prev_snap: dict) -> None:
+    """
+    Fill cross-bar candle pattern flags that require the previous bar.
+    Modifies *row* in-place; both snap and prev_snap are snapshot dicts.
+    """
+    ph = prev_snap.get("high")
+    pl = prev_snap.get("low")
+    po = prev_snap.get("open")
+    pc = prev_snap.get("close")
+
+    h  = snap.get("high")
+    l  = snap.get("low")
+    o  = snap.get("open")
+    c  = snap.get("close")
+
+    if None in (ph, pl, po, pc, h, l, o, c):
+        return  # leave flags None when any OHLC is missing
+
+    prev_bearish  = pc < po
+    prev_bullish  = pc > po
+    today_bullish = c  > o
+    today_bearish = c  < o
+
+    # Bullish engulfing: prev bearish; today bullish body engulfs prev body
+    row["bullish_engulfing"] = bool(
+        prev_bearish and today_bullish
+        and min(o, c) <= min(po, pc)
+        and max(o, c) >= max(po, pc)
+    )
+
+    # Bearish engulfing: prev bullish; today bearish body engulfs prev body
+    row["bearish_engulfing"] = bool(
+        prev_bullish and today_bearish
+        and min(o, c) <= min(po, pc)
+        and max(o, c) >= max(po, pc)
+    )
+
+    # Inside bar: today's range entirely within prev bar's range
+    row["inside_bar"]  = bool(h <= ph and l >= pl)
+
+    # Outside bar: today's range completely engulfs prev bar's range
+    row["outside_bar"] = bool(h > ph and l < pl)
+
+    # Reclaim bar: gapped down but closed above prev close
+    gap = snap.get("gap_pct")
+    row["reclaim_bar"] = bool(gap is not None and gap < 0 and c > pc)
+
+
+async def build_raw_pattern_daily_features(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Iterate all pump episodes for *pump_study_run_id*, convert every daily
+    snapshot into a raw_pattern_daily_features row via
+    snapshot_to_raw_daily_feature(), fill trailing-context and cross-bar
+    fields, bulk-save the rows, and update raw_daily_count on the run.
+
+    Returns the total number of feature rows saved.
+    """
+    from collections import deque
+
+    from database import (
+        get_pump_episodes,
+        get_pump_episode_snapshots,
+        save_raw_pattern_daily_features,
+        update_raw_pattern_run,
+    )
+
+    _TRAIL_N = 10   # bars for trailing intraday-range average (wide/narrow bar)
+    _DVOL_N  = 20   # bars for dollar-volume trailing average
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    total_rows = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+        snaps = await get_pump_episode_snapshots(episode_id)
+        if not snaps:
+            continue
+
+        # Episode-wide price range for distance_to_range_* fields
+        ep_high: Optional[float] = None
+        ep_low:  Optional[float] = None
+        for s in snaps:
+            sh = s.get("high")
+            sl = s.get("low")
+            if sh is not None:
+                ep_high = sh if ep_high is None else max(ep_high, sh)
+            if sl is not None:
+                ep_low  = sl if ep_low  is None else min(ep_low,  sl)
+        ep_mid = (
+            (ep_high + ep_low) / 2
+            if (ep_high is not None and ep_low is not None)
+            else None
+        )
+
+        range_history: deque = deque(maxlen=_TRAIL_N)
+        dvol_history:  deque = deque(maxlen=_DVOL_N)
+
+        rows: list[dict]         = []
+        prev_snap: Optional[dict] = None
+
+        for snap in snaps:
+            trailing_avg = (
+                sum(range_history) / len(range_history)
+                if range_history else None
+            )
+
+            row = snapshot_to_raw_daily_feature(
+                snap, ep, raw_run_id,
+                trailing_avg_range_pct=trailing_avg,
+            )
+
+            # volume_vs_avg5 from snapshot_json.indicators.avg_vol_5
+            sj   = snap.get("snapshot") or {}
+            ind  = sj.get("indicators") or {}
+            avg5 = ind.get("avg_vol_5")
+            sv   = snap.get("volume")
+            if avg5 and sv and avg5 > 0:
+                row["volume_vs_avg5"] = round(sv / avg5, 3)
+
+            # dollar_volume_vs_avg20 from trailing dollar-volume history
+            dvol = row.get("dollar_volume")
+            if dvol is not None and dvol > 0 and len(dvol_history) == _DVOL_N:
+                dvol_avg = sum(dvol_history) / _DVOL_N
+                if dvol_avg > 0:
+                    row["dollar_volume_vs_avg20"] = round(dvol / dvol_avg, 3)
+
+            # Distance fields relative to the episode's full price range
+            sc = snap.get("close")
+            if sc is not None and ep_high is not None and ep_low is not None:
+                ep_range = ep_high - ep_low
+                if ep_range > 0:
+                    row["distance_to_range_high"] = round((ep_high - sc) / ep_range, 4)
+                    row["distance_to_range_low"]  = round((sc - ep_low)  / ep_range, 4)
+                    if ep_mid is not None:
+                        row["distance_to_mid_range"] = round((sc - ep_mid) / ep_range, 4)
+
+            # Cross-bar pattern flags
+            if prev_snap is not None:
+                _fill_prev_bar_flags(row, snap, prev_snap)
+
+            # Advance trailing histories (after row is built so bar N is not in its own avg)
+            intra = snap.get("intraday_range_pct")
+            if intra is not None:
+                range_history.append(intra)
+            if dvol is not None and dvol > 0:
+                dvol_history.append(dvol)
+
+            rows.append(row)
+            prev_snap = snap
+
+        if rows:
+            saved = await save_raw_pattern_daily_features(raw_run_id, rows)
+            total_rows += saved
+
+    await update_raw_pattern_run(raw_run_id, {"raw_daily_count": total_rows})
+    return total_rows
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
