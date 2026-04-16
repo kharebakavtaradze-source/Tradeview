@@ -4593,6 +4593,7 @@ async def delete_raw_pattern_run(run_id: int) -> dict:
             (RawPatternComparison,       "cmp_features",    RawPatternComparison.run_id),
             (RawPatternEpisodeFeatures,  "ep_features",     RawPatternEpisodeFeatures.run_id),
             (RawPatternDailyFeatures,    "daily_features",  RawPatternDailyFeatures.run_id),
+            (RawPatternAISummary,        "ai_summaries",    RawPatternAISummary.run_id),
         ]:
             result = await session.execute(select(Model).where(fk == run_id))
             rows   = result.scalars().all()

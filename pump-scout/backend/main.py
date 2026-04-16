@@ -2762,6 +2762,31 @@ async def delete_pump_study_run_endpoint(run_id: int):
     }
 
 
+@app.delete("/api/replay/raw-pattern-study/{run_id}")
+async def delete_raw_pattern_study_run_endpoint(run_id: int):
+    """
+    Permanently delete a raw-pattern-study run and all its child records.
+
+    Cascade order:
+        raw_pattern_comparison_members → raw_pattern_comparisons
+        → raw_pattern_episode_features → raw_pattern_daily_features
+        → raw_pattern_ai_summaries → raw_pattern_runs
+    """
+    from database import delete_raw_pattern_run
+    try:
+        counts = await delete_raw_pattern_run(run_id)
+    except ValueError:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    except Exception as exc:
+        logger.error("delete_raw_pattern_run run_id=%s error: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "deleted": counts,
+    }
+
+
 def _repair_json(raw: str) -> str:
     """
     Lightweight single-pass JSON repair.
