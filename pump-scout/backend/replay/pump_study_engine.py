@@ -1621,6 +1621,106 @@ async def build_raw_pattern_episode_features_candle(
     return patched
 
 
+async def build_raw_pattern_episode_features_volume_compression(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-3: compute PRE-window volume and compression/volatility aggregates
+    and patch them onto existing raw_pattern_episode_features rows.
+
+    Fields patched:
+        Volume:       max_volume_anomaly_pre, median_volume_anomaly_pre,
+                      abnormal_volume_day_count_pre, dryup_day_count_pre,
+                      max_dollar_volume_pre
+        Compression:  had_compression, compression_days_pre, min_bb_width_pre,
+                      avg_atr_pct_pre, atr_contraction_days_pre
+
+    Reads from raw_pattern_daily_features (PRE phase only).
+    Patches existing rows via update_raw_pattern_episode_features().
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        update_raw_pattern_episode_features,
+    )
+
+    def _median(vals: list) -> Optional[float]:
+        cleaned = sorted(v for v in vals if v is not None)
+        n = len(cleaned)
+        if n == 0:
+            return None
+        mid = n // 2
+        return round((cleaned[mid - 1] + cleaned[mid]) / 2, 4) if n % 2 == 0 else round(cleaned[mid], 4)
+
+    def _mean(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(sum(cleaned) / len(cleaned), 4) if cleaned else None
+
+    def _max(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(max(cleaned), 4) if cleaned else None
+
+    def _min(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(min(cleaned), 4) if cleaned else None
+
+    def _count_true(vals: list) -> int:
+        return sum(1 for v in vals if v)
+
+    def _is_compressed(row: dict) -> bool:
+        cs  = row.get("compression_state") or ""
+        sqz = row.get("bb_squeeze_bars")
+        return cs in ("STRONG", "MEDIUM") or (sqz is not None and sqz >= 3)
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        pre_rows = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=500
+        )
+        if not pre_rows:
+            continue
+
+        # ── Volume ────────────────────────────────────────────────────────
+        vol_anomalies = [r.get("volume_vs_avg20") for r in pre_rows]
+        max_vol_anom    = _max(vol_anomalies)
+        median_vol_anom = _median(vol_anomalies)
+        abnormal_count  = _count_true(r.get("abnormal_volume_day") for r in pre_rows)
+        dryup_count     = _count_true(r.get("dryup_day")           for r in pre_rows)
+        max_dvol        = _max([r.get("dollar_volume") for r in pre_rows])
+
+        # ── Compression / volatility ──────────────────────────────────────
+        compr_flags     = [_is_compressed(r) for r in pre_rows]
+        had_compr       = any(compr_flags)
+        compr_days      = sum(compr_flags)
+        min_bb          = _min([r.get("bb_width")   for r in pre_rows])
+        avg_atr         = _mean([r.get("atr_pct")   for r in pre_rows])
+        atr_contr_days  = sum(
+            1 for r in pre_rows if r.get("atr_expansion_state") == "CONTRACTING"
+        )
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "max_volume_anomaly_pre":        max_vol_anom,
+            "median_volume_anomaly_pre":     median_vol_anom,
+            "abnormal_volume_day_count_pre": abnormal_count or None,
+            "dryup_day_count_pre":           dryup_count    or None,
+            "max_dollar_volume_pre":         max_dvol,
+            "had_compression":               had_compr      or None,
+            "compression_days_pre":          compr_days     or None,
+            "min_bb_width_pre":              min_bb,
+            "avg_atr_pct_pre":               avg_atr,
+            "atr_contraction_days_pre":      atr_contr_days or None,
+        })
+        patched += 1
+
+    return patched
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
