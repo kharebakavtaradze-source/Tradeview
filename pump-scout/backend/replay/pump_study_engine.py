@@ -1824,6 +1824,110 @@ async def build_raw_pattern_episode_features_structure(
     return patched
 
 
+# Features extracted into each member's features_json and compared across groups
+_COMPARISON_FEATURES = [
+    "max_volume_anomaly_pre",
+    "median_volume_anomaly_pre",
+    "abnormal_volume_day_count_pre",
+    "dryup_day_count_pre",
+    "had_compression",
+    "compression_days_pre",
+    "avg_body_pct_pre",
+    "avg_upper_wick_pct_pre",
+    "avg_lower_wick_pct_pre",
+    "bullish_engulfing_count_pre",
+    "reclaim_bar_count_pre",
+    "expansion_bar_count_pre",
+    "had_accumulation_like",
+    "had_spring_test_lps",
+    "days_in_base",
+    "days_from_breakout_to_peak",
+]
+
+_COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+
+
+async def build_raw_pattern_comparisons(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 3: Build cross-group comparison rows from existing
+    raw_pattern_episode_features.
+
+    For each group in _COMPARISON_GROUPS:
+      1. Collect all episode feature rows where group_type matches.
+      2. Save one comparison member row per episode (features_json = snapshot
+         of all comparison feature values for that episode).
+      3. For each feature in _COMPARISON_FEATURES compute distribution stats
+         over the group and save one raw_pattern_comparisons row.
+
+    Updates raw_pattern_runs.comparison_count with the total comparison rows
+    saved (= len(groups) × len(features) with at least one member).
+
+    Returns the total number of comparison stat rows saved.
+    """
+    from database import (
+        get_raw_pattern_episode_features,
+        save_raw_pattern_comparison_members,
+        save_raw_pattern_comparison_rows,
+        update_raw_pattern_run,
+    )
+
+    total_comp_rows = 0
+
+    for group_name in _COMPARISON_GROUPS:
+        ep_features = await get_raw_pattern_episode_features(
+            raw_run_id, group_type=group_name, limit=5000
+        )
+        if not ep_features:
+            continue
+
+        # ── Member rows ────────────────────────────────────────────────────
+        members = [
+            {
+                "symbol":     ef.get("symbol"),
+                "episode_id": ef.get("episode_id"),
+                "features":   {f: ef.get(f) for f in _COMPARISON_FEATURES},
+            }
+            for ef in ep_features
+        ]
+        await save_raw_pattern_comparison_members(raw_run_id, group_name, members)
+
+        # ── Per-feature stats ──────────────────────────────────────────────
+        comp_rows: list[dict] = []
+        for feat in _COMPARISON_FEATURES:
+            # Boolean fields (had_*): coerce True→1 / None→skip for stats
+            raw_vals = [ef.get(feat) for ef in ep_features]
+            numeric  = []
+            for v in raw_vals:
+                if v is None:
+                    continue
+                numeric.append(1 if v is True else (0 if v is False else v))
+
+            stats = _compute_stats(numeric)
+            if stats["count"] == 0:
+                continue
+
+            comp_rows.append({
+                "group_name":   group_name,
+                "feature_name": feat,
+                "member_count": len(ep_features),
+                "mean_value":   stats["mean"],
+                "median_value": stats["median"],
+                "p25_value":    stats["p25"],
+                "p75_value":    stats["p75"],
+                "p90_value":    stats["p90"],
+            })
+
+        if comp_rows:
+            saved = await save_raw_pattern_comparison_rows(raw_run_id, comp_rows)
+            total_comp_rows += saved
+
+    await update_raw_pattern_run(raw_run_id, {"comparison_count": total_comp_rows})
+    return total_comp_rows
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
