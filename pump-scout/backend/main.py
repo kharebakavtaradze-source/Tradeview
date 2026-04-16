@@ -3329,3 +3329,184 @@ async def raw_pattern_study_export(run_id: int, format: str = "json"):
         headers={"Content-Disposition":
                  f'attachment; filename="raw_pattern_{run_id}_full.json"'},
     )
+
+
+# ── 8. AI summary ─────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/ai-summary")
+async def raw_pattern_study_ai_summary(run_id: int):
+    """
+    Lazy AI pattern-analysis for a completed raw-pattern study run.
+
+    On first call: builds a deterministic evidence bundle from raw_pattern_comparisons
+    and raw_pattern_episode_features, calls Claude, stores the result, returns it.
+    On subsequent calls: returns the cached row immediately.
+
+    Evidence is 100% price/volume/indicator-derived.  No catalyst or news data.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(503, detail="ANTHROPIC_API_KEY not configured")
+
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_episode_features,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_ai_summary,
+        save_raw_pattern_ai_summary,
+    )
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(409, detail=f"Run {run_id} status is '{run.get('status')}'. AI summary requires a completed run.")
+
+    # ── Return cached result ──────────────────────────────────────────────────
+    cached = await get_raw_pattern_ai_summary(run_id)
+    if cached:
+        if cached.get("parse_failed"):
+            return {
+                "ok": False, "parse_failed": True, "run_id": run_id, "cached": True,
+                "message": "AI summary could not be parsed — model returned malformed JSON.",
+                "parse_error": cached.get("parse_error"),
+                "raw_text": (cached.get("raw_response") or "")[:500],
+                "model_used": cached.get("model_used"),
+            }
+        cached.update({"ok": True, "cached": True, "generated_at": cached.get("created_at")})
+        return cached
+
+    # ── Build evidence bundle ─────────────────────────────────────────────────
+    episodes = await get_raw_pattern_episode_features(run_id, limit=2000)
+    comps    = await get_raw_pattern_comparisons(run_id)
+
+    # Group counts
+    from collections import Counter
+    group_counts = dict(Counter(ep.get("group_type") for ep in episodes if ep.get("group_type")))
+
+    # Pivot comparisons: { feature → { group → median } }
+    pivot: dict[str, dict] = {}
+    for c in comps:
+        fn = c.get("feature_name")
+        gn = c.get("group_name")
+        if fn and gn:
+            pivot.setdefault(fn, {})[gn] = {
+                "median": c.get("median_value"),
+                "mean":   c.get("mean_value"),
+                "p25":    c.get("p25_value"),
+                "p75":    c.get("p75_value"),
+                "n":      c.get("member_count"),
+            }
+
+    evidence = {
+        "run_params": {
+            "date_range":            f"{run.get('start_date')} to {run.get('end_date')}",
+            "pump_study_run_id":     run.get("pump_study_run_id"),
+            "episode_feature_count": run.get("episode_feature_count"),
+            "comparison_count":      run.get("comparison_count"),
+        },
+        "group_counts": group_counts,
+        "feature_stats_by_group": pivot,
+        "data_limitations": {
+            "catalyst_news_available": False,
+            "note": "No external news or catalyst data ingested. Analysis limited to price, volume, and indicator-derived features.",
+        },
+    }
+
+    evidence_compact = json.dumps(evidence, separators=(",", ":"), default=str)
+
+    _MODEL = "claude-haiku-4-5-20251001"
+
+    prompt = (
+        "EVIDENCE (price/volume/indicator only — no news, no catalysts):\n"
+        f"{evidence_compact}\n\n"
+        "Answer 5 questions using ONLY the evidence above. "
+        "Each array item must be under 20 words. No newlines inside strings.\n"
+        "Q1: Which raw candle/volume/sequence patterns appear most before 4x_pump group?\n"
+        "Q2: Which features have the largest median difference between 4x_pump and normal_winner?\n"
+        "Q3: Which features have the largest median difference between 4x_pump and false_positive?\n"
+        "Q4: Which features look noisy, unreliable, or nearly identical across all groups?\n"
+        "Q5: List specific changes to improve the Pump Engine (scoring weights, thresholds, or new signals).\n\n"
+        "Rules: no invented catalysts; note if data is insufficient; keep items short.\n\n"
+        "Output ONLY this JSON object — no markdown, no prose, no code fences:\n"
+        '{"repeated_patterns":["..."],'
+        '"separators_vs_normal_winner":["..."],'
+        '"separators_vs_false_positive":["..."],'
+        '"noisy_features":["..."],'
+        '"pump_engine_changes":["..."],'
+        '"recommendation":"one sentence",'
+        '"limitations":["..."]}'
+    )
+
+    # ── Call Claude ───────────────────────────────────────────────────────────
+    raw_text = ""
+    try:
+        ai_client = anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0)
+        response  = await ai_client.messages.create(
+            model      = _MODEL,
+            max_tokens = 1400,
+            system     = (
+                "You are a quantitative research assistant. "
+                "Output only a single valid JSON object — "
+                "no markdown fences, no prose, no newlines inside string values."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = response.content[0].text.strip()
+    except Exception as exc:
+        logger.error("raw_pattern_ai_summary run_id=%s: API call failed: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+
+    # ── Safe JSON parse with one repair attempt ───────────────────────────────
+    analysis  = None
+    parse_err = None
+    try:
+        analysis = json.loads(raw_text)
+    except json.JSONDecodeError as exc1:
+        logger.warning("raw_pattern_ai_summary: initial JSON parse failed (%s); attempting repair", exc1)
+        try:
+            analysis = json.loads(_repair_json(raw_text))
+            logger.info("raw_pattern_ai_summary: JSON repair succeeded")
+        except json.JSONDecodeError as exc2:
+            parse_err = str(exc2)
+            logger.error("raw_pattern_ai_summary: JSON repair also failed: %s", exc2)
+
+    # ── Persist ───────────────────────────────────────────────────────────────
+    if analysis is None:
+        await save_raw_pattern_ai_summary(run_id, {
+            "analysis": {}, "recommendation": "", "evidence": evidence,
+            "limitations": "", "model_used": _MODEL,
+            "parse_failed": True, "raw_response": raw_text, "parse_error": parse_err,
+        })
+        return {
+            "ok": False, "parse_failed": True, "run_id": run_id, "cached": False,
+            "message": "AI summary could not be parsed — model returned malformed JSON.",
+            "parse_error": parse_err, "raw_text": raw_text[:500] if raw_text else "",
+            "model_used": _MODEL,
+        }
+
+    limitations_text = "\n".join(analysis.get("limitations", []))
+    await save_raw_pattern_ai_summary(run_id, {
+        "analysis":       analysis,
+        "recommendation": analysis.get("recommendation", ""),
+        "evidence":       evidence,
+        "limitations":    limitations_text,
+        "model_used":     _MODEL,
+        "parse_failed":   False,
+        "raw_response":   None,
+        "parse_error":    None,
+    })
+
+    return {
+        "ok":          True,
+        "run_id":      run_id,
+        "analysis":    analysis,
+        "evidence_summary": {
+            "groups":         list(group_counts.keys()),
+            "features_compared": len(pivot),
+            "episodes_analyzed": len(episodes),
+        },
+        "model_used":    _MODEL,
+        "generated_at":  datetime.utcnow().isoformat() + "Z",
+        "cached":        False,
+    }

@@ -3409,6 +3409,27 @@ class RawPatternComparisonMember(Base):
     created_at    = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class RawPatternAISummary(Base):
+    """
+    AI-generated analysis for one raw-pattern study run.
+    Generated lazily on first request; immutable after creation.
+    Replay-scoped only — never touches live scanner state.
+    """
+    __tablename__ = "raw_pattern_ai_summaries"
+
+    id             = Column(Integer,     primary_key=True)
+    run_id         = Column(Integer,     nullable=False, unique=True, index=True)
+    analysis_json  = Column(Text,        nullable=True)   # parsed analysis object
+    recommendation = Column(String(200), nullable=True)   # top-level recommendation string
+    evidence_json  = Column(Text,        nullable=True)   # serialised evidence bundle (audit)
+    limitations    = Column(Text,        nullable=True)
+    model_used     = Column(String(60),  nullable=True)
+    parse_failed   = Column(Boolean,     default=False, nullable=True)
+    raw_response   = Column(Text,        nullable=True)   # raw model text on failure
+    parse_error    = Column(Text,        nullable=True)   # exception string on failure
+    created_at     = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 # ── Pump Study CRUD ───────────────────────────────────────────────────────────
 
 async def create_pump_study_run(data: dict) -> int:
@@ -4471,6 +4492,56 @@ async def get_raw_pattern_comparison_members(
             }
             for r in rows
         ]
+
+
+async def save_raw_pattern_ai_summary(run_id: int, data: dict) -> int:
+    """Persist an AI-generated analysis for a raw-pattern run (insert or replace)."""
+    async with get_session_factory()() as session:
+        existing = await session.execute(
+            select(RawPatternAISummary).where(RawPatternAISummary.run_id == run_id)
+        )
+        old = existing.scalar_one_or_none()
+        if old:
+            await session.delete(old)
+            await session.flush()
+        row = RawPatternAISummary(
+            run_id         = run_id,
+            analysis_json  = json.dumps(data.get("analysis") or {}),
+            recommendation = data.get("recommendation", ""),
+            evidence_json  = json.dumps(data.get("evidence") or {}),
+            limitations    = data.get("limitations", ""),
+            model_used     = data.get("model_used", ""),
+            parse_failed   = data.get("parse_failed", False),
+            raw_response   = data.get("raw_response"),
+            parse_error    = data.get("parse_error"),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def get_raw_pattern_ai_summary(run_id: int) -> dict | None:
+    """Return a stored raw-pattern AI summary, or None if not yet generated."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(RawPatternAISummary).where(RawPatternAISummary.run_id == run_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return None
+        return {
+            "run_id":         row.run_id,
+            "analysis":       json.loads(row.analysis_json or "{}"),
+            "recommendation": row.recommendation,
+            "evidence":       json.loads(row.evidence_json or "{}"),
+            "limitations":    row.limitations,
+            "model_used":     row.model_used,
+            "parse_failed":   bool(row.parse_failed) if row.parse_failed is not None else False,
+            "raw_response":   row.raw_response,
+            "parse_error":    row.parse_error,
+            "created_at":     row.created_at.isoformat() if row.created_at else None,
+        }
 
 
 async def delete_raw_pattern_run(run_id: int) -> dict:
