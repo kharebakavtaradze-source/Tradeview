@@ -254,6 +254,9 @@ const COMP_FEATURES = [
   'dryup_day_count_pre',
   'days_in_base',
   'atr_contraction_days_pre',
+  // PRIMARY — EMA ribbon (computed from daily ema_spread_pct)
+  'avg_ema_spread_pre',
+  'min_ema_spread_pre',
   // PRIMARY — structure depth
   'had_accumulation_like',
   'accumulation_like_day_count',
@@ -292,6 +295,8 @@ const FEATURE_PRIORITY = {
   dryup_day_count_pre:                         'PRIMARY',
   days_in_base:                                'PRIMARY',
   atr_contraction_days_pre:                    'PRIMARY',
+  avg_ema_spread_pre:                          'PRIMARY',
+  min_ema_spread_pre:                          'PRIMARY',
   had_accumulation_like:                       'PRIMARY',
   accumulation_like_day_count:                 'PRIMARY',
   had_spring_test_lps:                         'PRIMARY',

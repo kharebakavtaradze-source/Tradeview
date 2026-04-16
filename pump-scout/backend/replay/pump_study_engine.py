@@ -1851,6 +1851,9 @@ _COMPARISON_FEATURES = [
     "dryup_day_count_pre",
     "days_in_base",
     "atr_contraction_days_pre",
+    # ── PRIMARY: EMA ribbon (computed from daily ema_spread_pct) ──
+    "avg_ema_spread_pre",
+    "min_ema_spread_pre",
     # ── PRIMARY: structure / wyckoff ──
     "had_accumulation_like",
     "accumulation_like_day_count",
@@ -1892,6 +1895,9 @@ _FEATURE_PRIORITY: dict[str, str] = {
     "dryup_day_count_pre":                         "PRIMARY",
     "days_in_base":                                "PRIMARY",
     "atr_contraction_days_pre":                    "PRIMARY",
+    # PRIMARY — EMA ribbon compression
+    "avg_ema_spread_pre":                          "PRIMARY",
+    "min_ema_spread_pre":                          "PRIMARY",
     # PRIMARY — structure depth
     "had_accumulation_like":                       "PRIMARY",
     "accumulation_like_day_count":                 "PRIMARY",
@@ -1951,11 +1957,30 @@ async def build_raw_pattern_comparisons(
     Returns the total number of comparison stat rows saved.
     """
     from database import (
+        get_raw_pattern_daily_features,
         get_raw_pattern_episode_features,
         save_raw_pattern_comparison_members,
         save_raw_pattern_comparison_rows,
         update_raw_pattern_run,
     )
+
+    # ── Pre-compute EMA spread aggregates from daily rows (zero schema change) ──
+    all_pre_daily = await get_raw_pattern_daily_features(
+        raw_run_id, phase="PRE", limit=100_000
+    )
+    _ema_spread_lookup: dict[int, list[float]] = {}
+    for dr in all_pre_daily:
+        eid = dr.get("episode_id")
+        val = dr.get("ema_spread_pct")
+        if eid is not None and val is not None:
+            _ema_spread_lookup.setdefault(eid, []).append(float(val))
+    _ema_agg: dict[int, dict] = {
+        eid: {
+            "avg_ema_spread_pre": round(sum(vals) / len(vals), 3),
+            "min_ema_spread_pre": round(min(vals), 3),
+        }
+        for eid, vals in _ema_spread_lookup.items()
+    }
 
     total_comp_rows = 0
 
@@ -1965,6 +1990,12 @@ async def build_raw_pattern_comparisons(
         )
         if not ep_features:
             continue
+
+        # Augment with EMA spread aggregates derived from daily rows
+        for ef in ep_features:
+            eid = ef.get("episode_id")
+            if eid in _ema_agg:
+                ef.update(_ema_agg[eid])
 
         # ── Member rows ────────────────────────────────────────────────────
         members = [
