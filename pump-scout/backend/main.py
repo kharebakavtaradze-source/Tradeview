@@ -3621,3 +3621,34 @@ async def raw_pattern_study_top_schemes(run_id: int):
     episodes = await get_raw_pattern_episode_features(run_id, limit=5000)
     result   = extract_top_schemes(episodes)
     return {"ok": True, "run_id": run_id, **result}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/engine-patch-plan")
+async def raw_pattern_study_engine_patch_plan(run_id: int):
+    """
+    Deterministic Pump Engine patch plan derived from comparison medians.
+
+    Classifies each comparison feature as BOOST / INCREASE / PENALIZE / REDUCE / IGNORE
+    based on the separation ratio between 4x_pump and false_positive (or normal_winner
+    when false_positive is absent).
+
+    Also returns 7 domain-area recommendations covering:
+      sequence_duration_weights, compression_persistence, volume_sweet_spot,
+      accumulation_spring_reclaim, ema_ribbon_quality, body_wick_noise_reduction,
+      toxicity_penalty.
+
+    Purely deterministic — no AI, no external calls.
+    Delta bonuses are excluded (delta not yet available in pipeline).
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_comparisons
+    from replay.pump_study_engine import generate_engine_patch_plan
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run is not complete yet.")
+
+    comps  = await get_raw_pattern_comparisons(run_id)
+    result = generate_engine_patch_plan(comps)
+    return {"ok": True, "run_id": run_id, **result}

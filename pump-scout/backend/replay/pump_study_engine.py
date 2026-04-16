@@ -2475,6 +2475,260 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
     }
 
 
+def generate_engine_patch_plan(comparisons: list[dict]) -> dict:
+    """
+    Deterministic patch-plan for the existing Pump Engine.
+
+    Reads comparison medians (group × feature) and classifies each feature:
+        BOOST    — 4x_pump median >= 1.4× false_positive median
+        INCREASE — 4x_pump modestly higher (1.15–1.4×)
+        PENALIZE — false_positive median > 4x_pump (contra-signal)
+        REDUCE   — little separation, outlier distortion, or no data
+        IGNORE   — always-on binary or low-variance across all groups
+
+    Falls back to normal_winner separation when false_positive data is absent.
+    Delta bonuses are NOT included — delta is not yet available upstream.
+    """
+    # ── Pivot: feature → group → {median, flags} ─────────────────────────────
+    pivot: dict[str, dict[str, dict]] = {}
+    for c in comparisons:
+        fn  = c.get("feature_name")
+        gn  = c.get("group_name")
+        if not fn or not gn:
+            continue
+        st = c.get("stats") or {}
+        pivot.setdefault(fn, {})[gn] = {
+            "median":       c.get("median_value"),
+            "n":            c.get("member_count") or 0,
+            "priority":     st.get("priority", "UNKNOWN"),
+            "low_variance": st.get("low_variance_flag", False),
+            "always_on":    st.get("always_on_flag",    False),
+            "outlier_risk": st.get("outlier_risk_flag", False),
+        }
+
+    def _sep(a, b):
+        if a is None or b is None or abs(b) < 0.001:
+            return None
+        return round(a / b, 2)
+
+    _BOOST_THRESH    = 1.40
+    _INCREASE_THRESH = 1.15
+    _PENALIZE_THRESH = 0.70
+
+    verdicts: list[dict] = []
+    for feat, groups in pivot.items():
+        g4x = groups.get("4x_pump",       {})
+        gfp = groups.get("false_positive", {})
+        gnw = groups.get("normal_winner",  {})
+
+        m4x = g4x.get("median")
+        mfp = gfp.get("median")
+        mnw = gnw.get("median")
+
+        priority     = g4x.get("priority") or "UNKNOWN"
+        low_variance = g4x.get("low_variance", False)
+        always_on    = g4x.get("always_on",    False)
+        outlier_risk = g4x.get("outlier_risk", False)
+
+        if g4x.get("n", 0) == 0 or m4x is None:
+            continue
+
+        sep_fp = _sep(m4x, mfp)
+        sep_nw = _sep(m4x, mnw)
+
+        if low_variance or always_on:
+            verdict = "IGNORE"
+            reason  = "always-on or low-variance — no discriminating power"
+        elif sep_fp is not None and sep_fp >= _BOOST_THRESH:
+            verdict = "BOOST"
+            reason  = f"4x_pump median {sep_fp}× higher than false_positive"
+        elif sep_fp is not None and sep_fp >= _INCREASE_THRESH:
+            verdict = "INCREASE"
+            reason  = f"4x_pump {sep_fp}× higher than false_positive (moderate)"
+        elif sep_fp is not None and sep_fp <= _PENALIZE_THRESH:
+            verdict = "PENALIZE"
+            reason  = f"false_positive median {round(1/sep_fp,2)}× higher — contra-signal"
+        elif mfp is None and sep_nw is not None and sep_nw >= _BOOST_THRESH:
+            verdict = "BOOST"
+            reason  = f"4x_pump {sep_nw}× vs normal_winner (fp unavailable)"
+        elif mfp is None and sep_nw is not None and sep_nw >= _INCREASE_THRESH:
+            verdict = "INCREASE"
+            reason  = f"4x_pump {sep_nw}× vs normal_winner (moderate, fp unavailable)"
+        elif outlier_risk and priority != "PRIMARY":
+            verdict = "REDUCE"
+            reason  = "outlier distortion in non-primary feature — weight lightly"
+        else:
+            verdict = "REDUCE"
+            reason  = "no meaningful group separation — reduce weight"
+
+        verdicts.append({
+            "feature":    feat,
+            "priority":   priority,
+            "verdict":    verdict,
+            "reason":     reason,
+            "sep_vs_fp":  sep_fp,
+            "sep_vs_nw":  sep_nw,
+            "median_4x":  m4x,
+            "median_fp":  mfp,
+            "median_nw":  mnw,
+        })
+
+    _V_ORDER = {"BOOST": 0, "INCREASE": 1, "PENALIZE": 2, "REDUCE": 3, "IGNORE": 4}
+    _P_ORDER = {"PRIMARY": 0, "SECONDARY": 1, "LOW_SIGNAL": 2, "UNKNOWN": 3}
+    verdicts.sort(key=lambda v: (
+        _V_ORDER.get(v["verdict"], 99),
+        _P_ORDER.get(v["priority"], 99),
+        -(v["sep_vs_fp"] or v["sep_vs_nw"] or 0),
+    ))
+
+    boost_set    = {v["feature"] for v in verdicts if v["verdict"] == "BOOST"}
+    increase_set = {v["feature"] for v in verdicts if v["verdict"] == "INCREASE"}
+    penalize_set = {v["feature"] for v in verdicts if v["verdict"] == "PENALIZE"}
+    reduce_set   = {v["feature"] for v in verdicts if v["verdict"] == "REDUCE"}
+    ignore_set   = {v["feature"] for v in verdicts if v["verdict"] == "IGNORE"}
+
+    def _gather(candidates):
+        b = [f for f in candidates if f in boost_set or f in increase_set]
+        r = [f for f in candidates if f in penalize_set or f in reduce_set or f in ignore_set]
+        return b, r
+
+    seq_feats   = ["compression_days_pre", "days_from_first_compression_to_breakout",
+                   "days_from_breakout_to_peak", "dryup_day_count_pre", "days_in_base",
+                   "days_from_first_abnormal_volume_to_breakout"]
+    compr_feats = ["compression_days_pre", "had_compression", "atr_contraction_days_pre",
+                   "avg_ema_spread_pre", "min_ema_spread_pre"]
+    vol_feats   = ["max_volume_anomaly_pre", "median_volume_anomaly_pre",
+                   "abnormal_volume_day_count_pre", "dryup_day_count_pre"]
+    struct_feats = ["had_accumulation_like", "accumulation_like_day_count",
+                    "had_spring_test_lps", "reclaim_bar_count_pre"]
+    ema_feats   = ["ema50_reclaim_count_pre", "had_bull_stack_pre", "days_above_ema50_pre",
+                   "bull_stack_days_pre", "avg_close_vs_ema50_pct_pre"]
+    noise_feats = ["avg_body_pct_pre", "avg_upper_wick_pct_pre", "avg_lower_wick_pct_pre",
+                   "bearish_engulfing_count_pre", "inside_bar_count_pre", "outside_bar_count_pre"]
+
+    seq_b,    seq_r    = _gather(seq_feats)
+    compr_b,  compr_r  = _gather(compr_feats)
+    vol_b,    vol_r    = _gather(vol_feats)
+    struct_b, struct_r = _gather(struct_feats)
+    ema_b,    ema_r    = _gather(ema_feats)
+    noise_b,  noise_r  = _gather(noise_feats)
+
+    ema_available = any(f in pivot for f in ema_feats)
+
+    recommendations = [
+        {
+            "area":      "sequence_duration_weights",
+            "priority":  1,
+            "action":    "BOOST" if seq_b else "NEUTRAL",
+            "boost":     seq_b,
+            "reduce":    seq_r,
+            "rationale": (
+                f"Timing sequence features are PRIMARY separators. "
+                + (f"Boost: {seq_b}. " if seq_b else "")
+                + (f"Reduce: {seq_r}." if seq_r else "")
+            ),
+        },
+        {
+            "area":      "compression_persistence",
+            "priority":  2,
+            "action":    "BOOST" if compr_b else "NEUTRAL",
+            "boost":     compr_b,
+            "reduce":    compr_r,
+            "rationale": (
+                "Duration metrics (compression_days_pre, atr_contraction_days_pre) separate "
+                "better than the binary had_compression. "
+                "had_compression is always-on — use day count instead. "
+                + (f"Boost: {compr_b}." if compr_b else "")
+            ),
+        },
+        {
+            "area":      "volume_sweet_spot",
+            "priority":  3,
+            "action":    "BOOST" if vol_b else "REDUCE",
+            "boost":     vol_b,
+            "reduce":    vol_r,
+            "rationale": (
+                "Volume anomaly is useful but needs calibration. "
+                "dryup_day_count_pre (quiet before storm) is often a better signal than "
+                "raw max_volume_anomaly. "
+                + (f"Boost: {vol_b}. " if vol_b else "")
+                + (f"Reduce: {vol_r}." if vol_r else "")
+            ),
+        },
+        {
+            "area":      "accumulation_spring_reclaim",
+            "priority":  4,
+            "action":    "BOOST" if struct_b else "NEUTRAL",
+            "boost":     struct_b,
+            "reduce":    struct_r,
+            "rationale": (
+                "Wyckoff structure quality (accumulation_like_day_count, had_spring_test_lps, "
+                "reclaim_bar_count_pre) are primary separators. "
+                "had_accumulation_like binary may be always-on — prefer day_count. "
+                + (f"Boost: {struct_b}." if struct_b else "")
+            ),
+        },
+        {
+            "area":      "ema_ribbon_quality",
+            "priority":  5,
+            "action":    "BOOST" if ema_b else ("PENDING_DATA" if not ema_available else "NEUTRAL"),
+            "boost":     ema_b,
+            "reduce":    ema_r,
+            "delta_available": False,
+            "rationale": (
+                (
+                    f"EMA ribbon episode fields available. "
+                    + (f"Boost: {ema_b}. " if ema_b else "Insufficient run count for EMA separation — rerun with more episodes. ")
+                    + "Delta bonuses deferred — delta feature extraction not yet in pipeline."
+                ) if ema_available else
+                "EMA episode fields not yet populated — run pipeline to generate data."
+            ),
+        },
+        {
+            "area":      "body_wick_noise_reduction",
+            "priority":  6,
+            "action":    "REDUCE",
+            "boost":     noise_b,
+            "reduce":    noise_r or noise_feats,
+            "rationale": (
+                "Single-bar candle anatomy (body_pct, wick_pct) rarely separates 4x_pump from "
+                "sub-4x winners. Zero-weight or heavily discount these in scoring. "
+                + (f"Confirmed low-signal: {noise_r}." if noise_r else "")
+            ),
+        },
+        {
+            "area":      "toxicity_penalty",
+            "priority":  7,
+            "action":    "PENALIZE",
+            "boost":     [],
+            "reduce":    ["max_toxicity_score", "avg_toxicity_score"],
+            "rationale": (
+                "High pre-pump toxicity score correlates with false_positive. "
+                "Apply negative score multiplier when avg_toxicity_score exceeds calibrated threshold."
+            ),
+        },
+    ]
+
+    return {
+        "feature_verdicts": verdicts,
+        "recommendations":  recommendations,
+        "summary": {
+            "boost_count":        len(boost_set),
+            "increase_count":     len(increase_set),
+            "penalize_count":     len(penalize_set),
+            "reduce_count":       len(reduce_set),
+            "ignore_count":       len(ignore_set),
+            "ema_data_available": ema_available,
+            "delta_available":    False,
+            "note": (
+                "Deterministic plan — no AI. Based on comparison medians only. "
+                "Validate counts per group before applying to Pump Engine. "
+                "Delta bonuses deferred until delta field extraction is in the pipeline."
+            ),
+        },
+    }
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
