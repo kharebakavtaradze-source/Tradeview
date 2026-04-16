@@ -3380,15 +3380,19 @@ async def raw_pattern_study_ai_summary(run_id: int):
     episodes = await get_raw_pattern_episode_features(run_id, limit=2000)
     comps    = await get_raw_pattern_comparisons(run_id)
 
-    # Group counts
+    # Group counts — explicitly note absent groups
     from collections import Counter
     group_counts = dict(Counter(ep.get("group_type") for ep in episodes if ep.get("group_type")))
+    all_groups   = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+    absent_groups = [g for g in all_groups if g not in group_counts]
 
-    # Pivot comparisons: { feature → { group → median } }
+    # Pivot comparisons: { feature → { group → stats + flags } }
     pivot: dict[str, dict] = {}
+    feature_meta: dict[str, dict] = {}   # { feature → {priority, flags} } — one entry per feature
     for c in comps:
-        fn = c.get("feature_name")
-        gn = c.get("group_name")
+        fn    = c.get("feature_name")
+        gn    = c.get("group_name")
+        extra = c.get("stats") or {}          # stats_json unpacked by DB layer
         if fn and gn:
             pivot.setdefault(fn, {})[gn] = {
                 "median": c.get("median_value"),
@@ -3397,6 +3401,20 @@ async def raw_pattern_study_ai_summary(run_id: int):
                 "p75":    c.get("p75_value"),
                 "n":      c.get("member_count"),
             }
+            # Keep first-seen meta per feature (same priority/flags across groups)
+            if fn not in feature_meta and extra:
+                feature_meta[fn] = {
+                    "priority":          extra.get("priority", "UNKNOWN"),
+                    "low_variance":      extra.get("low_variance_flag", False),
+                    "always_on":         extra.get("always_on_flag",    False),
+                    "outlier_risk":      extra.get("outlier_risk_flag", False),
+                }
+
+    # Separate features by priority tier for a focused evidence view
+    primary_features   = [f for f, m in feature_meta.items() if m.get("priority") == "PRIMARY"]
+    secondary_features = [f for f, m in feature_meta.items() if m.get("priority") == "SECONDARY"]
+    flagged_features   = [f for f, m in feature_meta.items()
+                          if m.get("low_variance") or m.get("always_on") or m.get("outlier_risk")]
 
     evidence = {
         "run_params": {
@@ -3405,11 +3423,21 @@ async def raw_pattern_study_ai_summary(run_id: int):
             "episode_feature_count": run.get("episode_feature_count"),
             "comparison_count":      run.get("comparison_count"),
         },
-        "group_counts": group_counts,
+        "group_counts":        group_counts,
+        "absent_groups":       absent_groups,
+        "primary_features":    primary_features,
+        "secondary_features":  secondary_features,
+        "flagged_low_signal":  flagged_features,
+        "feature_meta":        feature_meta,
         "feature_stats_by_group": pivot,
         "data_limitations": {
             "catalyst_news_available": False,
-            "note": "No external news or catalyst data ingested. Analysis limited to price, volume, and indicator-derived features.",
+            "post_factum_labels_excluded": ["peak_day", "fade_day", "dump_day"],
+            "note": (
+                "No external news or catalyst data. "
+                "peak_day/fade_day/dump_day are outcome labels — not usable as early signals. "
+                "Analysis limited to pre-breakout price, volume, and sequence features."
+            ),
         },
     }
 
@@ -3418,17 +3446,34 @@ async def raw_pattern_study_ai_summary(run_id: int):
     _MODEL = "claude-haiku-4-5-20251001"
 
     prompt = (
-        "EVIDENCE (price/volume/indicator only — no news, no catalysts):\n"
+        "You are a quantitative research assistant. "
+        "All evidence below is price/volume/sequence only — no news, no catalysts.\n\n"
+        "CRITICAL RULES:\n"
+        "  - peak_day, fade_day, dump_day are POST-FACTUM outcome labels. "
+        "Never use them as early discovery signals.\n"
+        "  - If a group listed in absent_groups is missing from the data, say so explicitly "
+        "instead of drawing conclusions about it.\n"
+        "  - Focus Q1–Q3 on PRIMARY features listed in primary_features.\n"
+        "  - Each array item must be under 25 words. No newlines inside strings.\n\n"
+        "EVIDENCE:\n"
         f"{evidence_compact}\n\n"
-        "Answer 5 questions using ONLY the evidence above. "
-        "Each array item must be under 20 words. No newlines inside strings.\n"
-        "Q1: Which raw candle/volume/sequence patterns appear most before 4x_pump group?\n"
-        "Q2: Which features have the largest median difference between 4x_pump and normal_winner?\n"
-        "Q3: Which features have the largest median difference between 4x_pump and false_positive?\n"
-        "Q4: Which features look noisy, unreliable, or nearly identical across all groups?\n"
-        "Q5: List specific changes to improve the Pump Engine (scoring weights, thresholds, or new signals).\n\n"
-        "Rules: no invented catalysts; note if data is insufficient; keep items short.\n\n"
-        "Output ONLY this JSON object — no markdown, no prose, no code fences:\n"
+        "Answer 5 questions using ONLY the evidence above:\n"
+        "Q1 (repeated_patterns): Which pre-breakout sequence/duration/structure patterns "
+        "appear most consistently before 4x_pump? Emphasise PRIMARY features: "
+        "compression_days_pre, days_from_first_compression_to_breakout, "
+        "days_from_breakout_to_peak, dryup_day_count_pre, had_accumulation_like, "
+        "had_spring_test_lps.\n"
+        "Q2 (separators_vs_normal_winner): Which PRIMARY features show the largest median "
+        "gap between 4x_pump and normal_winner? If normal_winner is absent, state that.\n"
+        "Q3 (separators_vs_false_positive): Which PRIMARY features show the largest median "
+        "gap between 4x_pump and false_positive? If false_positive is absent, state that.\n"
+        "Q4 (noisy_features): Which features are low-signal — low variance, near-identical "
+        "medians across groups, always-on binary, or extreme outlier distortion? "
+        "Do NOT list peak_day/fade_day/dump_day as noisy — they are excluded by design.\n"
+        "Q5 (pump_engine_changes): List 3–5 specific changes to improve the current Pump "
+        "Engine scoring: sequence-duration weights, compression persistence, "
+        "accumulation/reclaim bonuses, volume sweet-spot, reduce body/wick noise reliance.\n\n"
+        "Output ONLY this JSON — no markdown, no prose, no code fences:\n"
         '{"repeated_patterns":["..."],'
         '"separators_vs_normal_winner":["..."],'
         '"separators_vs_false_positive":["..."],'
