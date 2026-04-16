@@ -53,8 +53,27 @@ function StatusBadge({ status }) {
 
 // ── Run header card ───────────────────────────────────────────────────────────
 
-function RunHeader({ run }) {
+function RunHeader({ run, onRepairDone }) {
   const isRunning = run.status === 'running';
+  const needsRepair = run.status === 'complete' && !run.comparison_count;
+  const [repairing, setRepairing] = useState(false);
+  const [repairErr, setRepairErr] = useState('');
+
+  const handleRepair = async () => {
+    setRepairing(true);
+    setRepairErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/repair`, { method: 'POST' });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      if (onRepairDone) onRepairDone();
+    } catch (e) {
+      setRepairErr(String(e));
+    } finally {
+      setRepairing(false);
+    }
+  };
+
   return (
     <div className={styles.runHeader}>
       <div className={styles.runHeaderTop}>
@@ -92,6 +111,15 @@ function RunHeader({ run }) {
       )}
       {run.error_message && (
         <div className={styles.errorMsg}>{run.error_message}</div>
+      )}
+      {needsRepair && (
+        <div className={styles.repairRow}>
+          <span className={styles.repairHint}>Comparisons are empty — group_type may not have been assigned.</span>
+          <button className={styles.repairBtn} disabled={repairing} onClick={handleRepair}>
+            {repairing ? 'Repairing…' : 'Repair Groups + Rebuild Comparisons'}
+          </button>
+          {repairErr && <div className={styles.errorMsg}>{repairErr}</div>}
+        </div>
       )}
     </div>
   );
@@ -707,7 +735,7 @@ export default function RawPatternStudy() {
 
             {selectedId && !loadingRun && run && (
               <>
-                <RunHeader run={run} />
+                <RunHeader run={run} onRepairDone={() => { loadRun(selectedId); loadRuns(); loadEpisodes(selectedId); loadComparisons(selectedId); }} />
 
                 {/* Tab row */}
                 <div className={styles.tabRow}>

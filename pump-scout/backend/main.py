@@ -3510,3 +3510,29 @@ async def raw_pattern_study_ai_summary(run_id: int):
         "generated_at":  datetime.utcnow().isoformat() + "Z",
         "cached":        False,
     }
+
+
+# ── 9. Repair ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/repair")
+async def raw_pattern_study_repair(run_id: int):
+    """
+    Repair a completed raw-pattern run where group_type was empty and
+    comparison_count is 0.
+
+    Resolves episode → group mappings from pump_comparison_members,
+    patches group_type on raw_pattern_episode_features rows,
+    clears stale comparison rows, and rebuilds comparisons.
+    Safe to call multiple times (idempotent).
+    """
+    from database import get_raw_pattern_run
+    from replay.pump_study_engine import repair_raw_pattern_group_types
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if not run.get("pump_study_run_id"):
+        raise HTTPException(400, detail="Run has no pump_study_run_id — cannot resolve groups.")
+
+    result = await repair_raw_pattern_group_types(run_id, run["pump_study_run_id"])
+    return {"ok": True, "run_id": run_id, "pump_study_run_id": run["pump_study_run_id"], **result}
