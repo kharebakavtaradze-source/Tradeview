@@ -1412,6 +1412,133 @@ async def build_raw_pattern_daily_features(
     return total_rows
 
 
+async def build_raw_pattern_episode_features_timing(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-1: compute timing / base aggregate fields for each episode and
+    persist one raw_pattern_episode_features row per episode.
+
+    Fields populated (all others left None for later phases):
+        Identity:   run_id, episode_id, symbol, group_type, pump_multiple, pump_type
+        Timing:     pre_days, pump_days, post_days, days_in_base,
+                    days_from_first_abnormal_volume_to_breakout,
+                    days_from_breakout_to_peak,
+                    days_from_first_compression_to_breakout
+
+    Sources:
+        - raw_pattern_daily_features  (phase counts, abnormal_volume_day,
+                                       compression_state / bb_squeeze_bars)
+        - pump_episodes               (group_type, pump_multiple, pump_type)
+        - pump_episode_events         (breakout_day, peak_day dates)
+
+    Returns the total number of episode feature rows saved.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        get_pump_episode_events,
+        save_raw_pattern_episode_features,
+        update_raw_pattern_run,
+    )
+
+    episodes   = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    total_rows = 0
+
+    rows_to_save: list[dict] = []
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        # ── Fetch daily features for this episode ──────────────────────────
+        daily = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, limit=2000
+        )
+
+        if not daily:
+            continue
+
+        # ── Phase counts ───────────────────────────────────────────────────
+        pre_days  = sum(1 for r in daily if r.get("phase") == "PRE")
+        pump_days = sum(1 for r in daily if r.get("phase") == "PUMP")
+        post_days = sum(1 for r in daily if r.get("phase") == "POST")
+        days_in_base = pre_days  # PRE window = base/accumulation window
+
+        # ── Sort PRE rows by date for ordinal lookups ──────────────────────
+        pre_rows = sorted(
+            (r for r in daily if r.get("phase") == "PRE"),
+            key=lambda r: r.get("date") or "",
+        )
+
+        # ── First abnormal volume day in PRE or PUMP ───────────────────────
+        first_abnormal_date: Optional[str] = None
+        for r in sorted(daily, key=lambda r: r.get("date") or ""):
+            if r.get("abnormal_volume_day"):
+                first_abnormal_date = r.get("date")
+                break
+
+        # ── First compression day in PRE ───────────────────────────────────
+        # Compression: compression_state in (STRONG, MEDIUM) or bb_squeeze_bars >= 3
+        first_compression_date: Optional[str] = None
+        for r in pre_rows:
+            cs   = r.get("compression_state") or ""
+            sqz  = r.get("bb_squeeze_bars")
+            if cs in ("STRONG", "MEDIUM") or (sqz is not None and sqz >= 3):
+                first_compression_date = r.get("date")
+                break
+
+        # ── Breakout / peak dates from episode timeline events ─────────────
+        evs = await get_pump_episode_events(episode_id)
+        breakout_date: Optional[str] = None
+        peak_date:     Optional[str] = None
+        for ev in evs:
+            et = ev.get("event_type")
+            ed = ev.get("event_date")
+            if et == "breakout_day" and breakout_date is None:
+                breakout_date = str(ed) if ed else None
+            elif et == "peak_day" and peak_date is None:
+                peak_date = str(ed) if ed else None
+
+        # ── Derived day-delta fields ───────────────────────────────────────
+        def _day_delta(d1: Optional[str], d2: Optional[str]) -> Optional[int]:
+            """Calendar days from d1 to d2. Returns None when either is missing."""
+            if not d1 or not d2:
+                return None
+            try:
+                return (date.fromisoformat(d2) - date.fromisoformat(d1)).days
+            except (ValueError, TypeError):
+                return None
+
+        days_abnvol_to_breakout  = _day_delta(first_abnormal_date, breakout_date)
+        days_breakout_to_peak    = _day_delta(breakout_date, peak_date)
+        days_compr_to_breakout   = _day_delta(first_compression_date, breakout_date)
+
+        rows_to_save.append({
+            "run_id":       raw_run_id,
+            "episode_id":   episode_id,
+            "symbol":       ep.get("symbol"),
+            "group_type":   ep.get("comparison_group"),
+            "pump_multiple": ep.get("pump_multiple"),
+            "pump_type":    ep.get("pump_type"),
+            # Timing
+            "pre_days":                                   pre_days  or None,
+            "pump_days":                                  pump_days or None,
+            "post_days":                                  post_days or None,
+            "days_in_base":                               days_in_base or None,
+            "days_from_first_abnormal_volume_to_breakout": days_abnvol_to_breakout,
+            "days_from_breakout_to_peak":                  days_breakout_to_peak,
+            "days_from_first_compression_to_breakout":     days_compr_to_breakout,
+        })
+
+    if rows_to_save:
+        await save_raw_pattern_episode_features(raw_run_id, rows_to_save)
+        total_rows = len(rows_to_save)
+
+    await update_raw_pattern_run(raw_run_id, {"episode_feature_count": total_rows})
+    return total_rows
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
