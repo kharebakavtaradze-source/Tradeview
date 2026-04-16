@@ -3191,12 +3191,124 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             for ed in all_ep_data
         ]
 
-        # Group B — normal_winner: secondary scan on candle_map for 1.40–3.99x moves.
-        # Same symbols as 4x_pump (only 4x symbols have candles), but different
-        # time windows — useful for comparing strong-but-sub-4x behaviour.
-        group_b = _build_normal_winner_members(
-            run_id, candle_map, start_date, end_date, window_days,
-        )
+        # Group B — normal_winner: promote 1.40–3.99x windows into real pump_episode
+        # rows so downstream Raw Pattern Study receives snapshots, daily features,
+        # episode features, and comparisons identical to 4x_pump.
+        # Secondary detection uses already-loaded candle_map — no extra API calls.
+        _pump_study_progress["phase"] = "NORMAL_WINNER"
+        group_b: list[dict] = []
+        nw_ep_dicts_to_save: list[dict] = []
+        nw_best_hits_ordered: list[dict] = []
+
+        for sym, candles in candle_map.items():
+            all_nw_hits = _detect_raw_pumps(
+                sym, candles,
+                scan_start   = start_date,
+                scan_end     = end_date,
+                window_days  = window_days,
+                min_multiple = _NORMAL_WINNER_MIN_MULTIPLE,
+            )
+            sub4x = [h for h in all_nw_hits if h["multiple"] < 4.0]
+            if not sub4x:
+                continue
+            best = max(sub4x, key=lambda h: h["multiple"])
+            nw_best_hits_ordered.append(best)
+            nw_ep_dicts_to_save.append({
+                "run_id":                   run_id,
+                "cluster_id":               None,
+                "symbol":                   sym,
+                "pump_start_date":          best["window_start_date"],
+                "pump_peak_date":           best["window_peak_date"],
+                "pump_window_days":         best["window_days"],
+                "start_price":              best["start_price"],
+                "peak_price":               best["peak_price"],
+                "pump_multiple":            best["multiple"],
+                "pump_return_pct":          best["return_pct"],
+                "days_to_peak":             best["days_to_peak"],
+                "days_to_double":           best.get("days_to_double"),
+                "max_drawdown_before_peak": best.get("max_drawdown_before_peak"),
+                "pump_type":                "NORMAL_WINNER",
+                "was_in_universe":          True,
+                "was_flagged_by_scanner":   False,
+                "filter_reason":            None,
+                "had_ribbon":               False,
+                "had_ignition":             False,
+                "sector":                   None,
+                "industry":                 None,
+                "summary":                  {},
+            })
+
+        nw_ep_ids: list[int] = []
+        if nw_ep_dicts_to_save:
+            nw_ep_ids = await save_pump_episodes(run_id, nw_ep_dicts_to_save)
+
+        for nw_epd, nw_ep_id, nw_best in zip(
+            nw_ep_dicts_to_save, nw_ep_ids, nw_best_hits_ordered
+        ):
+            sym         = nw_epd["symbol"]
+            sym_candles = candle_map.get(sym)
+
+            ep_dict_nw = {
+                "pump_start_date":          nw_epd["pump_start_date"],
+                "pump_peak_date":           nw_epd["pump_peak_date"],
+                "start_price":              nw_epd["start_price"],
+                "peak_price":               nw_epd["peak_price"],
+                "pump_multiple":            nw_epd["pump_multiple"],
+                "pump_return_pct":          nw_epd["pump_return_pct"],
+                "days_to_peak":             nw_epd["days_to_peak"],
+                "days_to_double":           nw_epd.get("days_to_double"),
+                "max_drawdown_before_peak": nw_epd.get("max_drawdown_before_peak"),
+                "sector":                   None,
+                "industry":                 None,
+            }
+
+            nw_snaps: list[dict] = []
+            nw_evs:   list[dict] = []
+            if sym_candles:
+                nw_snaps = _build_snapshots(nw_ep_id, run_id, sym, ep_dict_nw, sym_candles)
+                if nw_snaps:
+                    await save_pump_episode_snapshots(nw_snaps)
+                    total_snapshots += len(nw_snaps)
+                if nw_snaps:
+                    nw_evs = _detect_timeline_events(
+                        nw_ep_id, run_id, sym, ep_dict_nw, nw_snaps
+                    )
+                    if nw_evs:
+                        await save_pump_episode_events(nw_evs)
+                        total_events += len(nw_evs)
+
+            nw_features = _extract_episode_features(ep_dict_nw, nw_snaps, nw_evs)
+
+            await update_pump_episode_enrichment(nw_ep_id, {
+                "pump_type":               "NORMAL_WINNER",
+                "had_ribbon":              nw_features.get("had_ribbon", False),
+                "had_ignition":            nw_features.get("had_ignition", False),
+                "strongest_wyckoff_state": nw_features.get("strongest_wyckoff_state"),
+                "max_volume_anomaly":      nw_features.get("max_volume_anomaly"),
+                "largest_gap_pct":         nw_features.get("largest_gap_pct"),
+                "summary_json":            json.dumps({"family_reason": "normal_winner sub-4x window"}),
+            })
+
+            group_b.append({
+                "run_id":          run_id,
+                "group_name":      "normal_winner",
+                "symbol":          sym,
+                "episode_id":      nw_ep_id,
+                "pump_multiple":   nw_epd["pump_multiple"],
+                "pump_return_pct": nw_epd["pump_return_pct"],
+                "days_to_peak":    nw_epd["days_to_peak"],
+                "pump_type":       "NORMAL_WINNER",
+                "features":        nw_features,
+            })
+
+            _pump_study_progress["snapshots"] = total_snapshots
+            _pump_study_progress["events"]    = total_events
+
+            logger.debug(
+                f"[PUMP_STUDY][NW] {sym} ep={nw_ep_id}: "
+                f"multiple={nw_epd['pump_multiple']:.2f}x, "
+                f"snaps={len(nw_snaps)}, evs={len(nw_evs)}"
+            )
 
         # Group C — false_positive: canonical 4x episodes where the worst POST
         # close fell back below start_price × _POST_REVERSAL_THRESHOLD (default 2.0×).
