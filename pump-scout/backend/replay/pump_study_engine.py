@@ -1034,6 +1034,900 @@ _WYK_PRIORITY: dict[str, int] = {
 _RIBBON_QUALIFY: frozenset = frozenset({"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE"})
 
 
+# ── Raw Pattern Study helpers ─────────────────────────────────────────────────
+
+def snapshot_to_raw_daily_feature(
+    snap: dict,
+    episode: dict,
+    raw_run_id: int,
+    trailing_avg_range_pct: float | None = None,
+) -> dict:
+    """
+    Convert one Pump Study snapshot row (as returned by _snapshot_to_dict /
+    get_pump_episode_snapshots) into a raw_pattern_daily_features row dict,
+    ready for save_raw_pattern_daily_features().
+
+    Parameters
+    ----------
+    snap                  : snapshot dict (includes a "snapshot" sub-dict with
+                            snapshot_json contents: indicators, regime, pump, etc.)
+    episode               : pump_episodes row dict (supplies sector/industry)
+    raw_run_id            : id of the raw_pattern_run this row belongs to
+    trailing_avg_range_pct: optional pre-computed trailing mean of
+                            intraday_range_pct over the prior N bars;
+                            required for wide_range_bar / narrow_range_bar;
+                            pass None to leave those fields null until the
+                            caller loop provides context
+
+    Source mapping
+    --------------
+    Direct from snapshot columns:
+        phase, relative_day_from_start, relative_day_from_peak
+        open, high, low, close, volume
+        gap_pct, intraday_range_pct, close_position_in_bar (← close_position)
+        volume_vs_avg20, volume_zscore
+        atr_pct, bb_width
+
+    From snapshot_json.indicators:
+        atr             ← indicators.atr
+        bb_squeeze_bars ← indicators.bb_sqz_bars
+        ema_spread_pct  ← indicators.ema_spread_pct
+        compression_state ← indicators.ribbon_compression (STRONG|MEDIUM|WEAK|NONE)
+        atr_expansion_state derived from indicators.atr_ratio
+
+    From pump_episodes:
+        sector, industry
+
+    Derived here (single-bar, no cross-bar context needed):
+        dollar_volume, body_pct, upper_wick_pct, lower_wick_pct
+        strong_close_near_high, weak_close_near_low
+        doji_like, abnormal_volume_day, dryup_day
+        atr_expansion_state
+
+    Derived here (require trailing_avg_range_pct from caller):
+        wide_range_bar, narrow_range_bar, expansion_bar
+
+    Null for now (data not available in snapshot pipeline):
+        exchange, market_cap, float_shares, market_regime
+        volume_vs_avg5, volume_vs_avg10, dollar_volume, dollar_volume_vs_avg20 (see note)
+        distance_to_range_high/low/mid (requires 52w range not stored)
+        bullish_engulfing, bearish_engulfing, inside_bar, outside_bar,
+        reclaim_bar (require previous-bar context — added by caller loop)
+    """
+    # ── Unpack raw OHLCV ──────────────────────────────────────────────────────
+    o: Optional[float] = snap.get("open")
+    h: Optional[float] = snap.get("high")
+    l: Optional[float] = snap.get("low")
+    c: Optional[float] = snap.get("close")
+    v: Optional[int]   = snap.get("volume")
+
+    bar_range: Optional[float] = (h - l) if (h is not None and l is not None) else None
+
+    # ── Unpack snapshot_json sub-dicts ────────────────────────────────────────
+    sj   = snap.get("snapshot") or {}
+    ind  = sj.get("indicators") or {}
+    reg  = sj.get("regime")     or {}
+
+    # ── Direct snapshot column fields ─────────────────────────────────────────
+    close_pos     = snap.get("close_position")        # already 0–1 in snapshot
+    vol_vs_avg20  = snap.get("volume_vs_avg20")
+    vol_z         = snap.get("volume_zscore")
+    intra_range   = snap.get("intraday_range_pct")
+
+    # ── From snapshot_json.indicators ─────────────────────────────────────────
+    atr_abs       = ind.get("atr")
+    atr_ratio     = ind.get("atr_ratio")
+    bb_sqz_bars   = ind.get("bb_sqz_bars")
+    ema_spread    = ind.get("ema_spread_pct")
+    compr_state   = ind.get("ribbon_compression")     # STRONG|MEDIUM|WEAK|NONE
+
+    # ── Derived: ATR expansion state ──────────────────────────────────────────
+    if atr_ratio is not None:
+        if atr_ratio > 1.10:
+            atr_exp = "EXPANDING"
+        elif atr_ratio < 0.90:
+            atr_exp = "CONTRACTING"
+        else:
+            atr_exp = "NEUTRAL"
+    else:
+        atr_exp = None
+
+    # ── Derived: dollar volume ────────────────────────────────────────────────
+    dollar_vol: Optional[float] = (c * v) if (c is not None and v) else None
+
+    # ── Derived: candle anatomy ───────────────────────────────────────────────
+    body_pct: Optional[float] = None
+    upper_wick_pct: Optional[float] = None
+    lower_wick_pct: Optional[float] = None
+
+    if bar_range and bar_range > 0 and o is not None and c is not None:
+        body_pct       = round(abs(c - o) / bar_range, 4)
+        upper_wick_pct = round((h - max(o, c)) / bar_range, 4)         # type: ignore[operator]
+        lower_wick_pct = round((min(o, c) - l) / bar_range, 4)         # type: ignore[operator]
+
+    # ── Derived: close-position classifications ───────────────────────────────
+    strong_close = (close_pos >= 0.80) if close_pos is not None else None
+    weak_close   = (close_pos <= 0.20) if close_pos is not None else None
+    doji_like    = (body_pct  <  0.10) if body_pct  is not None else None
+
+    # ── Derived: volume flags ─────────────────────────────────────────────────
+    abnormal_vol = (
+        (vol_vs_avg20 is not None and vol_vs_avg20 >= 2.0) or
+        (vol_z        is not None and vol_z         >= 2.5)
+    ) if (vol_vs_avg20 is not None or vol_z is not None) else None
+
+    dryup = (vol_vs_avg20 < 0.5) if vol_vs_avg20 is not None else None
+
+    # ── Derived: wide/narrow range bar (requires trailing context) ────────────
+    wide_bar      = None
+    narrow_bar    = None
+    expansion_bar = None
+
+    if trailing_avg_range_pct and intra_range is not None:
+        wide_bar   = intra_range > 1.5 * trailing_avg_range_pct
+        narrow_bar = intra_range < 0.5 * trailing_avg_range_pct
+        expansion_bar = bool(
+            wide_bar and strong_close and
+            vol_vs_avg20 is not None and vol_vs_avg20 > 1.5
+        )
+
+    # ── Assemble output row ───────────────────────────────────────────────────
+    return {
+        # Identity / window context
+        "run_id":                  raw_run_id,
+        "episode_id":              snap.get("episode_id"),
+        "symbol":                  snap.get("symbol"),
+        "date":                    snap.get("date"),
+        "phase":                   snap.get("window_phase"),
+        "relative_day_from_start": snap.get("relative_day_from_start"),
+        "relative_day_from_peak":  snap.get("relative_day_from_peak"),
+
+        # Instrument context (episode supplies sector/industry; rest unavailable)
+        "sector":        episode.get("sector"),
+        "industry":      episode.get("industry"),
+        "exchange":      None,      # not stored in pipeline
+        "market_cap":    None,      # requires reference API
+        "float_shares":  None,      # requires reference API
+        "market_regime": None,      # broad market context not computed
+
+        # Raw OHLCV
+        "open":         o,
+        "high":         h,
+        "low":          l,
+        "close":        c,
+        "volume":       v,
+        "dollar_volume": round(dollar_vol, 2) if dollar_vol is not None else None,
+
+        # Candle anatomy — direct
+        "gap_pct":            snap.get("gap_pct"),
+        "intraday_range_pct": intra_range,
+        # Candle anatomy — derived
+        "body_pct":               body_pct,
+        "upper_wick_pct":         upper_wick_pct,
+        "lower_wick_pct":         lower_wick_pct,
+        "close_position_in_bar":  close_pos,
+        "wide_range_bar":         wide_bar,
+        "narrow_range_bar":       narrow_bar,
+        "strong_close_near_high": strong_close,
+        "weak_close_near_low":    weak_close,
+
+        # Volume / liquidity — direct
+        "volume_vs_avg20": vol_vs_avg20,
+        "volume_zscore":   vol_z,
+        # Volume / liquidity — deferred (need trailing series from caller)
+        "volume_vs_avg5":          None,
+        "volume_vs_avg10":         None,
+        "dollar_volume_vs_avg20":  None,
+        # Volume / liquidity — derived
+        "abnormal_volume_day": abnormal_vol,
+        "dryup_day":           dryup,
+
+        # Volatility / compression — direct
+        "atr_pct":    snap.get("atr_pct"),
+        "bb_width":   snap.get("bb_width"),
+        # Volatility / compression — from snapshot_json
+        "atr":                atr_abs,
+        "atr_expansion_state": atr_exp,
+        "bb_squeeze_bars":    bb_sqz_bars,
+        "ema_spread_pct":     ema_spread,
+        "compression_state":  compr_state,
+
+        # Distance context — null (52w range not stored; added by caller from episode window)
+        "distance_to_range_high": None,
+        "distance_to_range_low":  None,
+        "distance_to_mid_range":  None,
+
+        # Candle pattern flags — null here (require prev-bar; set by caller loop)
+        "bullish_engulfing": None,
+        "bearish_engulfing": None,
+        "inside_bar":        None,
+        "outside_bar":       None,
+        "doji_like":         doji_like,
+        "reclaim_bar":       None,
+        "expansion_bar":     expansion_bar,
+
+        # Overflow
+        "feature_json": None,
+    }
+
+
+def _fill_prev_bar_flags(row: dict, snap: dict, prev_snap: dict) -> None:
+    """
+    Fill cross-bar candle pattern flags that require the previous bar.
+    Modifies *row* in-place; both snap and prev_snap are snapshot dicts.
+    """
+    ph = prev_snap.get("high")
+    pl = prev_snap.get("low")
+    po = prev_snap.get("open")
+    pc = prev_snap.get("close")
+
+    h  = snap.get("high")
+    l  = snap.get("low")
+    o  = snap.get("open")
+    c  = snap.get("close")
+
+    if None in (ph, pl, po, pc, h, l, o, c):
+        return  # leave flags None when any OHLC is missing
+
+    prev_bearish  = pc < po
+    prev_bullish  = pc > po
+    today_bullish = c  > o
+    today_bearish = c  < o
+
+    # Bullish engulfing: prev bearish; today bullish body engulfs prev body
+    row["bullish_engulfing"] = bool(
+        prev_bearish and today_bullish
+        and min(o, c) <= min(po, pc)
+        and max(o, c) >= max(po, pc)
+    )
+
+    # Bearish engulfing: prev bullish; today bearish body engulfs prev body
+    row["bearish_engulfing"] = bool(
+        prev_bullish and today_bearish
+        and min(o, c) <= min(po, pc)
+        and max(o, c) >= max(po, pc)
+    )
+
+    # Inside bar: today's range entirely within prev bar's range
+    row["inside_bar"]  = bool(h <= ph and l >= pl)
+
+    # Outside bar: today's range completely engulfs prev bar's range
+    row["outside_bar"] = bool(h > ph and l < pl)
+
+    # Reclaim bar: gapped down but closed above prev close
+    gap = snap.get("gap_pct")
+    row["reclaim_bar"] = bool(gap is not None and gap < 0 and c > pc)
+
+
+async def build_raw_pattern_daily_features(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Iterate all pump episodes for *pump_study_run_id*, convert every daily
+    snapshot into a raw_pattern_daily_features row via
+    snapshot_to_raw_daily_feature(), fill trailing-context and cross-bar
+    fields, bulk-save the rows, and update raw_daily_count on the run.
+
+    Returns the total number of feature rows saved.
+    """
+    from collections import deque
+
+    from database import (
+        get_pump_episodes,
+        get_pump_episode_snapshots,
+        save_raw_pattern_daily_features,
+        update_raw_pattern_run,
+    )
+
+    _TRAIL_N = 10   # bars for trailing intraday-range average (wide/narrow bar)
+    _DVOL_N  = 20   # bars for dollar-volume trailing average
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    total_rows = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+        snaps = await get_pump_episode_snapshots(episode_id)
+        if not snaps:
+            continue
+
+        # Episode-wide price range for distance_to_range_* fields
+        ep_high: Optional[float] = None
+        ep_low:  Optional[float] = None
+        for s in snaps:
+            sh = s.get("high")
+            sl = s.get("low")
+            if sh is not None:
+                ep_high = sh if ep_high is None else max(ep_high, sh)
+            if sl is not None:
+                ep_low  = sl if ep_low  is None else min(ep_low,  sl)
+        ep_mid = (
+            (ep_high + ep_low) / 2
+            if (ep_high is not None and ep_low is not None)
+            else None
+        )
+
+        range_history: deque = deque(maxlen=_TRAIL_N)
+        dvol_history:  deque = deque(maxlen=_DVOL_N)
+
+        rows: list[dict]         = []
+        prev_snap: Optional[dict] = None
+
+        for snap in snaps:
+            trailing_avg = (
+                sum(range_history) / len(range_history)
+                if range_history else None
+            )
+
+            row = snapshot_to_raw_daily_feature(
+                snap, ep, raw_run_id,
+                trailing_avg_range_pct=trailing_avg,
+            )
+
+            # volume_vs_avg5 from snapshot_json.indicators.avg_vol_5
+            sj   = snap.get("snapshot") or {}
+            ind  = sj.get("indicators") or {}
+            avg5 = ind.get("avg_vol_5")
+            sv   = snap.get("volume")
+            if avg5 and sv and avg5 > 0:
+                row["volume_vs_avg5"] = round(sv / avg5, 3)
+
+            # dollar_volume_vs_avg20 from trailing dollar-volume history
+            dvol = row.get("dollar_volume")
+            if dvol is not None and dvol > 0 and len(dvol_history) == _DVOL_N:
+                dvol_avg = sum(dvol_history) / _DVOL_N
+                if dvol_avg > 0:
+                    row["dollar_volume_vs_avg20"] = round(dvol / dvol_avg, 3)
+
+            # Distance fields relative to the episode's full price range
+            sc = snap.get("close")
+            if sc is not None and ep_high is not None and ep_low is not None:
+                ep_range = ep_high - ep_low
+                if ep_range > 0:
+                    row["distance_to_range_high"] = round((ep_high - sc) / ep_range, 4)
+                    row["distance_to_range_low"]  = round((sc - ep_low)  / ep_range, 4)
+                    if ep_mid is not None:
+                        row["distance_to_mid_range"] = round((sc - ep_mid) / ep_range, 4)
+
+            # Cross-bar pattern flags
+            if prev_snap is not None:
+                _fill_prev_bar_flags(row, snap, prev_snap)
+
+            # Advance trailing histories (after row is built so bar N is not in its own avg)
+            intra = snap.get("intraday_range_pct")
+            if intra is not None:
+                range_history.append(intra)
+            if dvol is not None and dvol > 0:
+                dvol_history.append(dvol)
+
+            rows.append(row)
+            prev_snap = snap
+
+        if rows:
+            saved = await save_raw_pattern_daily_features(raw_run_id, rows)
+            total_rows += saved
+
+    await update_raw_pattern_run(raw_run_id, {"raw_daily_count": total_rows})
+    return total_rows
+
+
+async def build_raw_pattern_episode_features_timing(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-1: compute timing / base aggregate fields for each episode and
+    persist one raw_pattern_episode_features row per episode.
+
+    Fields populated (all others left None for later phases):
+        Identity:   run_id, episode_id, symbol, group_type, pump_multiple, pump_type
+        Timing:     pre_days, pump_days, post_days, days_in_base,
+                    days_from_first_abnormal_volume_to_breakout,
+                    days_from_breakout_to_peak,
+                    days_from_first_compression_to_breakout
+
+    Sources:
+        - raw_pattern_daily_features  (phase counts, abnormal_volume_day,
+                                       compression_state / bb_squeeze_bars)
+        - pump_episodes               (group_type, pump_multiple, pump_type)
+        - pump_episode_events         (breakout_day, peak_day dates)
+
+    Returns the total number of episode feature rows saved.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        get_pump_episode_events,
+        save_raw_pattern_episode_features,
+        update_raw_pattern_run,
+    )
+
+    episodes   = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    total_rows = 0
+
+    rows_to_save: list[dict] = []
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        # ── Fetch daily features for this episode ──────────────────────────
+        daily = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, limit=2000
+        )
+
+        if not daily:
+            continue
+
+        # ── Phase counts ───────────────────────────────────────────────────
+        pre_days  = sum(1 for r in daily if r.get("phase") == "PRE")
+        pump_days = sum(1 for r in daily if r.get("phase") == "PUMP")
+        post_days = sum(1 for r in daily if r.get("phase") == "POST")
+        days_in_base = pre_days  # PRE window = base/accumulation window
+
+        # ── Sort PRE rows by date for ordinal lookups ──────────────────────
+        pre_rows = sorted(
+            (r for r in daily if r.get("phase") == "PRE"),
+            key=lambda r: r.get("date") or "",
+        )
+
+        # ── First abnormal volume day in PRE or PUMP ───────────────────────
+        first_abnormal_date: Optional[str] = None
+        for r in sorted(daily, key=lambda r: r.get("date") or ""):
+            if r.get("abnormal_volume_day"):
+                first_abnormal_date = r.get("date")
+                break
+
+        # ── First compression day in PRE ───────────────────────────────────
+        # Compression: compression_state in (STRONG, MEDIUM) or bb_squeeze_bars >= 3
+        first_compression_date: Optional[str] = None
+        for r in pre_rows:
+            cs   = r.get("compression_state") or ""
+            sqz  = r.get("bb_squeeze_bars")
+            if cs in ("STRONG", "MEDIUM") or (sqz is not None and sqz >= 3):
+                first_compression_date = r.get("date")
+                break
+
+        # ── Breakout / peak dates from episode timeline events ─────────────
+        evs = await get_pump_episode_events(episode_id)
+        breakout_date: Optional[str] = None
+        peak_date:     Optional[str] = None
+        for ev in evs:
+            et = ev.get("event_type")
+            ed = ev.get("event_date")
+            if et == "breakout_day" and breakout_date is None:
+                breakout_date = str(ed) if ed else None
+            elif et == "peak_day" and peak_date is None:
+                peak_date = str(ed) if ed else None
+
+        # ── Derived day-delta fields ───────────────────────────────────────
+        def _day_delta(d1: Optional[str], d2: Optional[str]) -> Optional[int]:
+            """Calendar days from d1 to d2. Returns None when either is missing."""
+            if not d1 or not d2:
+                return None
+            try:
+                return (date.fromisoformat(d2) - date.fromisoformat(d1)).days
+            except (ValueError, TypeError):
+                return None
+
+        days_abnvol_to_breakout  = _day_delta(first_abnormal_date, breakout_date)
+        days_breakout_to_peak    = _day_delta(breakout_date, peak_date)
+        days_compr_to_breakout   = _day_delta(first_compression_date, breakout_date)
+
+        rows_to_save.append({
+            "run_id":       raw_run_id,
+            "episode_id":   episode_id,
+            "symbol":       ep.get("symbol"),
+            "group_type":   ep.get("comparison_group"),
+            "pump_multiple": ep.get("pump_multiple"),
+            "pump_type":    ep.get("pump_type"),
+            # Timing
+            "pre_days":                                   pre_days  or None,
+            "pump_days":                                  pump_days or None,
+            "post_days":                                  post_days or None,
+            "days_in_base":                               days_in_base or None,
+            "days_from_first_abnormal_volume_to_breakout": days_abnvol_to_breakout,
+            "days_from_breakout_to_peak":                  days_breakout_to_peak,
+            "days_from_first_compression_to_breakout":     days_compr_to_breakout,
+        })
+
+    if rows_to_save:
+        await save_raw_pattern_episode_features(raw_run_id, rows_to_save)
+        total_rows = len(rows_to_save)
+
+    await update_raw_pattern_run(raw_run_id, {"episode_feature_count": total_rows})
+    return total_rows
+
+
+async def build_raw_pattern_episode_features_candle(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-2: compute PRE-window candle anatomy and pattern-count aggregates
+    and patch them onto existing raw_pattern_episode_features rows.
+
+    Fields patched:
+        Candle anatomy:  avg_body_pct_pre, avg_upper_wick_pct_pre,
+                         avg_lower_wick_pct_pre, wide_range_bar_count_pre,
+                         narrow_range_bar_count_pre, strong_close_count_pre
+        Pattern counts:  bullish_engulfing_count_pre, bearish_engulfing_count_pre,
+                         inside_bar_count_pre, outside_bar_count_pre,
+                         reclaim_bar_count_pre, expansion_bar_count_pre
+
+    Reads from raw_pattern_daily_features (PRE phase only).
+    Updates existing rows via update_raw_pattern_episode_features().
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        update_raw_pattern_episode_features,
+    )
+
+    def _mean(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(sum(cleaned) / len(cleaned), 4) if cleaned else None
+
+    def _count_true(vals: list) -> int:
+        return sum(1 for v in vals if v)
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        pre_rows = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=500
+        )
+        if not pre_rows:
+            continue
+
+        # ── Candle anatomy averages ────────────────────────────────────────
+        avg_body        = _mean([r.get("body_pct")         for r in pre_rows])
+        avg_upper_wick  = _mean([r.get("upper_wick_pct")   for r in pre_rows])
+        avg_lower_wick  = _mean([r.get("lower_wick_pct")   for r in pre_rows])
+
+        # ── Candle classification counts ───────────────────────────────────
+        wide_count   = _count_true(r.get("wide_range_bar")       for r in pre_rows)
+        narrow_count = _count_true(r.get("narrow_range_bar")     for r in pre_rows)
+        strong_count = _count_true(r.get("strong_close_near_high") for r in pre_rows)
+
+        # ── Pattern counts ─────────────────────────────────────────────────
+        bull_eng  = _count_true(r.get("bullish_engulfing") for r in pre_rows)
+        bear_eng  = _count_true(r.get("bearish_engulfing") for r in pre_rows)
+        inside    = _count_true(r.get("inside_bar")        for r in pre_rows)
+        outside   = _count_true(r.get("outside_bar")       for r in pre_rows)
+        reclaim   = _count_true(r.get("reclaim_bar")       for r in pre_rows)
+        expansion = _count_true(r.get("expansion_bar")     for r in pre_rows)
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "avg_body_pct_pre":           avg_body,
+            "avg_upper_wick_pct_pre":     avg_upper_wick,
+            "avg_lower_wick_pct_pre":     avg_lower_wick,
+            "wide_range_bar_count_pre":   wide_count   or None,
+            "narrow_range_bar_count_pre": narrow_count or None,
+            "strong_close_count_pre":     strong_count or None,
+            "bullish_engulfing_count_pre": bull_eng  or None,
+            "bearish_engulfing_count_pre": bear_eng  or None,
+            "inside_bar_count_pre":        inside    or None,
+            "outside_bar_count_pre":       outside   or None,
+            "reclaim_bar_count_pre":       reclaim   or None,
+            "expansion_bar_count_pre":     expansion or None,
+        })
+        patched += 1
+
+    return patched
+
+
+async def build_raw_pattern_episode_features_volume_compression(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-3: compute PRE-window volume and compression/volatility aggregates
+    and patch them onto existing raw_pattern_episode_features rows.
+
+    Fields patched:
+        Volume:       max_volume_anomaly_pre, median_volume_anomaly_pre,
+                      abnormal_volume_day_count_pre, dryup_day_count_pre,
+                      max_dollar_volume_pre
+        Compression:  had_compression, compression_days_pre, min_bb_width_pre,
+                      avg_atr_pct_pre, atr_contraction_days_pre
+
+    Reads from raw_pattern_daily_features (PRE phase only).
+    Patches existing rows via update_raw_pattern_episode_features().
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        update_raw_pattern_episode_features,
+    )
+
+    def _median(vals: list) -> Optional[float]:
+        cleaned = sorted(v for v in vals if v is not None)
+        n = len(cleaned)
+        if n == 0:
+            return None
+        mid = n // 2
+        return round((cleaned[mid - 1] + cleaned[mid]) / 2, 4) if n % 2 == 0 else round(cleaned[mid], 4)
+
+    def _mean(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(sum(cleaned) / len(cleaned), 4) if cleaned else None
+
+    def _max(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(max(cleaned), 4) if cleaned else None
+
+    def _min(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(min(cleaned), 4) if cleaned else None
+
+    def _count_true(vals: list) -> int:
+        return sum(1 for v in vals if v)
+
+    def _is_compressed(row: dict) -> bool:
+        cs  = row.get("compression_state") or ""
+        sqz = row.get("bb_squeeze_bars")
+        return cs in ("STRONG", "MEDIUM") or (sqz is not None and sqz >= 3)
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        pre_rows = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=500
+        )
+        if not pre_rows:
+            continue
+
+        # ── Volume ────────────────────────────────────────────────────────
+        vol_anomalies = [r.get("volume_vs_avg20") for r in pre_rows]
+        max_vol_anom    = _max(vol_anomalies)
+        median_vol_anom = _median(vol_anomalies)
+        abnormal_count  = _count_true(r.get("abnormal_volume_day") for r in pre_rows)
+        dryup_count     = _count_true(r.get("dryup_day")           for r in pre_rows)
+        max_dvol        = _max([r.get("dollar_volume") for r in pre_rows])
+
+        # ── Compression / volatility ──────────────────────────────────────
+        compr_flags     = [_is_compressed(r) for r in pre_rows]
+        had_compr       = any(compr_flags)
+        compr_days      = sum(compr_flags)
+        min_bb          = _min([r.get("bb_width")   for r in pre_rows])
+        avg_atr         = _mean([r.get("atr_pct")   for r in pre_rows])
+        atr_contr_days  = sum(
+            1 for r in pre_rows if r.get("atr_expansion_state") == "CONTRACTING"
+        )
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "max_volume_anomaly_pre":        max_vol_anom,
+            "median_volume_anomaly_pre":     median_vol_anom,
+            "abnormal_volume_day_count_pre": abnormal_count or None,
+            "dryup_day_count_pre":           dryup_count    or None,
+            "max_dollar_volume_pre":         max_dvol,
+            "had_compression":               had_compr      or None,
+            "compression_days_pre":          compr_days     or None,
+            "min_bb_width_pre":              min_bb,
+            "avg_atr_pct_pre":               avg_atr,
+            "atr_contraction_days_pre":      atr_contr_days or None,
+        })
+        patched += 1
+
+    return patched
+
+
+async def build_raw_pattern_episode_features_structure(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-4: compute PRE-window structure/sequence aggregates and patch
+    them onto existing raw_pattern_episode_features rows.
+
+    Fields patched:
+        had_accumulation_like, accumulation_like_day_count, had_spring_test_lps
+        had_breakout_retest, retest_count, avg_retest_quality (null — no source)
+        strongest_wyckoff_state, strongest_sequence_type, strongest_structural_bias
+
+    Sources:
+        pump_episode_events         — had_accumulation_like, had_spring_test_lps
+        pump_episodes.strongest_wyckoff_state / pump_type — re-used directly
+        pump_episode_snapshots (PRE) — accumulation_like_day_count,
+                                       in_dist scan for structural bias
+
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_pump_episode_events,
+        get_pump_episode_snapshots,
+        update_raw_pattern_episode_features,
+    )
+
+    # Priority ranking for Wyckoff states (higher = stronger)
+    _STATE_RANK: dict[str, int] = {
+        "FIRE": 5, "ARM": 4, "STEALTH_ARM": 3,
+        "BASE": 2, "STEALTH": 1, "NONE": 0,
+    }
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        # ── Boolean milestones from timeline events ────────────────────────
+        evs         = await get_pump_episode_events(episode_id)
+        event_types = {e["event_type"] for e in evs}
+
+        had_acc_like = "first_accumulation_like_day" in event_types
+        had_spring   = "first_spring_test_lps_day"   in event_types
+
+        # ── Episode-level computed fields (already stored during enrichment) ─
+        # strongest_wyckoff_state and pump_type are computed by Phase 3D/3E
+        ep_wyckoff   = ep.get("strongest_wyckoff_state")
+        ep_pump_type = ep.get("pump_type")
+
+        # ── PRE snapshots: accumulation day count + distribution scan ─────
+        pre_snaps = await get_pump_episode_snapshots(episode_id, phase="PRE")
+
+        acc_day_count    = 0
+        in_dist_any      = False
+        scan_best_state  = None
+        scan_best_rank   = -1
+
+        for s in pre_snaps:
+            reg = (s.get("snapshot") or {}).get("regime") or {}
+            if reg.get("in_acc"):
+                acc_day_count += 1
+            if reg.get("in_dist"):
+                in_dist_any = True
+            # Fallback Wyckoff state scan (supplements episode-level if missing)
+            state = reg.get("state") or s.get("wyckoff_state")
+            if state:
+                rank = _STATE_RANK.get(state, 0)
+                if rank > scan_best_rank:
+                    scan_best_rank  = rank
+                    scan_best_state = state
+
+        # Prefer episode-level value (computed over full window); fallback to PRE scan
+        strongest_state = ep_wyckoff or scan_best_state
+
+        # ── Structural bias ────────────────────────────────────────────────
+        if had_acc_like or acc_day_count > 0:
+            structural_bias: Optional[str] = "BULLISH"
+        elif in_dist_any:
+            structural_bias = "BEARISH"
+        elif pre_snaps:
+            structural_bias = "NEUTRAL"  # data present, no directional signal
+        else:
+            structural_bias = None
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "had_accumulation_like":       had_acc_like or None,
+            "accumulation_like_day_count": acc_day_count or None,
+            "had_spring_test_lps":         had_spring or None,
+            "had_breakout_retest":         None,   # no stored source
+            "retest_count":                None,   # no stored source
+            "avg_retest_quality":          None,   # no stored source
+            "strongest_wyckoff_state":     strongest_state,
+            "strongest_sequence_type":     ep_pump_type,
+            "strongest_structural_bias":   structural_bias,
+        })
+        patched += 1
+
+    return patched
+
+
+# Features extracted into each member's features_json and compared across groups
+_COMPARISON_FEATURES = [
+    "max_volume_anomaly_pre",
+    "median_volume_anomaly_pre",
+    "abnormal_volume_day_count_pre",
+    "dryup_day_count_pre",
+    "had_compression",
+    "compression_days_pre",
+    "avg_body_pct_pre",
+    "avg_upper_wick_pct_pre",
+    "avg_lower_wick_pct_pre",
+    "bullish_engulfing_count_pre",
+    "reclaim_bar_count_pre",
+    "expansion_bar_count_pre",
+    "had_accumulation_like",
+    "had_spring_test_lps",
+    "days_in_base",
+    "days_from_breakout_to_peak",
+]
+
+_COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+
+
+async def build_raw_pattern_comparisons(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 3: Build cross-group comparison rows from existing
+    raw_pattern_episode_features.
+
+    For each group in _COMPARISON_GROUPS:
+      1. Collect all episode feature rows where group_type matches.
+      2. Save one comparison member row per episode (features_json = snapshot
+         of all comparison feature values for that episode).
+      3. For each feature in _COMPARISON_FEATURES compute distribution stats
+         over the group and save one raw_pattern_comparisons row.
+
+    Updates raw_pattern_runs.comparison_count with the total comparison rows
+    saved (= len(groups) × len(features) with at least one member).
+
+    Returns the total number of comparison stat rows saved.
+    """
+    from database import (
+        get_raw_pattern_episode_features,
+        save_raw_pattern_comparison_members,
+        save_raw_pattern_comparison_rows,
+        update_raw_pattern_run,
+    )
+
+    total_comp_rows = 0
+
+    for group_name in _COMPARISON_GROUPS:
+        ep_features = await get_raw_pattern_episode_features(
+            raw_run_id, group_type=group_name, limit=5000
+        )
+        if not ep_features:
+            continue
+
+        # ── Member rows ────────────────────────────────────────────────────
+        members = [
+            {
+                "symbol":     ef.get("symbol"),
+                "episode_id": ef.get("episode_id"),
+                "features":   {f: ef.get(f) for f in _COMPARISON_FEATURES},
+            }
+            for ef in ep_features
+        ]
+        await save_raw_pattern_comparison_members(raw_run_id, group_name, members)
+
+        # ── Per-feature stats ──────────────────────────────────────────────
+        comp_rows: list[dict] = []
+        for feat in _COMPARISON_FEATURES:
+            # Boolean fields (had_*): coerce True→1 / None→skip for stats
+            raw_vals = [ef.get(feat) for ef in ep_features]
+            numeric  = []
+            for v in raw_vals:
+                if v is None:
+                    continue
+                numeric.append(1 if v is True else (0 if v is False else v))
+
+            stats = _compute_stats(numeric)
+            if stats["count"] == 0:
+                continue
+
+            comp_rows.append({
+                "group_name":   group_name,
+                "feature_name": feat,
+                "member_count": len(ep_features),
+                "mean_value":   stats["mean"],
+                "median_value": stats["median"],
+                "p25_value":    stats["p25"],
+                "p75_value":    stats["p75"],
+                "p90_value":    stats["p90"],
+            })
+
+        if comp_rows:
+            saved = await save_raw_pattern_comparison_rows(raw_run_id, comp_rows)
+            total_comp_rows += saved
+
+    await update_raw_pattern_run(raw_run_id, {"comparison_count": total_comp_rows})
+    return total_comp_rows
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
