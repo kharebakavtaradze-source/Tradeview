@@ -1925,6 +1925,15 @@ _COMPARISON_FEATURES = [
     # ── PRIMARY: EMA ribbon (computed from daily ema_spread_pct) ──
     "avg_ema_spread_pre",
     "min_ema_spread_pre",
+    # ── PRIMARY: EMA ribbon episode aggregates ──
+    "had_bull_stack_pre",
+    "bull_stack_days_pre",
+    "days_above_ema50_pre",
+    "ema50_reclaim_count_pre",
+    # ── SECONDARY: EMA position metrics ──
+    "days_above_ema200_pre",
+    "avg_close_vs_ema50_pct_pre",
+    "avg_close_vs_ema200_pct_pre",
     # ── PRIMARY: structure / wyckoff ──
     "had_accumulation_like",
     "accumulation_like_day_count",
@@ -1969,6 +1978,15 @@ _FEATURE_PRIORITY: dict[str, str] = {
     # PRIMARY — EMA ribbon compression
     "avg_ema_spread_pre":                          "PRIMARY",
     "min_ema_spread_pre":                          "PRIMARY",
+    # PRIMARY — EMA ribbon episode aggregates
+    "had_bull_stack_pre":                          "PRIMARY",
+    "bull_stack_days_pre":                         "PRIMARY",
+    "days_above_ema50_pre":                        "PRIMARY",
+    "ema50_reclaim_count_pre":                     "PRIMARY",
+    # SECONDARY — EMA position metrics
+    "days_above_ema200_pre":                       "SECONDARY",
+    "avg_close_vs_ema50_pct_pre":                  "SECONDARY",
+    "avg_close_vs_ema200_pct_pre":                 "SECONDARY",
     # PRIMARY — structure depth
     "had_accumulation_like":                       "PRIMARY",
     "accumulation_like_day_count":                 "PRIMARY",
@@ -2002,9 +2020,73 @@ _FEATURE_PRIORITY: dict[str, str] = {
 _BINARY_FEATURES = {
     "had_compression", "had_accumulation_like",
     "had_spring_test_lps", "had_breakout_retest",
+    "had_bull_stack_pre",
 }
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+
+
+async def build_raw_pattern_episode_features_ema(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-5: compute PRE-window EMA ribbon episode aggregates from
+    raw_pattern_daily_features.feature_json and patch episode feature rows.
+
+    Fields patched:
+        had_bull_stack_pre, bull_stack_days_pre
+        days_above_ema50_pre, days_above_ema200_pre
+        ema50_reclaim_count_pre
+        avg_close_vs_ema50_pct_pre, avg_close_vs_ema200_pct_pre
+
+    Requires raw_pattern_daily_features to already have feature_json populated
+    (from build_raw_pattern_daily_features Phase 2B-1).
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        update_raw_pattern_episode_features,
+    )
+
+    def _mean(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(sum(cleaned) / len(cleaned), 3) if cleaned else None
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+        pre_rows = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=500
+        )
+        if not pre_rows:
+            continue
+
+        fjs = [r.get("feature_json") or {} for r in pre_rows]
+
+        bull_stack_days     = sum(1 for fj in fjs if fj.get("bullish_stack"))
+        days_above_ema50    = sum(1 for fj in fjs if fj.get("above_ema50"))
+        days_above_ema200   = sum(1 for fj in fjs if fj.get("above_ema200"))
+        ema50_reclaim_count = sum(1 for fj in fjs if fj.get("ema50_reclaim_day"))
+
+        avg_vs_ema50  = _mean([fj.get("close_vs_ema50_pct")  for fj in fjs])
+        avg_vs_ema200 = _mean([fj.get("close_vs_ema200_pct") for fj in fjs])
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "had_bull_stack_pre":          bool(bull_stack_days) or None,
+            "bull_stack_days_pre":         bull_stack_days     or None,
+            "days_above_ema50_pre":        days_above_ema50    or None,
+            "days_above_ema200_pre":       days_above_ema200   or None,
+            "ema50_reclaim_count_pre":     ema50_reclaim_count or None,
+            "avg_close_vs_ema50_pct_pre":  avg_vs_ema50,
+            "avg_close_vs_ema200_pct_pre": avg_vs_ema200,
+        })
+        patched += 1
+
+    return patched
 
 
 async def build_raw_pattern_comparisons(

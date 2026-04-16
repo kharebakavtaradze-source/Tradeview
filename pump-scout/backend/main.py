@@ -3132,6 +3132,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             build_raw_pattern_episode_features_candle,
             build_raw_pattern_episode_features_volume_compression,
             build_raw_pattern_episode_features_structure,
+            build_raw_pattern_episode_features_ema,
             build_raw_pattern_comparisons,
         )
         try:
@@ -3142,6 +3143,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             await build_raw_pattern_episode_features_candle(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_volume_compression(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_ema(raw_run_id, pump_study_run_id)
             await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
             await _upd(raw_run_id, {"status": "complete",
                                     "finished_at": datetime.utcnow()})
