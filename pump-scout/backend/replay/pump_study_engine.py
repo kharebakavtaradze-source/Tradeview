@@ -1721,6 +1721,109 @@ async def build_raw_pattern_episode_features_volume_compression(
     return patched
 
 
+async def build_raw_pattern_episode_features_structure(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-4: compute PRE-window structure/sequence aggregates and patch
+    them onto existing raw_pattern_episode_features rows.
+
+    Fields patched:
+        had_accumulation_like, accumulation_like_day_count, had_spring_test_lps
+        had_breakout_retest, retest_count, avg_retest_quality (null — no source)
+        strongest_wyckoff_state, strongest_sequence_type, strongest_structural_bias
+
+    Sources:
+        pump_episode_events         — had_accumulation_like, had_spring_test_lps
+        pump_episodes.strongest_wyckoff_state / pump_type — re-used directly
+        pump_episode_snapshots (PRE) — accumulation_like_day_count,
+                                       in_dist scan for structural bias
+
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_pump_episode_events,
+        get_pump_episode_snapshots,
+        update_raw_pattern_episode_features,
+    )
+
+    # Priority ranking for Wyckoff states (higher = stronger)
+    _STATE_RANK: dict[str, int] = {
+        "FIRE": 5, "ARM": 4, "STEALTH_ARM": 3,
+        "BASE": 2, "STEALTH": 1, "NONE": 0,
+    }
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+
+        # ── Boolean milestones from timeline events ────────────────────────
+        evs         = await get_pump_episode_events(episode_id)
+        event_types = {e["event_type"] for e in evs}
+
+        had_acc_like = "first_accumulation_like_day" in event_types
+        had_spring   = "first_spring_test_lps_day"   in event_types
+
+        # ── Episode-level computed fields (already stored during enrichment) ─
+        # strongest_wyckoff_state and pump_type are computed by Phase 3D/3E
+        ep_wyckoff   = ep.get("strongest_wyckoff_state")
+        ep_pump_type = ep.get("pump_type")
+
+        # ── PRE snapshots: accumulation day count + distribution scan ─────
+        pre_snaps = await get_pump_episode_snapshots(episode_id, phase="PRE")
+
+        acc_day_count    = 0
+        in_dist_any      = False
+        scan_best_state  = None
+        scan_best_rank   = -1
+
+        for s in pre_snaps:
+            reg = (s.get("snapshot") or {}).get("regime") or {}
+            if reg.get("in_acc"):
+                acc_day_count += 1
+            if reg.get("in_dist"):
+                in_dist_any = True
+            # Fallback Wyckoff state scan (supplements episode-level if missing)
+            state = reg.get("state") or s.get("wyckoff_state")
+            if state:
+                rank = _STATE_RANK.get(state, 0)
+                if rank > scan_best_rank:
+                    scan_best_rank  = rank
+                    scan_best_state = state
+
+        # Prefer episode-level value (computed over full window); fallback to PRE scan
+        strongest_state = ep_wyckoff or scan_best_state
+
+        # ── Structural bias ────────────────────────────────────────────────
+        if had_acc_like or acc_day_count > 0:
+            structural_bias: Optional[str] = "BULLISH"
+        elif in_dist_any:
+            structural_bias = "BEARISH"
+        elif pre_snaps:
+            structural_bias = "NEUTRAL"  # data present, no directional signal
+        else:
+            structural_bias = None
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "had_accumulation_like":       had_acc_like or None,
+            "accumulation_like_day_count": acc_day_count or None,
+            "had_spring_test_lps":         had_spring or None,
+            "had_breakout_retest":         None,   # no stored source
+            "retest_count":                None,   # no stored source
+            "avg_retest_quality":          None,   # no stored source
+            "strongest_wyckoff_state":     strongest_state,
+            "strongest_sequence_type":     ep_pump_type,
+            "strongest_structural_bias":   structural_bias,
+        })
+        patched += 1
+
+    return patched
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
