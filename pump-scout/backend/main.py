@@ -3132,6 +3132,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             build_raw_pattern_episode_features_candle,
             build_raw_pattern_episode_features_volume_compression,
             build_raw_pattern_episode_features_structure,
+            build_raw_pattern_episode_features_ema,
             build_raw_pattern_comparisons,
         )
         try:
@@ -3142,6 +3143,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             await build_raw_pattern_episode_features_candle(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_volume_compression(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_ema(raw_run_id, pump_study_run_id)
             await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
             await _upd(raw_run_id, {"status": "complete",
                                     "finished_at": datetime.utcnow()})
@@ -3433,6 +3435,13 @@ async def raw_pattern_study_ai_summary(run_id: int):
         "data_limitations": {
             "catalyst_news_available": False,
             "post_factum_labels_excluded": ["peak_day", "fade_day", "dump_day"],
+            "missed_mover_excluded": True,
+            "missed_mover_exclusion_reason": (
+                "missed_mover has no deterministic event anchor dates "
+                "(no pump_start_date / peak_date), so no PRE-window feature extraction "
+                "is structurally possible. It is formally excluded from episode-feature "
+                "comparison. Do not treat its absence as missing data."
+            ),
             "note": (
                 "No external news or catalyst data. "
                 "peak_day/fade_day/dump_day are outcome labels — not usable as early signals. "
@@ -3453,6 +3462,9 @@ async def raw_pattern_study_ai_summary(run_id: int):
         "Never use them as early discovery signals.\n"
         "  - If a group listed in absent_groups is missing from the data, say so explicitly "
         "instead of drawing conclusions about it.\n"
+        "  - missed_mover is FORMALLY EXCLUDED from episode-feature comparison because it has "
+        "no deterministic anchor dates. Do NOT treat it as absent data — acknowledge this "
+        "structural exclusion explicitly in the limitations array.\n"
         "  - Focus Q1–Q3 on PRIMARY features listed in primary_features.\n"
         "  - Each array item must be under 25 words. No newlines inside strings.\n\n"
         "EVIDENCE:\n"
@@ -3462,9 +3474,12 @@ async def raw_pattern_study_ai_summary(run_id: int):
         "appear most consistently before 4x_pump? Emphasise PRIMARY features: "
         "compression_days_pre, days_from_first_compression_to_breakout, "
         "days_from_breakout_to_peak, dryup_day_count_pre, had_accumulation_like, "
-        "had_spring_test_lps.\n"
+        "had_spring_test_lps, had_bull_stack_pre, days_above_ema50_pre, "
+        "avg_ema_spread_pre, ema50_reclaim_count_pre.\n"
         "Q2 (separators_vs_normal_winner): Which PRIMARY features show the largest median "
-        "gap between 4x_pump and normal_winner? If normal_winner is absent, state that.\n"
+        "gap between 4x_pump and normal_winner? Include EMA ribbon fields: "
+        "had_bull_stack_pre, days_above_ema50_pre, avg_ema_spread_pre, "
+        "ema50_reclaim_count_pre. If normal_winner is absent, state that.\n"
         "Q3 (separators_vs_false_positive): Which PRIMARY features show the largest median "
         "gap between 4x_pump and false_positive? If false_positive is absent, state that.\n"
         "Q4 (noisy_features): Which features are low-signal — low variance, near-identical "
@@ -3605,4 +3620,35 @@ async def raw_pattern_study_top_schemes(run_id: int):
 
     episodes = await get_raw_pattern_episode_features(run_id, limit=5000)
     result   = extract_top_schemes(episodes)
+    return {"ok": True, "run_id": run_id, **result}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/engine-patch-plan")
+async def raw_pattern_study_engine_patch_plan(run_id: int):
+    """
+    Deterministic Pump Engine patch plan derived from comparison medians.
+
+    Classifies each comparison feature as BOOST / INCREASE / PENALIZE / REDUCE / IGNORE
+    based on the separation ratio between 4x_pump and false_positive (or normal_winner
+    when false_positive is absent).
+
+    Also returns 7 domain-area recommendations covering:
+      sequence_duration_weights, compression_persistence, volume_sweet_spot,
+      accumulation_spring_reclaim, ema_ribbon_quality, body_wick_noise_reduction,
+      toxicity_penalty.
+
+    Purely deterministic — no AI, no external calls.
+    Delta bonuses are excluded (delta not yet available in pipeline).
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_comparisons
+    from replay.pump_study_engine import generate_engine_patch_plan
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run is not complete yet.")
+
+    comps  = await get_raw_pattern_comparisons(run_id)
+    result = generate_engine_patch_plan(comps)
     return {"ok": True, "run_id": run_id, **result}

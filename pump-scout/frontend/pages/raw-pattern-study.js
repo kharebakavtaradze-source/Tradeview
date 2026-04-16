@@ -254,6 +254,18 @@ const COMP_FEATURES = [
   'dryup_day_count_pre',
   'days_in_base',
   'atr_contraction_days_pre',
+  // PRIMARY — EMA ribbon (computed from daily ema_spread_pct)
+  'avg_ema_spread_pre',
+  'min_ema_spread_pre',
+  // PRIMARY — EMA ribbon episode aggregates
+  'had_bull_stack_pre',
+  'bull_stack_days_pre',
+  'days_above_ema50_pre',
+  'ema50_reclaim_count_pre',
+  // SECONDARY — EMA position metrics
+  'days_above_ema200_pre',
+  'avg_close_vs_ema50_pct_pre',
+  'avg_close_vs_ema200_pct_pre',
   // PRIMARY — structure depth
   'had_accumulation_like',
   'accumulation_like_day_count',
@@ -292,6 +304,15 @@ const FEATURE_PRIORITY = {
   dryup_day_count_pre:                         'PRIMARY',
   days_in_base:                                'PRIMARY',
   atr_contraction_days_pre:                    'PRIMARY',
+  avg_ema_spread_pre:                          'PRIMARY',
+  min_ema_spread_pre:                          'PRIMARY',
+  had_bull_stack_pre:                          'PRIMARY',
+  bull_stack_days_pre:                         'PRIMARY',
+  days_above_ema50_pre:                        'PRIMARY',
+  ema50_reclaim_count_pre:                     'PRIMARY',
+  days_above_ema200_pre:                       'SECONDARY',
+  avg_close_vs_ema50_pct_pre:                  'SECONDARY',
+  avg_close_vs_ema200_pct_pre:                 'SECONDARY',
   had_accumulation_like:                       'PRIMARY',
   accumulation_like_day_count:                 'PRIMARY',
   had_spring_test_lps:                         'PRIMARY',
@@ -390,6 +411,10 @@ function ComparisonGrid({ comparisons }) {
         <span className={styles.tableTitle}>Feature Comparisons</span>
         <span className={styles.tableHint}>median (n=members) · sorted by priority</span>
       </div>
+      <div className={styles.excludedNote}>
+        <strong>missed_mover</strong> is excluded from this table — no deterministic pre-pump
+        anchor dates exist, so PRE-window feature extraction is structurally impossible.
+      </div>
       <div className={styles.tableScroll}>
         <table className={styles.dataTable}>
           <thead>
@@ -453,13 +478,19 @@ const SCHEME_GROUP_DOT = {
 };
 
 function SchemeCard({ scheme }) {
-  const t   = scheme.typical_timing || {};
-  const sep = scheme.separator_strength;
+  const t    = scheme.typical_timing || {};
+  const sep  = scheme.separator_strength;
+  const sepNw = scheme.separator_vs_normal_winner;
 
   const sepLabel = sep == null ? null
-    : sep >= 2   ? `${sep}× stronger`
-    : sep >= 1.2 ? `${sep}× stronger`
-    : `${sep}× (weak)`;
+    : sep >= 2   ? `${sep}× vs fp`
+    : sep >= 1.2 ? `${sep}× vs fp`
+    : `${sep}× vs fp (weak)`;
+
+  const sepNwLabel = sepNw == null ? null
+    : sepNw >= 2   ? `${sepNw}× vs nw`
+    : sepNw >= 1.2 ? `${sepNw}× vs nw`
+    : `${sepNw}× vs nw (weak)`;
 
   return (
     <div className={styles.schemeCard}>
@@ -469,6 +500,11 @@ function SchemeCard({ scheme }) {
         {sepLabel && (
           <span className={`${styles.schemeSepBadge} ${sep >= 2 ? styles.schemeSepStrong : sep >= 1.2 ? styles.schemeSepMid : styles.schemeSepWeak}`}>
             {sepLabel}
+          </span>
+        )}
+        {sepNwLabel && (
+          <span className={styles.schemeSepNwBadge}>
+            {sepNwLabel}
           </span>
         )}
       </div>
@@ -521,6 +557,15 @@ function SchemeCard({ scheme }) {
           {t.days_in_base != null && (
             <span className={styles.timingChip}><span className={styles.timingKey}>base</span><span className={styles.timingVal}>{t.days_in_base}d</span></span>
           )}
+          {t.avg_days_above_ema50 != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>ema50↑</span><span className={styles.timingVal}>{t.avg_days_above_ema50}d</span></span>
+          )}
+          {t.avg_ema_spread_pre != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>ema·spr</span><span className={styles.timingVal}>{t.avg_ema_spread_pre}%</span></span>
+          )}
+          {t.bull_stack_pct != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>bull·stk</span><span className={styles.timingVal}>{Math.round(t.bull_stack_pct * 100)}%</span></span>
+          )}
         </div>
       </div>
 
@@ -569,11 +614,17 @@ function TopSchemesPanel({ runId }) {
         </span>
       </div>
 
-      {absent_groups.length > 0 && (
+      {absent_groups.filter(g => g !== 'missed_mover').length > 0 && (
         <div className={styles.schemesAbsent}>
-          Groups absent from data: <strong>{absent_groups.join(', ')}</strong> — conclusions for these groups unavailable.
+          Groups absent from data:{' '}
+          <strong>{absent_groups.filter(g => g !== 'missed_mover').join(', ')}</strong>
+          {' '}— conclusions for these groups unavailable.
         </div>
       )}
+      <div className={styles.excludedNote}>
+        <strong>missed_mover</strong> is formally excluded from episode-feature comparisons
+        — no deterministic pre-pump anchor dates exist.
+      </div>
 
       {schemes.length === 0 ? (
         <div className={styles.statusMsg}>
@@ -719,6 +770,160 @@ function AISummaryCard({ runId }) {
           {limits.map((l, i) => <p key={i} className={styles.aiLimText}>{l}</p>)}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Engine Patch Plan ─────────────────────────────────────────────────────────
+
+const VERDICT_STYLE = {
+  BOOST:    { color: 'var(--lime,  #86efac)', label: 'BOOST'    },
+  INCREASE: { color: 'var(--cyan,  #22d3ee)', label: 'INCREASE' },
+  PENALIZE: { color: 'var(--red,   #f87171)', label: 'PENALIZE' },
+  REDUCE:   { color: 'var(--amber, #fbbf24)', label: 'REDUCE'   },
+  IGNORE:   { color: 'var(--text-muted)',      label: 'IGNORE'   },
+};
+
+const REC_AREA_LABEL = {
+  sequence_duration_weights:  'Sequence / Duration',
+  compression_persistence:    'Compression Persistence',
+  volume_sweet_spot:          'Volume Sweet-Spot',
+  accumulation_spring_reclaim:'Accumulation / Spring / Reclaim',
+  ema_ribbon_quality:         'EMA Ribbon Quality',
+  body_wick_noise_reduction:  'Body / Wick Noise Reduction',
+  toxicity_penalty:           'Toxicity Penalty',
+};
+
+function EnginePatchPlan({ runId }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState('');
+
+  useEffect(() => {
+    setLoading(true); setError('');
+    fetch(`/api/replay/raw-pattern-study/${runId}/engine-patch-plan`)
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(e => { setError(String(e)); setLoading(false); });
+  }, [runId]);
+
+  if (loading) return <div className={styles.statusMsg}>Building patch plan…</div>;
+  if (error)   return <div className={styles.errorMsg}>{error}</div>;
+  if (!data)   return null;
+
+  const { feature_verdicts = [], recommendations = [], summary = {} } = data;
+
+  return (
+    <div>
+      {/* Summary row */}
+      <div className={styles.tableCard} style={{ marginBottom: 12 }}>
+        <div className={styles.tableHeader}>
+          <span className={styles.tableTitle}>Pump Engine Patch Plan</span>
+          <span className={styles.tableHint}>deterministic · based on comparison medians · no AI</span>
+        </div>
+        <div style={{ display: 'flex', gap: 16, padding: '8px 12px', flexWrap: 'wrap' }}>
+          {[['BOOST', summary.boost_count], ['INCREASE', summary.increase_count],
+            ['PENALIZE', summary.penalize_count], ['REDUCE', summary.reduce_count],
+            ['IGNORE', summary.ignore_count]].map(([v, n]) => (
+            <span key={v} style={{ fontSize: 11, color: VERDICT_STYLE[v]?.color }}>
+              {v} <strong>{n ?? 0}</strong>
+            </span>
+          ))}
+          {!summary.ema_data_available && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              EMA data not yet populated
+            </span>
+          )}
+          {!summary.delta_available && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              delta deferred
+            </span>
+          )}
+        </div>
+        {summary.note && (
+          <div className={styles.excludedNote} style={{ margin: '0 12px 10px' }}>{summary.note}</div>
+        )}
+      </div>
+
+      {/* Domain recommendations */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+        {recommendations.map(rec => {
+          const vs = VERDICT_STYLE[rec.action] || VERDICT_STYLE.REDUCE;
+          return (
+            <div key={rec.area} className={styles.tableCard} style={{ padding: '8px 12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: vs.color, minWidth: 64 }}>{vs.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>
+                  {REC_AREA_LABEL[rec.area] || rec.area}
+                </span>
+                {rec.delta_available === false && (
+                  <span style={{ fontSize: 9, color: 'var(--text-muted)', fontStyle: 'italic' }}>delta deferred</span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>{rec.rationale}</div>
+              {rec.boost?.length > 0 && (
+                <div style={{ fontSize: 10 }}>
+                  <span style={{ color: 'var(--lime, #86efac)' }}>↑ </span>
+                  {rec.boost.join(', ')}
+                </div>
+              )}
+              {rec.reduce?.length > 0 && (
+                <div style={{ fontSize: 10 }}>
+                  <span style={{ color: 'var(--amber, #fbbf24)' }}>↓ </span>
+                  {rec.reduce.join(', ')}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Feature verdicts table */}
+      <div className={styles.tableCard}>
+        <div className={styles.tableHeader}>
+          <span className={styles.tableTitle}>Feature Verdicts</span>
+          <span className={styles.tableHint}>sorted by verdict · sep = 4x_median / group_median</span>
+        </div>
+        <div className={styles.tableScroll}>
+          <table className={styles.dataTable}>
+            <thead>
+              <tr>
+                <th className={styles.dataHead} style={{ minWidth: 220 }}>Feature</th>
+                <th className={styles.dataHead}>Priority</th>
+                <th className={styles.dataHead}>Verdict</th>
+                <th className={styles.dataHead}>sep vs fp</th>
+                <th className={styles.dataHead}>sep vs nw</th>
+                <th className={styles.dataHead}>4x med</th>
+                <th className={styles.dataHead}>fp med</th>
+                <th className={styles.dataHead}>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {feature_verdicts.map(v => {
+                const vs = VERDICT_STYLE[v.verdict] || VERDICT_STYLE.REDUCE;
+                return (
+                  <tr key={v.feature} className={styles.dataRow}>
+                    <td className={styles.dataCell}>{v.feature}</td>
+                    <td className={styles.dataCell}>
+                      <span className={styles[{ PRIMARY: 'priBadge', SECONDARY: 'secBadge', LOW_SIGNAL: 'lowBadge' }[v.priority] || 'lowBadge']}>
+                        {v.priority === 'PRIMARY' ? 'PRI' : v.priority === 'SECONDARY' ? 'SEC' : 'LOW'}
+                      </span>
+                    </td>
+                    <td className={styles.dataCell}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: vs.color }}>{vs.label}</span>
+                    </td>
+                    <td className={styles.dataCell}>{v.sep_vs_fp ?? '—'}</td>
+                    <td className={styles.dataCell}>{v.sep_vs_nw ?? '—'}</td>
+                    <td className={styles.dataCell}>{v.median_4x != null ? fmtN(v.median_4x) : '—'}</td>
+                    <td className={styles.dataCell}>{v.median_fp  != null ? fmtN(v.median_fp)  : '—'}</td>
+                    <td className={styles.dataCell} style={{ maxWidth: 300, fontSize: 10, color: 'var(--text-dim)' }}>{v.reason}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1019,6 +1224,7 @@ export default function RawPatternStudy() {
                     { id: 'episodes',    label: `Episodes (${episodes.length})` },
                     { id: 'comparisons', label: 'Comparisons' },
                     { id: 'ai',          label: 'AI Summary' },
+                    { id: 'patch-plan',  label: 'Engine Plan' },
                   ].map(({ id, label }) => (
                     <button
                       key={id}
@@ -1070,6 +1276,13 @@ export default function RawPatternStudy() {
                   run.status !== 'complete'
                     ? <div className={styles.statusMsg}>AI summary available after run completes.</div>
                     : <AISummaryCard key={selectedId} runId={selectedId} />
+                )}
+
+                {/* Engine Patch Plan tab */}
+                {activeTab === 'patch-plan' && (
+                  run.status !== 'complete'
+                    ? <div className={styles.statusMsg}>Engine plan available after run completes.</div>
+                    : <EnginePatchPlan key={selectedId} runId={selectedId} />
                 )}
               </>
             )}

@@ -3354,6 +3354,15 @@ class RawPatternEpisodeFeatures(Base):
     avg_atr_pct_pre              = Column(Float,   nullable=True)
     atr_contraction_days_pre     = Column(Integer, nullable=True)  # days with atr_expansion_state=CONTRACTING
 
+    # ── PRE-window: EMA ribbon aggregates (from feature_json) ─────────────────
+    had_bull_stack_pre           = Column(Boolean, nullable=True)  # any day had bullish_stack=True
+    bull_stack_days_pre          = Column(Integer, nullable=True)  # count of bullish_stack days
+    days_above_ema50_pre         = Column(Integer, nullable=True)
+    days_above_ema200_pre        = Column(Integer, nullable=True)
+    ema50_reclaim_count_pre      = Column(Integer, nullable=True)  # ema50_reclaim_day events in PRE
+    avg_close_vs_ema50_pct_pre   = Column(Float,   nullable=True)  # mean (close-ema50)/ema50 %
+    avg_close_vs_ema200_pct_pre  = Column(Float,   nullable=True)  # mean (close-ema200)/ema200 %
+
     # ── PRE-window: structure / sequence ──────────────────────────────────────
     had_accumulation_like         = Column(Boolean,    nullable=True)
     accumulation_like_day_count   = Column(Integer,    nullable=True)
@@ -4306,6 +4315,13 @@ async def save_raw_pattern_episode_features(run_id: int, rows: list[dict]) -> li
                 min_bb_width_pre                            = d.get("min_bb_width_pre"),
                 avg_atr_pct_pre                             = d.get("avg_atr_pct_pre"),
                 atr_contraction_days_pre                    = d.get("atr_contraction_days_pre"),
+                had_bull_stack_pre                          = d.get("had_bull_stack_pre"),
+                bull_stack_days_pre                         = d.get("bull_stack_days_pre"),
+                days_above_ema50_pre                        = d.get("days_above_ema50_pre"),
+                days_above_ema200_pre                       = d.get("days_above_ema200_pre"),
+                ema50_reclaim_count_pre                     = d.get("ema50_reclaim_count_pre"),
+                avg_close_vs_ema50_pct_pre                  = d.get("avg_close_vs_ema50_pct_pre"),
+                avg_close_vs_ema200_pct_pre                 = d.get("avg_close_vs_ema200_pct_pre"),
                 had_accumulation_like                       = d.get("had_accumulation_like"),
                 accumulation_like_day_count                 = d.get("accumulation_like_day_count"),
                 had_spring_test_lps                         = d.get("had_spring_test_lps"),

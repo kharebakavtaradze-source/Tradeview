@@ -1036,6 +1036,63 @@ _RIBBON_QUALIFY: frozenset = frozenset({"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE
 
 # ── Raw Pattern Study helpers ─────────────────────────────────────────────────
 
+_RIBBON_COMPRESSION_SCORE: dict[str, float] = {
+    "STRONG": 1.0, "MEDIUM": 0.67, "WEAK": 0.33, "NONE": 0.0,
+}
+
+
+def _build_ema_feature_json(
+    ind: dict,
+    close: Optional[float],
+    compr_state: Optional[str],
+) -> dict:
+    """Build feature_json EMA payload from snapshot indicators. No upstream fabrication."""
+    def _vs_pct(ema_val: Optional[float]) -> Optional[float]:
+        if close is not None and ema_val is not None and ema_val != 0:
+            return round((close - ema_val) / abs(ema_val) * 100, 3)
+        return None
+
+    ema8   = ind.get("ema8")
+    ema13  = ind.get("ema13")
+    ema21  = ind.get("ema21")
+    ema34  = ind.get("ema34")
+    ema50  = ind.get("ema50")
+    ema89  = ind.get("ema89")
+    ema200 = ind.get("ema200")
+
+    above_ema200: Optional[bool] = (
+        bool(close > ema200) if (close is not None and ema200 is not None) else None
+    )
+
+    return {
+        # Raw EMA values
+        "ema8":   ema8,
+        "ema13":  ema13,
+        "ema21":  ema21,
+        "ema34":  ema34,
+        "ema50":  ema50,
+        "ema89":  ema89,
+        "ema200": ema200,
+        # Stack / ribbon flags
+        "bullish_stack": ind.get("bullish_stack"),
+        "bearish_stack": ind.get("bearish_stack"),
+        "above_ema50":   ind.get("above_ema50"),
+        "ema8_slope":    ind.get("ema8_slope"),
+        # Derived: % distance from close to each key EMA
+        "close_vs_ema8_pct":   _vs_pct(ema8),
+        "close_vs_ema21_pct":  _vs_pct(ema21),
+        "close_vs_ema50_pct":  _vs_pct(ema50),
+        "close_vs_ema200_pct": _vs_pct(ema200),
+        # Derived: above/below long-term anchor
+        "above_ema200": above_ema200,
+        # Derived: numeric compression score (STRONG=1.0 → NONE=0.0)
+        "ema_compression_score": _RIBBON_COMPRESSION_SCORE.get(compr_state) if compr_state else None,
+        # Cross-bar flags filled by _fill_prev_bar_flags
+        "ema50_reclaim_day": None,
+        "ema21_support_day": None,
+    }
+
+
 def snapshot_to_raw_daily_feature(
     snap: dict,
     episode: dict,
@@ -1246,8 +1303,8 @@ def snapshot_to_raw_daily_feature(
         "reclaim_bar":       None,
         "expansion_bar":     expansion_bar,
 
-        # Overflow
-        "feature_json": None,
+        # Overflow — EMA ribbon details + derived distance/flag fields
+        "feature_json": _build_ema_feature_json(ind, c, compr_state),
     }
 
 
@@ -1297,6 +1354,20 @@ def _fill_prev_bar_flags(row: dict, snap: dict, prev_snap: dict) -> None:
     # Reclaim bar: gapped down but closed above prev close
     gap = snap.get("gap_pct")
     row["reclaim_bar"] = bool(gap is not None and gap < 0 and c > pc)
+
+    # EMA cross-bar flags — stored inside feature_json
+    fj = row.get("feature_json")
+    if isinstance(fj, dict):
+        ind      = (snap.get("snapshot") or {}).get("indicators") or {}
+        prev_ind = (prev_snap.get("snapshot") or {}).get("indicators") or {}
+        curr_ema50 = ind.get("ema50")
+        prev_ema50 = prev_ind.get("ema50")
+        curr_ema21 = ind.get("ema21")
+        if curr_ema50 is not None and prev_ema50 is not None:
+            fj["ema50_reclaim_day"] = bool(c > curr_ema50 and pc < prev_ema50)
+        if curr_ema21 is not None:
+            # Support: bar touched or pierced ema21 from above but closed at/above it bullishly
+            fj["ema21_support_day"] = bool(l <= curr_ema21 and c >= curr_ema21 and today_bullish)
 
 
 async def build_raw_pattern_daily_features(
@@ -1851,6 +1922,18 @@ _COMPARISON_FEATURES = [
     "dryup_day_count_pre",
     "days_in_base",
     "atr_contraction_days_pre",
+    # ── PRIMARY: EMA ribbon (computed from daily ema_spread_pct) ──
+    "avg_ema_spread_pre",
+    "min_ema_spread_pre",
+    # ── PRIMARY: EMA ribbon episode aggregates ──
+    "had_bull_stack_pre",
+    "bull_stack_days_pre",
+    "days_above_ema50_pre",
+    "ema50_reclaim_count_pre",
+    # ── SECONDARY: EMA position metrics ──
+    "days_above_ema200_pre",
+    "avg_close_vs_ema50_pct_pre",
+    "avg_close_vs_ema200_pct_pre",
     # ── PRIMARY: structure / wyckoff ──
     "had_accumulation_like",
     "accumulation_like_day_count",
@@ -1892,6 +1975,18 @@ _FEATURE_PRIORITY: dict[str, str] = {
     "dryup_day_count_pre":                         "PRIMARY",
     "days_in_base":                                "PRIMARY",
     "atr_contraction_days_pre":                    "PRIMARY",
+    # PRIMARY — EMA ribbon compression
+    "avg_ema_spread_pre":                          "PRIMARY",
+    "min_ema_spread_pre":                          "PRIMARY",
+    # PRIMARY — EMA ribbon episode aggregates
+    "had_bull_stack_pre":                          "PRIMARY",
+    "bull_stack_days_pre":                         "PRIMARY",
+    "days_above_ema50_pre":                        "PRIMARY",
+    "ema50_reclaim_count_pre":                     "PRIMARY",
+    # SECONDARY — EMA position metrics
+    "days_above_ema200_pre":                       "SECONDARY",
+    "avg_close_vs_ema50_pct_pre":                  "SECONDARY",
+    "avg_close_vs_ema200_pct_pre":                 "SECONDARY",
     # PRIMARY — structure depth
     "had_accumulation_like":                       "PRIMARY",
     "accumulation_like_day_count":                 "PRIMARY",
@@ -1925,9 +2020,73 @@ _FEATURE_PRIORITY: dict[str, str] = {
 _BINARY_FEATURES = {
     "had_compression", "had_accumulation_like",
     "had_spring_test_lps", "had_breakout_retest",
+    "had_bull_stack_pre",
 }
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+
+
+async def build_raw_pattern_episode_features_ema(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-5: compute PRE-window EMA ribbon episode aggregates from
+    raw_pattern_daily_features.feature_json and patch episode feature rows.
+
+    Fields patched:
+        had_bull_stack_pre, bull_stack_days_pre
+        days_above_ema50_pre, days_above_ema200_pre
+        ema50_reclaim_count_pre
+        avg_close_vs_ema50_pct_pre, avg_close_vs_ema200_pct_pre
+
+    Requires raw_pattern_daily_features to already have feature_json populated
+    (from build_raw_pattern_daily_features Phase 2B-1).
+    Returns the number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        update_raw_pattern_episode_features,
+    )
+
+    def _mean(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(sum(cleaned) / len(cleaned), 3) if cleaned else None
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep["id"]
+        pre_rows = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=500
+        )
+        if not pre_rows:
+            continue
+
+        fjs = [r.get("feature_json") or {} for r in pre_rows]
+
+        bull_stack_days     = sum(1 for fj in fjs if fj.get("bullish_stack"))
+        days_above_ema50    = sum(1 for fj in fjs if fj.get("above_ema50"))
+        days_above_ema200   = sum(1 for fj in fjs if fj.get("above_ema200"))
+        ema50_reclaim_count = sum(1 for fj in fjs if fj.get("ema50_reclaim_day"))
+
+        avg_vs_ema50  = _mean([fj.get("close_vs_ema50_pct")  for fj in fjs])
+        avg_vs_ema200 = _mean([fj.get("close_vs_ema200_pct") for fj in fjs])
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "had_bull_stack_pre":          bool(bull_stack_days) or None,
+            "bull_stack_days_pre":         bull_stack_days     or None,
+            "days_above_ema50_pre":        days_above_ema50    or None,
+            "days_above_ema200_pre":       days_above_ema200   or None,
+            "ema50_reclaim_count_pre":     ema50_reclaim_count or None,
+            "avg_close_vs_ema50_pct_pre":  avg_vs_ema50,
+            "avg_close_vs_ema200_pct_pre": avg_vs_ema200,
+        })
+        patched += 1
+
+    return patched
 
 
 async def build_raw_pattern_comparisons(
@@ -1951,11 +2110,30 @@ async def build_raw_pattern_comparisons(
     Returns the total number of comparison stat rows saved.
     """
     from database import (
+        get_raw_pattern_daily_features,
         get_raw_pattern_episode_features,
         save_raw_pattern_comparison_members,
         save_raw_pattern_comparison_rows,
         update_raw_pattern_run,
     )
+
+    # ── Pre-compute EMA spread aggregates from daily rows (zero schema change) ──
+    all_pre_daily = await get_raw_pattern_daily_features(
+        raw_run_id, phase="PRE", limit=100_000
+    )
+    _ema_spread_lookup: dict[int, list[float]] = {}
+    for dr in all_pre_daily:
+        eid = dr.get("episode_id")
+        val = dr.get("ema_spread_pct")
+        if eid is not None and val is not None:
+            _ema_spread_lookup.setdefault(eid, []).append(float(val))
+    _ema_agg: dict[int, dict] = {
+        eid: {
+            "avg_ema_spread_pre": round(sum(vals) / len(vals), 3),
+            "min_ema_spread_pre": round(min(vals), 3),
+        }
+        for eid, vals in _ema_spread_lookup.items()
+    }
 
     total_comp_rows = 0
 
@@ -1965,6 +2143,12 @@ async def build_raw_pattern_comparisons(
         )
         if not ep_features:
             continue
+
+        # Augment with EMA spread aggregates derived from daily rows
+        for ef in ep_features:
+            eid = ef.get("episode_id")
+            if eid in _ema_agg:
+                ef.update(_ema_agg[eid])
 
         # ── Member rows ────────────────────────────────────────────────────
         members = [
@@ -2229,6 +2413,9 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
         sep_str  = (round(share_4x / share_fp, 2)
                     if share_4x and share_fp and share_fp > 0
                     else None)
+        sep_nw   = (round(share_4x / share_nw, 2)
+                    if share_4x and share_nw and share_nw > 0
+                    else None)
 
         breakdown = {g: len(by_group[sid].get(g, []))
                      for g in _ALL_GROUPS if group_totals.get(g, 0) > 0}
@@ -2247,10 +2434,11 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
             "ordered_steps":              tmpl["steps"],
             "frequency_count":            ftotal,
             "group_breakdown":            breakdown,
-            "share_of_4x_pumps":          share_4x,
-            "share_of_false_positives":   share_fp,
-            "share_of_normal_winners":    share_nw,
-            "separator_strength":         sep_str,
+            "share_of_4x_pumps":            share_4x,
+            "share_of_false_positives":     share_fp,
+            "share_of_normal_winners":      share_nw,
+            "separator_strength":           sep_str,
+            "separator_vs_normal_winner":   sep_nw,
             "typical_timing": {
                 "compression_lead_days":        _med([e.get("compression_days_pre")                         for e in teps]),
                 "accumulation_days":            _med([e.get("accumulation_like_day_count")                  for e in teps]),
@@ -2258,6 +2446,13 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
                 "vol_to_breakout_days":         _med([e.get("days_from_first_abnormal_volume_to_breakout")  for e in teps]),
                 "breakout_to_peak_days":        _med([e.get("days_from_breakout_to_peak")                   for e in teps]),
                 "days_in_base":                 _med([e.get("days_in_base")                                 for e in teps]),
+                # EMA ribbon episode aggregates
+                "avg_days_above_ema50":         _med([e.get("days_above_ema50_pre")   for e in teps]),
+                "avg_ema_spread_pre":           _med([e.get("avg_ema_spread_pre")     for e in teps]),
+                "bull_stack_pct":               (
+                    round(sum(1 for e in teps if e.get("had_bull_stack_pre")) / len(teps), 2)
+                    if teps else None
+                ),
             },
             "notes": notes or None,
         })
@@ -2277,6 +2472,260 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
             "Pre-breakout features only. peak/fade/dump excluded. "
             "Each episode assigned to first matching scheme (most specific wins)."
         ),
+    }
+
+
+def generate_engine_patch_plan(comparisons: list[dict]) -> dict:
+    """
+    Deterministic patch-plan for the existing Pump Engine.
+
+    Reads comparison medians (group × feature) and classifies each feature:
+        BOOST    — 4x_pump median >= 1.4× false_positive median
+        INCREASE — 4x_pump modestly higher (1.15–1.4×)
+        PENALIZE — false_positive median > 4x_pump (contra-signal)
+        REDUCE   — little separation, outlier distortion, or no data
+        IGNORE   — always-on binary or low-variance across all groups
+
+    Falls back to normal_winner separation when false_positive data is absent.
+    Delta bonuses are NOT included — delta is not yet available upstream.
+    """
+    # ── Pivot: feature → group → {median, flags} ─────────────────────────────
+    pivot: dict[str, dict[str, dict]] = {}
+    for c in comparisons:
+        fn  = c.get("feature_name")
+        gn  = c.get("group_name")
+        if not fn or not gn:
+            continue
+        st = c.get("stats") or {}
+        pivot.setdefault(fn, {})[gn] = {
+            "median":       c.get("median_value"),
+            "n":            c.get("member_count") or 0,
+            "priority":     st.get("priority", "UNKNOWN"),
+            "low_variance": st.get("low_variance_flag", False),
+            "always_on":    st.get("always_on_flag",    False),
+            "outlier_risk": st.get("outlier_risk_flag", False),
+        }
+
+    def _sep(a, b):
+        if a is None or b is None or abs(b) < 0.001:
+            return None
+        return round(a / b, 2)
+
+    _BOOST_THRESH    = 1.40
+    _INCREASE_THRESH = 1.15
+    _PENALIZE_THRESH = 0.70
+
+    verdicts: list[dict] = []
+    for feat, groups in pivot.items():
+        g4x = groups.get("4x_pump",       {})
+        gfp = groups.get("false_positive", {})
+        gnw = groups.get("normal_winner",  {})
+
+        m4x = g4x.get("median")
+        mfp = gfp.get("median")
+        mnw = gnw.get("median")
+
+        priority     = g4x.get("priority") or "UNKNOWN"
+        low_variance = g4x.get("low_variance", False)
+        always_on    = g4x.get("always_on",    False)
+        outlier_risk = g4x.get("outlier_risk", False)
+
+        if g4x.get("n", 0) == 0 or m4x is None:
+            continue
+
+        sep_fp = _sep(m4x, mfp)
+        sep_nw = _sep(m4x, mnw)
+
+        if low_variance or always_on:
+            verdict = "IGNORE"
+            reason  = "always-on or low-variance — no discriminating power"
+        elif sep_fp is not None and sep_fp >= _BOOST_THRESH:
+            verdict = "BOOST"
+            reason  = f"4x_pump median {sep_fp}× higher than false_positive"
+        elif sep_fp is not None and sep_fp >= _INCREASE_THRESH:
+            verdict = "INCREASE"
+            reason  = f"4x_pump {sep_fp}× higher than false_positive (moderate)"
+        elif sep_fp is not None and sep_fp <= _PENALIZE_THRESH:
+            verdict = "PENALIZE"
+            reason  = f"false_positive median {round(1/sep_fp,2)}× higher — contra-signal"
+        elif mfp is None and sep_nw is not None and sep_nw >= _BOOST_THRESH:
+            verdict = "BOOST"
+            reason  = f"4x_pump {sep_nw}× vs normal_winner (fp unavailable)"
+        elif mfp is None and sep_nw is not None and sep_nw >= _INCREASE_THRESH:
+            verdict = "INCREASE"
+            reason  = f"4x_pump {sep_nw}× vs normal_winner (moderate, fp unavailable)"
+        elif outlier_risk and priority != "PRIMARY":
+            verdict = "REDUCE"
+            reason  = "outlier distortion in non-primary feature — weight lightly"
+        else:
+            verdict = "REDUCE"
+            reason  = "no meaningful group separation — reduce weight"
+
+        verdicts.append({
+            "feature":    feat,
+            "priority":   priority,
+            "verdict":    verdict,
+            "reason":     reason,
+            "sep_vs_fp":  sep_fp,
+            "sep_vs_nw":  sep_nw,
+            "median_4x":  m4x,
+            "median_fp":  mfp,
+            "median_nw":  mnw,
+        })
+
+    _V_ORDER = {"BOOST": 0, "INCREASE": 1, "PENALIZE": 2, "REDUCE": 3, "IGNORE": 4}
+    _P_ORDER = {"PRIMARY": 0, "SECONDARY": 1, "LOW_SIGNAL": 2, "UNKNOWN": 3}
+    verdicts.sort(key=lambda v: (
+        _V_ORDER.get(v["verdict"], 99),
+        _P_ORDER.get(v["priority"], 99),
+        -(v["sep_vs_fp"] or v["sep_vs_nw"] or 0),
+    ))
+
+    boost_set    = {v["feature"] for v in verdicts if v["verdict"] == "BOOST"}
+    increase_set = {v["feature"] for v in verdicts if v["verdict"] == "INCREASE"}
+    penalize_set = {v["feature"] for v in verdicts if v["verdict"] == "PENALIZE"}
+    reduce_set   = {v["feature"] for v in verdicts if v["verdict"] == "REDUCE"}
+    ignore_set   = {v["feature"] for v in verdicts if v["verdict"] == "IGNORE"}
+
+    def _gather(candidates):
+        b = [f for f in candidates if f in boost_set or f in increase_set]
+        r = [f for f in candidates if f in penalize_set or f in reduce_set or f in ignore_set]
+        return b, r
+
+    seq_feats   = ["compression_days_pre", "days_from_first_compression_to_breakout",
+                   "days_from_breakout_to_peak", "dryup_day_count_pre", "days_in_base",
+                   "days_from_first_abnormal_volume_to_breakout"]
+    compr_feats = ["compression_days_pre", "had_compression", "atr_contraction_days_pre",
+                   "avg_ema_spread_pre", "min_ema_spread_pre"]
+    vol_feats   = ["max_volume_anomaly_pre", "median_volume_anomaly_pre",
+                   "abnormal_volume_day_count_pre", "dryup_day_count_pre"]
+    struct_feats = ["had_accumulation_like", "accumulation_like_day_count",
+                    "had_spring_test_lps", "reclaim_bar_count_pre"]
+    ema_feats   = ["ema50_reclaim_count_pre", "had_bull_stack_pre", "days_above_ema50_pre",
+                   "bull_stack_days_pre", "avg_close_vs_ema50_pct_pre"]
+    noise_feats = ["avg_body_pct_pre", "avg_upper_wick_pct_pre", "avg_lower_wick_pct_pre",
+                   "bearish_engulfing_count_pre", "inside_bar_count_pre", "outside_bar_count_pre"]
+
+    seq_b,    seq_r    = _gather(seq_feats)
+    compr_b,  compr_r  = _gather(compr_feats)
+    vol_b,    vol_r    = _gather(vol_feats)
+    struct_b, struct_r = _gather(struct_feats)
+    ema_b,    ema_r    = _gather(ema_feats)
+    noise_b,  noise_r  = _gather(noise_feats)
+
+    ema_available = any(f in pivot for f in ema_feats)
+
+    recommendations = [
+        {
+            "area":      "sequence_duration_weights",
+            "priority":  1,
+            "action":    "BOOST" if seq_b else "NEUTRAL",
+            "boost":     seq_b,
+            "reduce":    seq_r,
+            "rationale": (
+                f"Timing sequence features are PRIMARY separators. "
+                + (f"Boost: {seq_b}. " if seq_b else "")
+                + (f"Reduce: {seq_r}." if seq_r else "")
+            ),
+        },
+        {
+            "area":      "compression_persistence",
+            "priority":  2,
+            "action":    "BOOST" if compr_b else "NEUTRAL",
+            "boost":     compr_b,
+            "reduce":    compr_r,
+            "rationale": (
+                "Duration metrics (compression_days_pre, atr_contraction_days_pre) separate "
+                "better than the binary had_compression. "
+                "had_compression is always-on — use day count instead. "
+                + (f"Boost: {compr_b}." if compr_b else "")
+            ),
+        },
+        {
+            "area":      "volume_sweet_spot",
+            "priority":  3,
+            "action":    "BOOST" if vol_b else "REDUCE",
+            "boost":     vol_b,
+            "reduce":    vol_r,
+            "rationale": (
+                "Volume anomaly is useful but needs calibration. "
+                "dryup_day_count_pre (quiet before storm) is often a better signal than "
+                "raw max_volume_anomaly. "
+                + (f"Boost: {vol_b}. " if vol_b else "")
+                + (f"Reduce: {vol_r}." if vol_r else "")
+            ),
+        },
+        {
+            "area":      "accumulation_spring_reclaim",
+            "priority":  4,
+            "action":    "BOOST" if struct_b else "NEUTRAL",
+            "boost":     struct_b,
+            "reduce":    struct_r,
+            "rationale": (
+                "Wyckoff structure quality (accumulation_like_day_count, had_spring_test_lps, "
+                "reclaim_bar_count_pre) are primary separators. "
+                "had_accumulation_like binary may be always-on — prefer day_count. "
+                + (f"Boost: {struct_b}." if struct_b else "")
+            ),
+        },
+        {
+            "area":      "ema_ribbon_quality",
+            "priority":  5,
+            "action":    "BOOST" if ema_b else ("PENDING_DATA" if not ema_available else "NEUTRAL"),
+            "boost":     ema_b,
+            "reduce":    ema_r,
+            "delta_available": False,
+            "rationale": (
+                (
+                    f"EMA ribbon episode fields available. "
+                    + (f"Boost: {ema_b}. " if ema_b else "Insufficient run count for EMA separation — rerun with more episodes. ")
+                    + "Delta bonuses deferred — delta feature extraction not yet in pipeline."
+                ) if ema_available else
+                "EMA episode fields not yet populated — run pipeline to generate data."
+            ),
+        },
+        {
+            "area":      "body_wick_noise_reduction",
+            "priority":  6,
+            "action":    "REDUCE",
+            "boost":     noise_b,
+            "reduce":    noise_r or noise_feats,
+            "rationale": (
+                "Single-bar candle anatomy (body_pct, wick_pct) rarely separates 4x_pump from "
+                "sub-4x winners. Zero-weight or heavily discount these in scoring. "
+                + (f"Confirmed low-signal: {noise_r}." if noise_r else "")
+            ),
+        },
+        {
+            "area":      "toxicity_penalty",
+            "priority":  7,
+            "action":    "PENALIZE",
+            "boost":     [],
+            "reduce":    ["max_toxicity_score", "avg_toxicity_score"],
+            "rationale": (
+                "High pre-pump toxicity score correlates with false_positive. "
+                "Apply negative score multiplier when avg_toxicity_score exceeds calibrated threshold."
+            ),
+        },
+    ]
+
+    return {
+        "feature_verdicts": verdicts,
+        "recommendations":  recommendations,
+        "summary": {
+            "boost_count":        len(boost_set),
+            "increase_count":     len(increase_set),
+            "penalize_count":     len(penalize_set),
+            "reduce_count":       len(reduce_set),
+            "ignore_count":       len(ignore_set),
+            "ema_data_available": ema_available,
+            "delta_available":    False,
+            "note": (
+                "Deterministic plan — no AI. Based on comparison medians only. "
+                "Validate counts per group before applying to Pump Engine. "
+                "Delta bonuses deferred until delta field extraction is in the pipeline."
+            ),
+        },
     }
 
 
@@ -3007,12 +3456,124 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             for ed in all_ep_data
         ]
 
-        # Group B — normal_winner: secondary scan on candle_map for 1.40–3.99x moves.
-        # Same symbols as 4x_pump (only 4x symbols have candles), but different
-        # time windows — useful for comparing strong-but-sub-4x behaviour.
-        group_b = _build_normal_winner_members(
-            run_id, candle_map, start_date, end_date, window_days,
-        )
+        # Group B — normal_winner: promote 1.40–3.99x windows into real pump_episode
+        # rows so downstream Raw Pattern Study receives snapshots, daily features,
+        # episode features, and comparisons identical to 4x_pump.
+        # Secondary detection uses already-loaded candle_map — no extra API calls.
+        _pump_study_progress["phase"] = "NORMAL_WINNER"
+        group_b: list[dict] = []
+        nw_ep_dicts_to_save: list[dict] = []
+        nw_best_hits_ordered: list[dict] = []
+
+        for sym, candles in candle_map.items():
+            all_nw_hits = _detect_raw_pumps(
+                sym, candles,
+                scan_start   = start_date,
+                scan_end     = end_date,
+                window_days  = window_days,
+                min_multiple = _NORMAL_WINNER_MIN_MULTIPLE,
+            )
+            sub4x = [h for h in all_nw_hits if h["multiple"] < 4.0]
+            if not sub4x:
+                continue
+            best = max(sub4x, key=lambda h: h["multiple"])
+            nw_best_hits_ordered.append(best)
+            nw_ep_dicts_to_save.append({
+                "run_id":                   run_id,
+                "cluster_id":               None,
+                "symbol":                   sym,
+                "pump_start_date":          best["window_start_date"],
+                "pump_peak_date":           best["window_peak_date"],
+                "pump_window_days":         best["window_days"],
+                "start_price":              best["start_price"],
+                "peak_price":               best["peak_price"],
+                "pump_multiple":            best["multiple"],
+                "pump_return_pct":          best["return_pct"],
+                "days_to_peak":             best["days_to_peak"],
+                "days_to_double":           best.get("days_to_double"),
+                "max_drawdown_before_peak": best.get("max_drawdown_before_peak"),
+                "pump_type":                "NORMAL_WINNER",
+                "was_in_universe":          True,
+                "was_flagged_by_scanner":   False,
+                "filter_reason":            None,
+                "had_ribbon":               False,
+                "had_ignition":             False,
+                "sector":                   None,
+                "industry":                 None,
+                "summary":                  {},
+            })
+
+        nw_ep_ids: list[int] = []
+        if nw_ep_dicts_to_save:
+            nw_ep_ids = await save_pump_episodes(run_id, nw_ep_dicts_to_save)
+
+        for nw_epd, nw_ep_id, nw_best in zip(
+            nw_ep_dicts_to_save, nw_ep_ids, nw_best_hits_ordered
+        ):
+            sym         = nw_epd["symbol"]
+            sym_candles = candle_map.get(sym)
+
+            ep_dict_nw = {
+                "pump_start_date":          nw_epd["pump_start_date"],
+                "pump_peak_date":           nw_epd["pump_peak_date"],
+                "start_price":              nw_epd["start_price"],
+                "peak_price":               nw_epd["peak_price"],
+                "pump_multiple":            nw_epd["pump_multiple"],
+                "pump_return_pct":          nw_epd["pump_return_pct"],
+                "days_to_peak":             nw_epd["days_to_peak"],
+                "days_to_double":           nw_epd.get("days_to_double"),
+                "max_drawdown_before_peak": nw_epd.get("max_drawdown_before_peak"),
+                "sector":                   None,
+                "industry":                 None,
+            }
+
+            nw_snaps: list[dict] = []
+            nw_evs:   list[dict] = []
+            if sym_candles:
+                nw_snaps = _build_snapshots(nw_ep_id, run_id, sym, ep_dict_nw, sym_candles)
+                if nw_snaps:
+                    await save_pump_episode_snapshots(nw_snaps)
+                    total_snapshots += len(nw_snaps)
+                if nw_snaps:
+                    nw_evs = _detect_timeline_events(
+                        nw_ep_id, run_id, sym, ep_dict_nw, nw_snaps
+                    )
+                    if nw_evs:
+                        await save_pump_episode_events(nw_evs)
+                        total_events += len(nw_evs)
+
+            nw_features = _extract_episode_features(ep_dict_nw, nw_snaps, nw_evs)
+
+            await update_pump_episode_enrichment(nw_ep_id, {
+                "pump_type":               "NORMAL_WINNER",
+                "had_ribbon":              nw_features.get("had_ribbon", False),
+                "had_ignition":            nw_features.get("had_ignition", False),
+                "strongest_wyckoff_state": nw_features.get("strongest_wyckoff_state"),
+                "max_volume_anomaly":      nw_features.get("max_volume_anomaly"),
+                "largest_gap_pct":         nw_features.get("largest_gap_pct"),
+                "summary_json":            json.dumps({"family_reason": "normal_winner sub-4x window"}),
+            })
+
+            group_b.append({
+                "run_id":          run_id,
+                "group_name":      "normal_winner",
+                "symbol":          sym,
+                "episode_id":      nw_ep_id,
+                "pump_multiple":   nw_epd["pump_multiple"],
+                "pump_return_pct": nw_epd["pump_return_pct"],
+                "days_to_peak":    nw_epd["days_to_peak"],
+                "pump_type":       "NORMAL_WINNER",
+                "features":        nw_features,
+            })
+
+            _pump_study_progress["snapshots"] = total_snapshots
+            _pump_study_progress["events"]    = total_events
+
+            logger.debug(
+                f"[PUMP_STUDY][NW] {sym} ep={nw_ep_id}: "
+                f"multiple={nw_epd['pump_multiple']:.2f}x, "
+                f"snaps={len(nw_snaps)}, evs={len(nw_evs)}"
+            )
 
         # Group C — false_positive: canonical 4x episodes where the worst POST
         # close fell back below start_price × _POST_REVERSAL_THRESHOLD (default 2.0×).
