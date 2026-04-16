@@ -1843,60 +1843,89 @@ async def build_raw_pattern_episode_features_structure(
 # Features extracted into each member's features_json and compared across groups.
 # Ordered PRIMARY first so the comparison table is meaningful at a glance.
 _COMPARISON_FEATURES = [
-    # ── PRIMARY: sequence / duration — core 4x separators ──
+    # ── PRIMARY: sequence / duration ──
     "days_from_breakout_to_peak",
     "compression_days_pre",
     "days_from_first_compression_to_breakout",
     "days_from_first_abnormal_volume_to_breakout",
     "dryup_day_count_pre",
     "days_in_base",
+    "atr_contraction_days_pre",
     # ── PRIMARY: structure / wyckoff ──
     "had_accumulation_like",
+    "accumulation_like_day_count",
     "had_spring_test_lps",
     "reclaim_bar_count_pre",
+    # ── SECONDARY: structure quality ──
+    "had_breakout_retest",
+    "retest_count",
+    "avg_retest_quality",
     # ── SECONDARY: volume ──
     "max_volume_anomaly_pre",
     "median_volume_anomaly_pre",
     "abnormal_volume_day_count_pre",
-    # ── SECONDARY: candle patterns ──
+    "max_dollar_volume_pre",
+    # ── SECONDARY: candle / bar patterns ──
     "bullish_engulfing_count_pre",
     "expansion_bar_count_pre",
-    # ── LOW_SIGNAL: raw candle anatomy + binary flags ──
+    "strong_close_count_pre",
+    "wide_range_bar_count_pre",
+    # ── LOW_SIGNAL: raw candle anatomy + binary / always-on ──
     "had_compression",
     "avg_body_pct_pre",
     "avg_upper_wick_pct_pre",
     "avg_lower_wick_pct_pre",
+    "bearish_engulfing_count_pre",
+    "inside_bar_count_pre",
+    "outside_bar_count_pre",
 ]
 
 # Priority tier for each feature.  Used to populate stats_json["priority"]
 # and to drive UI badge rendering.  Post-factum outcome labels are NOT in
 # _COMPARISON_FEATURES — they must never be treated as early signals.
 _FEATURE_PRIORITY: dict[str, str] = {
-    # PRIMARY — best separators of 4x pump vs all other groups
+    # PRIMARY — core sequence/duration separators
     "days_from_breakout_to_peak":                  "PRIMARY",
     "compression_days_pre":                        "PRIMARY",
     "days_from_first_compression_to_breakout":     "PRIMARY",
     "days_from_first_abnormal_volume_to_breakout": "PRIMARY",
     "dryup_day_count_pre":                         "PRIMARY",
     "days_in_base":                                "PRIMARY",
+    "atr_contraction_days_pre":                    "PRIMARY",
+    # PRIMARY — structure depth
     "had_accumulation_like":                       "PRIMARY",
+    "accumulation_like_day_count":                 "PRIMARY",
     "had_spring_test_lps":                         "PRIMARY",
     "reclaim_bar_count_pre":                       "PRIMARY",
-    # SECONDARY — informative but weaker or noisier separators
+    # SECONDARY — structure quality
+    "had_breakout_retest":                         "SECONDARY",
+    "retest_count":                                "SECONDARY",
+    "avg_retest_quality":                          "SECONDARY",
+    # SECONDARY — volume
     "max_volume_anomaly_pre":                      "SECONDARY",
     "median_volume_anomaly_pre":                   "SECONDARY",
     "abnormal_volume_day_count_pre":               "SECONDARY",
+    "max_dollar_volume_pre":                       "SECONDARY",
+    # SECONDARY — candle patterns
     "bullish_engulfing_count_pre":                 "SECONDARY",
     "expansion_bar_count_pre":                     "SECONDARY",
-    # LOW_SIGNAL — high noise, low discrimination, or near-always-on
+    "strong_close_count_pre":                      "SECONDARY",
+    "wide_range_bar_count_pre":                    "SECONDARY",
+    # LOW_SIGNAL — noisy, always-on, or weak discriminators
     "had_compression":                             "LOW_SIGNAL",
     "avg_body_pct_pre":                            "LOW_SIGNAL",
     "avg_upper_wick_pct_pre":                      "LOW_SIGNAL",
     "avg_lower_wick_pct_pre":                      "LOW_SIGNAL",
+    "bearish_engulfing_count_pre":                 "LOW_SIGNAL",
+    "inside_bar_count_pre":                        "LOW_SIGNAL",
+    "outside_bar_count_pre":                       "LOW_SIGNAL",
 }
 
 # Binary features where always_on_flag is meaningful
-_BINARY_FEATURES = {"had_compression", "had_accumulation_like", "had_spring_test_lps"}
+_BINARY_FEATURES = {
+    "had_compression", "had_accumulation_like",
+    "had_spring_test_lps", "had_breakout_retest",
+}
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
 
@@ -2110,8 +2139,16 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
     def _s(ef):  return bool(ef.get("had_spring_test_lps"))
     def _e(ef):  return (ef.get("expansion_bar_count_pre") or 0) > 0
 
-    # Checked in order — most specific scheme first
+    # Checked in order — most specific scheme first.
+    # All helpers use pre-pump fields only; peak/fade/dump excluded.
     TEMPLATES: list[dict] = [
+        {
+            # Full textbook pre-pump playbook — all 5 components present
+            "scheme_id": "S0",
+            "label":     "Full Pre-Pump (Comp+Dryup+Accum+Spring+Vol)",
+            "steps":     ["compression", "dryup", "accumulation_like", "spring_test_lps", "abnormal_volume", "breakout"],
+            "check":     lambda ef: _c(ef) and _d(ef) and _a(ef) and _s(ef) and _v(ef),
+        },
         {
             "scheme_id": "S1",
             "label":     "Compression → Dryup → Vol → Reclaim",
@@ -2168,8 +2205,9 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
         cleaned = [v for v in vals if v is not None]
         return round(_stats.median(cleaned), 1) if cleaned else None
 
-    n4x   = group_totals.get("4x_pump",       0)
-    nfp   = group_totals.get("false_positive", 0)
+    n4x    = group_totals.get("4x_pump",       0)
+    nfp    = group_totals.get("false_positive",0)
+    nnw    = group_totals.get("normal_winner", 0)
     absent = [g for g in _ALL_GROUPS if group_totals.get(g, 0) == 0]
 
     # ── Summarise each scheme ──────────────────────────────────────────────
@@ -2179,6 +2217,7 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
         teps  = timing_eps[sid]
         f4x   = len(by_group[sid].get("4x_pump",       []))
         ffp   = len(by_group[sid].get("false_positive", []))
+        fnw   = len(by_group[sid].get("normal_winner",  []))
         ftotal = sum(len(v) for v in by_group[sid].values())
 
         if ftotal == 0:
@@ -2186,6 +2225,7 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
 
         share_4x = round(f4x / n4x, 3) if n4x > 0 else None
         share_fp = round(ffp / nfp, 3) if nfp > 0 else None
+        share_nw = round(fnw / nnw, 3) if nnw > 0 else None
         sep_str  = (round(share_4x / share_fp, 2)
                     if share_4x and share_fp and share_fp > 0
                     else None)
@@ -2198,18 +2238,22 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
             notes.append("false_positive absent — separator_strength unavailable")
         if n4x == 0:
             notes.append("4x_pump absent — share_of_4x_pumps unavailable")
+        if nnw == 0:
+            notes.append("normal_winner absent — share_of_normal_winners unavailable")
 
         results.append({
-            "scheme_id":                sid,
-            "scheme_label":             tmpl["label"],
-            "ordered_steps":            tmpl["steps"],
-            "frequency_count":          ftotal,
-            "group_breakdown":          breakdown,
-            "share_of_4x_pumps":        share_4x,
-            "share_of_false_positives": share_fp,
-            "separator_strength":       sep_str,
+            "scheme_id":                  sid,
+            "scheme_label":               tmpl["label"],
+            "ordered_steps":              tmpl["steps"],
+            "frequency_count":            ftotal,
+            "group_breakdown":            breakdown,
+            "share_of_4x_pumps":          share_4x,
+            "share_of_false_positives":   share_fp,
+            "share_of_normal_winners":    share_nw,
+            "separator_strength":         sep_str,
             "typical_timing": {
                 "compression_lead_days":        _med([e.get("compression_days_pre")                         for e in teps]),
+                "accumulation_days":            _med([e.get("accumulation_like_day_count")                  for e in teps]),
                 "compression_to_breakout_days": _med([e.get("days_from_first_compression_to_breakout")      for e in teps]),
                 "vol_to_breakout_days":         _med([e.get("days_from_first_abnormal_volume_to_breakout")  for e in teps]),
                 "breakout_to_peak_days":        _med([e.get("days_from_breakout_to_peak")                   for e in teps]),
