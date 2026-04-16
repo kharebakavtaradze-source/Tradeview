@@ -117,8 +117,17 @@ def _volume_wakeup_score(indicators: dict) -> tuple[float, list[str]]:
     score   = 0.0
     reasons = []
 
+    # Sweet-spot: 5–15x is cleanest pump signal; ultra-extreme often post-dump
+    bullish_stack = indicators.get("bullish_stack", False)
+    ribbon_compr  = indicators.get("ribbon_compression", "NONE")
+    has_structure = bullish_stack or ribbon_compr in ("STRONG", "MEDIUM")
+
     # Anomaly ratio (vs 20-day avg)
-    if anomaly_ratio >= 5.0:
+    if anomaly_ratio >= 15.0:
+        score += 35; reasons.append(f"volume {anomaly_ratio:.1f}x anomaly")
+        if anomaly_ratio >= 20.0 and not has_structure:
+            score -= 15; reasons.append("ultra_extreme_vol_no_structure")
+    elif anomaly_ratio >= 5.0:
         score += 45; reasons.append(f"volume {anomaly_ratio:.1f}x anomaly")
     elif anomaly_ratio >= 3.0:
         score += 30; reasons.append(f"volume {anomaly_ratio:.1f}x anomaly")
@@ -244,12 +253,81 @@ def _theme_context_score(indicators: dict, ribbon_class: str,
     return _clamp(score), reasons
 
 
+# ── Structure bonus scorer ───────────────────────────────────────────────────
+
+def _structure_bonus_score(indicators: dict, regime: dict | None) -> tuple[float, list[str]]:
+    """
+    Small bonus for compression/accumulation quality that real pumps tend to
+    show.  Rewards setups with structural prerequisites — not random squeezes.
+
+    Max raw output: 50 pts; weight in final formula: 0.10 → ≤ +5 pts to
+    pump_quality.  Does not penalise — only rewards good setups.
+    """
+    score   = 0.0
+    reasons = []
+
+    # Bollinger-band squeeze duration + bullish alignment
+    bb_sqz_bars  = indicators.get("bb_sqz_bars",             0) or 0
+    compr_bull   = indicators.get("compression_and_bullish", False)
+    ribbon_compr = indicators.get("ribbon_compression",      "NONE")
+
+    if bb_sqz_bars >= 5 and compr_bull:
+        score += 15; reasons.append(f"bb_squeeze_{bb_sqz_bars}bars_bullish")
+    elif bb_sqz_bars >= 3:
+        score += 8;  reasons.append(f"bb_squeeze_{bb_sqz_bars}bars")
+
+    if ribbon_compr == "STRONG":
+        score += 10; reasons.append("ribbon_compression_strong")
+    elif ribbon_compr == "MEDIUM":
+        score += 5
+
+    # Stealth accumulation signature
+    stealth       = indicators.get("stealth", {}) or {}
+    is_stealth    = stealth.get("is_stealth",    False)
+    stealth_score = stealth.get("stealth_score", 0)    or 0
+
+    if is_stealth and stealth_score >= 70:
+        score += 12; reasons.append("stealth_accumulation")
+    elif is_stealth:
+        score += 6
+
+    # OBV trend quality
+    obv          = indicators.get("obv", {}) or {}
+    obv_div      = obv.get("obv_divergence", False)
+    obv_slope    = obv.get("obv_slope_5d",   0.0) or 0.0
+    obv_strength = obv.get("obv_strength",   "WEAK")
+
+    if not obv_div and obv_slope > 0.05 and obv_strength == "STRONG":
+        score += 10; reasons.append("obv_strong_trend")
+    elif not obv_div and obv_slope > 0.02:
+        score += 5
+
+    # Wyckoff regime: accumulation / spring arm
+    if regime:
+        if regime.get("in_acc"):
+            score += 15; reasons.append("wyckoff_accumulation")
+        elif regime.get("state") in ("ARM", "STEALTH_ARM"):
+            score += 8;  reasons.append(f"wyckoff_{regime.get('state', '').lower()}")
+
+    # Optional ignition bonus — only present if ignition engine was run separately
+    ignition_signal  = indicators.get("ignition_signal")
+    ignition_quality = indicators.get("ignition_quality", "")
+    if ignition_signal and ignition_signal != "NO_IGNITION":
+        if ignition_quality in ("HIGH", "VERY_HIGH"):
+            score += 12; reasons.append(f"ignition_{ignition_quality.lower()}")
+        else:
+            score += 6;  reasons.append("ignition_detected")
+
+    return _clamp(score, 0.0, 50.0), reasons
+
+
 # ── Main pump scorer ──────────────────────────────────────────────────────────
 
 def score_pump(
     indicators: dict,
     price: float | None = None,
     sector_context: dict | None = None,
+    regime: dict | None = None,
 ) -> dict:
     """
     Score a single ticker on the pump/explosive mover dimension.
@@ -273,19 +351,23 @@ def score_pump(
     vol_score, vol_reasons              = _volume_wakeup_score(indicators)
     beh_score, beh_reasons              = _price_behavior_score(indicators)
     theme_score, theme_reasons          = _theme_context_score(indicators, ribbon_class, sector_context)
+    struct_score, struct_reasons        = _structure_bonus_score(indicators, regime)
 
     tox_score = toxicity["toxicity_score"]
     tox_mult  = toxicity_penalty(tox_score)
 
     # ── Weighted pump quality (0-100) ─────────────────────────────────────────
     raw_quality = (
-        v_score    * 0.30 +
-        vol_score  * 0.20 +
-        beh_score  * 0.20 +
-        theme_score * 0.15 +
-        (100 - tox_score) * 0.15
+        v_score      * 0.30 +
+        vol_score    * 0.20 +
+        beh_score    * 0.20 +
+        theme_score  * 0.15 +
+        (100 - tox_score) * 0.15 +
+        struct_score * 0.10         # small structure bonus; max ≤ +5 pts
     )
-    pump_quality = int(_clamp(raw_quality * tox_mult))
+    # Strengthen toxicity: extra deduction for HIGH/EXTREME on top of multiplier
+    tox_deduction = 15 if tox_score >= 70 else (8 if tox_score >= 45 else 0)
+    pump_quality = int(_clamp(raw_quality * tox_mult - tox_deduction))
 
     # ── Pump signal classification ────────────────────────────────────────────
     anomaly   = indicators.get("anomaly_ratio",    0.0) or 0.0
@@ -369,10 +451,11 @@ def score_pump(
         "toxicity_level":     toxicity["toxicity_level"],
         "toxicity_flags":     toxicity["toxicity_flags"],
         # Sub-scores for debugging / research
-        "_velocity_score":    round(v_score,    1),
-        "_volume_score":      round(vol_score,  1),
-        "_behavior_score":    round(beh_score,  1),
-        "_theme_score":       round(theme_score, 1),
+        "_velocity_score":    round(v_score,      1),
+        "_volume_score":      round(vol_score,    1),
+        "_behavior_score":    round(beh_score,    1),
+        "_theme_score":       round(theme_score,  1),
+        "_structure_score":   round(struct_score, 1),
     }
 
 
@@ -425,7 +508,8 @@ def run_pump_engine(
             return
         seen.add(sym)
         # Normalise indicators access
-        ind = r.get("indicators") or r.get("_indicators") or {}
+        ind    = r.get("indicators") or r.get("_indicators") or {}
+        regime = r.get("regime") or {}
         merged.append({
             "symbol":           sym,
             "price":            r.get("price") or 0.0,
@@ -438,6 +522,7 @@ def run_pump_engine(
             "price_change_pct": ind.get("price_change_pct", 0.0),
             "source":           source,
             "_indicators":      ind,
+            "_regime":          regime,
         })
 
     for r in main_results:
@@ -453,13 +538,14 @@ def run_pump_engine(
     # ── Score each candidate ──────────────────────────────────────────────────
     scored: list[dict] = []
     for r in filtered:
-        ind   = r["_indicators"]
-        price = r["price"]
+        ind    = r["_indicators"]
+        price  = r["price"]
+        regime = r.get("_regime", {})
 
         if bullish_only and ind.get("bearish_stack"):
             continue
 
-        pump = score_pump(ind, price)
+        pump = score_pump(ind, price, regime=regime)
 
         # Apply filters
         if pump["toxicity_score"] > max_toxicity:
