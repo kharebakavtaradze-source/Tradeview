@@ -806,7 +806,7 @@ function EnginePatchPlan({ runId }) {
 
   useEffect(() => {
     setLoading(true); setError('');
-    fetch(`/api/replay/raw-pattern-study/${runId}/engine-patch-plan`)
+    fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/engine-patch-plan`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
       .catch(e => { setError(String(e)); setLoading(false); });
