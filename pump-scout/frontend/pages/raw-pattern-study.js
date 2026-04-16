@@ -53,7 +53,7 @@ function StatusBadge({ status }) {
 
 // ── Run header card ───────────────────────────────────────────────────────────
 
-function RunHeader({ run, onRepairDone }) {
+function RunHeader({ run, onRepairDone, onDelete }) {
   const isRunning = run.status === 'running';
   const needsRepair = run.status === 'complete' && !run.comparison_count;
   const [repairing, setRepairing] = useState(false);
@@ -80,6 +80,11 @@ function RunHeader({ run, onRepairDone }) {
         <span className={styles.runIdLabel}>Run #{run.id}</span>
         <StatusBadge status={run.status} />
         {isRunning && <span className={styles.pulsingDot} />}
+        {onDelete && (
+          <button className={styles.deleteRunBtn} onClick={onDelete} title="Delete this run permanently">
+            Delete
+          </button>
+        )}
       </div>
 
       <div className={styles.runMeta}>
@@ -965,6 +970,11 @@ export default function RawPatternStudy() {
   const [launching, setLaunching] = useState(false);
   const [launchErr, setLaunchErr] = useState('');
 
+  // Delete
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting,      setDeleting]      = useState(false);
+  const [deleteErr,     setDeleteErr]     = useState('');
+
   const pollRef = useRef(null);
 
   // ── Fetch runs list ────────────────────────────────────────────────────────
@@ -1092,6 +1102,28 @@ export default function RawPatternStudy() {
     }
   };
 
+  // ── Delete run ────────────────────────────────────────────────────────────
+  const handleDeleteRun = async () => {
+    if (!selectedId) return;
+    setDeleting(true);
+    setDeleteErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${selectedId}`, { method: 'DELETE' });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      setRuns(prev => prev.filter(x => x.id !== selectedId));
+      setSelectedId(null);
+      setRun(null);
+      setEpisodes([]);
+      setComparisons([]);
+      setConfirmDelete(false);
+    } catch (e) {
+      setDeleteErr(String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <>
@@ -1215,7 +1247,11 @@ export default function RawPatternStudy() {
 
             {selectedId && !loadingRun && run && (
               <>
-                <RunHeader run={run} onRepairDone={() => { loadRun(selectedId); loadRuns(); loadEpisodes(selectedId); loadComparisons(selectedId); }} />
+                <RunHeader
+                  run={run}
+                  onRepairDone={() => { loadRun(selectedId); loadRuns(); loadEpisodes(selectedId); loadComparisons(selectedId); }}
+                  onDelete={() => { setConfirmDelete(true); setDeleteErr(''); }}
+                />
 
                 {/* Tab row */}
                 <div className={styles.tabRow}>
@@ -1289,6 +1325,36 @@ export default function RawPatternStudy() {
           </div>
         </div>
       </div>
+
+      {/* ── Delete confirmation modal ──────────────────────────────────── */}
+      {confirmDelete && (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modalBox}>
+            <div className={styles.modalTitle}>Delete Run #{selectedId}?</div>
+            <p className={styles.modalBody}>
+              This will permanently remove all daily features, episode features,
+              comparisons, and the AI summary for this run. This cannot be undone.
+            </p>
+            {deleteErr && <div className={styles.errorMsg}>{deleteErr}</div>}
+            <div className={styles.modalActions}>
+              <button
+                className={styles.modalCancelBtn}
+                disabled={deleting}
+                onClick={() => { setConfirmDelete(false); setDeleteErr(''); }}
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.modalDeleteBtn}
+                disabled={deleting}
+                onClick={handleDeleteRun}
+              >
+                {deleting ? 'Deleting…' : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

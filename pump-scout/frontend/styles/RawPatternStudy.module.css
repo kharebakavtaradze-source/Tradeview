@@ -978,3 +978,88 @@
   0%, 100% { opacity: 1;   transform: scale(1);   }
   50%       { opacity: 0.4; transform: scale(0.7); }
 }
+
+/* ── Delete run button ────────────────────────────────────── */
+.deleteRunBtn {
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--red-border, #7f1d1d);
+  background: transparent;
+  color: var(--red, #ef4444);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.deleteRunBtn:hover { background: var(--red-dim, rgba(239,68,68,0.12)); }
+
+/* ── Confirmation modal ───────────────────────────────────── */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modalBox {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 24px 28px;
+  max-width: 420px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modalTitle {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--red, #ef4444);
+}
+
+.modalBody {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modalCancelBtn {
+  padding: 6px 16px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.modalCancelBtn:hover { color: var(--text); border-color: var(--accent-border); }
+.modalCancelBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.modalDeleteBtn {
+  padding: 6px 16px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--red-border, #7f1d1d);
+  background: var(--red-dim, rgba(239,68,68,0.12));
+  color: var(--red, #ef4444);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.modalDeleteBtn:hover { background: rgba(239,68,68,0.22); }
+.modalDeleteBtn:disabled { opacity: 0.4; cursor: not-allowed; }
