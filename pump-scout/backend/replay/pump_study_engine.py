@@ -1437,11 +1437,27 @@ async def build_raw_pattern_episode_features_timing(
     """
     from database import (
         get_pump_episodes,
+        get_pump_comparison_members,
         get_raw_pattern_daily_features,
         get_pump_episode_events,
         save_raw_pattern_episode_features,
         update_raw_pattern_run,
     )
+
+    # ── Build episode_id → group_name from Pump Study comparison members ──
+    # Priority: false_positive wins over 4x_pump (it is a more specific label
+    # for the same episode).  missed_mover has no episode_id and is skipped.
+    _GROUP_PRIORITY = {"false_positive": 0, "4x_pump": 1, "normal_winner": 2, "missed_mover": 3}
+    ps_members = await get_pump_comparison_members(pump_study_run_id)
+    episode_group: dict[int, str] = {}
+    for m in ps_members:
+        eid   = m.get("episode_id")
+        gname = m.get("group_name")
+        if eid is None or not gname:
+            continue
+        existing = episode_group.get(eid)
+        if existing is None or _GROUP_PRIORITY.get(gname, 99) < _GROUP_PRIORITY.get(existing, 99):
+            episode_group[eid] = gname
 
     episodes   = await get_pump_episodes(pump_study_run_id, limit=10_000)
     total_rows = 0
@@ -1518,7 +1534,7 @@ async def build_raw_pattern_episode_features_timing(
             "run_id":       raw_run_id,
             "episode_id":   episode_id,
             "symbol":       ep.get("symbol"),
-            "group_type":   ep.get("comparison_group"),
+            "group_type":   episode_group.get(episode_id),
             "pump_multiple": ep.get("pump_multiple"),
             "pump_type":    ep.get("pump_type"),
             # Timing
@@ -1926,6 +1942,67 @@ async def build_raw_pattern_comparisons(
 
     await update_raw_pattern_run(raw_run_id, {"comparison_count": total_comp_rows})
     return total_comp_rows
+
+
+async def repair_raw_pattern_group_types(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> dict:
+    """
+    Repair an existing raw-pattern run where group_type was not assigned.
+
+    Steps:
+      1. Re-derive episode_id → group_name from pump_comparison_members.
+      2. Patch group_type on every raw_pattern_episode_features row for this run.
+      3. Clear stale comparison rows (members + stats) for the run.
+      4. Rebuild comparisons via build_raw_pattern_comparisons().
+
+    Returns a dict with patch counts.
+    """
+    from database import (
+        get_pump_comparison_members,
+        get_raw_pattern_episode_features,
+        update_raw_pattern_episode_features,
+        clear_raw_pattern_comparisons,
+        update_raw_pattern_run,
+    )
+
+    _GROUP_PRIORITY = {"false_positive": 0, "4x_pump": 1, "normal_winner": 2, "missed_mover": 3}
+
+    # Build lookup
+    ps_members = await get_pump_comparison_members(pump_study_run_id)
+    episode_group: dict[int, str] = {}
+    for m in ps_members:
+        eid   = m.get("episode_id")
+        gname = m.get("group_name")
+        if eid is None or not gname:
+            continue
+        existing = episode_group.get(eid)
+        if existing is None or _GROUP_PRIORITY.get(gname, 99) < _GROUP_PRIORITY.get(existing, 99):
+            episode_group[eid] = gname
+
+    # Patch episode feature rows
+    ep_rows  = await get_raw_pattern_episode_features(raw_run_id, limit=10_000)
+    patched  = 0
+    skipped  = 0
+    for row in ep_rows:
+        eid   = row.get("episode_id")
+        gname = episode_group.get(eid)
+        if gname and row.get("group_type") != gname:
+            await update_raw_pattern_episode_features(raw_run_id, eid, {"group_type": gname})
+            patched += 1
+        elif not gname:
+            skipped += 1
+
+    # Clear stale comparison data and rebuild
+    await clear_raw_pattern_comparisons(raw_run_id)
+    new_comp_rows = await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
+
+    return {
+        "episodes_patched":  patched,
+        "episodes_skipped":  skipped,
+        "comparison_rows":   new_comp_rows,
+    }
 
 
 def _compute_stats(values: list) -> dict:
