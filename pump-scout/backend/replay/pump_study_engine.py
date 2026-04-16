@@ -1036,6 +1036,63 @@ _RIBBON_QUALIFY: frozenset = frozenset({"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE
 
 # ── Raw Pattern Study helpers ─────────────────────────────────────────────────
 
+_RIBBON_COMPRESSION_SCORE: dict[str, float] = {
+    "STRONG": 1.0, "MEDIUM": 0.67, "WEAK": 0.33, "NONE": 0.0,
+}
+
+
+def _build_ema_feature_json(
+    ind: dict,
+    close: Optional[float],
+    compr_state: Optional[str],
+) -> dict:
+    """Build feature_json EMA payload from snapshot indicators. No upstream fabrication."""
+    def _vs_pct(ema_val: Optional[float]) -> Optional[float]:
+        if close is not None and ema_val is not None and ema_val != 0:
+            return round((close - ema_val) / abs(ema_val) * 100, 3)
+        return None
+
+    ema8   = ind.get("ema8")
+    ema13  = ind.get("ema13")
+    ema21  = ind.get("ema21")
+    ema34  = ind.get("ema34")
+    ema50  = ind.get("ema50")
+    ema89  = ind.get("ema89")
+    ema200 = ind.get("ema200")
+
+    above_ema200: Optional[bool] = (
+        bool(close > ema200) if (close is not None and ema200 is not None) else None
+    )
+
+    return {
+        # Raw EMA values
+        "ema8":   ema8,
+        "ema13":  ema13,
+        "ema21":  ema21,
+        "ema34":  ema34,
+        "ema50":  ema50,
+        "ema89":  ema89,
+        "ema200": ema200,
+        # Stack / ribbon flags
+        "bullish_stack": ind.get("bullish_stack"),
+        "bearish_stack": ind.get("bearish_stack"),
+        "above_ema50":   ind.get("above_ema50"),
+        "ema8_slope":    ind.get("ema8_slope"),
+        # Derived: % distance from close to each key EMA
+        "close_vs_ema8_pct":   _vs_pct(ema8),
+        "close_vs_ema21_pct":  _vs_pct(ema21),
+        "close_vs_ema50_pct":  _vs_pct(ema50),
+        "close_vs_ema200_pct": _vs_pct(ema200),
+        # Derived: above/below long-term anchor
+        "above_ema200": above_ema200,
+        # Derived: numeric compression score (STRONG=1.0 → NONE=0.0)
+        "ema_compression_score": _RIBBON_COMPRESSION_SCORE.get(compr_state) if compr_state else None,
+        # Cross-bar flags filled by _fill_prev_bar_flags
+        "ema50_reclaim_day": None,
+        "ema21_support_day": None,
+    }
+
+
 def snapshot_to_raw_daily_feature(
     snap: dict,
     episode: dict,
@@ -1246,8 +1303,8 @@ def snapshot_to_raw_daily_feature(
         "reclaim_bar":       None,
         "expansion_bar":     expansion_bar,
 
-        # Overflow
-        "feature_json": None,
+        # Overflow — EMA ribbon details + derived distance/flag fields
+        "feature_json": _build_ema_feature_json(ind, c, compr_state),
     }
 
 
@@ -1297,6 +1354,20 @@ def _fill_prev_bar_flags(row: dict, snap: dict, prev_snap: dict) -> None:
     # Reclaim bar: gapped down but closed above prev close
     gap = snap.get("gap_pct")
     row["reclaim_bar"] = bool(gap is not None and gap < 0 and c > pc)
+
+    # EMA cross-bar flags — stored inside feature_json
+    fj = row.get("feature_json")
+    if isinstance(fj, dict):
+        ind      = (snap.get("snapshot") or {}).get("indicators") or {}
+        prev_ind = (prev_snap.get("snapshot") or {}).get("indicators") or {}
+        curr_ema50 = ind.get("ema50")
+        prev_ema50 = prev_ind.get("ema50")
+        curr_ema21 = ind.get("ema21")
+        if curr_ema50 is not None and prev_ema50 is not None:
+            fj["ema50_reclaim_day"] = bool(c > curr_ema50 and pc < prev_ema50)
+        if curr_ema21 is not None:
+            # Support: bar touched or pierced ema21 from above but closed at/above it bullishly
+            fj["ema21_support_day"] = bool(l <= curr_ema21 and c >= curr_ema21 and today_bullish)
 
 
 async def build_raw_pattern_daily_features(
