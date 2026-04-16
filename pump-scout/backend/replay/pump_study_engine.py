@@ -1034,6 +1034,223 @@ _WYK_PRIORITY: dict[str, int] = {
 _RIBBON_QUALIFY: frozenset = frozenset({"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE"})
 
 
+# ── Raw Pattern Study helpers ─────────────────────────────────────────────────
+
+def snapshot_to_raw_daily_feature(
+    snap: dict,
+    episode: dict,
+    raw_run_id: int,
+    trailing_avg_range_pct: float | None = None,
+) -> dict:
+    """
+    Convert one Pump Study snapshot row (as returned by _snapshot_to_dict /
+    get_pump_episode_snapshots) into a raw_pattern_daily_features row dict,
+    ready for save_raw_pattern_daily_features().
+
+    Parameters
+    ----------
+    snap                  : snapshot dict (includes a "snapshot" sub-dict with
+                            snapshot_json contents: indicators, regime, pump, etc.)
+    episode               : pump_episodes row dict (supplies sector/industry)
+    raw_run_id            : id of the raw_pattern_run this row belongs to
+    trailing_avg_range_pct: optional pre-computed trailing mean of
+                            intraday_range_pct over the prior N bars;
+                            required for wide_range_bar / narrow_range_bar;
+                            pass None to leave those fields null until the
+                            caller loop provides context
+
+    Source mapping
+    --------------
+    Direct from snapshot columns:
+        phase, relative_day_from_start, relative_day_from_peak
+        open, high, low, close, volume
+        gap_pct, intraday_range_pct, close_position_in_bar (← close_position)
+        volume_vs_avg20, volume_zscore
+        atr_pct, bb_width
+
+    From snapshot_json.indicators:
+        atr             ← indicators.atr
+        bb_squeeze_bars ← indicators.bb_sqz_bars
+        ema_spread_pct  ← indicators.ema_spread_pct
+        compression_state ← indicators.ribbon_compression (STRONG|MEDIUM|WEAK|NONE)
+        atr_expansion_state derived from indicators.atr_ratio
+
+    From pump_episodes:
+        sector, industry
+
+    Derived here (single-bar, no cross-bar context needed):
+        dollar_volume, body_pct, upper_wick_pct, lower_wick_pct
+        strong_close_near_high, weak_close_near_low
+        doji_like, abnormal_volume_day, dryup_day
+        atr_expansion_state
+
+    Derived here (require trailing_avg_range_pct from caller):
+        wide_range_bar, narrow_range_bar, expansion_bar
+
+    Null for now (data not available in snapshot pipeline):
+        exchange, market_cap, float_shares, market_regime
+        volume_vs_avg5, volume_vs_avg10, dollar_volume, dollar_volume_vs_avg20 (see note)
+        distance_to_range_high/low/mid (requires 52w range not stored)
+        bullish_engulfing, bearish_engulfing, inside_bar, outside_bar,
+        reclaim_bar (require previous-bar context — added by caller loop)
+    """
+    # ── Unpack raw OHLCV ──────────────────────────────────────────────────────
+    o: Optional[float] = snap.get("open")
+    h: Optional[float] = snap.get("high")
+    l: Optional[float] = snap.get("low")
+    c: Optional[float] = snap.get("close")
+    v: Optional[int]   = snap.get("volume")
+
+    bar_range: Optional[float] = (h - l) if (h is not None and l is not None) else None
+
+    # ── Unpack snapshot_json sub-dicts ────────────────────────────────────────
+    sj   = snap.get("snapshot") or {}
+    ind  = sj.get("indicators") or {}
+    reg  = sj.get("regime")     or {}
+
+    # ── Direct snapshot column fields ─────────────────────────────────────────
+    close_pos     = snap.get("close_position")        # already 0–1 in snapshot
+    vol_vs_avg20  = snap.get("volume_vs_avg20")
+    vol_z         = snap.get("volume_zscore")
+    intra_range   = snap.get("intraday_range_pct")
+
+    # ── From snapshot_json.indicators ─────────────────────────────────────────
+    atr_abs       = ind.get("atr")
+    atr_ratio     = ind.get("atr_ratio")
+    bb_sqz_bars   = ind.get("bb_sqz_bars")
+    ema_spread    = ind.get("ema_spread_pct")
+    compr_state   = ind.get("ribbon_compression")     # STRONG|MEDIUM|WEAK|NONE
+
+    # ── Derived: ATR expansion state ──────────────────────────────────────────
+    if atr_ratio is not None:
+        if atr_ratio > 1.10:
+            atr_exp = "EXPANDING"
+        elif atr_ratio < 0.90:
+            atr_exp = "CONTRACTING"
+        else:
+            atr_exp = "NEUTRAL"
+    else:
+        atr_exp = None
+
+    # ── Derived: dollar volume ────────────────────────────────────────────────
+    dollar_vol: Optional[float] = (c * v) if (c is not None and v) else None
+
+    # ── Derived: candle anatomy ───────────────────────────────────────────────
+    body_pct: Optional[float] = None
+    upper_wick_pct: Optional[float] = None
+    lower_wick_pct: Optional[float] = None
+
+    if bar_range and bar_range > 0 and o is not None and c is not None:
+        body_pct       = round(abs(c - o) / bar_range, 4)
+        upper_wick_pct = round((h - max(o, c)) / bar_range, 4)         # type: ignore[operator]
+        lower_wick_pct = round((min(o, c) - l) / bar_range, 4)         # type: ignore[operator]
+
+    # ── Derived: close-position classifications ───────────────────────────────
+    strong_close = (close_pos >= 0.80) if close_pos is not None else None
+    weak_close   = (close_pos <= 0.20) if close_pos is not None else None
+    doji_like    = (body_pct  <  0.10) if body_pct  is not None else None
+
+    # ── Derived: volume flags ─────────────────────────────────────────────────
+    abnormal_vol = (
+        (vol_vs_avg20 is not None and vol_vs_avg20 >= 2.0) or
+        (vol_z        is not None and vol_z         >= 2.5)
+    ) if (vol_vs_avg20 is not None or vol_z is not None) else None
+
+    dryup = (vol_vs_avg20 < 0.5) if vol_vs_avg20 is not None else None
+
+    # ── Derived: wide/narrow range bar (requires trailing context) ────────────
+    wide_bar      = None
+    narrow_bar    = None
+    expansion_bar = None
+
+    if trailing_avg_range_pct and intra_range is not None:
+        wide_bar   = intra_range > 1.5 * trailing_avg_range_pct
+        narrow_bar = intra_range < 0.5 * trailing_avg_range_pct
+        expansion_bar = bool(
+            wide_bar and strong_close and
+            vol_vs_avg20 is not None and vol_vs_avg20 > 1.5
+        )
+
+    # ── Assemble output row ───────────────────────────────────────────────────
+    return {
+        # Identity / window context
+        "run_id":                  raw_run_id,
+        "episode_id":              snap.get("episode_id"),
+        "symbol":                  snap.get("symbol"),
+        "date":                    snap.get("date"),
+        "phase":                   snap.get("window_phase"),
+        "relative_day_from_start": snap.get("relative_day_from_start"),
+        "relative_day_from_peak":  snap.get("relative_day_from_peak"),
+
+        # Instrument context (episode supplies sector/industry; rest unavailable)
+        "sector":        episode.get("sector"),
+        "industry":      episode.get("industry"),
+        "exchange":      None,      # not stored in pipeline
+        "market_cap":    None,      # requires reference API
+        "float_shares":  None,      # requires reference API
+        "market_regime": None,      # broad market context not computed
+
+        # Raw OHLCV
+        "open":         o,
+        "high":         h,
+        "low":          l,
+        "close":        c,
+        "volume":       v,
+        "dollar_volume": round(dollar_vol, 2) if dollar_vol is not None else None,
+
+        # Candle anatomy — direct
+        "gap_pct":            snap.get("gap_pct"),
+        "intraday_range_pct": intra_range,
+        # Candle anatomy — derived
+        "body_pct":               body_pct,
+        "upper_wick_pct":         upper_wick_pct,
+        "lower_wick_pct":         lower_wick_pct,
+        "close_position_in_bar":  close_pos,
+        "wide_range_bar":         wide_bar,
+        "narrow_range_bar":       narrow_bar,
+        "strong_close_near_high": strong_close,
+        "weak_close_near_low":    weak_close,
+
+        # Volume / liquidity — direct
+        "volume_vs_avg20": vol_vs_avg20,
+        "volume_zscore":   vol_z,
+        # Volume / liquidity — deferred (need trailing series from caller)
+        "volume_vs_avg5":          None,
+        "volume_vs_avg10":         None,
+        "dollar_volume_vs_avg20":  None,
+        # Volume / liquidity — derived
+        "abnormal_volume_day": abnormal_vol,
+        "dryup_day":           dryup,
+
+        # Volatility / compression — direct
+        "atr_pct":    snap.get("atr_pct"),
+        "bb_width":   snap.get("bb_width"),
+        # Volatility / compression — from snapshot_json
+        "atr":                atr_abs,
+        "atr_expansion_state": atr_exp,
+        "bb_squeeze_bars":    bb_sqz_bars,
+        "ema_spread_pct":     ema_spread,
+        "compression_state":  compr_state,
+
+        # Distance context — null (52w range not stored; added by caller from episode window)
+        "distance_to_range_high": None,
+        "distance_to_range_low":  None,
+        "distance_to_mid_range":  None,
+
+        # Candle pattern flags — null here (require prev-bar; set by caller loop)
+        "bullish_engulfing": None,
+        "bearish_engulfing": None,
+        "inside_bar":        None,
+        "outside_bar":       None,
+        "doji_like":         doji_like,
+        "reclaim_bar":       None,
+        "expansion_bar":     expansion_bar,
+
+        # Overflow
+        "feature_json": None,
+    }
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.
