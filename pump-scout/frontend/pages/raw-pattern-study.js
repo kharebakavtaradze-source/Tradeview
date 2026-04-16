@@ -478,13 +478,19 @@ const SCHEME_GROUP_DOT = {
 };
 
 function SchemeCard({ scheme }) {
-  const t   = scheme.typical_timing || {};
-  const sep = scheme.separator_strength;
+  const t    = scheme.typical_timing || {};
+  const sep  = scheme.separator_strength;
+  const sepNw = scheme.separator_vs_normal_winner;
 
   const sepLabel = sep == null ? null
-    : sep >= 2   ? `${sep}× stronger`
-    : sep >= 1.2 ? `${sep}× stronger`
-    : `${sep}× (weak)`;
+    : sep >= 2   ? `${sep}× vs fp`
+    : sep >= 1.2 ? `${sep}× vs fp`
+    : `${sep}× vs fp (weak)`;
+
+  const sepNwLabel = sepNw == null ? null
+    : sepNw >= 2   ? `${sepNw}× vs nw`
+    : sepNw >= 1.2 ? `${sepNw}× vs nw`
+    : `${sepNw}× vs nw (weak)`;
 
   return (
     <div className={styles.schemeCard}>
@@ -494,6 +500,11 @@ function SchemeCard({ scheme }) {
         {sepLabel && (
           <span className={`${styles.schemeSepBadge} ${sep >= 2 ? styles.schemeSepStrong : sep >= 1.2 ? styles.schemeSepMid : styles.schemeSepWeak}`}>
             {sepLabel}
+          </span>
+        )}
+        {sepNwLabel && (
+          <span className={styles.schemeSepNwBadge}>
+            {sepNwLabel}
           </span>
         )}
       </div>
@@ -545,6 +556,15 @@ function SchemeCard({ scheme }) {
           )}
           {t.days_in_base != null && (
             <span className={styles.timingChip}><span className={styles.timingKey}>base</span><span className={styles.timingVal}>{t.days_in_base}d</span></span>
+          )}
+          {t.avg_days_above_ema50 != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>ema50↑</span><span className={styles.timingVal}>{t.avg_days_above_ema50}d</span></span>
+          )}
+          {t.avg_ema_spread_pre != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>ema·spr</span><span className={styles.timingVal}>{t.avg_ema_spread_pre}%</span></span>
+          )}
+          {t.bull_stack_pct != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>bull·stk</span><span className={styles.timingVal}>{Math.round(t.bull_stack_pct * 100)}%</span></span>
           )}
         </div>
       </div>

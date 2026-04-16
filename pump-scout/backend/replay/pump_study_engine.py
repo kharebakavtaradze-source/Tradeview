@@ -2413,6 +2413,9 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
         sep_str  = (round(share_4x / share_fp, 2)
                     if share_4x and share_fp and share_fp > 0
                     else None)
+        sep_nw   = (round(share_4x / share_nw, 2)
+                    if share_4x and share_nw and share_nw > 0
+                    else None)
 
         breakdown = {g: len(by_group[sid].get(g, []))
                      for g in _ALL_GROUPS if group_totals.get(g, 0) > 0}
@@ -2431,10 +2434,11 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
             "ordered_steps":              tmpl["steps"],
             "frequency_count":            ftotal,
             "group_breakdown":            breakdown,
-            "share_of_4x_pumps":          share_4x,
-            "share_of_false_positives":   share_fp,
-            "share_of_normal_winners":    share_nw,
-            "separator_strength":         sep_str,
+            "share_of_4x_pumps":            share_4x,
+            "share_of_false_positives":     share_fp,
+            "share_of_normal_winners":      share_nw,
+            "separator_strength":           sep_str,
+            "separator_vs_normal_winner":   sep_nw,
             "typical_timing": {
                 "compression_lead_days":        _med([e.get("compression_days_pre")                         for e in teps]),
                 "accumulation_days":            _med([e.get("accumulation_like_day_count")                  for e in teps]),
@@ -2442,6 +2446,13 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
                 "vol_to_breakout_days":         _med([e.get("days_from_first_abnormal_volume_to_breakout")  for e in teps]),
                 "breakout_to_peak_days":        _med([e.get("days_from_breakout_to_peak")                   for e in teps]),
                 "days_in_base":                 _med([e.get("days_in_base")                                 for e in teps]),
+                # EMA ribbon episode aggregates
+                "avg_days_above_ema50":         _med([e.get("days_above_ema50_pre")   for e in teps]),
+                "avg_ema_spread_pre":           _med([e.get("avg_ema_spread_pre")     for e in teps]),
+                "bull_stack_pct":               (
+                    round(sum(1 for e in teps if e.get("had_bull_stack_pre")) / len(teps), 2)
+                    if teps else None
+                ),
             },
             "notes": notes or None,
         })
