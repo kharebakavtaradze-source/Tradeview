@@ -313,6 +313,38 @@
   margin-top: 4px;
 }
 
+/* ── Repair row ──────────────────────────────────────────── */
+.repairRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  background: var(--amber-dim, #fff3001a);
+  border: 1px solid var(--amber-border, #fff30044);
+  border-radius: var(--r-sm);
+  margin-top: 4px;
+}
+
+.repairHint {
+  font-size: 11px;
+  color: var(--amber);
+}
+
+.repairBtn {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  background: var(--amber-dim, #fff3001a);
+  border: 1px solid var(--amber-border, #fff30044);
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity var(--t-fast);
+}
+.repairBtn:hover { opacity: 0.8; }
+.repairBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ── Tab row ─────────────────────────────────────────────── */
 .tabRow {
   display: flex;

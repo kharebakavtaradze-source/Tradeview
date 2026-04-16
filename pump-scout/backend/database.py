@@ -4544,6 +4544,24 @@ async def get_raw_pattern_ai_summary(run_id: int) -> dict | None:
         }
 
 
+async def clear_raw_pattern_comparisons(run_id: int) -> int:
+    """Delete all raw_pattern_comparisons + raw_pattern_comparison_members for a run.
+    Used before rebuilding comparisons in a repair pass.  Returns rows deleted."""
+    async with get_session_factory()() as session:
+        total = 0
+        for Model, fk in [
+            (RawPatternComparisonMember, RawPatternComparisonMember.run_id),
+            (RawPatternComparison,       RawPatternComparison.run_id),
+        ]:
+            result = await session.execute(select(Model).where(fk == run_id))
+            rows   = result.scalars().all()
+            for r in rows:
+                await session.delete(r)
+            total += len(rows)
+        await session.commit()
+    return total
+
+
 async def delete_raw_pattern_run(run_id: int) -> dict:
     """Hard-delete a raw-pattern run and all its child records."""
     async with get_session_factory()() as session:
