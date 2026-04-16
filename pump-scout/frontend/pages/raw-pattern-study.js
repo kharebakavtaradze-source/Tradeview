@@ -919,8 +919,8 @@ function EnginePatchPlan({ runId }) {
                     </td>
                     <td className={styles.dataCell}>{v.sep_vs_fp ?? '—'}</td>
                     <td className={styles.dataCell}>{v.sep_vs_nw ?? '—'}</td>
-                    <td className={styles.dataCell}>{v.median_4x != null ? fmtN(v.median_4x) : '—'}</td>
-                    <td className={styles.dataCell}>{v.median_fp  != null ? fmtN(v.median_fp)  : '—'}</td>
+                    <td className={styles.dataCell}>{v.median_4x != null ? fmtNum(v.median_4x) : '—'}</td>
+                    <td className={styles.dataCell}>{v.median_fp  != null ? fmtNum(v.median_fp)  : '—'}</td>
                     <td className={styles.dataCell} style={{ maxWidth: 300, fontSize: 10, color: 'var(--text-dim)' }}>{v.reason}</td>
                   </tr>
                 );
