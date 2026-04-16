@@ -420,6 +420,147 @@ function ComparisonGrid({ comparisons }) {
   );
 }
 
+// ── Top Pre-Pump Schemes ──────────────────────────────────────────────────────
+
+const SCHEME_GROUP_DOT = {
+  '4x_pump':       '#22d3ee',
+  'normal_winner': '#86efac',
+  'false_positive':'#fca5a5',
+  'missed_mover':  '#fde68a',
+};
+
+function SchemeCard({ scheme }) {
+  const t   = scheme.typical_timing || {};
+  const sep = scheme.separator_strength;
+
+  const sepLabel = sep == null ? null
+    : sep >= 2   ? `${sep}× stronger`
+    : sep >= 1.2 ? `${sep}× stronger`
+    : `${sep}× (weak)`;
+
+  return (
+    <div className={styles.schemeCard}>
+      <div className={styles.schemeHeader}>
+        <span className={styles.schemeId}>{scheme.scheme_id}</span>
+        <span className={styles.schemeLabel}>{scheme.scheme_label}</span>
+        {sepLabel && (
+          <span className={`${styles.schemeSepBadge} ${sep >= 2 ? styles.schemeSepStrong : sep >= 1.2 ? styles.schemeSepMid : styles.schemeSepWeak}`}>
+            {sepLabel}
+          </span>
+        )}
+      </div>
+
+      {/* Ordered steps */}
+      <div className={styles.schemeSteps}>
+        {scheme.ordered_steps.map((step, i) => (
+          <span key={step} className={styles.schemeStep}>
+            {i > 0 && <span className={styles.stepArrow}>→</span>}
+            <span className={styles.stepLabel}>{step.replace(/_/g, '\u00a0')}</span>
+          </span>
+        ))}
+      </div>
+
+      <div className={styles.schemeBottom}>
+        {/* Group breakdown */}
+        <div className={styles.schemeBreakdown}>
+          {Object.entries(scheme.group_breakdown || {}).map(([g, n]) => (
+            <span key={g} className={styles.breakdownItem}>
+              <span className={styles.breakdownDot} style={{ background: SCHEME_GROUP_DOT[g] || '#888' }} />
+              <span className={styles.breakdownGroup}>{g.replace(/_/g, ' ')}</span>
+              <span className={styles.breakdownCount}>{n}</span>
+              {g === '4x_pump' && scheme.share_of_4x_pumps != null && (
+                <span className={styles.breakdownPct}>{Math.round(scheme.share_of_4x_pumps * 100)}%</span>
+              )}
+              {g === 'false_positive' && scheme.share_of_false_positives != null && (
+                <span className={styles.breakdownPct}>{Math.round(scheme.share_of_false_positives * 100)}%</span>
+              )}
+            </span>
+          ))}
+        </div>
+
+        {/* Timing */}
+        <div className={styles.schemeTiming}>
+          {t.compression_lead_days != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>compr</span><span className={styles.timingVal}>{t.compression_lead_days}d</span></span>
+          )}
+          {t.vol_to_breakout_days != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>vol→brk</span><span className={styles.timingVal}>{t.vol_to_breakout_days}d</span></span>
+          )}
+          {t.breakout_to_peak_days != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>brk→peak</span><span className={styles.timingVal}>{t.breakout_to_peak_days}d</span></span>
+          )}
+          {t.days_in_base != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>base</span><span className={styles.timingVal}>{t.days_in_base}d</span></span>
+          )}
+        </div>
+      </div>
+
+      {scheme.notes?.length > 0 && (
+        <div className={styles.schemeNotes}>
+          {scheme.notes.map((n, i) => <span key={i}>{n}</span>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TopSchemesPanel({ runId }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/top-schemes`)
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (cancelled) return;
+        if (!ok) throw new Error(d.detail || 'Request failed');
+        setData(d);
+      })
+      .catch(e => { if (!cancelled) setError(String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [runId]);
+
+  if (loading) return <div className={styles.statusMsg}>Extracting schemes…</div>;
+  if (error)   return <div className={styles.errorMsg}>{error}</div>;
+  if (!data)   return null;
+
+  const { schemes = [], absent_groups = [], total_episodes, analyzed_episodes, note } = data;
+
+  return (
+    <div className={styles.schemesPanel}>
+      <div className={styles.schemesHeader}>
+        <span className={styles.schemesTitle}>Top Pre-Pump Schemes</span>
+        <span className={styles.schemesHint}>
+          {analyzed_episodes}/{total_episodes} episodes matched · deterministic · pre-breakout only
+        </span>
+      </div>
+
+      {absent_groups.length > 0 && (
+        <div className={styles.schemesAbsent}>
+          Groups absent from data: <strong>{absent_groups.join(', ')}</strong> — conclusions for these groups unavailable.
+        </div>
+      )}
+
+      {schemes.length === 0 ? (
+        <div className={styles.statusMsg}>
+          No schemes detected — run may need group diversity or re-run comparisons via Repair.
+        </div>
+      ) : (
+        <div className={styles.schemesList}>
+          {schemes.map(s => <SchemeCard key={s.scheme_id} scheme={s} />)}
+        </div>
+      )}
+
+      {note && <div className={styles.schemesNote}>{note}</div>}
+    </div>
+  );
+}
+
 // ── AI summary card ───────────────────────────────────────────────────────────
 
 const AI_SECTIONS = [
@@ -578,6 +719,9 @@ export default function RawPatternStudy() {
   const [loadingComps,   setLoadingComps]   = useState(false);
   const [compsError,     setCompsError]     = useState('');
 
+  // Top schemes (loaded fresh on tab open via TopSchemesPanel's own useEffect)
+  const [schemesKey, setSchemesKey] = useState(0); // bump to force remount
+
   // Active tab in main panel
   const [activeTab, setActiveTab] = useState('episodes');
 
@@ -667,6 +811,7 @@ export default function RawPatternStudy() {
   useEffect(() => {
     setEpisodes([]);
     setComparisons([]);
+    setSchemesKey(k => k + 1);
     setSymFilter('');
     setGroupFilter('');
     setActiveTab('episodes');
@@ -841,6 +986,7 @@ export default function RawPatternStudy() {
                 {/* Tab row */}
                 <div className={styles.tabRow}>
                   {[
+                    { id: 'schemes',     label: 'Top Schemes' },
                     { id: 'episodes',    label: `Episodes (${episodes.length})` },
                     { id: 'comparisons', label: 'Comparisons' },
                     { id: 'ai',          label: 'AI Summary' },
@@ -854,6 +1000,13 @@ export default function RawPatternStudy() {
                     </button>
                   ))}
                 </div>
+
+                {/* Top Schemes tab */}
+                {activeTab === 'schemes' && (
+                  run.status !== 'complete'
+                    ? <div className={styles.statusMsg}>Schemes available after run completes.</div>
+                    : <TopSchemesPanel key={`${selectedId}-${schemesKey}`} runId={selectedId} />
+                )}
 
                 {/* Episodes tab */}
                 {activeTab === 'episodes' && (
