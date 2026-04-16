@@ -411,6 +411,10 @@ function ComparisonGrid({ comparisons }) {
         <span className={styles.tableTitle}>Feature Comparisons</span>
         <span className={styles.tableHint}>median (n=members) · sorted by priority</span>
       </div>
+      <div className={styles.excludedNote}>
+        <strong>missed_mover</strong> is excluded from this table — no deterministic pre-pump
+        anchor dates exist, so PRE-window feature extraction is structurally impossible.
+      </div>
       <div className={styles.tableScroll}>
         <table className={styles.dataTable}>
           <thead>
@@ -590,11 +594,17 @@ function TopSchemesPanel({ runId }) {
         </span>
       </div>
 
-      {absent_groups.length > 0 && (
+      {absent_groups.filter(g => g !== 'missed_mover').length > 0 && (
         <div className={styles.schemesAbsent}>
-          Groups absent from data: <strong>{absent_groups.join(', ')}</strong> — conclusions for these groups unavailable.
+          Groups absent from data:{' '}
+          <strong>{absent_groups.filter(g => g !== 'missed_mover').join(', ')}</strong>
+          {' '}— conclusions for these groups unavailable.
         </div>
       )}
+      <div className={styles.excludedNote}>
+        <strong>missed_mover</strong> is formally excluded from episode-feature comparisons
+        — no deterministic pre-pump anchor dates exist.
+      </div>
 
       {schemes.length === 0 ? (
         <div className={styles.statusMsg}>

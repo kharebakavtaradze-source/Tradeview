@@ -687,6 +687,17 @@
   padding: 6px 12px;
 }
 
+.excludedNote {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted, #6b7280) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-muted, #6b7280) 20%, transparent);
+  border-radius: var(--r-sm);
+  padding: 5px 10px;
+  margin: 4px 0;
+  font-style: italic;
+}
+
 .schemesNote {
   font-size: 9px;
   color: var(--text-muted);

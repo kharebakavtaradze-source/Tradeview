@@ -3435,6 +3435,13 @@ async def raw_pattern_study_ai_summary(run_id: int):
         "data_limitations": {
             "catalyst_news_available": False,
             "post_factum_labels_excluded": ["peak_day", "fade_day", "dump_day"],
+            "missed_mover_excluded": True,
+            "missed_mover_exclusion_reason": (
+                "missed_mover has no deterministic event anchor dates "
+                "(no pump_start_date / peak_date), so no PRE-window feature extraction "
+                "is structurally possible. It is formally excluded from episode-feature "
+                "comparison. Do not treat its absence as missing data."
+            ),
             "note": (
                 "No external news or catalyst data. "
                 "peak_day/fade_day/dump_day are outcome labels — not usable as early signals. "
@@ -3455,6 +3462,9 @@ async def raw_pattern_study_ai_summary(run_id: int):
         "Never use them as early discovery signals.\n"
         "  - If a group listed in absent_groups is missing from the data, say so explicitly "
         "instead of drawing conclusions about it.\n"
+        "  - missed_mover is FORMALLY EXCLUDED from episode-feature comparison because it has "
+        "no deterministic anchor dates. Do NOT treat it as absent data — acknowledge this "
+        "structural exclusion explicitly in the limitations array.\n"
         "  - Focus Q1–Q3 on PRIMARY features listed in primary_features.\n"
         "  - Each array item must be under 25 words. No newlines inside strings.\n\n"
         "EVIDENCE:\n"
