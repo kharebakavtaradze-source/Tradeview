@@ -2082,6 +2082,160 @@ async def repair_raw_pattern_group_types(
     }
 
 
+def extract_top_schemes(episodes: list[dict]) -> dict:
+    """
+    Deterministic top pre-pump scheme extraction from episode feature vectors.
+
+    Classifies each episode into one of 5 canonical pre-pump sequence templates
+    using ONLY pre-breakout features.  peak / fade / dump are excluded entirely.
+    Each episode is assigned to the FIRST matching template (most-specific first).
+
+    Returns a summary dict with:
+      schemes          — top schemes sorted by 4x_pump absolute count
+      absent_groups    — groups with zero episodes in this run
+      total_episodes   — total input episode count
+      analyzed_episodes — episodes that matched at least one scheme
+      note             — validation disclaimer
+    """
+    import statistics as _stats
+
+    _ALL_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+
+    # ── Feature helpers — pre-pump fields ONLY ─────────────────────────────
+    def _c(ef):  return (ef.get("compression_days_pre") or 0) > 0 or bool(ef.get("had_compression"))
+    def _d(ef):  return (ef.get("dryup_day_count_pre") or 0) > 0
+    def _v(ef):  return (ef.get("abnormal_volume_day_count_pre") or 0) > 0
+    def _r(ef):  return (ef.get("reclaim_bar_count_pre") or 0) > 0
+    def _a(ef):  return bool(ef.get("had_accumulation_like"))
+    def _s(ef):  return bool(ef.get("had_spring_test_lps"))
+    def _e(ef):  return (ef.get("expansion_bar_count_pre") or 0) > 0
+
+    # Checked in order — most specific scheme first
+    TEMPLATES: list[dict] = [
+        {
+            "scheme_id": "S1",
+            "label":     "Compression → Dryup → Vol → Reclaim",
+            "steps":     ["compression", "dryup", "abnormal_volume", "reclaim", "breakout"],
+            "check":     lambda ef: _c(ef) and _d(ef) and _v(ef) and _r(ef),
+        },
+        {
+            "scheme_id": "S2",
+            "label":     "Accumulation → Spring/LPS → Vol",
+            "steps":     ["accumulation_like", "spring_test_lps", "abnormal_volume", "breakout"],
+            "check":     lambda ef: _a(ef) and _s(ef) and _v(ef),
+        },
+        {
+            "scheme_id": "S3",
+            "label":     "Accumulation → Vol → Reclaim",
+            "steps":     ["accumulation_like", "abnormal_volume", "reclaim", "expansion"],
+            "check":     lambda ef: _a(ef) and _v(ef) and _r(ef) and not _s(ef),
+        },
+        {
+            "scheme_id": "S4",
+            "label":     "Compression → Vol Wake-up → Breakout",
+            "steps":     ["compression", "abnormal_volume", "breakout"],
+            "check":     lambda ef: _c(ef) and _v(ef) and not _d(ef) and not _a(ef),
+        },
+        {
+            "scheme_id": "S5",
+            "label":     "Dryup → Vol → Expansion",
+            "steps":     ["dryup", "abnormal_volume", "expansion"],
+            "check":     lambda ef: _d(ef) and _v(ef) and _e(ef) and not _c(ef) and not _a(ef),
+        },
+    ]
+
+    # ── Per-scheme accumulators ────────────────────────────────────────────
+    by_group:    dict[str, dict[str, list]] = {t["scheme_id"]: {} for t in TEMPLATES}
+    timing_eps:  dict[str, list]            = {t["scheme_id"]: [] for t in TEMPLATES}
+    group_totals: dict[str, int]            = {}
+    matched = 0
+
+    for ep in episodes:
+        gt = ep.get("group_type") or "unknown"
+        group_totals[gt] = group_totals.get(gt, 0) + 1
+        for tmpl in TEMPLATES:
+            try:
+                if tmpl["check"](ep):
+                    by_group[tmpl["scheme_id"]].setdefault(gt, []).append(ep)
+                    timing_eps[tmpl["scheme_id"]].append(ep)
+                    matched += 1
+                    break   # first-match only
+            except Exception:
+                pass
+
+    # ── Timing median helper ───────────────────────────────────────────────
+    def _med(vals: list):
+        cleaned = [v for v in vals if v is not None]
+        return round(_stats.median(cleaned), 1) if cleaned else None
+
+    n4x   = group_totals.get("4x_pump",       0)
+    nfp   = group_totals.get("false_positive", 0)
+    absent = [g for g in _ALL_GROUPS if group_totals.get(g, 0) == 0]
+
+    # ── Summarise each scheme ──────────────────────────────────────────────
+    results: list[dict] = []
+    for tmpl in TEMPLATES:
+        sid   = tmpl["scheme_id"]
+        teps  = timing_eps[sid]
+        f4x   = len(by_group[sid].get("4x_pump",       []))
+        ffp   = len(by_group[sid].get("false_positive", []))
+        ftotal = sum(len(v) for v in by_group[sid].values())
+
+        if ftotal == 0:
+            continue
+
+        share_4x = round(f4x / n4x, 3) if n4x > 0 else None
+        share_fp = round(ffp / nfp, 3) if nfp > 0 else None
+        sep_str  = (round(share_4x / share_fp, 2)
+                    if share_4x and share_fp and share_fp > 0
+                    else None)
+
+        breakdown = {g: len(by_group[sid].get(g, []))
+                     for g in _ALL_GROUPS if group_totals.get(g, 0) > 0}
+
+        notes: list[str] = []
+        if nfp == 0:
+            notes.append("false_positive absent — separator_strength unavailable")
+        if n4x == 0:
+            notes.append("4x_pump absent — share_of_4x_pumps unavailable")
+
+        results.append({
+            "scheme_id":                sid,
+            "scheme_label":             tmpl["label"],
+            "ordered_steps":            tmpl["steps"],
+            "frequency_count":          ftotal,
+            "group_breakdown":          breakdown,
+            "share_of_4x_pumps":        share_4x,
+            "share_of_false_positives": share_fp,
+            "separator_strength":       sep_str,
+            "typical_timing": {
+                "compression_lead_days":        _med([e.get("compression_days_pre")                         for e in teps]),
+                "compression_to_breakout_days": _med([e.get("days_from_first_compression_to_breakout")      for e in teps]),
+                "vol_to_breakout_days":         _med([e.get("days_from_first_abnormal_volume_to_breakout")  for e in teps]),
+                "breakout_to_peak_days":        _med([e.get("days_from_breakout_to_peak")                   for e in teps]),
+                "days_in_base":                 _med([e.get("days_in_base")                                 for e in teps]),
+            },
+            "notes": notes or None,
+        })
+
+    # Sort: primary by 4x_pump absolute count, then total
+    results.sort(key=lambda r: (
+        -len(by_group[r["scheme_id"]].get("4x_pump", [])),
+        -(r["frequency_count"] or 0),
+    ))
+
+    return {
+        "schemes":            results[:5],
+        "absent_groups":      absent,
+        "total_episodes":     len(episodes),
+        "analyzed_episodes":  matched,
+        "note": (
+            "Pre-breakout features only. peak/fade/dump excluded. "
+            "Each episode assigned to first matching scheme (most specific wins)."
+        ),
+    }
+
+
 def _compute_stats(values: list) -> dict:
     """
     Compute distribution statistics over a list of numeric values.

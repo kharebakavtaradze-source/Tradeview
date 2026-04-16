@@ -651,6 +651,235 @@
   margin: 0;
 }
 
+/* ── Top Pre-Pump Schemes panel ──────────────────────────── */
+.schemesPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.schemesHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.schemesTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.schemesHint {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.schemesAbsent {
+  font-size: 11px;
+  color: var(--amber, #fbbf24);
+  background: color-mix(in srgb, var(--amber, #fbbf24) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber, #fbbf24) 25%, transparent);
+  border-radius: var(--r-sm);
+  padding: 6px 12px;
+}
+
+.schemesNote {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+
+.schemesList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Individual scheme card ───────────────────────────────── */
+.schemeCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color var(--t-fast);
+}
+.schemeCard:hover { border-color: var(--accent-border); }
+
+.schemeHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.schemeId {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.schemeLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+
+.schemeSepBadge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+.schemeSepStrong {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+.schemeSepMid {
+  background: color-mix(in srgb, #86efac 15%, transparent);
+  border: 1px solid color-mix(in srgb, #86efac 30%, transparent);
+  color: #86efac;
+}
+.schemeSepWeak {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+/* ── Ordered steps row ────────────────────────────────────── */
+.schemeSteps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.schemeStep {
+  display: flex;
+  align-items: center;
+}
+
+.stepArrow {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0 4px;
+}
+
+.stepLabel {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* ── Bottom: breakdown + timing ───────────────────────────── */
+.schemeBottom {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.schemeBreakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.breakdownItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.breakdownDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.breakdownGroup {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.breakdownCount {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.breakdownPct {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.schemeTiming {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.timingChip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+.timingKey {
+  font-size: 8px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.timingVal {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.schemeNotes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 9px;
+  color: var(--amber, #fbbf24);
+  font-style: italic;
+}
+
 /* ── Feature priority badges ─────────────────────────────── */
 .priBadge,
 .secBadge,

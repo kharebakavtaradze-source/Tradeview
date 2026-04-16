@@ -3581,3 +3581,28 @@ async def raw_pattern_study_repair(run_id: int):
 
     result = await repair_raw_pattern_group_types(run_id, run["pump_study_run_id"])
     return {"ok": True, "run_id": run_id, "pump_study_run_id": run["pump_study_run_id"], **result}
+
+
+# ── 10. Top pre-pump schemes ───────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/top-schemes")
+async def raw_pattern_study_top_schemes(run_id: int):
+    """
+    Deterministic extraction of the top 3–5 repeated pre-pump sequence schemes
+    from stored episode features for a completed raw-pattern run.
+
+    Uses ONLY pre-breakout features.  peak / fade / dump are excluded entirely.
+    No AI — purely deterministic counting and ranking.
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_episode_features
+    from replay.pump_study_engine import extract_top_schemes
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run is not complete yet.")
+
+    episodes = await get_raw_pattern_episode_features(run_id, limit=5000)
+    result   = extract_top_schemes(episodes)
+    return {"ok": True, "run_id": run_id, **result}
