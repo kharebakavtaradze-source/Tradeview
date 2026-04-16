@@ -1840,25 +1840,63 @@ async def build_raw_pattern_episode_features_structure(
     return patched
 
 
-# Features extracted into each member's features_json and compared across groups
+# Features extracted into each member's features_json and compared across groups.
+# Ordered PRIMARY first so the comparison table is meaningful at a glance.
 _COMPARISON_FEATURES = [
+    # ── PRIMARY: sequence / duration — core 4x separators ──
+    "days_from_breakout_to_peak",
+    "compression_days_pre",
+    "days_from_first_compression_to_breakout",
+    "days_from_first_abnormal_volume_to_breakout",
+    "dryup_day_count_pre",
+    "days_in_base",
+    # ── PRIMARY: structure / wyckoff ──
+    "had_accumulation_like",
+    "had_spring_test_lps",
+    "reclaim_bar_count_pre",
+    # ── SECONDARY: volume ──
     "max_volume_anomaly_pre",
     "median_volume_anomaly_pre",
     "abnormal_volume_day_count_pre",
-    "dryup_day_count_pre",
+    # ── SECONDARY: candle patterns ──
+    "bullish_engulfing_count_pre",
+    "expansion_bar_count_pre",
+    # ── LOW_SIGNAL: raw candle anatomy + binary flags ──
     "had_compression",
-    "compression_days_pre",
     "avg_body_pct_pre",
     "avg_upper_wick_pct_pre",
     "avg_lower_wick_pct_pre",
-    "bullish_engulfing_count_pre",
-    "reclaim_bar_count_pre",
-    "expansion_bar_count_pre",
-    "had_accumulation_like",
-    "had_spring_test_lps",
-    "days_in_base",
-    "days_from_breakout_to_peak",
 ]
+
+# Priority tier for each feature.  Used to populate stats_json["priority"]
+# and to drive UI badge rendering.  Post-factum outcome labels are NOT in
+# _COMPARISON_FEATURES — they must never be treated as early signals.
+_FEATURE_PRIORITY: dict[str, str] = {
+    # PRIMARY — best separators of 4x pump vs all other groups
+    "days_from_breakout_to_peak":                  "PRIMARY",
+    "compression_days_pre":                        "PRIMARY",
+    "days_from_first_compression_to_breakout":     "PRIMARY",
+    "days_from_first_abnormal_volume_to_breakout": "PRIMARY",
+    "dryup_day_count_pre":                         "PRIMARY",
+    "days_in_base":                                "PRIMARY",
+    "had_accumulation_like":                       "PRIMARY",
+    "had_spring_test_lps":                         "PRIMARY",
+    "reclaim_bar_count_pre":                       "PRIMARY",
+    # SECONDARY — informative but weaker or noisier separators
+    "max_volume_anomaly_pre":                      "SECONDARY",
+    "median_volume_anomaly_pre":                   "SECONDARY",
+    "abnormal_volume_day_count_pre":               "SECONDARY",
+    "bullish_engulfing_count_pre":                 "SECONDARY",
+    "expansion_bar_count_pre":                     "SECONDARY",
+    # LOW_SIGNAL — high noise, low discrimination, or near-always-on
+    "had_compression":                             "LOW_SIGNAL",
+    "avg_body_pct_pre":                            "LOW_SIGNAL",
+    "avg_upper_wick_pct_pre":                      "LOW_SIGNAL",
+    "avg_lower_wick_pct_pre":                      "LOW_SIGNAL",
+}
+
+# Binary features where always_on_flag is meaningful
+_BINARY_FEATURES = {"had_compression", "had_accumulation_like", "had_spring_test_lps"}
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
 
@@ -1925,6 +1963,35 @@ async def build_raw_pattern_comparisons(
             if stats["count"] == 0:
                 continue
 
+            median = stats["median"] or 0.0
+            mean   = stats["mean"]   or 0.0
+            p25    = stats["p25"]    or 0.0
+            p75    = stats["p75"]    or 0.0
+
+            # ── Diagnostic flags ─────────────────────────────────────────
+            iqr = p75 - p25
+
+            # Low-variance: IQR is small relative to median (or absolute)
+            low_variance_flag = bool(
+                iqr < max(abs(median) * 0.15, 0.5)
+            )
+
+            # Always-on: binary feature where >90% of values are True/1
+            always_on_flag = bool(
+                feat in _BINARY_FEATURES and mean > 0.90
+            )
+
+            # Outlier-risk: mean is heavily distorted relative to median
+            outlier_risk_flag = bool(
+                abs(mean - median) / max(abs(median), 0.001) > 0.50
+            )
+
+            priority = _FEATURE_PRIORITY.get(feat, "LOW_SIGNAL")
+            # Override to LOW_SIGNAL if diagnostics indicate poor signal
+            if always_on_flag or (low_variance_flag and not always_on_flag):
+                if priority not in ("PRIMARY",):
+                    priority = "LOW_SIGNAL"
+
             comp_rows.append({
                 "group_name":   group_name,
                 "feature_name": feat,
@@ -1934,6 +2001,16 @@ async def build_raw_pattern_comparisons(
                 "p25_value":    stats["p25"],
                 "p75_value":    stats["p75"],
                 "p90_value":    stats["p90"],
+                "stats_json": {
+                    "priority":           priority,
+                    "low_variance_flag":  low_variance_flag,
+                    "always_on_flag":     always_on_flag,
+                    "outlier_risk_flag":  outlier_risk_flag,
+                    "iqr":                round(iqr, 4),
+                    "pct_nonzero":        round(
+                        sum(1 for x in numeric if x != 0) / len(numeric), 3
+                    ) if numeric else 0.0,
+                },
             })
 
         if comp_rows:

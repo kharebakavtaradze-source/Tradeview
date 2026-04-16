@@ -651,6 +651,67 @@
   margin: 0;
 }
 
+/* ── Feature priority badges ─────────────────────────────── */
+.priBadge,
+.secBadge,
+.lowBadge,
+.alwaysOnBadge,
+.outlierBadge,
+.lowVarBadge {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+/* PRIMARY — accent colour, stands out */
+.priBadge {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+
+/* SECONDARY — muted blue-grey */
+.secBadge {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+/* LOW_SIGNAL — very dim */
+.lowBadge {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* ALWAYS ON — amber warning */
+.alwaysOnBadge {
+  background: color-mix(in srgb, var(--amber, #fbbf24) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber, #fbbf24) 35%, transparent);
+  color: var(--amber, #fbbf24);
+}
+
+/* OUTLIER RISK — red warning */
+.outlierBadge {
+  background: color-mix(in srgb, var(--red, #f87171) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red, #f87171) 35%, transparent);
+  color: var(--red, #f87171);
+}
+
+/* LOW VARIANCE — soft grey */
+.lowVarBadge {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
 /* ── Pulsing dot (running indicator) ─────────────────────── */
 .pulsingDot {
   width: 8px;

@@ -244,13 +244,77 @@ function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroup
 
 // ── Comparison grid ───────────────────────────────────────────────────────────
 
+// Must match _COMPARISON_FEATURES order in pump_study_engine.py
 const COMP_FEATURES = [
-  'max_volume_anomaly_pre', 'median_volume_anomaly_pre', 'abnormal_volume_day_count_pre',
-  'dryup_day_count_pre', 'had_compression', 'compression_days_pre',
-  'avg_body_pct_pre', 'avg_upper_wick_pct_pre', 'avg_lower_wick_pct_pre',
-  'bullish_engulfing_count_pre', 'reclaim_bar_count_pre', 'expansion_bar_count_pre',
-  'had_accumulation_like', 'had_spring_test_lps', 'days_in_base', 'days_from_breakout_to_peak',
+  // PRIMARY — sequence / duration
+  'days_from_breakout_to_peak',
+  'compression_days_pre',
+  'days_from_first_compression_to_breakout',
+  'days_from_first_abnormal_volume_to_breakout',
+  'dryup_day_count_pre',
+  'days_in_base',
+  // PRIMARY — structure
+  'had_accumulation_like',
+  'had_spring_test_lps',
+  'reclaim_bar_count_pre',
+  // SECONDARY — volume
+  'max_volume_anomaly_pre',
+  'median_volume_anomaly_pre',
+  'abnormal_volume_day_count_pre',
+  // SECONDARY — candle patterns
+  'bullish_engulfing_count_pre',
+  'expansion_bar_count_pre',
+  // LOW_SIGNAL — raw candle anatomy
+  'had_compression',
+  'avg_body_pct_pre',
+  'avg_upper_wick_pct_pre',
+  'avg_lower_wick_pct_pre',
 ];
+
+// Used to derive badge when stats_json priority is absent (legacy runs)
+const FEATURE_PRIORITY = {
+  days_from_breakout_to_peak:                  'PRIMARY',
+  compression_days_pre:                        'PRIMARY',
+  days_from_first_compression_to_breakout:     'PRIMARY',
+  days_from_first_abnormal_volume_to_breakout: 'PRIMARY',
+  dryup_day_count_pre:                         'PRIMARY',
+  days_in_base:                                'PRIMARY',
+  had_accumulation_like:                       'PRIMARY',
+  had_spring_test_lps:                         'PRIMARY',
+  reclaim_bar_count_pre:                       'PRIMARY',
+  max_volume_anomaly_pre:                      'SECONDARY',
+  median_volume_anomaly_pre:                   'SECONDARY',
+  abnormal_volume_day_count_pre:               'SECONDARY',
+  bullish_engulfing_count_pre:                 'SECONDARY',
+  expansion_bar_count_pre:                     'SECONDARY',
+  had_compression:                             'LOW_SIGNAL',
+  avg_body_pct_pre:                            'LOW_SIGNAL',
+  avg_upper_wick_pct_pre:                      'LOW_SIGNAL',
+  avg_lower_wick_pct_pre:                      'LOW_SIGNAL',
+};
+
+const TIER_ORDER = { PRIMARY: 0, SECONDARY: 1, LOW_SIGNAL: 2 };
+
+function PriorityBadge({ priority }) {
+  const cls = {
+    PRIMARY:    styles.priBadge,
+    SECONDARY:  styles.secBadge,
+    LOW_SIGNAL: styles.lowBadge,
+  }[priority] || styles.lowBadge;
+  const label = { PRIMARY: 'PRI', SECONDARY: 'SEC', LOW_SIGNAL: 'LOW' }[priority] || priority;
+  return <span className={cls}>{label}</span>;
+}
+
+function FlagBadges({ stats }) {
+  if (!stats) return null;
+  return (
+    <>
+      {stats.always_on_flag    && <span className={styles.alwaysOnBadge}>ALWAYS ON</span>}
+      {stats.outlier_risk_flag && <span className={styles.outlierBadge}>OUTLIER</span>}
+      {stats.low_variance_flag && !stats.always_on_flag && <span className={styles.lowVarBadge}>LOW VAR</span>}
+    </>
+  );
+}
 
 function fmtStat(v) {
   if (v == null) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
@@ -267,51 +331,88 @@ function ComparisonGrid({ comparisons }) {
     pivot[c.feature_name][c.group_name] = c;
   }
 
-  const features = COMP_FEATURES.filter(f => pivot[f]);
+  // Collect known features, sort by priority tier then original order
+  const allFeats = COMP_FEATURES.filter(f => pivot[f]);
+  // Any features in data but not in COMP_FEATURES list (future-proof)
+  const extraFeats = Object.keys(pivot).filter(f => !COMP_FEATURES.includes(f));
+  const features = [...allFeats, ...extraFeats];
+
+  // Get the effective priority for a feature (from stored stats or fallback)
+  const getPriority = (feat) => {
+    // Try to read from any group's stats
+    const anyRow = Object.values(pivot[feat] || {})[0];
+    return anyRow?.stats?.priority || FEATURE_PRIORITY[feat] || 'LOW_SIGNAL';
+  };
+
+  features.sort((a, b) => {
+    const ta = TIER_ORDER[getPriority(a)] ?? 99;
+    const tb = TIER_ORDER[getPriority(b)] ?? 99;
+    if (ta !== tb) return ta - tb;
+    return COMP_FEATURES.indexOf(a) - COMP_FEATURES.indexOf(b);
+  });
 
   if (features.length === 0) {
     return <div className={styles.statusMsg}>No comparison data yet.</div>;
   }
 
+  // Get flags from first available group row for a feature
+  const getFlags = (feat) => {
+    const anyRow = Object.values(pivot[feat] || {})[0];
+    return anyRow?.stats || null;
+  };
+
   return (
     <div className={styles.tableCard}>
       <div className={styles.tableHeader}>
         <span className={styles.tableTitle}>Feature Comparisons</span>
-        <span className={styles.tableHint}>median (n=members)</span>
+        <span className={styles.tableHint}>median (n=members) · sorted by priority</span>
       </div>
       <div className={styles.tableScroll}>
         <table className={styles.dataTable}>
           <thead>
             <tr>
-              <th className={styles.dataHead} style={{ minWidth: 200 }}>Feature</th>
+              <th className={styles.dataHead} style={{ minWidth: 220 }}>Feature</th>
+              <th className={styles.dataHead} style={{ minWidth: 70 }}>Priority</th>
               {GROUPS.map(g => (
                 <th key={g} className={styles.dataHead} style={{ color: GROUP_COLOR[g] }}>{g}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {features.map(feat => (
-              <tr key={feat} className={styles.dataRow}>
-                <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-dim)' }}>
-                  {feat}
-                </td>
-                {GROUPS.map(g => {
-                  const row = pivot[feat]?.[g];
-                  return (
-                    <td key={g} className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)' }}>
-                      {row ? (
-                        <>
-                          <span style={{ fontWeight: 700 }}>{fmtStat(row.median_value)}</span>
-                          <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 4 }}>
-                            n={row.member_count}
-                          </span>
-                        </>
-                      ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+            {features.map(feat => {
+              const priority = getPriority(feat);
+              const flags    = getFlags(feat);
+              return (
+                <tr key={feat} className={styles.dataRow}>
+                  <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span>{feat}</span>
+                      <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                        <FlagBadges stats={flags} />
+                      </div>
+                    </div>
+                  </td>
+                  <td className={styles.dataCell}>
+                    <PriorityBadge priority={priority} />
+                  </td>
+                  {GROUPS.map(g => {
+                    const row = pivot[feat]?.[g];
+                    return (
+                      <td key={g} className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)' }}>
+                        {row ? (
+                          <>
+                            <span style={{ fontWeight: 700 }}>{fmtStat(row.median_value)}</span>
+                            <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 4 }}>
+                              n={row.member_count}
+                            </span>
+                          </>
+                        ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
