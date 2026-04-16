@@ -3163,6 +3163,280 @@ class PumpStudyAISummary(Base):
     created_at     = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# RAW PATTERN STUDY — Feature Discovery Layer
+# ───────────────────────────────────────────────────────────────────────────────
+# Purpose: extract, store, and compare raw candle/indicator/structure features
+# across the four canonical groups (4x_pump, normal_winner, false_positive,
+# missed_mover) so that repeating pre-conditions can be discovered empirically
+# before any template or matching logic is built.
+#
+# Data source: existing pump_episode_snapshots.snapshot_json — no new data
+# collection required.  All tables reference a pump_study_run as source.
+#
+# Table hierarchy (creation order):
+#   raw_pattern_runs
+#   raw_pattern_daily_features    ← one row per episode × day (PRE/PUMP/POST)
+#   raw_pattern_episode_features  ← aggregated feature vector per episode
+#   raw_pattern_comparisons       ← group-level feature distributions
+#   raw_pattern_comparison_members← one row per symbol per comparison group
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class RawPatternRun(Base):
+    """
+    One raw-pattern discovery run.  Always backed by a completed pump_study_run
+    as the data source — does NOT re-fetch candles.
+
+    status: pending | running | completed | failed
+    """
+    __tablename__ = "raw_pattern_runs"
+
+    id                    = Column(Integer,  primary_key=True)
+    pump_study_run_id     = Column(Integer,  nullable=False, index=True)   # FK → pump_study_runs.id
+    status                = Column(String(20), default="pending")
+    # Progress counters
+    episodes_processed    = Column(Integer,  default=0)
+    daily_feature_count   = Column(Integer,  default=0)
+    episode_feature_count = Column(Integer,  default=0)
+    comparison_count      = Column(Integer,  default=0)
+    # Config
+    notes                 = Column(Text,     nullable=True)
+    error_message         = Column(Text,     nullable=True)
+    started_at            = Column(DateTime(timezone=True), nullable=True)
+    finished_at           = Column(DateTime(timezone=True), nullable=True)
+    created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class RawPatternDailyFeatures(Base):
+    """
+    Per-episode, per-day feature row.  Derived by reading
+    pump_episode_snapshots.snapshot_json — no re-computation of indicators.
+
+    Stores:
+      • Scalar OHLCV + price-action fields (some duplicated from snapshot for
+        fast querying without JSON parsing)
+      • Fields NOT already extracted as snapshot columns:
+        bb_sqz_bars, ribbon_compression, bullish_stack, bearish_stack,
+        compression_and_bullish, in_acc, in_dist, obv_*, pump_quality,
+        pump_signal, sub-scores, toxicity_*
+      • Multi-bar derived features computed across consecutive snapshot rows
+        (rsi_3d_slope, vol_ramp_3d, etc.)
+    """
+    __tablename__ = "raw_pattern_daily_features"
+
+    id                    = Column(Integer, primary_key=True)
+    pattern_run_id        = Column(Integer, nullable=False, index=True)    # FK → raw_pattern_runs.id
+    episode_id            = Column(Integer, nullable=False, index=True)    # FK → pump_episodes.id
+    snapshot_id           = Column(Integer, nullable=True)                 # FK → pump_episode_snapshots.id (optional, for traceability)
+    symbol                = Column(String(10), index=True)
+    date                  = Column(String(10))
+
+    # ── Window context ────────────────────────────────────────────────────────
+    window_phase          = Column(String(6), nullable=True)    # PRE | PUMP | POST
+    relative_day          = Column(Integer,   nullable=True)    # vs pump_start (neg=pre, 0=start, pos=post)
+    relative_day_peak     = Column(Integer,   nullable=True)    # vs pump_peak
+
+    # ── OHLCV (raw, for charting / pattern shape) ─────────────────────────────
+    open                  = Column(Float,      nullable=True)
+    high                  = Column(Float,      nullable=True)
+    low                   = Column(Float,      nullable=True)
+    close                 = Column(Float,      nullable=True)
+    volume                = Column(BigInteger, nullable=True)
+
+    # ── Price-action features ─────────────────────────────────────────────────
+    daily_return_pct      = Column(Float, nullable=True)
+    cum_return_pct        = Column(Float, nullable=True)   # cumulative from pump_start_price
+    gap_pct               = Column(Float, nullable=True)
+    intraday_range_pct    = Column(Float, nullable=True)   # (high-low)/open
+    close_position        = Column(Float, nullable=True)   # 0–1 within day range
+
+    # ── Volume features ───────────────────────────────────────────────────────
+    volume_vs_avg20       = Column(Float, nullable=True)
+    volume_zscore         = Column(Float, nullable=True)
+
+    # ── Volatility / compression features ────────────────────────────────────
+    atr_pct               = Column(Float,   nullable=True)
+    bb_width              = Column(Float,   nullable=True)
+    bb_squeeze            = Column(Boolean, nullable=True)
+    bb_sqz_bars           = Column(Integer, nullable=True)  # consecutive squeeze bars (from snapshot_json)
+
+    # ── Momentum features ─────────────────────────────────────────────────────
+    rsi                   = Column(Float, nullable=True)
+    cmf                   = Column(Float, nullable=True)
+
+    # ── Structure signals (from snapshot_json.indicators) ────────────────────
+    ribbon_class          = Column(String(30), nullable=True)
+    ribbon_compression    = Column(String(10), nullable=True)  # STRONG|MEDIUM|WEAK|NONE
+    bullish_stack         = Column(Boolean,    nullable=True)
+    bearish_stack         = Column(Boolean,    nullable=True)
+    compression_and_bullish = Column(Boolean,  nullable=True)
+
+    # ── Wyckoff / regime (from snapshot_json.regime) ─────────────────────────
+    wyckoff_state         = Column(String(20), nullable=True)
+    in_acc                = Column(Boolean, nullable=True)
+    in_dist               = Column(Boolean, nullable=True)
+    regime_confidence     = Column(Integer, nullable=True)
+
+    # ── OBV features (from snapshot_json.indicators.obv) ─────────────────────
+    obv_divergence        = Column(Boolean, nullable=True)
+    obv_strength          = Column(String(10), nullable=True)  # STRONG|MEDIUM|WEAK
+    obv_slope_5d          = Column(Float,   nullable=True)
+
+    # ── Pump engine scores (from snapshot_json.pump) ──────────────────────────
+    pump_quality          = Column(Integer,    nullable=True)
+    pump_signal           = Column(String(30), nullable=True)
+    velocity_score        = Column(Float,      nullable=True)  # _velocity_score
+    volume_score          = Column(Float,      nullable=True)  # _volume_score
+    behavior_score        = Column(Float,      nullable=True)  # _behavior_score
+    structure_score       = Column(Float,      nullable=True)  # _structure_score
+
+    # ── Toxicity (from snapshot_json.toxicity) ────────────────────────────────
+    toxicity_score        = Column(Integer,    nullable=True)
+    toxicity_level        = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH|EXTREME
+
+    # ── Multi-bar derived features (computed across consecutive snapshot rows) ─
+    # These require at least 3 prior rows to compute; NULL on early PRE days.
+    rsi_3d_slope          = Column(Float, nullable=True)  # (rsi_today - rsi_3days_ago) / 3
+    vol_ramp_3d           = Column(Float, nullable=True)  # slope of volume_vs_avg20 over last 3 days
+    bb_width_3d_slope     = Column(Float, nullable=True)  # bb_width expansion/contraction rate
+    close_pos_3d_avg      = Column(Float, nullable=True)  # rolling 3-day avg of close_position
+
+    created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class RawPatternEpisodeFeatures(Base):
+    """
+    Aggregated feature vector for one episode, computed from its
+    RawPatternDailyFeatures rows.
+
+    Separate PRE / PUMP / POST sections.  PRE-window aggregates are the
+    primary focus for discovery (what structural conditions existed before
+    the pump started).
+
+    comparison_group links this episode into exactly one of the four
+    canonical buckets for cross-group analysis.
+    """
+    __tablename__ = "raw_pattern_episode_features"
+
+    id                    = Column(Integer,    primary_key=True)
+    pattern_run_id        = Column(Integer,    nullable=False, index=True)
+    episode_id            = Column(Integer,    nullable=False, index=True)  # FK → pump_episodes.id
+    symbol                = Column(String(10))
+    comparison_group      = Column(String(30), nullable=True, index=True)   # 4x_pump|normal_winner|false_positive|missed_mover
+    pump_multiple         = Column(Float,      nullable=True)
+    pump_type             = Column(String(40), nullable=True)
+
+    # ── PRE-window aggregates ─────────────────────────────────────────────────
+    pre_days_available    = Column(Integer, nullable=True)   # actual PRE rows present
+
+    # Compression / squeeze
+    pre_compression_days  = Column(Integer, nullable=True)   # days with bb_squeeze=True
+    pre_max_sqz_run       = Column(Integer, nullable=True)   # longest consecutive squeeze run
+    pre_min_bb_width      = Column(Float,   nullable=True)   # tightest compression level
+    pre_bb_width_slope    = Column(Float,   nullable=True)   # overall compression direction (neg=tightening)
+
+    # Volume ramp
+    pre_max_vol_anomaly   = Column(Float, nullable=True)     # max volume_vs_avg20 in PRE
+    pre_avg_vol_anomaly   = Column(Float, nullable=True)     # mean volume_vs_avg20 in PRE
+    pre_vol_ramp_slope    = Column(Float, nullable=True)     # linear slope of vol_vs_avg20 series in PRE
+
+    # Momentum
+    pre_rsi_mean          = Column(Float, nullable=True)
+    pre_rsi_first         = Column(Float, nullable=True)     # RSI on day PRE[-10]
+    pre_rsi_last          = Column(Float, nullable=True)     # RSI on day PRE[-1]
+    pre_rsi_slope         = Column(Float, nullable=True)     # (last - first) / pre_days
+    pre_cmf_mean          = Column(Float, nullable=True)
+    pre_cmf_last          = Column(Float, nullable=True)
+
+    # OBV trend
+    pre_obv_slope_last    = Column(Float,   nullable=True)   # obv_slope_5d on last PRE day
+    pre_obv_strength_last = Column(String(10), nullable=True)
+    pre_obv_div_days      = Column(Integer, nullable=True)   # days with obv_divergence=True
+
+    # Structure
+    pre_bullish_stack_days     = Column(Integer,    nullable=True)
+    pre_compression_bull_days  = Column(Integer,    nullable=True)  # days with compression_and_bullish
+    pre_ribbon_best            = Column(String(30), nullable=True)  # best ribbon_class in PRE
+    pre_ribbon_compr_best      = Column(String(10), nullable=True)  # STRONG|MEDIUM|WEAK|NONE (best)
+    pre_wyckoff_best           = Column(String(20), nullable=True)  # highest Wyckoff state in PRE
+    pre_in_acc_days            = Column(Integer,    nullable=True)  # days with in_acc=True
+    pre_in_dist_days           = Column(Integer,    nullable=True)
+
+    # Price action
+    pre_avg_close_position = Column(Float, nullable=True)
+    pre_max_gap_pct        = Column(Float, nullable=True)
+    pre_avg_atr_pct        = Column(Float, nullable=True)
+
+    # Pump engine (pre-pump readiness)
+    pre_pump_quality_max   = Column(Integer, nullable=True)  # highest pump_quality score seen in PRE
+    pre_pump_quality_last  = Column(Integer, nullable=True)  # pump_quality on last PRE day
+    pre_toxicity_avg       = Column(Float,   nullable=True)
+
+    # Timing: first event day relative to pump_start (negative = days before)
+    pre_first_vol_spike_day       = Column(Integer, nullable=True)  # first vol_vs_avg20 >= 2.0
+    pre_first_squeeze_day         = Column(Integer, nullable=True)  # first bb_squeeze=True
+    pre_first_acc_day             = Column(Integer, nullable=True)  # first in_acc=True
+    pre_first_bull_stack_day      = Column(Integer, nullable=True)  # first bullish_stack=True
+    pre_first_compr_bullish_day   = Column(Integer, nullable=True)  # first compression_and_bullish
+
+    # ── PUMP-window aggregates ────────────────────────────────────────────────
+    pump_days_count       = Column(Integer, nullable=True)
+    pump_max_daily_return = Column(Float,   nullable=True)
+    pump_avg_vol_anomaly  = Column(Float,   nullable=True)
+    pump_max_vol_anomaly  = Column(Float,   nullable=True)
+    pump_max_gap_pct      = Column(Float,   nullable=True)
+    pump_min_close_pos    = Column(Float,   nullable=True)   # worst close position (high wick days)
+    pump_wyckoff_fire_days= Column(Integer, nullable=True)   # days with state=FIRE
+
+    # ── POST-window aggregates ────────────────────────────────────────────────
+    post_days_count       = Column(Integer, nullable=True)
+    post_worst_return     = Column(Float,   nullable=True)   # worst cum_return_pct vs start in POST
+    post_avg_daily_return = Column(Float,   nullable=True)   # avg daily_return_pct in POST (fade speed)
+    post_held_above_start = Column(Boolean, nullable=True)   # all POST closes > pump start_price
+    post_avg_close_pos    = Column(Float,   nullable=True)   # avg close position in POST (distribution?)
+
+    created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class RawPatternComparison(Base):
+    """
+    Group-level feature distribution for one comparison bucket within a
+    raw pattern run.  Mirrors pump_comparison_groups structure.
+
+    stats_json shape (per feature):
+      { "feature_name": { "mean": ..., "median": ..., "p25": ...,
+                          "p75": ..., "p90": ..., "pct_nonzero": ... } }
+    """
+    __tablename__ = "raw_pattern_comparisons"
+
+    id             = Column(Integer,    primary_key=True)
+    pattern_run_id = Column(Integer,    nullable=False, index=True)
+    group_name     = Column(String(30), nullable=False)          # 4x_pump|normal_winner|false_positive|missed_mover
+    member_count   = Column(Integer,    default=0)
+    stats_json     = Column(Text,       nullable=True)           # feature distributions
+    created_at     = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class RawPatternComparisonMember(Base):
+    """
+    One symbol's membership in a raw-pattern comparison group.
+    Links back to raw_pattern_episode_features for the full feature vector.
+    """
+    __tablename__ = "raw_pattern_comparison_members"
+
+    id                 = Column(Integer,    primary_key=True)
+    pattern_run_id     = Column(Integer,    nullable=False, index=True)
+    comparison_id      = Column(Integer,    nullable=False, index=True)   # FK → raw_pattern_comparisons.id
+    group_name         = Column(String(30), nullable=False)               # denormalized
+    symbol             = Column(String(10), nullable=False)
+    episode_id         = Column(Integer,    nullable=True)                 # FK → pump_episodes.id (null for missed_mover)
+    episode_feature_id = Column(Integer,    nullable=True)                 # FK → raw_pattern_episode_features.id
+    pump_multiple      = Column(Float,      nullable=True)
+    pump_type          = Column(String(40), nullable=True)
+    features_json      = Column(Text,       nullable=True)                 # full episode feature dict for stats aggregation
+    created_at         = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 # ── Pump Study CRUD ───────────────────────────────────────────────────────────
 
 async def create_pump_study_run(data: dict) -> int:
@@ -3822,3 +4096,342 @@ async def get_pump_ai_summary(run_id: int) -> dict | None:
             "parse_error":    row.parse_error,
             "created_at":     row.created_at.isoformat() if row.created_at else None,
         }
+
+
+# ── Raw Pattern Study CRUD ────────────────────────────────────────────────────
+
+def _raw_pattern_run_to_dict(row: RawPatternRun) -> dict:
+    return {
+        "id":                    row.id,
+        "pump_study_run_id":     row.pump_study_run_id,
+        "status":                row.status,
+        "episodes_processed":    row.episodes_processed,
+        "daily_feature_count":   row.daily_feature_count,
+        "episode_feature_count": row.episode_feature_count,
+        "comparison_count":      row.comparison_count,
+        "notes":                 row.notes,
+        "error_message":         row.error_message,
+        "started_at":            row.started_at.isoformat() if row.started_at else None,
+        "finished_at":           row.finished_at.isoformat() if row.finished_at else None,
+        "created_at":            row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+async def create_raw_pattern_run(pump_study_run_id: int, notes: str | None = None) -> int:
+    """Create a new raw-pattern discovery run. Returns run id."""
+    async with get_session_factory()() as session:
+        row = RawPatternRun(
+            pump_study_run_id = pump_study_run_id,
+            status            = "pending",
+            notes             = notes,
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def update_raw_pattern_run(run_id: int, data: dict) -> None:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(RawPatternRun).where(RawPatternRun.id == run_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return
+        for k, v in data.items():
+            if hasattr(row, k):
+                setattr(row, k, v)
+        await session.commit()
+
+
+async def get_raw_pattern_run(run_id: int) -> dict | None:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(RawPatternRun).where(RawPatternRun.id == run_id)
+        )
+        row = result.scalar_one_or_none()
+        return _raw_pattern_run_to_dict(row) if row else None
+
+
+async def get_raw_pattern_runs(pump_study_run_id: int | None = None, limit: int = 20) -> list[dict]:
+    async with get_session_factory()() as session:
+        q = select(RawPatternRun).order_by(RawPatternRun.created_at.desc()).limit(limit)
+        if pump_study_run_id is not None:
+            q = q.where(RawPatternRun.pump_study_run_id == pump_study_run_id)
+        result = await session.execute(q)
+        return [_raw_pattern_run_to_dict(r) for r in result.scalars().all()]
+
+
+async def save_raw_pattern_daily_features(pattern_run_id: int, rows: list[dict]) -> int:
+    """Bulk-insert daily feature rows for one or more episodes. Returns count inserted."""
+    if not rows:
+        return 0
+    async with get_session_factory()() as session:
+        for d in rows:
+            row = RawPatternDailyFeatures(
+                pattern_run_id          = pattern_run_id,
+                episode_id              = d["episode_id"],
+                snapshot_id             = d.get("snapshot_id"),
+                symbol                  = d["symbol"],
+                date                    = d["date"],
+                window_phase            = d.get("window_phase"),
+                relative_day            = d.get("relative_day"),
+                relative_day_peak       = d.get("relative_day_peak"),
+                open                    = d.get("open"),
+                high                    = d.get("high"),
+                low                     = d.get("low"),
+                close                   = d.get("close"),
+                volume                  = d.get("volume"),
+                daily_return_pct        = d.get("daily_return_pct"),
+                cum_return_pct          = d.get("cum_return_pct"),
+                gap_pct                 = d.get("gap_pct"),
+                intraday_range_pct      = d.get("intraday_range_pct"),
+                close_position          = d.get("close_position"),
+                volume_vs_avg20         = d.get("volume_vs_avg20"),
+                volume_zscore           = d.get("volume_zscore"),
+                atr_pct                 = d.get("atr_pct"),
+                bb_width                = d.get("bb_width"),
+                bb_squeeze              = d.get("bb_squeeze"),
+                bb_sqz_bars             = d.get("bb_sqz_bars"),
+                rsi                     = d.get("rsi"),
+                cmf                     = d.get("cmf"),
+                ribbon_class            = d.get("ribbon_class"),
+                ribbon_compression      = d.get("ribbon_compression"),
+                bullish_stack           = d.get("bullish_stack"),
+                bearish_stack           = d.get("bearish_stack"),
+                compression_and_bullish = d.get("compression_and_bullish"),
+                wyckoff_state           = d.get("wyckoff_state"),
+                in_acc                  = d.get("in_acc"),
+                in_dist                 = d.get("in_dist"),
+                regime_confidence       = d.get("regime_confidence"),
+                obv_divergence          = d.get("obv_divergence"),
+                obv_strength            = d.get("obv_strength"),
+                obv_slope_5d            = d.get("obv_slope_5d"),
+                pump_quality            = d.get("pump_quality"),
+                pump_signal             = d.get("pump_signal"),
+                velocity_score          = d.get("velocity_score"),
+                volume_score            = d.get("volume_score"),
+                behavior_score          = d.get("behavior_score"),
+                structure_score         = d.get("structure_score"),
+                toxicity_score          = d.get("toxicity_score"),
+                toxicity_level          = d.get("toxicity_level"),
+                rsi_3d_slope            = d.get("rsi_3d_slope"),
+                vol_ramp_3d             = d.get("vol_ramp_3d"),
+                bb_width_3d_slope       = d.get("bb_width_3d_slope"),
+                close_pos_3d_avg        = d.get("close_pos_3d_avg"),
+            )
+            session.add(row)
+        await session.commit()
+    return len(rows)
+
+
+async def get_raw_pattern_daily_features(
+    pattern_run_id: int,
+    episode_id: int | None = None,
+    window_phase: str | None = None,
+    limit: int = 5000,
+) -> list[dict]:
+    async with get_session_factory()() as session:
+        q = select(RawPatternDailyFeatures).where(
+            RawPatternDailyFeatures.pattern_run_id == pattern_run_id
+        ).order_by(RawPatternDailyFeatures.episode_id, RawPatternDailyFeatures.relative_day)
+        if episode_id is not None:
+            q = q.where(RawPatternDailyFeatures.episode_id == episode_id)
+        if window_phase is not None:
+            q = q.where(RawPatternDailyFeatures.window_phase == window_phase)
+        q = q.limit(limit)
+        result = await session.execute(q)
+        rows = result.scalars().all()
+        return [
+            {c.key: getattr(r, c.key) for c in RawPatternDailyFeatures.__table__.columns}
+            for r in rows
+        ]
+
+
+async def save_raw_pattern_episode_feature(pattern_run_id: int, data: dict) -> int:
+    """Insert one episode-level feature row. Returns its id."""
+    async with get_session_factory()() as session:
+        row = RawPatternEpisodeFeatures(
+            pattern_run_id             = pattern_run_id,
+            episode_id                 = data["episode_id"],
+            symbol                     = data["symbol"],
+            comparison_group           = data.get("comparison_group"),
+            pump_multiple              = data.get("pump_multiple"),
+            pump_type                  = data.get("pump_type"),
+            pre_days_available         = data.get("pre_days_available"),
+            pre_compression_days       = data.get("pre_compression_days"),
+            pre_max_sqz_run            = data.get("pre_max_sqz_run"),
+            pre_min_bb_width           = data.get("pre_min_bb_width"),
+            pre_bb_width_slope         = data.get("pre_bb_width_slope"),
+            pre_max_vol_anomaly        = data.get("pre_max_vol_anomaly"),
+            pre_avg_vol_anomaly        = data.get("pre_avg_vol_anomaly"),
+            pre_vol_ramp_slope         = data.get("pre_vol_ramp_slope"),
+            pre_rsi_mean               = data.get("pre_rsi_mean"),
+            pre_rsi_first              = data.get("pre_rsi_first"),
+            pre_rsi_last               = data.get("pre_rsi_last"),
+            pre_rsi_slope              = data.get("pre_rsi_slope"),
+            pre_cmf_mean               = data.get("pre_cmf_mean"),
+            pre_cmf_last               = data.get("pre_cmf_last"),
+            pre_obv_slope_last         = data.get("pre_obv_slope_last"),
+            pre_obv_strength_last      = data.get("pre_obv_strength_last"),
+            pre_obv_div_days           = data.get("pre_obv_div_days"),
+            pre_bullish_stack_days     = data.get("pre_bullish_stack_days"),
+            pre_compression_bull_days  = data.get("pre_compression_bull_days"),
+            pre_ribbon_best            = data.get("pre_ribbon_best"),
+            pre_ribbon_compr_best      = data.get("pre_ribbon_compr_best"),
+            pre_wyckoff_best           = data.get("pre_wyckoff_best"),
+            pre_in_acc_days            = data.get("pre_in_acc_days"),
+            pre_in_dist_days           = data.get("pre_in_dist_days"),
+            pre_avg_close_position     = data.get("pre_avg_close_position"),
+            pre_max_gap_pct            = data.get("pre_max_gap_pct"),
+            pre_avg_atr_pct            = data.get("pre_avg_atr_pct"),
+            pre_pump_quality_max       = data.get("pre_pump_quality_max"),
+            pre_pump_quality_last      = data.get("pre_pump_quality_last"),
+            pre_toxicity_avg           = data.get("pre_toxicity_avg"),
+            pre_first_vol_spike_day    = data.get("pre_first_vol_spike_day"),
+            pre_first_squeeze_day      = data.get("pre_first_squeeze_day"),
+            pre_first_acc_day          = data.get("pre_first_acc_day"),
+            pre_first_bull_stack_day   = data.get("pre_first_bull_stack_day"),
+            pre_first_compr_bullish_day= data.get("pre_first_compr_bullish_day"),
+            pump_days_count            = data.get("pump_days_count"),
+            pump_max_daily_return      = data.get("pump_max_daily_return"),
+            pump_avg_vol_anomaly       = data.get("pump_avg_vol_anomaly"),
+            pump_max_vol_anomaly       = data.get("pump_max_vol_anomaly"),
+            pump_max_gap_pct           = data.get("pump_max_gap_pct"),
+            pump_min_close_pos         = data.get("pump_min_close_pos"),
+            pump_wyckoff_fire_days     = data.get("pump_wyckoff_fire_days"),
+            post_days_count            = data.get("post_days_count"),
+            post_worst_return          = data.get("post_worst_return"),
+            post_avg_daily_return      = data.get("post_avg_daily_return"),
+            post_held_above_start      = data.get("post_held_above_start"),
+            post_avg_close_pos         = data.get("post_avg_close_pos"),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def get_raw_pattern_episode_features(
+    pattern_run_id: int,
+    comparison_group: str | None = None,
+    limit: int = 1000,
+) -> list[dict]:
+    async with get_session_factory()() as session:
+        q = select(RawPatternEpisodeFeatures).where(
+            RawPatternEpisodeFeatures.pattern_run_id == pattern_run_id
+        ).order_by(RawPatternEpisodeFeatures.id)
+        if comparison_group is not None:
+            q = q.where(RawPatternEpisodeFeatures.comparison_group == comparison_group)
+        q = q.limit(limit)
+        result = await session.execute(q)
+        rows = result.scalars().all()
+        return [
+            {c.key: getattr(r, c.key) for c in RawPatternEpisodeFeatures.__table__.columns}
+            for r in rows
+        ]
+
+
+async def save_raw_pattern_comparison(pattern_run_id: int, group_name: str,
+                                      member_count: int, stats: dict) -> int:
+    """Insert one comparison group row. Returns its id."""
+    async with get_session_factory()() as session:
+        row = RawPatternComparison(
+            pattern_run_id = pattern_run_id,
+            group_name     = group_name,
+            member_count   = member_count,
+            stats_json     = json.dumps(stats),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def save_raw_pattern_comparison_members(comparison_id: int, pattern_run_id: int,
+                                              group_name: str, members: list[dict]) -> int:
+    """Bulk-insert comparison member rows. Returns count inserted."""
+    if not members:
+        return 0
+    async with get_session_factory()() as session:
+        for m in members:
+            row = RawPatternComparisonMember(
+                pattern_run_id     = pattern_run_id,
+                comparison_id      = comparison_id,
+                group_name         = group_name,
+                symbol             = m["symbol"],
+                episode_id         = m.get("episode_id"),
+                episode_feature_id = m.get("episode_feature_id"),
+                pump_multiple      = m.get("pump_multiple"),
+                pump_type          = m.get("pump_type"),
+                features_json      = json.dumps(m.get("features") or {}),
+            )
+            session.add(row)
+        await session.commit()
+    return len(members)
+
+
+async def get_raw_pattern_comparisons(pattern_run_id: int) -> list[dict]:
+    """Return all comparison groups + members for a pattern run."""
+    async with get_session_factory()() as session:
+        grp_result = await session.execute(
+            select(RawPatternComparison)
+            .where(RawPatternComparison.pattern_run_id == pattern_run_id)
+            .order_by(RawPatternComparison.id)
+        )
+        groups = grp_result.scalars().all()
+        out = []
+        for g in groups:
+            mem_result = await session.execute(
+                select(RawPatternComparisonMember)
+                .where(RawPatternComparisonMember.comparison_id == g.id)
+                .order_by(RawPatternComparisonMember.symbol)
+            )
+            members = mem_result.scalars().all()
+            out.append({
+                "id":            g.id,
+                "group_name":    g.group_name,
+                "member_count":  g.member_count,
+                "stats":         json.loads(g.stats_json or "{}"),
+                "members": [
+                    {
+                        "symbol":             m.symbol,
+                        "episode_id":         m.episode_id,
+                        "episode_feature_id": m.episode_feature_id,
+                        "pump_multiple":      m.pump_multiple,
+                        "pump_type":          m.pump_type,
+                        "features":           json.loads(m.features_json or "{}"),
+                    }
+                    for m in members
+                ],
+            })
+        return out
+
+
+async def delete_raw_pattern_run(run_id: int) -> dict:
+    """Hard-delete a raw-pattern run and all its child records."""
+    async with get_session_factory()() as session:
+        run = (await session.execute(
+            select(RawPatternRun).where(RawPatternRun.id == run_id)
+        )).scalar_one_or_none()
+        if not run:
+            raise ValueError(f"Raw pattern run {run_id} not found")
+
+        counts = {}
+        for Model, label, fk in [
+            (RawPatternComparisonMember, "cmp_members",      RawPatternComparisonMember.pattern_run_id),
+            (RawPatternComparison,       "cmp_groups",        RawPatternComparison.pattern_run_id),
+            (RawPatternEpisodeFeatures,  "episode_features",  RawPatternEpisodeFeatures.pattern_run_id),
+            (RawPatternDailyFeatures,    "daily_features",    RawPatternDailyFeatures.pattern_run_id),
+        ]:
+            result = await session.execute(select(Model).where(fk == run_id))
+            rows   = result.scalars().all()
+            for r in rows:
+                await session.delete(r)
+            counts[label] = len(rows)
+
+        await session.delete(run)
+        counts["run"] = 1
+        await session.commit()
+        return counts
