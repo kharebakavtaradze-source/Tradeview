@@ -482,6 +482,16 @@ _PUMP_AI_SUMMARY_MIGRATIONS = [
     ("parse_error",  "TEXT"),
 ]
 
+_RAW_PATTERN_EP_MIGRATIONS = [
+    ("had_bull_stack_pre",          "BOOLEAN"),
+    ("bull_stack_days_pre",         "INTEGER"),
+    ("days_above_ema50_pre",        "INTEGER"),
+    ("days_above_ema200_pre",       "INTEGER"),
+    ("ema50_reclaim_count_pre",     "INTEGER"),
+    ("avg_close_vs_ema50_pct_pre",  "FLOAT"),
+    ("avg_close_vs_ema200_pct_pre", "FLOAT"),
+]
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -545,6 +555,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE pump_study_ai_summaries ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for col, coltype in _RAW_PATTERN_EP_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE raw_pattern_episode_features ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -587,6 +602,13 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration pump_study_ai_summaries.{col} failed (non-fatal): {e}")
+        for col, coltype in _RAW_PATTERN_EP_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE raw_pattern_episode_features ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration raw_pattern_episode_features.{col} failed (non-fatal): {e}")
 
 
 async def init_db():
