@@ -3053,3 +3053,279 @@ async def pump_study_ai_summary(run_id: int):
         "generated_at":  datetime.utcnow().isoformat() + "Z",
         "cached":        False,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Raw Pattern Study endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _raw_pattern_markdown(run: dict, episodes: list[dict], comps: list[dict]) -> str:
+    """Deterministic markdown summary of a raw-pattern study run."""
+    lines = [
+        f"# Raw Pattern Study — Run {run['id']}",
+        f"",
+        f"**Status:** {run.get('status')}  ",
+        f"**Pump Study Run:** {run.get('pump_study_run_id')}  ",
+        f"**Episodes analysed:** {run.get('episode_feature_count', 0)}  ",
+        f"**Daily feature rows:** {run.get('raw_daily_count', 0)}  ",
+        f"**Comparison rows:** {run.get('comparison_count', 0)}  ",
+        f"",
+    ]
+    # Group summary
+    from collections import Counter
+    group_counts = Counter(ep.get("group_type") for ep in episodes)
+    if group_counts:
+        lines += ["## Group Breakdown", ""]
+        for g, n in sorted(group_counts.items()):
+            lines.append(f"- **{g}**: {n} episodes")
+        lines.append("")
+    # Comparison highlights: median per feature per group
+    if comps:
+        lines += ["## Feature Medians by Group", ""]
+        feat_groups: dict[str, dict[str, Any]] = {}
+        for c in comps:
+            feat_groups.setdefault(c["feature_name"], {})[c["group_name"]] = c.get("median_value")
+        for feat, groups in sorted(feat_groups.items()):
+            parts = "  |  ".join(f"{g}: {v}" for g, v in sorted(groups.items()) if v is not None)
+            if parts:
+                lines.append(f"- **{feat}**: {parts}")
+    return "\n".join(lines)
+
+
+# ── 1. Launch ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/replay/raw-pattern-study/run")
+async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks):
+    """
+    Launch a new Raw Pattern Study run tied to an existing pump study run.
+
+    Body (JSON):
+        pump_study_run_id   int    required
+        notes               str    optional
+
+    Returns immediately with raw_run_id.
+    Poll GET /api/replay/raw-pattern-study/{run_id} for status.
+    """
+    from database import create_raw_pattern_run, get_pump_study_run, update_raw_pattern_run
+
+    psrun_id = body.get("pump_study_run_id")
+    if not psrun_id:
+        raise HTTPException(400, detail="pump_study_run_id is required")
+
+    ps_run = await get_pump_study_run(int(psrun_id))
+    if not ps_run:
+        raise HTTPException(404, detail=f"Pump study run {psrun_id} not found")
+
+    notes  = body.get("notes")
+    run_id = await create_raw_pattern_run(
+        pump_study_run_id=int(psrun_id),
+        start_date=ps_run.get("start_date"),
+        end_date=ps_run.get("end_date"),
+        notes=notes,
+    )
+
+    async def _run(raw_run_id: int, pump_study_run_id: int) -> None:
+        from database import update_raw_pattern_run as _upd
+        from replay.pump_study_engine import (
+            build_raw_pattern_daily_features,
+            build_raw_pattern_episode_features_timing,
+            build_raw_pattern_episode_features_candle,
+            build_raw_pattern_episode_features_volume_compression,
+            build_raw_pattern_episode_features_structure,
+            build_raw_pattern_comparisons,
+        )
+        try:
+            await _upd(raw_run_id, {"status": "running",
+                                    "started_at": datetime.utcnow()})
+            await build_raw_pattern_daily_features(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_timing(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_candle(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_volume_compression(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
+            await _upd(raw_run_id, {"status": "complete",
+                                    "finished_at": datetime.utcnow()})
+        except Exception as exc:
+            logger.error("raw_pattern_study run_id=%s failed: %s", raw_run_id, exc)
+            await _upd(raw_run_id, {"status": "error",
+                                    "error_message": str(exc)[:500],
+                                    "finished_at": datetime.utcnow()})
+
+    background_tasks.add_task(_run, run_id, int(psrun_id))
+
+    return {
+        "ok":                 True,
+        "raw_run_id":         run_id,
+        "pump_study_run_id":  int(psrun_id),
+        "status":             "running",
+        "message":            f"Raw Pattern Study launched. Poll GET /api/replay/raw-pattern-study/{run_id}",
+    }
+
+
+# ── 2. List runs ──────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/runs")
+async def raw_pattern_study_list_runs(
+    pump_study_run_id: Optional[int] = None,
+    limit: int = 20,
+):
+    """List raw-pattern-study runs, most recent first."""
+    from database import get_raw_pattern_runs
+    runs = await get_raw_pattern_runs(pump_study_run_id=pump_study_run_id, limit=limit)
+    return {"ok": True, "count": len(runs), "runs": runs}
+
+
+# ── 3. Run detail ─────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}")
+async def raw_pattern_study_detail(run_id: int):
+    """Return metadata and counts for one raw-pattern-study run."""
+    from database import get_raw_pattern_run
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    return {"ok": True, "run": run}
+
+
+# ── 4. Episode features ───────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/episodes")
+async def raw_pattern_study_episodes(
+    run_id: int,
+    group_type: Optional[str] = None,
+    limit: int = 1000,
+):
+    """Return raw_pattern_episode_features rows for a run."""
+    from database import get_raw_pattern_run, get_raw_pattern_episode_features
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    episodes = await get_raw_pattern_episode_features(
+        run_id, group_type=group_type, limit=limit
+    )
+    return {"ok": True, "run_id": run_id, "count": len(episodes), "episodes": episodes}
+
+
+# ── 5. Daily features ─────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/daily-features")
+async def raw_pattern_study_daily_features(
+    run_id: int,
+    episode_id: Optional[int] = None,
+    phase: Optional[str] = None,
+    limit: int = 2000,
+):
+    """Return raw_pattern_daily_features rows for a run."""
+    from database import get_raw_pattern_run, get_raw_pattern_daily_features
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    rows = await get_raw_pattern_daily_features(
+        run_id, episode_id=episode_id, phase=phase, limit=limit
+    )
+    return {"ok": True, "run_id": run_id, "count": len(rows), "rows": rows}
+
+
+# ── 6. Comparisons ────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/comparisons")
+async def raw_pattern_study_comparisons(
+    run_id: int,
+    group_name: Optional[str] = None,
+    feature_name: Optional[str] = None,
+):
+    """
+    Return comparison stats and member rows for a run.
+
+    Response:
+        comparisons  — list of (group_name, feature_name) stat rows
+        members      — list of member rows (per-episode feature snapshots)
+    """
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_comparison_members,
+    )
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    comps   = await get_raw_pattern_comparisons(run_id, group_name=group_name,
+                                                feature_name=feature_name)
+    members = await get_raw_pattern_comparison_members(run_id, group_name=group_name,
+                                                       limit=5000)
+    return {
+        "ok":          True,
+        "run_id":      run_id,
+        "comparisons": comps,
+        "members":     members,
+    }
+
+
+# ── 7. Export ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/export")
+async def raw_pattern_study_export(run_id: int, format: str = "json"):
+    """
+    Download a raw-pattern-study export.
+
+    format=json     — full structured export (run + episodes + comparisons)
+    format=csv      — flat episode feature rows
+    format=markdown — deterministic text summary
+    """
+    if format not in ("json", "csv", "markdown"):
+        raise HTTPException(400, detail="format must be one of: json, csv, markdown")
+
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_episode_features,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_comparison_members,
+    )
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    episodes = await get_raw_pattern_episode_features(run_id, limit=5000)
+    comps    = await get_raw_pattern_comparisons(run_id)
+
+    if format == "csv":
+        if not episodes:
+            raise HTTPException(404, detail="No episode features found for this run")
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=list(episodes[0].keys()))
+        writer.writeheader()
+        writer.writerows(episodes)
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="raw_pattern_{run_id}_episodes.csv"'},
+        )
+
+    if format == "markdown":
+        content = _raw_pattern_markdown(run, episodes, comps)
+        return StreamingResponse(
+            iter([content]),
+            media_type="text/markdown",
+            headers={"Content-Disposition":
+                     f'attachment; filename="raw_pattern_{run_id}_summary.md"'},
+        )
+
+    # json (default)
+    members = await get_raw_pattern_comparison_members(run_id, limit=5000)
+    payload = json.dumps({
+        "export_type":    "raw_pattern_study",
+        "run":            run,
+        "episodes":       episodes,
+        "comparisons":    comps,
+        "members":        members,
+        "exported_at":    datetime.utcnow().isoformat() + "Z",
+    }, default=str)
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="raw_pattern_{run_id}_full.json"'},
+    )
