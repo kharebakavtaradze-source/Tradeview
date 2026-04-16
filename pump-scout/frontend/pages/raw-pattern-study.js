@@ -253,22 +253,34 @@ const COMP_FEATURES = [
   'days_from_first_abnormal_volume_to_breakout',
   'dryup_day_count_pre',
   'days_in_base',
-  // PRIMARY — structure
+  'atr_contraction_days_pre',
+  // PRIMARY — structure depth
   'had_accumulation_like',
+  'accumulation_like_day_count',
   'had_spring_test_lps',
   'reclaim_bar_count_pre',
+  // SECONDARY — structure quality
+  'had_breakout_retest',
+  'retest_count',
+  'avg_retest_quality',
   // SECONDARY — volume
   'max_volume_anomaly_pre',
   'median_volume_anomaly_pre',
   'abnormal_volume_day_count_pre',
-  // SECONDARY — candle patterns
+  'max_dollar_volume_pre',
+  // SECONDARY — candle / bar patterns
   'bullish_engulfing_count_pre',
   'expansion_bar_count_pre',
-  // LOW_SIGNAL — raw candle anatomy
+  'strong_close_count_pre',
+  'wide_range_bar_count_pre',
+  // LOW_SIGNAL
   'had_compression',
   'avg_body_pct_pre',
   'avg_upper_wick_pct_pre',
   'avg_lower_wick_pct_pre',
+  'bearish_engulfing_count_pre',
+  'inside_bar_count_pre',
+  'outside_bar_count_pre',
 ];
 
 // Used to derive badge when stats_json priority is absent (legacy runs)
@@ -279,18 +291,29 @@ const FEATURE_PRIORITY = {
   days_from_first_abnormal_volume_to_breakout: 'PRIMARY',
   dryup_day_count_pre:                         'PRIMARY',
   days_in_base:                                'PRIMARY',
+  atr_contraction_days_pre:                    'PRIMARY',
   had_accumulation_like:                       'PRIMARY',
+  accumulation_like_day_count:                 'PRIMARY',
   had_spring_test_lps:                         'PRIMARY',
   reclaim_bar_count_pre:                       'PRIMARY',
+  had_breakout_retest:                         'SECONDARY',
+  retest_count:                                'SECONDARY',
+  avg_retest_quality:                          'SECONDARY',
   max_volume_anomaly_pre:                      'SECONDARY',
   median_volume_anomaly_pre:                   'SECONDARY',
   abnormal_volume_day_count_pre:               'SECONDARY',
+  max_dollar_volume_pre:                       'SECONDARY',
   bullish_engulfing_count_pre:                 'SECONDARY',
   expansion_bar_count_pre:                     'SECONDARY',
+  strong_close_count_pre:                      'SECONDARY',
+  wide_range_bar_count_pre:                    'SECONDARY',
   had_compression:                             'LOW_SIGNAL',
   avg_body_pct_pre:                            'LOW_SIGNAL',
   avg_upper_wick_pct_pre:                      'LOW_SIGNAL',
   avg_lower_wick_pct_pre:                      'LOW_SIGNAL',
+  bearish_engulfing_count_pre:                 'LOW_SIGNAL',
+  inside_bar_count_pre:                        'LOW_SIGNAL',
+  outside_bar_count_pre:                       'LOW_SIGNAL',
 };
 
 const TIER_ORDER = { PRIMARY: 0, SECONDARY: 1, LOW_SIGNAL: 2 };
@@ -474,6 +497,9 @@ function SchemeCard({ scheme }) {
               {g === 'false_positive' && scheme.share_of_false_positives != null && (
                 <span className={styles.breakdownPct}>{Math.round(scheme.share_of_false_positives * 100)}%</span>
               )}
+              {g === 'normal_winner' && scheme.share_of_normal_winners != null && (
+                <span className={styles.breakdownPct}>{Math.round(scheme.share_of_normal_winners * 100)}%</span>
+              )}
             </span>
           ))}
         </div>
@@ -482,6 +508,9 @@ function SchemeCard({ scheme }) {
         <div className={styles.schemeTiming}>
           {t.compression_lead_days != null && (
             <span className={styles.timingChip}><span className={styles.timingKey}>compr</span><span className={styles.timingVal}>{t.compression_lead_days}d</span></span>
+          )}
+          {t.accumulation_days != null && (
+            <span className={styles.timingChip}><span className={styles.timingKey}>accum</span><span className={styles.timingVal}>{t.accumulation_days}d</span></span>
           )}
           {t.vol_to_breakout_days != null && (
             <span className={styles.timingChip}><span className={styles.timingKey}>vol→brk</span><span className={styles.timingVal}>{t.vol_to_breakout_days}d</span></span>
