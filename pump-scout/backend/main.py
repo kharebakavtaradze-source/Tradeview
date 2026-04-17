@@ -3442,14 +3442,22 @@ async def raw_pattern_study_export(run_id: int, format: str = "json"):
         )
 
     # json (default)
-    members = await get_raw_pattern_comparison_members(run_id, limit=5000)
+    from replay.pump_study_engine import extract_top_schemes, generate_engine_patch_plan
+    from database import get_raw_pattern_ai_summary
+    members     = await get_raw_pattern_comparison_members(run_id, limit=5000)
+    engine_data = generate_engine_patch_plan(comps)
+    ai_summary  = await get_raw_pattern_ai_summary(run_id)
     payload = json.dumps({
-        "export_type":    "raw_pattern_study",
-        "run":            run,
-        "episodes":       episodes,
-        "comparisons":    comps,
-        "members":        members,
-        "exported_at":    datetime.utcnow().isoformat() + "Z",
+        "export_type":      "raw_pattern_study",
+        "run":              run,
+        "episodes":         episodes,
+        "comparisons":      comps,
+        "members":          members,
+        "top_schemes":      extract_top_schemes(episodes).get("schemes", []),
+        "feature_verdicts": engine_data.get("feature_verdicts", []),
+        "engine_plan":      engine_data,
+        "ai_summary":       ai_summary,
+        "exported_at":      datetime.utcnow().isoformat() + "Z",
     }, default=str)
     return StreamingResponse(
         iter([payload]),
