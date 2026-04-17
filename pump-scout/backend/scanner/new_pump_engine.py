@@ -706,3 +706,51 @@ def analyze(bars):
         new_pump_sequence_label=_sequence_label(age_l34, age_fri34, age_g4, age_b2),
         new_pump_label=_final_label(total),
     )
+
+
+def summarize_results(scan_results, top_n=20):
+    """
+    Produce a debug summary of New Pump output across a scan result set.
+
+    scan_results: list of result dicts from runner.py (each has "symbol" and "new_pump").
+    Returns a dict with label_counts, sequence_counts, and top_by_score.
+    """
+    _LABEL_ORDER = [
+        "NEW_PUMP_FIRE", "NEW_PUMP_STRONG", "NEW_PUMP_SETUP",
+        "NEW_PUMP_TRIGGER_ONLY", "NEW_PUMP_WEAK", "NEW_PUMP_NONE",
+    ]
+
+    label_counts    = {lbl: 0 for lbl in _LABEL_ORDER}
+    sequence_counts = {}
+    ranked          = []
+
+    for r in scan_results:
+        np = r.get("new_pump")
+        if not np:
+            continue
+
+        lbl = np.get("new_pump_label", "NEW_PUMP_NONE")
+        label_counts[lbl] = label_counts.get(lbl, 0) + 1
+
+        seq = np.get("new_pump_sequence_label", "NONE")
+        sequence_counts[seq] = sequence_counts.get(seq, 0) + 1
+
+        ranked.append({
+            "symbol":                 r.get("symbol", "?"),
+            "new_pump_score":         np.get("new_pump_score", 0),
+            "new_pump_label":         lbl,
+            "new_pump_sequence_label": seq,
+            "has_l34":                np.get("has_l34", False),
+            "has_fri34":              np.get("has_fri34", False),
+            "has_g4":                 np.get("has_g4", False),
+            "has_b2":                 np.get("has_b2", False),
+        })
+
+    ranked.sort(key=lambda x: x["new_pump_score"], reverse=True)
+
+    return dict(
+        label_counts=label_counts,
+        sequence_counts=dict(sorted(sequence_counts.items(),
+                                    key=lambda kv: kv[1], reverse=True)),
+        top_by_score=ranked[:top_n],
+    )
