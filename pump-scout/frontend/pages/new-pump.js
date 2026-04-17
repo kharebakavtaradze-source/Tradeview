@@ -1,0 +1,286 @@
+import { useCallback, useEffect, useState } from 'react';
+import Head from 'next/head';
+import Link from 'next/link';
+import styles from '../styles/NewPump.module.css';
+import AppNav from '../components/AppNav';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const REFRESH_INTERVAL = 60 * 1000;
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const LABEL_CFG = {
+  NEW_PUMP_FIRE:         { cls: styles.badgeFIRE,   short: 'FIRE'    },
+  NEW_PUMP_STRONG:       { cls: styles.badgeSTRONG, short: 'STRONG'  },
+  NEW_PUMP_SETUP:        { cls: styles.badgeSETUP,  short: 'SETUP'   },
+  NEW_PUMP_TRIGGER_ONLY: { cls: styles.badgeTRIG,   short: 'TRIGGER' },
+  NEW_PUMP_WEAK:         { cls: styles.badgeWEAK,   short: 'WEAK'    },
+  NEW_PUMP_NONE:         { cls: styles.badgeNONE,   short: 'NONE'    },
+};
+
+const ALL_LABELS = [
+  'NEW_PUMP_FIRE', 'NEW_PUMP_STRONG', 'NEW_PUMP_SETUP',
+  'NEW_PUMP_TRIGGER_ONLY', 'NEW_PUMP_WEAK', 'NEW_PUMP_NONE',
+];
+
+const ALL_SEQUENCES = [
+  'FULL_FRI34_G4_B2', 'FULL_L34_G4_B2',
+  'CONFIRM_AFTER_G4',
+  'TRIGGER_AFTER_FRI34', 'TRIGGER_AFTER_L34',
+  'SETUP_ONLY_FRI34', 'SETUP_ONLY_L34',
+  'ISOLATED_G4', 'ISOLATED_B2', 'NONE',
+];
+
+const SCORE_COLOR = (s) => {
+  if (s >= 70) return '#ff4400';
+  if (s >= 55) return '#ff8800';
+  if (s >= 40) return '#ffd600';
+  if (s >= 25) return '#00e5ff';
+  if (s >= 10) return '#888';
+  return '#444';
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmt(n, d = 1) { return n == null ? '—' : Number(n).toFixed(d); }
+function fmtVol(n) {
+  if (n == null) return '—';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}K`;
+  return String(n);
+}
+function fmtAge(a) { return a == null ? '—' : String(a); }
+
+function LabelBadge({ label }) {
+  const cfg = LABEL_CFG[label] || LABEL_CFG.NEW_PUMP_NONE;
+  return <span className={`${styles.badge} ${cfg.cls}`}>{cfg.short}</span>;
+}
+
+function Pill({ on, label }) {
+  return (
+    <span className={`${styles.pill} ${on ? styles.pillOn : styles.pillOff}`}>
+      {label}
+    </span>
+  );
+}
+
+// ── Count how many rows per label ─────────────────────────────────────────────
+
+function labelCounts(results) {
+  const c = {};
+  for (const r of results) {
+    const lbl = r.new_pump_label || 'NEW_PUMP_NONE';
+    c[lbl] = (c[lbl] || 0) + 1;
+  }
+  return c;
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export default function NewPumpPage() {
+  const [data,      setData]      = useState(null);
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState(null);
+  const [minScore,  setMinScore]  = useState(0);
+  const [labelF,    setLabelF]    = useState('');
+  const [seqF,      setSeqF]      = useState('');
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (minScore > 0) params.set('min_score', minScore);
+      if (labelF)       params.set('label', labelF);
+      if (seqF)         params.set('sequence', seqF);
+      const res = await fetch(`${API_URL}/api/scan/new-pump?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setData(await res.json());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [minScore, labelF, seqF]);
+
+  useEffect(() => {
+    fetchData();
+    const iv = setInterval(fetchData, REFRESH_INTERVAL);
+    return () => clearInterval(iv);
+  }, [fetchData]);
+
+  const results = data?.results || [];
+  const counts  = labelCounts(results);
+
+  return (
+    <>
+      <Head><title>New Pump — Pump Scout</title></Head>
+      <AppNav />
+
+      <div className={styles.page}>
+        {/* Header */}
+        <div className={styles.header}>
+          <h1 className={styles.title}>New Pump</h1>
+          <p className={styles.subtitle}>
+            STRUCTURED SETUP → TRIGGER → CONFIRMATION ENGINE · L34 / FRI34 / G4 / B2
+          </p>
+          {data?.scanned_at && (
+            <div className={styles.scanTime}>
+              Last scan: {new Date(data.scanned_at).toLocaleString()}
+            </div>
+          )}
+        </div>
+
+        {/* Summary bar */}
+        {results.length > 0 && (
+          <div className={styles.summaryBar}>
+            {ALL_LABELS.map(lbl => (
+              <div key={lbl} className={styles.summaryItem}>
+                <span className={styles.summaryNum}>{counts[lbl] || 0}</span>
+                <span className={styles.summaryLbl}>{LABEL_CFG[lbl]?.short || lbl}</span>
+              </div>
+            ))}
+            <div className={styles.summaryItem}>
+              <span className={styles.summaryNum}>{results.length}</span>
+              <span className={styles.summaryLbl}>Total</span>
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div className={styles.controls}>
+          <div className={styles.filterGroup}>
+            <span className={styles.filterLabel}>Min Score</span>
+            <select
+              className={styles.select}
+              value={minScore}
+              onChange={e => setMinScore(Number(e.target.value))}
+            >
+              {[0, 10, 25, 40, 55, 70].map(v => (
+                <option key={v} value={v}>{v === 0 ? 'All' : `${v}+`}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.filterGroup}>
+            <span className={styles.filterLabel}>Label</span>
+            <select
+              className={styles.select}
+              value={labelF}
+              onChange={e => setLabelF(e.target.value)}
+            >
+              <option value="">All</option>
+              {ALL_LABELS.map(l => (
+                <option key={l} value={l}>{LABEL_CFG[l]?.short || l}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.filterGroup}>
+            <span className={styles.filterLabel}>Sequence</span>
+            <select
+              className={styles.select}
+              value={seqF}
+              onChange={e => setSeqF(e.target.value)}
+            >
+              <option value="">All</option>
+              {ALL_SEQUENCES.map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            className={styles.refreshBtn}
+            onClick={fetchData}
+            disabled={loading}
+          >
+            {loading ? '…' : '⟳ Refresh'}
+          </button>
+        </div>
+
+        {/* Body */}
+        {error ? (
+          <div className={styles.error}>Error: {error}</div>
+        ) : loading && !data ? (
+          <div className={styles.loading}>Loading New Pump data…</div>
+        ) : results.length === 0 ? (
+          <div className={styles.empty}>
+            No tickers match the current filters.
+          </div>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Score</th>
+                  <th>Label</th>
+                  <th>Sequence</th>
+                  <th>L34</th>
+                  <th>FRI34</th>
+                  <th>G4</th>
+                  <th>B2</th>
+                  <th>Age L34</th>
+                  <th>Age FRI34</th>
+                  <th>Age G4</th>
+                  <th>Age B2</th>
+                  <th>Setup</th>
+                  <th>Trigger</th>
+                  <th>Confirm</th>
+                  <th>Mod</th>
+                  <th>Price</th>
+                  <th>Volume</th>
+                  <th>Tier</th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.map(r => {
+                  const isNone = r.new_pump_label === 'NEW_PUMP_NONE';
+                  return (
+                    <tr key={r.symbol} className={isNone ? styles.rowDim : ''}>
+                      <td className={styles.symbolCell}>
+                        <Link href={`/ticker/${r.symbol}`} className={styles.symLink}>
+                          {r.symbol}
+                        </Link>
+                      </td>
+                      <td className={styles.scoreCell}
+                          style={{ color: SCORE_COLOR(r.new_pump_score) }}>
+                        {fmt(r.new_pump_score)}
+                      </td>
+                      <td><LabelBadge label={r.new_pump_label} /></td>
+                      <td className={styles.seqCell}>{r.new_pump_sequence_label || '—'}</td>
+                      <td><Pill on={r.has_l34}   label="L34"   /></td>
+                      <td><Pill on={r.has_fri34} label="FRI34" /></td>
+                      <td><Pill on={r.has_g4}    label="G4"    /></td>
+                      <td><Pill on={r.has_b2}    label="B2"    /></td>
+                      <td className={styles.ageCell}>{fmtAge(r.age_l34)}</td>
+                      <td className={styles.ageCell}>{fmtAge(r.age_fri34)}</td>
+                      <td className={styles.ageCell}>{fmtAge(r.age_g4)}</td>
+                      <td className={styles.ageCell}>{fmtAge(r.age_b2)}</td>
+                      <td className={styles.ageCell}>{fmt(r.new_pump_setup_score,   0)}</td>
+                      <td className={styles.ageCell}>{fmt(r.new_pump_trigger_score, 0)}</td>
+                      <td className={styles.ageCell}>{fmt(r.new_pump_confirm_score, 0)}</td>
+                      <td className={styles.ageCell}>{fmt(r.new_pump_modifier_score,0)}</td>
+                      <td>{r.price != null ? `$${fmt(r.price, 2)}` : '—'}</td>
+                      <td>{fmtVol(r.volume_today)}</td>
+                      <td>
+                        {r.tier && (
+                          <span className={styles.badge} style={{
+                            color: '#aaa',
+                            background: 'transparent',
+                            border: '1px solid #333',
+                          }}>{r.tier}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
