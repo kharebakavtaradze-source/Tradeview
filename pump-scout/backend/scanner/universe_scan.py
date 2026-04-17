@@ -419,17 +419,6 @@ async def run_universe_scan(target_date: str = None) -> dict:
     # Sort by score descending
     results.sort(key=lambda x: x["score"].get("total_score", 0), reverse=True)
 
-    # ── STEP 8.5: AI analysis for top FIRE/ARM/STEALTH ──────────────────────
-    # Mutates result dicts in-place; must run before save_scan so analysis
-    # is persisted. Mirrors what the intraday runner does in Step 6.
-    if results:
-        try:
-            from scanner.ai_analyst import analyze_batch
-            logger.info("Running AI analysis on top FIRE/ARM/STEALTH tickers...")
-            await analyze_batch(results)
-        except Exception as e:
-            logger.warning(f"AI analysis failed (non-fatal): {e}")
-
     # Tier counts
     tier_counts: dict = {}
     for r in results:

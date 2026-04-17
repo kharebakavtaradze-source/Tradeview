@@ -61,14 +61,6 @@ from database import (
     get_macro_events_history,
     get_macro_events_active,
     upsert_macro_events,
-    # AI Analysis Layer
-    save_ai_analyst_results,
-    get_ai_analyst_latest,
-    get_ai_analyst_for_symbol,
-    save_ai_review,
-    get_ai_reviews,
-    save_ai_insights,
-    get_ai_insights,
     # Historical Replay Layer
     create_replay_run,
     update_replay_run,
@@ -1206,6 +1198,83 @@ async def get_ignition_scan(
     }
 
 
+@app.get("/api/scan/new-pump")
+async def get_new_pump_scan(
+    min_score:  float = 0.0,
+    label:      str   = "",
+    sequence:   str   = "",
+    max_results: int  = 200,
+):
+    """
+    New Pump Engine — structured setup/trigger/confirmation view.
+    Returns tickers from latest scan sorted by new_pump_score descending.
+    Filters: min_score, label (e.g. NEW_PUMP_FIRE), sequence (e.g. FULL_FRI34_G4_B2).
+    """
+    scan     = await get_latest_scan()
+    eod_scan = await get_latest_scan_by_type("massive_eod")
+    main_res = scan.get("results", [])     if scan     else []
+    eod_res  = eod_scan.get("results", []) if eod_scan else []
+    main_syms = {r["symbol"] for r in main_res}
+    combined  = main_res + [r for r in eod_res if r["symbol"] not in main_syms]
+
+    exclusions = await _get_exclusion_set()
+    combined   = _strip_non_stocks(combined, exclusions)
+
+    out = []
+    for r in combined:
+        np = r.get("new_pump")
+        if not np:
+            continue
+        score = np.get("new_pump_score", 0) or 0
+        if score < min_score:
+            continue
+        if label and np.get("new_pump_label") != label:
+            continue
+        if sequence and np.get("new_pump_sequence_label") != sequence:
+            continue
+        out.append({
+            "symbol":                  r.get("symbol"),
+            "price":                   r.get("price"),
+            "volume_today":            r.get("volume_today"),
+            "tier":                    (r.get("score") or {}).get("tier"),
+            "total_score":             (r.get("score") or {}).get("total_score"),
+            # new pump fields
+            "new_pump_score":          np.get("new_pump_score"),
+            "new_pump_label":          np.get("new_pump_label"),
+            "new_pump_sequence_label": np.get("new_pump_sequence_label"),
+            "new_pump_setup_score":    np.get("new_pump_setup_score"),
+            "new_pump_trigger_score":  np.get("new_pump_trigger_score"),
+            "new_pump_confirm_score":  np.get("new_pump_confirm_score"),
+            "new_pump_modifier_score": np.get("new_pump_modifier_score"),
+            "has_l34":   np.get("has_l34"),
+            "has_fri34": np.get("has_fri34"),
+            "has_g4":    np.get("has_g4"),
+            "has_b2":    np.get("has_b2"),
+            "age_l34":   np.get("age_l34"),
+            "age_fri34": np.get("age_fri34"),
+            "age_g4":    np.get("age_g4"),
+            "age_b2":    np.get("age_b2"),
+        })
+
+    _LABEL_ORDER = {
+        "NEW_PUMP_FIRE": 0, "NEW_PUMP_STRONG": 1, "NEW_PUMP_SETUP": 2,
+        "NEW_PUMP_TRIGGER_ONLY": 3, "NEW_PUMP_WEAK": 4, "NEW_PUMP_NONE": 5,
+    }
+    out.sort(key=lambda x: (
+        _LABEL_ORDER.get(x["new_pump_label"] or "", 9),
+        -(x["new_pump_score"] or 0),
+    ))
+    out = out[:min(max_results, 500)]
+
+    scanned_at = (scan or eod_scan or {}).get("scanned_at") if (scan or eod_scan) else None
+    return {
+        "results":    out,
+        "total":      len(out),
+        "scanned_at": scanned_at,
+        "filters":    {"min_score": min_score, "label": label, "sequence": sequence},
+    }
+
+
 @app.get("/api/scan/pump")
 async def get_pump_scan(
     mode:         str  = "all",
@@ -1691,203 +1760,6 @@ async def admin_rotate_data():
     deleted = await rotate_old_data()
     total = sum(deleted.values())
     return {"ok": True, "total_deleted": total, "breakdown": deleted}
-
-
-# ─── AI Analysis Layer ────────────────────────────────────────────────────────
-# Advisory only — does NOT touch scan scores, tiers, or any production logic.
-
-@app.post("/api/ai/analyst/run")
-async def ai_analyst_run(
-    background_tasks: BackgroundTasks,
-    max_tickers: int = 25,
-    raw_pattern_run_id: Optional[int] = None,
-):
-    """
-    Trigger AI analysis of the current scan candidates.
-    Runs in background; results stored in ai_signal_analysis table.
-    Returns immediately with a status token.
-
-    raw_pattern_run_id: optional completed Raw Pattern Study run whose research
-    findings are injected into every ticker's AI prompt as prior context.
-    """
-    rp_run_id = raw_pattern_run_id   # capture for closure
-
-    async def _do():
-        try:
-            from ai.analyst import run_analyst
-            scan = await get_latest_scan()
-            eod  = await get_latest_scan_by_type("massive_eod")
-            results = (scan or {}).get("results", []) + [
-                r for r in (eod or {}).get("results", [])
-                if r["symbol"] not in {x["symbol"] for x in (scan or {}).get("results", [])}
-            ]
-            if not results:
-                logger.info("AI Analyst: no scan results available")
-                return
-
-            research_ctx: str | None = None
-            if rp_run_id:
-                research_ctx = await _build_research_context_text(rp_run_id) or None
-                if research_ctx:
-                    logger.info("AI Analyst: injecting Raw Pattern Study #%s context", rp_run_id)
-
-            analyses = await run_analyst(results, max_tickers=max_tickers, research_context=research_ctx)
-            scan_id  = (scan or {}).get("scan_id")
-            saved    = await save_ai_analyst_results(analyses, scan_id=scan_id)
-            logger.info(f"AI Analyst run complete: {saved} analyses saved")
-        except Exception as e:
-            logger.error(f"AI Analyst run failed: {e}", exc_info=True)
-
-    background_tasks.add_task(_do)
-    return {
-        "ok": True,
-        "message": "AI Analyst run started in background",
-        "max_tickers": max_tickers,
-        "research_context_run_id": raw_pattern_run_id,
-    }
-
-
-@app.get("/api/ai/analyst/latest")
-async def ai_analyst_latest(limit: int = 50):
-    """Return the most recent AI analyst outputs for current scan candidates."""
-    try:
-        results = await get_ai_analyst_latest(limit=min(limit, 100))
-        return {
-            "results": results,
-            "count":   len(results),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/ai/analyst/{symbol}")
-async def ai_analyst_symbol(symbol: str):
-    """Return AI analyst history for a specific ticker symbol."""
-    try:
-        results = await get_ai_analyst_for_symbol(symbol.upper())
-        return {
-            "symbol":  symbol.upper(),
-            "results": results,
-            "count":   len(results),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/ai/reviewer/run")
-async def ai_reviewer_run(
-    background_tasks: BackgroundTasks,
-    review_type: str = "DAILY",
-):
-    """
-    Trigger an AI review run.
-    review_type: DAILY | WEEKLY | MISSED | FAILURES
-    Runs in background; results stored in ai_review_reports.
-    """
-    valid = {"DAILY", "WEEKLY", "MISSED", "FAILURES"}
-    if review_type not in valid:
-        raise HTTPException(status_code=400, detail=f"review_type must be one of {valid}")
-
-    async def _do():
-        try:
-            from ai.reviewer import (
-                run_daily_review, run_weekly_review,
-                run_missed_opportunities, run_failure_review,
-            )
-            days   = 7 if review_type == "DAILY" else 30
-            j_list = await get_journal()           # returns list[dict]
-
-            # Filter by time window
-            cutoff = datetime.utcnow() - timedelta(days=days)
-            def _parse_dt(v):
-                try:
-                    return datetime.fromisoformat(str(v))
-                except Exception:
-                    return datetime.min
-            j_recent = [e for e in j_list if _parse_dt(e.get("added_at")) >= cutoff]
-
-            # Raw scan candidates (includes pct_5d outcomes)
-            missed_data = await get_candidates_missed()
-            candidates  = missed_data.get("recent", [])
-
-            if review_type == "DAILY":
-                scan = await get_latest_scan()
-                review = await run_daily_review(j_recent, candidates, scan_summary={
-                    "tier_counts": (scan or {}).get("tier_counts"),
-                    "total":       (scan or {}).get("total"),
-                })
-            elif review_type == "WEEKLY":
-                review = await run_weekly_review(j_recent, candidates)
-            elif review_type == "MISSED":
-                review = await run_missed_opportunities(candidates, j_list)
-            else:
-                review = await run_failure_review(j_list)
-
-            rid = await save_ai_review(review)
-            logger.info(f"AI Reviewer {review_type} complete, saved id={rid}")
-        except Exception as e:
-            logger.error(f"AI Reviewer run failed ({review_type}): {e}", exc_info=True)
-
-    background_tasks.add_task(_do)
-    return {"ok": True, "message": f"AI {review_type} review started in background"}
-
-
-@app.get("/api/ai/reviewer/daily")
-async def ai_reviewer_daily():
-    rows = await get_ai_reviews(review_type="DAILY", limit=5)
-    return {"results": rows, "count": len(rows)}
-
-
-@app.get("/api/ai/reviewer/weekly")
-async def ai_reviewer_weekly():
-    rows = await get_ai_reviews(review_type="WEEKLY", limit=4)
-    return {"results": rows, "count": len(rows)}
-
-
-@app.get("/api/ai/reviewer/missed")
-async def ai_reviewer_missed():
-    rows = await get_ai_reviews(review_type="MISSED_OPPORTUNITY", limit=5)
-    return {"results": rows, "count": len(rows)}
-
-
-@app.get("/api/ai/reviewer/failures")
-async def ai_reviewer_failures():
-    rows = await get_ai_reviews(review_type="FALSE_POSITIVE_REVIEW", limit=5)
-    return {"results": rows, "count": len(rows)}
-
-
-@app.post("/api/ai/insights/run")
-async def ai_insights_run(background_tasks: BackgroundTasks):
-    """
-    Trigger the AI Insight Engine.  Results stored in ai_insights.
-    Runs in background.
-    """
-    async def _do():
-        try:
-            from ai.insight_engine import run_insight_engine
-            missed_data = await get_candidates_missed()
-            candidates  = missed_data.get("recent", [])
-            j_list      = await get_journal()   # list[dict]
-            insights    = await run_insight_engine(candidates, j_list)
-            saved       = await save_ai_insights(insights)
-            logger.info(f"AI Insight Engine complete: {saved} insights saved")
-        except Exception as e:
-            logger.error(f"AI Insight Engine run failed: {e}", exc_info=True)
-
-    background_tasks.add_task(_do)
-    return {"ok": True, "message": "AI Insight Engine run started in background"}
-
-
-@app.get("/api/ai/insights/latest")
-async def ai_insights_latest(limit: int = 20):
-    results = await get_ai_insights(limit=min(limit, 50))
-    return {"results": results, "count": len(results)}
-
-
-@app.get("/api/ai/insights/history")
-async def ai_insights_history(limit: int = 50):
-    results = await get_ai_insights(limit=min(limit, 100))
-    return {"results": results, "count": len(results)}
 
 
 # ─── Historical Replay Layer ──────────────────────────────────────────────────

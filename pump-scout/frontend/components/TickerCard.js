@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import AIAnalysis from './AIAnalysis';
 import JournalModal from './JournalModal';
 import styles from '../styles/TickerCard.module.css';
 
@@ -609,7 +608,6 @@ export default function TickerCard({ data, hypeData, streakDays }) {
               ema50={indicators.ema50}
             />
           )}
-          {ai_analysis && <AIAnalysis analysis={ai_analysis} loading={false} />}
           <Link href={`/ticker/${symbol}`} className={styles.detailLink}>
             Full Analysis → {symbol}
           </Link>
