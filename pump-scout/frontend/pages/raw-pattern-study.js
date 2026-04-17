@@ -77,13 +77,12 @@ function RunHeader({ run, onRepairDone, onDelete }) {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/research-context`);
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail);
-      const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/export?format=json`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail); }
+      const blob = new Blob([await r.text()], { type: 'application/json' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href = url; a.download = `raw-pattern-run-${run.id}-context.json`; a.click();
+      a.href = url; a.download = `raw-pattern-run-${run.id}-full.json`; a.click();
       URL.revokeObjectURL(url);
     } catch { /* ignore */ } finally { setDownloading(false); }
   };
