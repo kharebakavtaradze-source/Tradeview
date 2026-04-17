@@ -81,9 +81,15 @@ Be concise and direct. Use the exact JSON format requested. \
 Never invent data not present in the input."""
 
 
-def _user_prompt(ctx: dict) -> str:
+def _user_prompt(ctx: dict, research_context: str | None = None) -> str:
+    context_block = ""
+    if research_context:
+        context_block = (
+            "\nPRIOR QUANTITATIVE RESEARCH (Raw Pattern Study findings — apply when weighting signals):\n"
+            f"{research_context}\n"
+        )
     return f"""Analyze this scan candidate and respond ONLY with valid JSON — no markdown, no prose outside the JSON.
-
+{context_block}
 Input data:
 {json.dumps(ctx, indent=2)}
 
@@ -112,11 +118,11 @@ Rules:
 - quality_view LATE: already moved significantly"""
 
 
-async def _analyze_one(r: dict, client) -> dict:
+async def _analyze_one(r: dict, client, research_context: str | None = None) -> dict:
     """Call Claude for one ticker, return the structured analysis dict."""
     symbol = r.get("symbol", "?")
     ctx    = _build_context(r)
-    prompt = _user_prompt(ctx)
+    prompt = _user_prompt(ctx, research_context)
     prompt = prompt.replace('\u2028', '\n').replace('\u2029', '\n')
 
     for model in (_MODEL, _FALLBACK):
@@ -176,6 +182,7 @@ async def run_analyst(
     scan_results: list[dict],
     *,
     max_tickers: int = _BATCH_SIZE,
+    research_context: str | None = None,
 ) -> list[dict]:
     """
     Analyze top N candidates from the current scan.
@@ -208,7 +215,7 @@ async def run_analyst(
 
     async def bounded(r):
         async with semaphore:
-            return await _analyze_one(r, client)
+            return await _analyze_one(r, client, research_context)
 
     results = await asyncio.gather(*[bounded(r) for r in ranked], return_exceptions=True)
 

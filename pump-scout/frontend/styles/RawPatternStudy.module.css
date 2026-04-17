@@ -979,6 +979,21 @@
   50%       { opacity: 0.4; transform: scale(0.7); }
 }
 
+/* ── Copy / Download context buttons ─────────────────────── */
+.contextBtn {
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--accent-border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.contextBtn:hover    { background: var(--accent-dim); }
+.contextBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ── Delete run button ────────────────────────────────────── */
 .deleteRunBtn {
   margin-left: auto;

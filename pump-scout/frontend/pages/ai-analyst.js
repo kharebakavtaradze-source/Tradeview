@@ -231,6 +231,8 @@ export default function AIAnalystPage() {
   const [running, setRunning] = useState(false);
   const [runMsg,  setRunMsg]  = useState('');
   const [error,   setError]   = useState(null);
+  const [rpRuns,  setRpRuns]  = useState([]);
+  const [rpRunId, setRpRunId] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -251,11 +253,19 @@ export default function AIAnalystPage() {
     return () => clearInterval(iv);
   }, [fetchData]);
 
+  useEffect(() => {
+    fetch(`${API_URL}/api/replay/raw-pattern-study/runs?limit=20`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setRpRuns(d.runs || []); })
+      .catch(() => {});
+  }, []);
+
   async function handleRun() {
     setRunning(true);
     setRunMsg('');
     try {
-      const res = await fetch(`${API_URL}/api/ai/analyst/run`, { method: 'POST' });
+      const qs  = rpRunId ? `?raw_pattern_run_id=${rpRunId}` : '';
+      const res = await fetch(`${API_URL}/api/ai/analyst/run${qs}`, { method: 'POST' });
       const d   = await res.json();
       setRunMsg(d.message || 'Analysis started');
       setTimeout(fetchData, 8000);
@@ -290,6 +300,21 @@ export default function AIAnalystPage() {
             {running ? '⏳ Running…' : '▶ Run AI Analysis'}
           </button>
           <button className={styles.refreshBtn} onClick={fetchData}>⟳ Refresh</button>
+          {rpRuns.filter(r => r.status === 'complete').length > 0 && (
+            <select
+              className={styles.contextSelect}
+              value={rpRunId}
+              onChange={e => setRpRunId(e.target.value)}
+              title="Optionally inject Raw Pattern Study research findings into every ticker's AI prompt"
+            >
+              <option value="">No research context</option>
+              {rpRuns.filter(r => r.status === 'complete').map(r => (
+                <option key={r.id} value={r.id}>
+                  Research #{r.id} ({r.start_date?.slice(0,7)} → {r.end_date?.slice(0,7)})
+                </option>
+              ))}
+            </select>
+          )}
           {runMsg && <span className={styles.statusNote}>{runMsg}</span>}
         </div>
 
