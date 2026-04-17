@@ -12,6 +12,7 @@ from .scoring import score_ticker
 from .ai_analyst import analyze_batch
 from .sector_sympathy import get_sectors_batch, find_sector_leaders, calc_sympathy_score
 from .market_regime import calculate_sector_strength, get_latest_regime
+from . import new_pump_engine as _npe
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +315,10 @@ async def run_scan() -> dict:
                 skipped += 1
                 continue
 
+            _npe_bars = [{"open": c["o"], "high": c["h"], "low": c["l"],
+                           "close": c["c"], "volume": c["v"]} for c in candles]
+            new_pump = _npe.analyze(_npe_bars)
+
             results.append({
                 "symbol": symbol,
                 "price": candles[-1]["c"],
@@ -321,6 +326,7 @@ async def run_scan() -> dict:
                 "indicators": indicators,
                 "regime": regime,
                 "score": score,
+                "new_pump": new_pump,
                 "candles": candles[-100:],  # last 100 bars only
                 "scanned_at": scan_start.isoformat(),
                 "ai_analysis": None,
