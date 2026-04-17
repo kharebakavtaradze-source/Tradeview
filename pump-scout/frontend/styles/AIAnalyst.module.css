@@ -80,6 +80,19 @@
   font-style: italic;
 }
 
+.contextSelect {
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  max-width: 260px;
+}
+.contextSelect:focus { outline: none; border-color: var(--accent-border); }
+
 /* ── Content ─────────────────────────────────────────────── */
 .content { padding: 12px var(--page-px); }
 

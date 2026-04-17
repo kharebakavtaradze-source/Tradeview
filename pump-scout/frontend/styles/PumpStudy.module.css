@@ -822,6 +822,19 @@
 .aiGenerateBtn:hover   { opacity: 0.8; }
 .aiGenerateBtn:disabled { opacity: 0.35; cursor: not-allowed; }
 
+.contextSelect {
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  max-width: 260px;
+}
+.contextSelect:focus { outline: none; border-color: var(--accent-border); }
+
 /* ── Signal comparison table (Phase 5D) ─────────────────── */
 .signalTable {
   width: 100%;

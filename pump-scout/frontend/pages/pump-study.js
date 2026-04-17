@@ -841,8 +841,17 @@ function AISummarySection({ runId, runStatus }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [tried,   setTried]   = useState(false);
+  const [rpRuns,  setRpRuns]  = useState([]);
+  const [rpRunId, setRpRunId] = useState('');
 
   const canGenerate = TERMINAL_STATUSES.has(runStatus);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/replay/raw-pattern-study/runs?limit=20`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setRpRuns(d.runs || []); })
+      .catch(() => {});
+  }, []);
 
   // Auto-fetch cached result (no generation) on mount
   useEffect(() => {
@@ -875,9 +884,10 @@ function AISummarySection({ runId, runStatus }) {
       // To force regeneration we need to delete the stale row.
       await fetch(`${API_URL}/api/replay/pump-study/${runId}/ai-summary`, {
         method: 'DELETE',
-      }).catch(() => {}); // ok if DELETE not supported — backend will overwrite
+      }).catch(() => {});
 
-      const res = await fetch(`${API_URL}/api/replay/pump-study/${runId}/ai-summary`);
+      const qs  = rpRunId ? `?raw_pattern_run_id=${rpRunId}` : '';
+      const res = await fetch(`${API_URL}/api/replay/pump-study/${runId}/ai-summary${qs}`);
       // 200 with ok:false means parse_failed — not a network error
       const body = await res.json().catch(() => ({}));
       if (!res.ok && !body.parse_failed) {
@@ -903,13 +913,29 @@ function AISummarySection({ runId, runStatus }) {
 
   // Not yet generated
   if (!data && !tried) {
+    const completedRpRuns = rpRuns.filter(r => r.status === 'complete');
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {error && <div className={styles.errorMsg}>{error}</div>}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <button className={styles.aiGenerateBtn} onClick={handleGenerate} disabled={loading}>
             {loading ? 'Generating…' : 'Generate AI Summary'}
           </button>
+          {completedRpRuns.length > 0 && (
+            <select
+              className={styles.contextSelect}
+              value={rpRunId}
+              onChange={e => setRpRunId(e.target.value)}
+              title="Inject Raw Pattern Study research findings into the AI prompt"
+            >
+              <option value="">No research context</option>
+              {completedRpRuns.map(r => (
+                <option key={r.id} value={r.id}>
+                  Research #{r.id} ({r.start_date?.slice(0,7)} → {r.end_date?.slice(0,7)})
+                </option>
+              ))}
+            </select>
+          )}
           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
             Analyzes stored evidence — no live data fetched
           </span>
