@@ -56,8 +56,37 @@ function StatusBadge({ status }) {
 function RunHeader({ run, onRepairDone, onDelete }) {
   const isRunning = run.status === 'running';
   const needsRepair = run.status === 'complete' && !run.comparison_count;
-  const [repairing, setRepairing] = useState(false);
-  const [repairErr, setRepairErr] = useState('');
+  const [repairing,   setRepairing]   = useState(false);
+  const [repairErr,   setRepairErr]   = useState('');
+  const [copying,     setCopying]     = useState(false);
+  const [copyDone,    setCopyDone]    = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleCopyContext = async () => {
+    setCopying(true); setCopyDone(false);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/research-context`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      await navigator.clipboard.writeText(d.context_text);
+      setCopyDone(true);
+      setTimeout(() => setCopyDone(false), 2500);
+    } catch { /* ignore */ } finally { setCopying(false); }
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/research-context`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail);
+      const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `raw-pattern-run-${run.id}-context.json`; a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ } finally { setDownloading(false); }
+  };
 
   const handleRepair = async () => {
     setRepairing(true);
@@ -80,6 +109,26 @@ function RunHeader({ run, onRepairDone, onDelete }) {
         <span className={styles.runIdLabel}>Run #{run.id}</span>
         <StatusBadge status={run.status} />
         {isRunning && <span className={styles.pulsingDot} />}
+        {run.status === 'complete' && (
+          <>
+            <button
+              className={styles.contextBtn}
+              disabled={copying || downloading}
+              onClick={handleCopyContext}
+              title="Copy research context to clipboard (for AI Analyst / Pump Study)"
+            >
+              {copyDone ? '✓ Copied' : copying ? '…' : 'Copy Context'}
+            </button>
+            <button
+              className={styles.contextBtn}
+              disabled={downloading || copying}
+              onClick={handleDownload}
+              title="Download full research context as JSON"
+            >
+              {downloading ? '…' : 'Download JSON'}
+            </button>
+          </>
+        )}
         {onDelete && (
           <button className={styles.deleteRunBtn} onClick={onDelete} title="Delete this run permanently">
             Delete

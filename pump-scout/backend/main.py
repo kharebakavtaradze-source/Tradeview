@@ -1700,12 +1700,18 @@ async def admin_rotate_data():
 async def ai_analyst_run(
     background_tasks: BackgroundTasks,
     max_tickers: int = 25,
+    raw_pattern_run_id: Optional[int] = None,
 ):
     """
     Trigger AI analysis of the current scan candidates.
     Runs in background; results stored in ai_signal_analysis table.
     Returns immediately with a status token.
+
+    raw_pattern_run_id: optional completed Raw Pattern Study run whose research
+    findings are injected into every ticker's AI prompt as prior context.
     """
+    rp_run_id = raw_pattern_run_id   # capture for closure
+
     async def _do():
         try:
             from ai.analyst import run_analyst
@@ -1718,7 +1724,14 @@ async def ai_analyst_run(
             if not results:
                 logger.info("AI Analyst: no scan results available")
                 return
-            analyses = await run_analyst(results, max_tickers=max_tickers)
+
+            research_ctx: str | None = None
+            if rp_run_id:
+                research_ctx = await _build_research_context_text(rp_run_id) or None
+                if research_ctx:
+                    logger.info("AI Analyst: injecting Raw Pattern Study #%s context", rp_run_id)
+
+            analyses = await run_analyst(results, max_tickers=max_tickers, research_context=research_ctx)
             scan_id  = (scan or {}).get("scan_id")
             saved    = await save_ai_analyst_results(analyses, scan_id=scan_id)
             logger.info(f"AI Analyst run complete: {saved} analyses saved")
@@ -1726,7 +1739,12 @@ async def ai_analyst_run(
             logger.error(f"AI Analyst run failed: {e}", exc_info=True)
 
     background_tasks.add_task(_do)
-    return {"ok": True, "message": "AI Analyst run started in background", "max_tickers": max_tickers}
+    return {
+        "ok": True,
+        "message": "AI Analyst run started in background",
+        "max_tickers": max_tickers,
+        "research_context_run_id": raw_pattern_run_id,
+    }
 
 
 @app.get("/api/ai/analyst/latest")
@@ -2787,6 +2805,82 @@ async def delete_raw_pattern_study_run_endpoint(run_id: int):
     }
 
 
+async def _build_research_context_text(run_id: int) -> str:
+    """
+    Build a compact, AI-prompt-ready research context string from a completed
+    Raw Pattern Study run.  Returns empty string on any failure.
+    """
+    from collections import Counter
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_episode_features,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_ai_summary,
+    )
+    from replay.pump_study_engine import extract_top_schemes, generate_engine_patch_plan
+
+    try:
+        run = await get_raw_pattern_run(run_id)
+        if not run or run.get("status") != "complete":
+            return ""
+
+        episodes = await get_raw_pattern_episode_features(run_id, limit=2000)
+        comps    = await get_raw_pattern_comparisons(run_id)
+
+        group_counts = dict(Counter(
+            ep.get("group_type") for ep in episodes if ep.get("group_type")
+        ))
+        schemes  = extract_top_schemes(episodes).get("schemes", [])[:5]
+        verdicts = generate_engine_patch_plan(comps).get("feature_verdicts", [])
+
+        lines = [
+            f"=== RAW PATTERN STUDY CONTEXT (Run #{run_id}, "
+            f"{run.get('start_date')} to {run.get('end_date')}, {len(episodes)} episodes) ===",
+            "SAMPLE: " + ", ".join(f"{k}={v}" for k, v in sorted(group_counts.items()))
+            + " (missed_mover=excluded/no-anchor)",
+        ]
+
+        if schemes:
+            lines.append("\nTOP DISCRIMINATING SCHEMES (4× rate vs false positive rate):")
+            for s in schemes:
+                gm    = s.get("group_match") or {}
+                p4x   = (gm.get("4x_pump")       or {}).get("pct", 0)
+                pfp   = (gm.get("false_positive") or {}).get("pct", 0)
+                ratio = s.get("separator_ratio")
+                badge = s.get("separator_badge") or (f"{ratio:.2f}×" if ratio else "—")
+                lines.append(f"  {s.get('label', s.get('scheme_id'))}: 4x={p4x:.0f}%, fp={pfp:.0f}% [{badge}]")
+
+        for vt in ("BOOST", "INCREASE", "PENALIZE", "REDUCE"):
+            feats = [v["feature"] for v in verdicts if v.get("verdict") == vt]
+            if feats:
+                tag = "WEIGHT HIGHER" if vt in ("BOOST", "INCREASE") else "WEIGHT LOWER"
+                lines.append(f"{tag} ({vt}): {', '.join(feats[:7])}")
+
+        timing_keys = {"days_in_base", "pre_days", "pump_days"}
+        timing_4x: dict[str, float] = {}
+        for c in comps:
+            fn = c.get("feature_name")
+            if fn in timing_keys and c.get("group_name") == "4x_pump" and c.get("median_value") is not None:
+                timing_4x[fn] = c["median_value"]
+        if timing_4x:
+            lines.append("\nKEY 4× MEDIANS: " + ", ".join(
+                f"{k}={v:.0f}d" for k, v in timing_4x.items()
+            ))
+
+        cached_ai = await get_raw_pattern_ai_summary(run_id)
+        if cached_ai and not cached_ai.get("parse_failed"):
+            rec = (cached_ai.get("analysis") or {}).get("recommendation") or cached_ai.get("recommendation") or ""
+            if rec:
+                lines.append(f"\nAI RECOMMENDATION: {rec}")
+
+        lines.append("=== END CONTEXT ===")
+        return "\n".join(lines)
+
+    except Exception as exc:
+        logger.warning("_build_research_context_text run_id=%s failed: %s", run_id, exc)
+        return ""
+
+
 def _repair_json(raw: str) -> str:
     """
     Lightweight single-pass JSON repair.
@@ -2849,7 +2943,7 @@ async def pump_study_delete_ai_summary(run_id: int):
 
 
 @app.get("/api/replay/pump-study/{run_id}/ai-summary")
-async def pump_study_ai_summary(run_id: int):
+async def pump_study_ai_summary(run_id: int, raw_pattern_run_id: Optional[int] = None):
     """
     Lazy AI pattern-analysis for a completed pump-study run.
 
@@ -2888,8 +2982,8 @@ async def pump_study_ai_summary(run_id: int):
             ),
         )
 
-    # ── Return cached result if available ─────────────────────────────────────
-    cached = await get_pump_ai_summary(run_id)
+    # ── Return cached result if available (skip when research context requested) ─
+    cached = await get_pump_ai_summary(run_id) if not raw_pattern_run_id else None
     if cached:
         # If previous attempt failed to parse, surface that clearly so UI can retry
         if cached.get("parse_failed"):
@@ -2958,12 +3052,19 @@ async def pump_study_ai_summary(run_id: int):
     }
 
     # ── Prompt (compact — reduces token count and truncation risk) ────────────
-    # Evidence is serialised as compact JSON (no indent) to minimise tokens.
     evidence_compact = json.dumps(evidence, separators=(",", ":"), default=str)
 
-    # Keep each bullet short (≤10 words) to prevent unterminated-string truncation.
+    research_section = ""
+    if raw_pattern_run_id:
+        ctx_text = await _build_research_context_text(raw_pattern_run_id)
+        if ctx_text:
+            research_section = f"PRIOR RESEARCH CONTEXT:\n{ctx_text}\n\n"
+            logger.info("pump_study_ai_summary run_id=%s: injecting Raw Pattern Study #%s context",
+                        run_id, raw_pattern_run_id)
+
     prompt = (
-        "EVIDENCE (price/volume/indicator only, no news):\n"
+        research_section
+        + "EVIDENCE (price/volume/indicator only, no news):\n"
         f"{evidence_compact}\n\n"
         "Answer 6 questions using ONLY the evidence. "
         "Keep each array item under 15 words. No newlines inside strings.\n"
@@ -3677,3 +3778,32 @@ async def raw_pattern_study_engine_patch_plan(run_id: int):
     comps  = await get_raw_pattern_comparisons(run_id)
     result = generate_engine_patch_plan(comps)
     return {"ok": True, "run_id": run_id, **result}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/research-context")
+async def raw_pattern_research_context(run_id: int):
+    """
+    Export a compact, AI-prompt-ready research context from a completed
+    Raw Pattern Study run.  Includes top schemes, feature verdicts, key
+    timing medians, and the cached AI recommendation.
+
+    Used by the Scanner AI Analyst and Pump Study AI to inject prior
+    quantitative research findings into their prompts.
+    """
+    from database import get_raw_pattern_run
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run must be complete to export research context.")
+
+    context_text = await _build_research_context_text(run_id)
+    if not context_text:
+        raise HTTPException(500, detail="Failed to build research context — run may have no comparison data.")
+
+    return {
+        "ok":           True,
+        "run_id":       run_id,
+        "date_range":   f"{run.get('start_date')} to {run.get('end_date')}",
+        "context_text": context_text,
+    }
