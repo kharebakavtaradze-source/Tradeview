@@ -9,7 +9,6 @@ from .yahoo import fetch_batch, fetch_premarket_batch
 from .indicators import calc_all
 from .wyckoff import detect_regime
 from .scoring import score_ticker
-from .ai_analyst import analyze_batch
 from .sector_sympathy import get_sectors_batch, find_sector_leaders, calc_sympathy_score
 from .market_regime import calculate_sector_strength, get_latest_regime
 from . import new_pump_engine as _npe
@@ -477,16 +476,7 @@ async def run_scan() -> dict:
             pm = premarket_data.get(r["symbol"])
             r["premarket"] = pm if pm else {"has_premarket": False, "premarket_pct": 0, "session": None}
 
-    # Step 6: AI analysis for top 20
-    if results:
-        print(f"Running AI analysis on top {min(20, len(results))} tickers...")
-        top20 = await analyze_batch(results)
-
-        # Merge AI analysis back into full results
-        top_symbols = {r["symbol"] for r in top20}
-        final = top20 + [r for r in results if r["symbol"] not in top_symbols]
-    else:
-        final = results
+    final = results
 
     top_symbols_list = [r["symbol"] for r in final[:5]]
     print(f"Scan complete. {len(final)} tickers. Top: {top_symbols_list}")

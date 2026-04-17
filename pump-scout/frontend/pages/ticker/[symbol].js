@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import AIAnalysis from '../../components/AIAnalysis';
 import AppNav from '../../components/AppNav';
 import styles from '../../styles/Ticker.module.css';
 
@@ -272,12 +271,6 @@ export default function TickerPage() {
             <StatBox label="ACCUM SCORE" value={score.accum_score ?? 0} sub="Accumulation component" color="Green" />
             <StatBox label="TOTAL SCORE" value={score.total_score?.toFixed(1) ?? 0} sub={`Tier: ${tier}`} color="Gold" />
           </div>
-        </div>
-
-        {/* AI Analysis */}
-        <div className={styles.section}>
-          <div className={styles.sectionTitle}>AI ANALYSIS (CLAUDE)</div>
-          <AIAnalysis analysis={ai_analysis} loading={false} />
         </div>
 
         {/* Watchlist Notes */}
