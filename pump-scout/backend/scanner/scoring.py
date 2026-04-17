@@ -314,6 +314,10 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
     breakout        = regime.get("breakout", False)
     wyckoff_conf    = regime.get("confidence", 0) or 0
 
+    ema_spread_pct  = indicators.get("ema_spread_pct", 999.0) or 999.0
+    bull_stack_days = indicators.get("bull_stack_days", 0) or 0
+    ema50_reclaim   = indicators.get("ema50_reclaim_count", 0) or 0
+
     # ── DIMENSION 1: VOLUME PRESSURE (0–100) ─────────────────────────────────
     # Is aggressive/unusual buying happening? Core pump-detection signal.
 
@@ -402,7 +406,29 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
     else:
         atr_pts = 0
 
-    struct_dim = min(100.0, bb_pts + ema_pts + wyckoff_pts + atr_pts)
+    # Bull stack duration — sustained ordered EMA stack = quality base (0–15)
+    if bull_stack_days >= 15:
+        bull_dur_pts = 15
+    elif bull_stack_days >= 10:
+        bull_dur_pts = 10
+    elif bull_stack_days >= 5:
+        bull_dur_pts = 6
+    elif bull_stack_days >= 2:
+        bull_dur_pts = 3
+    else:
+        bull_dur_pts = 0
+
+    # EMA50 reclaim count — repeated reclaims show active accumulation (0–8)
+    if ema50_reclaim >= 3:
+        reclaim_pts = 8
+    elif ema50_reclaim >= 2:
+        reclaim_pts = 5
+    elif ema50_reclaim >= 1:
+        reclaim_pts = 2
+    else:
+        reclaim_pts = 0
+
+    struct_dim = min(100.0, bb_pts + ema_pts + wyckoff_pts + atr_pts + bull_dur_pts + reclaim_pts)
 
     # ── DIMENSION 3: SMART MONEY FLOW (0–100) ────────────────────────────────
     # Evidence of institutions quietly accumulating
@@ -545,6 +571,10 @@ def score_ticker(indicators: dict, regime: dict, symbol: str = "") -> dict:
         total_score *= 0.85          # more volume on down-days than up-days
     if gap_type == "GAP_DOWN_STRONG":
         total_score *= 0.80          # strong overnight distribution event
+    if ema_spread_pct > 55:
+        total_score *= 0.80          # ribbon too expanded = overextended, not coiling
+    elif ema_spread_pct > 35:
+        total_score *= 0.90          # moderately expanded = reduced conviction
 
     # Stealth floor — meaningful stealth always at least WATCH
     if is_stealth and stealth_score_v >= 50 and total_score < 25:
