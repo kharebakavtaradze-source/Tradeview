@@ -500,6 +500,20 @@ async def run_scan() -> dict:
         tier = r["score"]["tier"]
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
+    # New Pump debug summary
+    try:
+        np_summary = _npe.summarize_results(final)
+        print("[NewPump] label counts:", np_summary["label_counts"])
+        print("[NewPump] sequence counts:", np_summary["sequence_counts"])
+        print("[NewPump] top by score:")
+        for row in np_summary["top_by_score"][:10]:
+            print(f"  {row['symbol']:8s}  score={row['new_pump_score']:5.1f}"
+                  f"  {row['new_pump_label']:24s}  {row['new_pump_sequence_label']:22s}"
+                  f"  L34={row['has_l34']}  FRI={row['has_fri34']}"
+                  f"  G4={row['has_g4']}  B2={row['has_b2']}")
+    except Exception as _np_exc:
+        logger.warning(f"[NewPump] summary failed (non-fatal): {_np_exc}")
+
     # Save FIRE/ARM tickers as scan candidates (control group)
     try:
         from database import save_scan_candidates
