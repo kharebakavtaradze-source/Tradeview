@@ -550,6 +550,19 @@ async def _run_migrations(conn):
             except Exception as e:
                 logger.warning(f"Migration raw_pattern_episode_features.{col} failed (non-fatal): {e}")
 
+        # New Pump columns on replay_signal_candidates
+        for col, coltype in (
+            ("new_pump_score",          "FLOAT"),
+            ("new_pump_label",          "VARCHAR(30)"),
+            ("new_pump_sequence_label", "VARCHAR(40)"),
+        ):
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE replay_signal_candidates ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration replay_signal_candidates.{col} failed (non-fatal): {e}")
+
         # Drop removed AI advisory tables (idempotent)
         for tbl in ("ai_signal_analysis", "ai_review_reports", "ai_insights"):
             try:
@@ -2324,6 +2337,9 @@ class ReplaySignalCandidate(Base):
     ignition_signal       = Column(Boolean,    default=False)
     ribbon_signal         = Column(Boolean,    default=False)
     sector                = Column(String(60), nullable=True)
+    new_pump_score        = Column(Float,      nullable=True)
+    new_pump_label        = Column(String(30), nullable=True)
+    new_pump_sequence_label = Column(String(40), nullable=True)
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -2514,6 +2530,9 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 ignition_signal         = bool(c.get("ignition_signal", False)),
                 ribbon_signal           = bool(c.get("ribbon_signal", False)),
                 sector                  = c.get("sector"),
+                new_pump_score          = c.get("new_pump_score"),
+                new_pump_label          = c.get("new_pump_label"),
+                new_pump_sequence_label = c.get("new_pump_sequence_label"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -2660,10 +2679,13 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "tier":             r.tier,
         "total_score":      r.total_score,
         "wyckoff_state":    r.wyckoff_state,
-        "ignition_signal":  r.ignition_signal,
-        "ribbon_signal":    r.ribbon_signal,
-        "sector":           r.sector,
-        "snapshot":         json.loads(r.candidate_snapshot_json or "{}"),
+        "ignition_signal":        r.ignition_signal,
+        "ribbon_signal":          r.ribbon_signal,
+        "sector":                 r.sector,
+        "new_pump_score":         r.new_pump_score,
+        "new_pump_label":         r.new_pump_label,
+        "new_pump_sequence_label": r.new_pump_sequence_label,
+        "snapshot":               json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":       r.created_at.isoformat() if r.created_at else None,
     }
 
