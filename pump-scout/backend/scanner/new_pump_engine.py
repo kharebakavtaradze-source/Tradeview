@@ -7,6 +7,13 @@ Components: L34, FRI34, G4, B2
 MIN_BODY_RATIO = 1.0
 SETUP_STALENESS = 5
 
+# Sequence validity windows
+_MAX_SETUP_AGE      = 10   # setup must be within 10 bars to participate in any sequence
+_MAX_TRIGGER_AGE    = 5    # G4 must be within 5 bars
+_MAX_CONFIRM_AGE    = 5    # B2 must be within 5 bars
+_MAX_SETUP_TRIG_GAP = 8    # setup → trigger gap (bars between them)
+_MAX_TRIG_CONF_GAP  = 4    # trigger → confirm gap
+
 
 # ---------------------------------------------------------------------------
 # Rolling helpers
@@ -410,25 +417,33 @@ def _confirm_score(age_b2, age_g4, age_l34, age_fri34):
 
 
 def _sequence_bonus(age_l34, age_fri34, age_g4, age_b2):
-    """Add bonus only for ordered sequences (setup before trigger before confirm)."""
-    score = 0
-    if age_g4 is None:
+    """Bonus only for fresh, ordered sequences within gap windows."""
+    if age_g4 is None or age_g4 > _MAX_TRIGGER_AGE:
         return 0
 
-    has_fri34_before_g4 = age_fri34 is not None and age_fri34 >= age_g4
-    has_l34_before_g4   = age_l34   is not None and age_l34   >= age_g4
-    has_b2_after_g4     = age_b2    is not None and age_b2    <= age_g4
+    def valid_setup(setup_age):
+        return (setup_age is not None
+                and setup_age <= _MAX_SETUP_AGE
+                and setup_age > age_g4
+                and (setup_age - age_g4) <= _MAX_SETUP_TRIG_GAP)
 
-    if has_fri34_before_g4 and has_b2_after_g4:
-        score += 12
-    elif has_l34_before_g4 and has_b2_after_g4:
-        score += 10
-    elif has_fri34_before_g4:
-        score += 8
-    elif has_l34_before_g4:
-        score += 6
+    valid_b2 = (age_b2 is not None
+                and age_b2 <= _MAX_CONFIRM_AGE
+                and age_b2 <= age_g4
+                and (age_g4 - age_b2) <= _MAX_TRIG_CONF_GAP)
 
-    return score
+    good_fri34 = valid_setup(age_fri34)
+    good_l34   = valid_setup(age_l34)
+
+    if good_fri34 and valid_b2:
+        return 12
+    if good_l34 and valid_b2:
+        return 10
+    if good_fri34:
+        return 8
+    if good_l34:
+        return 6
+    return 0
 
 
 def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
@@ -535,38 +550,55 @@ def _sequence_label(age_l34, age_fri34, age_g4, age_b2):
     has_g4    = age_g4    is not None
     has_b2    = age_b2    is not None
 
-    recent_setup  = lambda age: age is not None and age <= 10
-    recent_trig   = lambda age: age is not None and age <= 5
-    ordered_setup_trig = lambda sa, ta: sa is not None and ta is not None and sa >= ta
-    b2_after_g4   = has_b2 and has_g4 and age_b2 <= age_g4
+    # Freshness gates — component must be recent enough to participate
+    fresh_fri34 = has_fri34 and age_fri34 <= _MAX_SETUP_AGE
+    fresh_l34   = has_l34   and age_l34   <= _MAX_SETUP_AGE
+    fresh_g4    = has_g4    and age_g4    <= _MAX_TRIGGER_AGE
+    fresh_b2    = has_b2    and age_b2    <= _MAX_CONFIRM_AGE
 
-    if has_fri34 and has_g4 and has_b2 \
-            and ordered_setup_trig(age_fri34, age_g4) and b2_after_g4:
+    def valid_st(setup_age):
+        """setup before trigger AND gap within window (setup_age > trig_age = setup happened first)"""
+        return (setup_age is not None and age_g4 is not None
+                and setup_age > age_g4
+                and (setup_age - age_g4) <= _MAX_SETUP_TRIG_GAP)
+
+    def valid_tc():
+        """confirm after trigger AND gap within window"""
+        return (age_b2 is not None and age_g4 is not None
+                and age_b2 <= age_g4
+                and (age_g4 - age_b2) <= _MAX_TRIG_CONF_GAP)
+
+    # FULL sequences — all three freshness gates + ordering + gap required
+    if fresh_fri34 and fresh_g4 and fresh_b2 and valid_st(age_fri34) and valid_tc():
         return "FULL_FRI34_G4_B2"
 
-    if has_l34 and has_g4 and has_b2 \
-            and ordered_setup_trig(age_l34, age_g4) and b2_after_g4:
+    if fresh_l34 and fresh_g4 and fresh_b2 and valid_st(age_l34) and valid_tc():
         return "FULL_L34_G4_B2"
 
-    if has_b2 and has_g4 and age_b2 <= age_g4 and recent_trig(age_g4):
+    # Confirm after G4 — fresh G4 + fresh B2 + tight gap
+    if fresh_g4 and fresh_b2 and valid_tc():
         return "CONFIRM_AFTER_G4"
 
-    if has_g4 and has_fri34 and ordered_setup_trig(age_fri34, age_g4):
+    # Trigger after setup — fresh setup + G4 present + gap ok
+    if has_g4 and fresh_fri34 and valid_st(age_fri34):
         return "TRIGGER_AFTER_FRI34"
 
-    if has_g4 and has_l34 and ordered_setup_trig(age_l34, age_g4):
+    if has_g4 and fresh_l34 and valid_st(age_l34):
         return "TRIGGER_AFTER_L34"
 
-    if has_g4 and not recent_setup(age_l34) and not recent_setup(age_fri34):
+    # Isolated G4 — no fresh setup within window
+    if has_g4 and not fresh_fri34 and not fresh_l34:
         return "ISOLATED_G4"
 
-    if has_fri34 and recent_setup(age_fri34) and not recent_trig(age_g4):
+    # Setup only
+    if fresh_fri34 and not fresh_g4:
         return "SETUP_ONLY_FRI34"
 
-    if has_l34 and recent_setup(age_l34) and not recent_trig(age_g4):
+    if fresh_l34 and not fresh_g4:
         return "SETUP_ONLY_L34"
 
-    if has_b2 and not recent_trig(age_g4):
+    # Isolated B2
+    if has_b2 and not fresh_g4:
         return "ISOLATED_B2"
 
     return "NONE"
