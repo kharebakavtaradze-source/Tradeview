@@ -199,34 +199,30 @@ def _build_false_positives(candidates: list[dict], outcome_map: dict,
         o3 = horizons.get("3d", {})
         c  = cand_by_id.get(cid, {})
 
-        tier = c.get("tier", "?")
-        ign  = c.get("ignition_signal", False)
-        rib  = c.get("ribbon_signal", False)
-        score = c.get("total_score")
+        tier    = c.get("tier", "?")
+        np_lbl  = c.get("new_pump_label") or "UNKNOWN"
+        np_seq  = c.get("new_pump_sequence_label") or "NONE"
+        score   = c.get("total_score")
 
-        why = f"{tier} tier"
-        if ign and rib:
-            why += " | Ignition ✓ | Ribbon ✓"
-        elif ign:
-            why += " | Ignition ✓"
-        elif rib:
-            why += " | Ribbon ✓"
+        why = f"{tier} tier | {np_lbl}"
+        if np_seq and np_seq != "NONE":
+            why += f" | {np_seq}"
         if score is not None:
             why += f" | Score {round(score, 1)}"
 
         rows.append({
-            "symbol":           c.get("symbol", "?"),
-            "scan_date":        c.get("scan_date"),
-            "tier":             tier,
-            "total_score":      score,
-            "ignition_signal":  ign,
-            "ribbon_signal":    rib,
-            "sector":           c.get("sector"),
-            "why_selected":     why,
-            "return_3d":        o3.get("return_pct"),
-            "return_5d":        ret5,
-            "max_drawdown_pct": o5.get("max_drawdown_pct"),
-            "outcome_label":    o5.get("outcome_label"),
+            "symbol":            c.get("symbol", "?"),
+            "scan_date":         c.get("scan_date"),
+            "tier":              tier,
+            "total_score":       score,
+            "new_pump_label":    np_lbl,
+            "new_pump_sequence": np_seq,
+            "sector":            c.get("sector"),
+            "why_selected":      why,
+            "return_3d":         o3.get("return_pct"),
+            "return_5d":         ret5,
+            "max_drawdown_pct":  o5.get("max_drawdown_pct"),
+            "outcome_label":     o5.get("outcome_label"),
         })
 
     rows.sort(key=lambda x: x["return_5d"])
@@ -236,7 +232,7 @@ def _build_false_positives(candidates: list[dict], outcome_map: dict,
 def _build_missed_section(missed: list[dict], limit: int = 20) -> list[dict]:
     """Section D — Top missed movers enriched with classification flags."""
     _STRICT_CODES  = {"filtered_by_volume_gate", "filtered_by_price_gate"}
-    _SIGNAL_CODES  = {"no_structural_signal", "no_ignition"}
+    _SIGNAL_CODES  = {"no_structural_signal"}
     _UNIVERSE_CODES = {"not_in_universe", "filtered_as_non_equity"}
 
     result = []
@@ -259,10 +255,10 @@ def _build_missed_section(missed: list[dict], limit: int = 20) -> list[dict]:
 
 
 def _build_pattern_review(summary: dict,
-                           perf_tier: list, perf_ribbon: list,
-                           perf_ignition: list, perf_source: list,
+                           perf_tier: list,
+                           perf_np_label: list,
                            false_positives: list, missed: list) -> dict:
-    """Section E — Deterministic pattern analysis."""
+    """Section E — Deterministic pattern analysis (New Pump-centric)."""
     what_worked:    list = []
     what_failed:    list = []
     missed_patterns: list = []
@@ -301,36 +297,46 @@ def _build_pattern_review(summary: dict,
                 f"({worst['count']} candidates)"
             )
 
-    # ── Ignition signal lift ─────────────────────────────────────────────────
-    ign_true  = next((x for x in perf_ignition if x["bucket"] == "True"),  None)
-    ign_false = next((x for x in perf_ignition if x["bucket"] == "False"), None)
-    if ign_true and ign_false:
-        t5  = ign_true.get("avg_return_5d")  or 0
-        f5  = ign_false.get("avg_return_5d") or 0
-        lift = round(t5 - f5, 1)
-        if lift >= 2:
+    # ── New Pump label signal quality ─────────────────────────────────────────
+    _NP_ORDER = ["NEW_PUMP_FIRE", "NEW_PUMP_STRONG", "NEW_PUMP_SETUP",
+                 "NEW_PUMP_TRIGGER_ONLY", "NEW_PUMP_WEAK", "NEW_PUMP_NONE"]
+    np_fire  = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_FIRE"),  None)
+    np_none  = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_NONE"),  None)
+    np_weak  = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_WEAK"),  None)
+    np_setup = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_SETUP"), None)
+
+    if np_fire and np_none:
+        f5 = np_fire.get("avg_return_5d") or 0
+        n5 = np_none.get("avg_return_5d") or 0
+        if f5 - n5 >= 3 and np_fire.get("count", 0) >= 2:
             what_worked.append(
-                f"Ignition signal provides +{lift}% avg 5d lift vs non-ignition"
+                f"NEW_PUMP_FIRE avg 5d {f5:+.1f}% vs NONE {n5:+.1f}% "
+                f"({np_fire['count']} FIRE candidates) — label discriminates well"
             )
-        elif lift <= -2:
+        elif f5 - n5 < 1 and np_fire.get("count", 0) >= 3:
             what_failed.append(
-                f"Ignition signal does not improve 5d returns (delta {lift:+.1f}%)"
+                f"NEW_PUMP_FIRE shows no meaningful edge vs NONE ({f5:+.1f}% vs {n5:+.1f}%) — "
+                "FIRE threshold may be too permissive"
             )
 
-    # ── Ribbon signal lift ───────────────────────────────────────────────────
-    rib_true  = next((x for x in perf_ribbon if x["bucket"] == "True"),  None)
-    rib_false = next((x for x in perf_ribbon if x["bucket"] == "False"), None)
-    if rib_true and rib_false:
-        t5  = rib_true.get("avg_return_5d")  or 0
-        f5  = rib_false.get("avg_return_5d") or 0
-        lift = round(t5 - f5, 1)
-        if lift >= 2:
+    if np_setup:
+        s5 = np_setup.get("avg_return_5d") or 0
+        if s5 >= 4.0 and np_setup.get("count", 0) >= 3:
             what_worked.append(
-                f"Ribbon signal provides +{lift}% avg 5d lift vs no-ribbon"
+                f"NEW_PUMP_SETUP shows early edge {s5:+.1f}% avg 5d — "
+                "early setup detection is working"
             )
-        elif lift <= -2:
+        elif s5 < -1.0 and np_setup.get("count", 0) >= 3:
             what_failed.append(
-                f"Ribbon signal does not improve 5d returns (delta {lift:+.1f}%)"
+                f"NEW_PUMP_SETUP avg 5d {s5:+.1f}% — setup signals may not be resolving"
+            )
+
+    if np_weak:
+        w5 = np_weak.get("avg_return_5d") or 0
+        if w5 < -2.0 and np_weak.get("count", 0) >= 3:
+            likely_noisy.append(
+                f"NEW_PUMP_WEAK avg 5d {w5:+.1f}% — weak signals are destructive; "
+                "consider raising min score threshold"
             )
 
     # ── False positive rate ───────────────────────────────────────────────────
@@ -339,7 +345,7 @@ def _build_pattern_review(summary: dict,
         fp_rate  = _pct(fp_count, total5)
         if fp_rate >= 35:
             likely_noisy.append(
-                f"False positive/failed rate {fp_rate:.0f}% — scoring may be too permissive for this date"
+                f"False positive/failed rate {fp_rate:.0f}% — scoring may be too permissive"
             )
         elif fp_rate <= 15 and total5 >= 5:
             what_worked.append(f"Low false-positive/failed rate: {fp_rate:.0f}%")
@@ -359,21 +365,9 @@ def _build_pattern_review(summary: dict,
                 )
             elif reason == "no_structural_signal":
                 likely_noisy.append(
-                    f"{count} strong mover(s) had no structural signal — "
-                    "they moved without ribbon/ignition confirmation"
+                    f"{count} strong mover(s) had no New Pump structural signal — "
+                    "check if L34/FRI34/G4/B2 thresholds are too strict"
                 )
-
-    # ── Source bucket insight ─────────────────────────────────────────────────
-    both = next((x for x in perf_source if x["bucket"] == "Ignition+Ribbon"), None)
-    none_src = next((x for x in perf_source if x["bucket"] == "Neither"), None)
-    if both and none_src:
-        b5 = both.get("avg_return_5d") or 0
-        n5 = none_src.get("avg_return_5d") or 0
-        if b5 - n5 >= 3:
-            what_worked.append(
-                f"Ignition+Ribbon combo {b5:+.1f}% vs Neither {n5:+.1f}% 5d — "
-                "signal stacking shows edge"
-            )
 
     # ── Suggested focus ───────────────────────────────────────────────────────
     if what_worked:
@@ -386,23 +380,23 @@ def _build_pattern_review(summary: dict,
         suggested_focus.append(f"Investigate: {what_failed[0]}")
 
     return {
-        "what_worked":          what_worked,
-        "what_failed":          what_failed,
-        "missed_patterns":      missed_patterns,
+        "what_worked":           what_worked,
+        "what_failed":           what_failed,
+        "missed_patterns":       missed_patterns,
         "likely_strict_filters": likely_strict,
-        "likely_noisy_filters": likely_noisy,
-        "suggested_focus":      suggested_focus,
+        "likely_noisy_filters":  likely_noisy,
+        "suggested_focus":       suggested_focus,
     }
 
 
 def _build_experiments(summary: dict,
-                        perf_tier: list, perf_ribbon: list,
-                        perf_ignition: list, perf_source: list,
+                        perf_tier: list,
+                        perf_np_label: list,
                         missed: list, pattern: dict) -> list[dict]:
-    """Section F — Proposal-only experiments. NEVER auto-applied."""
+    """Section F — Proposal-only experiments (New Pump-centric). NEVER auto-applied."""
     experiments: list[dict] = []
 
-    lc    = summary.get("outcome_label_counts", {})
+    lc     = summary.get("outcome_label_counts", {})
     total5 = summary.get("total_outcomes_5d", 0)
 
     # ── Volume gate ───────────────────────────────────────────────────────────
@@ -411,7 +405,7 @@ def _build_experiments(summary: dict,
         experiments.append({
             "title":           "Lower MIN_VOLUME threshold",
             "description":     f"{vol_missed} strong mover(s) were eliminated by the volume gate. "
-                               "Test with MIN_VOLUME=100_000 to capture lower-liquidity breakouts.",
+                               "Test with MIN_VOLUME=50_000 to capture lower-liquidity breakouts.",
             "evidence":        f"{vol_missed} missed movers had why_missed='filtered_by_volume_gate'",
             "confidence":      "MEDIUM" if vol_missed >= 3 else "LOW",
             "experiment_type": "threshold",
@@ -433,68 +427,70 @@ def _build_experiments(summary: dict,
     signal_missed = sum(1 for m in missed if m.get("why_missed") == "no_structural_signal")
     if signal_missed >= 3:
         experiments.append({
-            "title":           "Investigate no-structural-signal missed movers",
-            "description":     f"{signal_missed} strong movers were in the universe but scored SKIP. "
-                               "Review their indicator profiles to see if a new signal pattern is being missed.",
+            "title":           "Investigate no-New-Pump-signal missed movers",
+            "description":     f"{signal_missed} strong movers were in the universe but had no "
+                               "L34/FRI34/G4/B2 signal. Review their bar-level anatomy to see "
+                               "if a new signal pattern is being missed.",
             "evidence":        f"{signal_missed} missed movers had why_missed='no_structural_signal'",
             "confidence":      "MEDIUM",
             "experiment_type": "scoring_review",
         })
 
-    # ── Ignition signal tier split ────────────────────────────────────────────
-    ign_true  = next((x for x in perf_ignition if x["bucket"] == "True"),  None)
-    ign_false = next((x for x in perf_ignition if x["bucket"] == "False"), None)
-    if ign_true and ign_false:
-        t5 = ign_true.get("avg_return_5d")  or 0
-        f5 = ign_false.get("avg_return_5d") or 0
-        if t5 - f5 >= 3 and ign_true.get("count", 0) >= 3:
+    # ── New Pump label FIRE vs NONE spread ───────────────────────────────────
+    np_fire = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_FIRE"),  None)
+    np_none = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_NONE"),  None)
+    if np_fire and np_none:
+        f5 = np_fire.get("avg_return_5d") or 0
+        n5 = np_none.get("avg_return_5d") or 0
+        if f5 - n5 >= 4 and np_fire.get("count", 0) >= 3:
             experiments.append({
-                "title":           "Promote ignition-confirmed candidates",
-                "description":     "Ignition signal shows a meaningful return edge. "
-                                   "Test a dedicated higher-priority bucket or score boost for ignition-confirmed names.",
-                "evidence":        f"Ignition=True avg 5d {t5:+.1f}% vs False {f5:+.1f}% (delta {t5-f5:+.1f}%)",
-                "confidence":      "HIGH" if t5 - f5 >= 5 else "MEDIUM",
+                "title":           "Elevate NEW_PUMP_FIRE to priority bucket",
+                "description":     "FIRE label shows a meaningful avg return edge. "
+                                   "Consider restricting alerts to FIRE+STRONG labels only.",
+                "evidence":        f"FIRE avg 5d {f5:+.1f}% vs NONE {n5:+.1f}% (delta {f5-n5:+.1f}%)",
+                "confidence":      "HIGH" if f5 - n5 >= 7 else "MEDIUM",
                 "experiment_type": "bucket_split",
             })
-        elif f5 - t5 >= 3:
+        elif n5 - f5 >= 3 and np_fire.get("count", 0) >= 3:
             experiments.append({
-                "title":           "Review ignition signal reliability",
-                "description":     "Non-ignition candidates outperformed ignition ones. "
-                                   "Check whether the ignition threshold is too aggressive for this date.",
-                "evidence":        f"Ignition=True avg 5d {t5:+.1f}% vs False {f5:+.1f}%",
+                "title":           "Review NEW_PUMP_FIRE signal quality",
+                "description":     "FIRE label underperforms NONE. Score thresholds or "
+                                   "sequence validity gates may be mis-calibrated for this regime.",
+                "evidence":        f"FIRE avg 5d {f5:+.1f}% vs NONE {n5:+.1f}%",
                 "confidence":      "MEDIUM",
                 "experiment_type": "threshold",
             })
 
-    # ── Ribbon signal split ───────────────────────────────────────────────────
-    rib_true  = next((x for x in perf_ribbon if x["bucket"] == "True"),  None)
-    rib_false = next((x for x in perf_ribbon if x["bucket"] == "False"), None)
-    if rib_true and rib_false:
-        t5 = rib_true.get("avg_return_5d")  or 0
-        f5 = rib_false.get("avg_return_5d") or 0
-        if t5 - f5 >= 3 and rib_true.get("count", 0) >= 3:
+    # ── Setup-only quality ────────────────────────────────────────────────────
+    np_setup = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_SETUP"), None)
+    np_trig  = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_TRIGGER_ONLY"), None)
+    if np_setup and np_trig:
+        s5 = np_setup.get("avg_return_5d") or 0
+        t5 = np_trig.get("avg_return_5d")  or 0
+        if s5 >= 3.0 and s5 > t5 and np_setup.get("count", 0) >= 3:
             experiments.append({
-                "title":           "Weight ribbon-aligned candidates higher",
-                "description":     "Ribbon signal shows a meaningful avg return edge. "
-                                   "Test awarding a +5pt score bonus or separate bucket for ribbon-confirmed names.",
-                "evidence":        f"Ribbon=True avg 5d {t5:+.1f}% vs False {f5:+.1f}%",
-                "confidence":      "HIGH" if t5 - f5 >= 5 else "MEDIUM",
+                "title":           "Reward early setup sequences more aggressively",
+                "description":     "SETUP label is outperforming TRIGGER_ONLY. "
+                                   "Increase L34/FRI34 setup_score weights; early entry is showing edge.",
+                "evidence":        f"SETUP avg 5d {s5:+.1f}% vs TRIGGER_ONLY {t5:+.1f}%",
+                "confidence":      "MEDIUM",
                 "experiment_type": "ranking_adjustment",
             })
 
-    # ── Ignition + Ribbon combo ───────────────────────────────────────────────
-    both = next((x for x in perf_source if x["bucket"] == "Ignition+Ribbon"), None)
-    only_ign = next((x for x in perf_source if x["bucket"] == "Ignition Only"), None)
-    if both and only_ign and (both.get("avg_return_5d") or 0) >= 5.0 and both.get("count", 0) >= 3:
-        experiments.append({
-            "title":           "Create dedicated Ignition+Ribbon super-tier",
-            "description":     "Candidates with both ignition and ribbon signals show the strongest returns. "
-                               "Promote them to a dedicated tier or watchlist bucket.",
-            "evidence":        f"Ignition+Ribbon avg 5d {both.get('avg_return_5d'):+.1f}%, "
-                               f"n={both.get('count')}",
-            "confidence":      "HIGH",
-            "experiment_type": "bucket_split",
-        })
+    # ── Full sequence quality (FIRE vs STRONG) ───────────────────────────────
+    np_strong = next((x for x in perf_np_label if x["bucket"] == "NEW_PUMP_STRONG"), None)
+    if np_fire and np_strong and np_fire.get("count", 0) >= 3 and np_strong.get("count", 0) >= 3:
+        fire5   = np_fire.get("avg_return_5d")   or 0
+        strong5 = np_strong.get("avg_return_5d") or 0
+        if strong5 - fire5 >= 3:
+            experiments.append({
+                "title":           "STRONG label outperforming FIRE — review score boundary",
+                "description":     "Candidates labelled STRONG (46–61) are performing better than FIRE (62+). "
+                                   "The FIRE threshold may be attracting over-extended sequences.",
+                "evidence":        f"STRONG avg 5d {strong5:+.1f}% vs FIRE {fire5:+.1f}%",
+                "confidence":      "MEDIUM",
+                "experiment_type": "threshold",
+            })
 
     # ── High false-positive rate ──────────────────────────────────────────────
     if total5 > 0:
@@ -502,9 +498,10 @@ def _build_experiments(summary: dict,
         fp_rate  = _pct(fp_count, total5)
         if fp_rate >= 35:
             experiments.append({
-                "title":           "Tighten entry-quality threshold",
+                "title":           "Tighten New Pump sequence validity gates",
                 "description":     f"False-positive/failed rate is {fp_rate:.0f}%. "
-                                   "Test raising MIN_SCORE or adding a pre-ignition OBV requirement.",
+                                   "Test tightening _MAX_SETUP_AGE or _MAX_TRIG_CONF_GAP to filter "
+                                   "stale sequences that are generating noise.",
                 "evidence":        f"{fp_count}/{total5} 5d outcomes were FAILED/FALSE_POSITIVE ({fp_rate:.0f}%)",
                 "confidence":      "MEDIUM",
                 "experiment_type": "threshold",
@@ -567,26 +564,6 @@ async def build_research_bundle(run_id: int) -> dict:
         lambda c: c.get("tier") or "UNKNOWN",
         "tier",
     )
-    perf_ribbon = _build_perf_buckets(
-        candidates, outcome_map,
-        lambda c: str(bool(c.get("ribbon_signal"))),
-        "ribbon_signal",
-    )
-    perf_ignition = _build_perf_buckets(
-        candidates, outcome_map,
-        lambda c: str(bool(c.get("ignition_signal"))),
-        "ignition_signal",
-    )
-    perf_source = _build_perf_buckets(
-        candidates, outcome_map,
-        lambda c: (
-            "Ignition+Ribbon" if c.get("ignition_signal") and c.get("ribbon_signal") else
-            "Ignition Only"   if c.get("ignition_signal") else
-            "Ribbon Only"     if c.get("ribbon_signal")   else
-            "Neither"
-        ),
-        "signal_combo",
-    )
 
     # ── New Pump Engine buckets ───────────────────────────────────────────────
     _NP_LABEL_ORDER = [
@@ -615,13 +592,13 @@ async def build_research_bundle(run_id: int) -> dict:
 
     # ── Section E: Pattern review ─────────────────────────────────────────────
     pattern_review = _build_pattern_review(
-        summary, perf_tier, perf_ribbon, perf_ignition, perf_source,
+        summary, perf_tier, perf_new_pump_label,
         false_positives, missed_section,
     )
 
     # ── Section F: Suggested experiments ─────────────────────────────────────
     suggested_experiments = _build_experiments(
-        summary, perf_tier, perf_ribbon, perf_ignition, perf_source,
+        summary, perf_tier, perf_new_pump_label,
         missed_section, pattern_review,
     )
 
@@ -629,9 +606,6 @@ async def build_research_bundle(run_id: int) -> dict:
         "run":                              run,
         "summary":                          summary,
         "performance_by_tier":              perf_tier,
-        "performance_by_ribbon_signal":     perf_ribbon,
-        "performance_by_ignition_signal":   perf_ignition,
-        "performance_by_source":            perf_source,
         "performance_by_new_pump_label":    perf_new_pump_label,
         "performance_by_new_pump_sequence": perf_new_pump_seq,
         "false_positives":                  false_positives,
@@ -751,12 +725,9 @@ def render_research_bundle_markdown(bundle: dict) -> str:
         ))
         add("")
 
-    _bucket_section("Performance by Tier",             bundle.get("performance_by_tier", []))
-    _bucket_section("Performance by Signal Combo",     bundle.get("performance_by_source", []))
-    _bucket_section("Performance by Ignition Signal",  bundle.get("performance_by_ignition_signal", []))
-    _bucket_section("Performance by Ribbon Signal",    bundle.get("performance_by_ribbon_signal", []))
-    _bucket_section("Performance by New Pump Label",   bundle.get("performance_by_new_pump_label", []))
-    _bucket_section("Performance by New Pump Sequence",bundle.get("performance_by_new_pump_sequence", []))
+    _bucket_section("Performance by New Pump Label",    bundle.get("performance_by_new_pump_label", []))
+    _bucket_section("Performance by New Pump Sequence", bundle.get("performance_by_new_pump_sequence", []))
+    _bucket_section("Performance by Tier",              bundle.get("performance_by_tier", []))
 
     # ── Section C: Top False Positives ────────────────────────────────────────
     add("## Top False Positives")
@@ -768,15 +739,15 @@ def render_research_bundle_markdown(bundle: dict) -> str:
             rows.append([
                 fp.get("symbol", "?"),
                 fp.get("tier", "?"),
+                fp.get("new_pump_label") or "—",
+                fp.get("new_pump_sequence") or "—",
                 _fmt(fp.get("return_3d"), sign=True, suffix="%"),
                 _fmt(fp.get("return_5d"), sign=True, suffix="%"),
                 _fmt(fp.get("max_drawdown_pct"), sign=True, suffix="%"),
                 fp.get("outcome_label") or "—",
-                "✓" if fp.get("ignition_signal") else "—",
-                "✓" if fp.get("ribbon_signal") else "—",
             ])
         add(_mdtable(
-            ["Symbol", "Tier", "3d", "5d", "MaxDD", "Label", "Ign", "Rib"],
+            ["Symbol", "Tier", "NP Label", "NP Sequence", "3d", "5d", "MaxDD", "Outcome"],
             rows,
         ))
     else:

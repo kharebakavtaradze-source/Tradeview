@@ -785,39 +785,7 @@ def _detect_timeline_events(
             ))
             break
 
-    # ── 3. first_ribbon_constructive_day ─────────────────────────────────────
-    # First day ribbon reaches CONSTRUCTIVE or CONFIRMED level (PRE preferred, then PUMP)
-    _RIBBON_QUALIFY = {"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE"}
-    for snap in pre_snaps + pump_snaps:
-        rc = snap.get("ribbon_class") or ""
-        if rc in _RIBBON_QUALIFY:
-            events.append(_mk_event(
-                episode_id, run_id, symbol, snap,
-                "first_ribbon_constructive_day",
-                value  = None,
-                note   = f"Ribbon class reached {rc}",
-                detail = {"ribbon_class": rc},
-            ))
-            break
-
-    # ── 4. first_ignition_day ─────────────────────────────────────────────────
-    # First day where ignition_quality >= 20 (meaningful, not noise)
-    for snap in pre_snaps + pump_snaps:
-        ig = (snap.get("snapshot") or {}).get("ignition") or {}
-        iq = ig.get("ignition_quality") or 0
-        ib = ig.get("ignition_bucket", "NONE")
-        sig = ig.get("ignition_signal", "NO_IGNITION")
-        if iq >= 20 and sig not in ("NO_IGNITION", "NONE", ""):
-            events.append(_mk_event(
-                episode_id, run_id, symbol, snap,
-                "first_ignition_day",
-                value  = float(iq),
-                note   = f"Ignition signal: {sig} / bucket={ib} / quality={iq}",
-                detail = {"ignition_signal": sig, "ignition_bucket": ib, "ignition_quality": iq},
-            ))
-            break
-
-    # ── 5. first_accumulation_like_day ────────────────────────────────────────
+    # ── 3. first_accumulation_like_day ────────────────────────────────────────
     # PRE only: first day with Wyckoff accumulation evidence
     _ACC_STATES = {"BASE", "ARM", "STEALTH", "STEALTH_BASE", "STEALTH_ARM", "FIRE"}
     for snap in pre_snaps:
@@ -1001,7 +969,7 @@ def _detect_timeline_events(
 _PUMP_FAMILIES = (
     "ACCUMULATION_TO_EXPANSION",
     "POST_COMPRESSION_BREAKOUT",
-    "CATALYST_IGNITION",
+    "CATALYST_DRIVEN",
     "GAP_AND_GO",
     "LOW_FLOAT_VELOCITY",
     "CHAOTIC_SPECULATIVE",
@@ -1030,8 +998,6 @@ _WYK_PRIORITY: dict[str, int] = {
     "NONE":        0,
 }
 
-# Ribbon classes that count as "constructive or better"
-_RIBBON_QUALIFY: frozenset = frozenset({"RIBBON_CONFIRMED", "RIBBON_CONSTRUCTIVE"})
 
 
 # ── Raw Pattern Study helpers ─────────────────────────────────────────────────
@@ -1228,6 +1194,16 @@ def snapshot_to_raw_daily_feature(
             vol_vs_avg20 is not None and vol_vs_avg20 > 1.5
         )
 
+    # ── Derived: extreme anomaly flag ─────────────────────────────────────────
+    # Wide EMA spread + extreme volume = penalised in NP engine; track for study
+    extreme_anomaly = None
+    if vol_z is not None:
+        extreme_anomaly = bool(
+            vol_z > 4.0 or
+            (trailing_avg_range_pct and intra_range is not None
+             and intra_range > 3.0 * trailing_avg_range_pct)
+        )
+
     # ── Assemble output row ───────────────────────────────────────────────────
     return {
         # Identity / window context
@@ -1303,8 +1279,19 @@ def snapshot_to_raw_daily_feature(
         "reclaim_bar":       None,
         "expansion_bar":     expansion_bar,
 
-        # Overflow — EMA ribbon details + derived distance/flag fields
-        "feature_json": _build_ema_feature_json(ind, c, compr_state),
+        # Overflow — EMA ribbon details + NP-relevant context flags
+        "feature_json": {
+            **_build_ema_feature_json(ind, c, compr_state),
+            # New Pump context fields (derivable without NP engine re-run)
+            "bull_stack_active":    ind.get("bullish_stack"),
+            "above_ema200":         (bool(c > ind["ema200"])
+                                     if (c is not None and ind.get("ema200")) else None),
+            "volume_z":             vol_z,
+            "dollar_volume":        round(dollar_vol, 2) if dollar_vol is not None else None,
+            "ema_spread_pct":       ema_spread,
+            "expansion_bar":        expansion_bar,
+            "extreme_anomaly_flag": extreme_anomaly,
+        },
     }
 
 
@@ -1914,6 +1901,15 @@ async def build_raw_pattern_episode_features_structure(
 # Features extracted into each member's features_json and compared across groups.
 # Ordered PRIMARY first so the comparison table is meaningful at a glance.
 _COMPARISON_FEATURES = [
+    # ── PRIMARY: New Pump signal presence / timing ──
+    "had_valid_recent_setup",
+    "had_valid_recent_trigger",
+    "had_valid_recent_confirm",
+    "had_valid_full_sequence",
+    "best_new_pump_label_rank",       # numeric rank: FIRE=0…NONE=5
+    "days_from_last_setup_to_breakout",
+    "days_from_last_trigger_to_breakout",
+    "days_from_g4_to_b2",
     # ── PRIMARY: sequence / duration ──
     "days_from_breakout_to_peak",
     "compression_days_pre",
@@ -1928,10 +1924,11 @@ _COMPARISON_FEATURES = [
     # ── PRIMARY: EMA ribbon episode aggregates ──
     "had_bull_stack_pre",
     "bull_stack_days_pre",
+    "max_bull_stack_days_pre",
     "days_above_ema50_pre",
+    "days_above_ema200_pre",
     "ema50_reclaim_count_pre",
     # ── SECONDARY: EMA position metrics ──
-    "days_above_ema200_pre",
     "avg_close_vs_ema50_pct_pre",
     "avg_close_vs_ema200_pct_pre",
     # ── PRIMARY: structure / wyckoff ──
@@ -1943,11 +1940,13 @@ _COMPARISON_FEATURES = [
     "had_breakout_retest",
     "retest_count",
     "avg_retest_quality",
-    # ── SECONDARY: volume ──
+    # ── SECONDARY: volume / context ──
     "max_volume_anomaly_pre",
     "median_volume_anomaly_pre",
     "abnormal_volume_day_count_pre",
+    "extreme_anomaly_day_count_pre",
     "max_dollar_volume_pre",
+    "median_dollar_volume_pre",
     # ── SECONDARY: candle / bar patterns ──
     "bullish_engulfing_count_pre",
     "expansion_bar_count_pre",
@@ -1967,6 +1966,15 @@ _COMPARISON_FEATURES = [
 # and to drive UI badge rendering.  Post-factum outcome labels are NOT in
 # _COMPARISON_FEATURES — they must never be treated as early signals.
 _FEATURE_PRIORITY: dict[str, str] = {
+    # PRIMARY — New Pump signal separators
+    "had_valid_recent_setup":                      "PRIMARY",
+    "had_valid_recent_trigger":                    "PRIMARY",
+    "had_valid_recent_confirm":                    "PRIMARY",
+    "had_valid_full_sequence":                     "PRIMARY",
+    "best_new_pump_label_rank":                    "PRIMARY",
+    "days_from_last_setup_to_breakout":            "PRIMARY",
+    "days_from_last_trigger_to_breakout":          "PRIMARY",
+    "days_from_g4_to_b2":                          "PRIMARY",
     # PRIMARY — core sequence/duration separators
     "days_from_breakout_to_peak":                  "PRIMARY",
     "compression_days_pre":                        "PRIMARY",
@@ -1981,10 +1989,11 @@ _FEATURE_PRIORITY: dict[str, str] = {
     # PRIMARY — EMA ribbon episode aggregates
     "had_bull_stack_pre":                          "PRIMARY",
     "bull_stack_days_pre":                         "PRIMARY",
+    "max_bull_stack_days_pre":                     "PRIMARY",
     "days_above_ema50_pre":                        "PRIMARY",
+    "days_above_ema200_pre":                       "PRIMARY",
     "ema50_reclaim_count_pre":                     "PRIMARY",
     # SECONDARY — EMA position metrics
-    "days_above_ema200_pre":                       "SECONDARY",
     "avg_close_vs_ema50_pct_pre":                  "SECONDARY",
     "avg_close_vs_ema200_pct_pre":                 "SECONDARY",
     # PRIMARY — structure depth
@@ -1996,11 +2005,13 @@ _FEATURE_PRIORITY: dict[str, str] = {
     "had_breakout_retest":                         "SECONDARY",
     "retest_count":                                "SECONDARY",
     "avg_retest_quality":                          "SECONDARY",
-    # SECONDARY — volume
+    # SECONDARY — volume / context
     "max_volume_anomaly_pre":                      "SECONDARY",
     "median_volume_anomaly_pre":                   "SECONDARY",
     "abnormal_volume_day_count_pre":               "SECONDARY",
+    "extreme_anomaly_day_count_pre":               "SECONDARY",
     "max_dollar_volume_pre":                       "SECONDARY",
+    "median_dollar_volume_pre":                    "SECONDARY",
     # SECONDARY — candle patterns
     "bullish_engulfing_count_pre":                 "SECONDARY",
     "expansion_bar_count_pre":                     "SECONDARY",
@@ -2021,6 +2032,8 @@ _BINARY_FEATURES = {
     "had_compression", "had_accumulation_like",
     "had_spring_test_lps", "had_breakout_retest",
     "had_bull_stack_pre",
+    "had_valid_recent_setup", "had_valid_recent_trigger",
+    "had_valid_recent_confirm", "had_valid_full_sequence",
 }
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
@@ -2086,6 +2099,179 @@ async def build_raw_pattern_episode_features_ema(
         })
         patched += 1
 
+    return patched
+
+
+async def build_raw_pattern_episode_features_new_pump(
+    raw_run_id: int,
+    pump_study_run_id: int,
+    lookback_days: int = 200,
+) -> int:
+    """
+    Phase 2B-6: Run new_pump_engine.analyze() on the PRE-window candle history
+    for each episode and patch NP signal aggregate fields onto
+    raw_pattern_episode_features rows.
+
+    Fields patched (all into extra NP columns):
+        had_valid_recent_setup, had_valid_recent_trigger,
+        had_valid_recent_confirm, had_valid_full_sequence
+        best_new_pump_label_rank  (FIRE=0, STRONG=1, SETUP=2, TRIGGER_ONLY=3, WEAK=4, NONE=5)
+        best_new_pump_sequence_type
+        days_from_last_setup_to_breakout
+        days_from_last_trigger_to_breakout
+        days_from_g4_to_b2
+        max_bull_stack_days_pre    (max consecutive bull-stack run in PRE)
+        extreme_anomaly_day_count_pre
+        median_dollar_volume_pre
+
+    Uses _fetch_candles_range → new_pump_engine.analyze() per episode.
+    Skips episodes where candle fetch fails. Returns number of patched episodes.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        get_pump_episode_events,
+        update_raw_pattern_episode_features,
+    )
+
+    _NP_LABEL_RANK = {
+        "NEW_PUMP_FIRE": 0, "NEW_PUMP_STRONG": 1, "NEW_PUMP_SETUP": 2,
+        "NEW_PUMP_TRIGGER_ONLY": 3, "NEW_PUMP_WEAK": 4, "NEW_PUMP_NONE": 5,
+    }
+    _FRESHNESS = {
+        "setup":   10,   # _MAX_SETUP_AGE
+        "trigger":  5,   # _MAX_TRIGGER_AGE
+        "confirm":  5,   # _MAX_CONFIRM_AGE
+    }
+
+    def _median(vals: list) -> Optional[float]:
+        cleaned = sorted(v for v in vals if v is not None)
+        n = len(cleaned)
+        if n == 0:
+            return None
+        mid = n // 2
+        return round((cleaned[mid - 1] + cleaned[mid]) / 2 if n % 2 == 0 else cleaned[mid], 2)
+
+    try:
+        from scanner.new_pump_engine import analyze as np_analyze
+    except ImportError:
+        logger.warning("[RawNP] new_pump_engine not importable — skipping NP episode phase")
+        return 0
+
+    episodes   = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched    = 0
+
+    for ep in episodes:
+        episode_id  = ep["id"]
+        symbol      = ep.get("symbol") or ""
+        pump_start  = ep.get("pump_start_date")
+        if not symbol or not pump_start:
+            continue
+
+        # ── Fetch candle history ending at pump_start ─────────────────────
+        from datetime import date, timedelta
+        try:
+            end_date   = pump_start if isinstance(pump_start, str) else str(pump_start)
+            start_date = str(
+                date.fromisoformat(end_date) - timedelta(days=lookback_days * 2)
+            )
+        except (ValueError, TypeError):
+            continue
+
+        candles = await _fetch_candles_range(symbol, start_date, end_date)
+        if len(candles) < 60:
+            continue
+
+        # ── Build bars list in NP engine format ───────────────────────────
+        bars = [
+            {"open": c["open"], "high": c["high"],
+             "low": c["low"],  "close": c["close"], "volume": c["volume"]}
+            for c in candles[-200:]
+        ]
+
+        try:
+            np_result = np_analyze(bars)
+        except Exception as exc:
+            logger.debug(f"[RawNP] NP analyze failed {symbol}: {exc}")
+            continue
+
+        # ── Extract per-episode NP aggregate fields ────────────────────────
+        lbl  = np_result.get("new_pump_label") or "NEW_PUMP_NONE"
+        seq  = np_result.get("new_pump_sequence_label") or "NONE"
+        lbl_rank = _NP_LABEL_RANK.get(lbl, 5)
+
+        age_l34   = np_result.get("age_l34")
+        age_fri34 = np_result.get("age_fri34")
+        age_g4    = np_result.get("age_g4")
+        age_b2    = np_result.get("age_b2")
+        has_l34   = np_result.get("has_l34", False)
+        has_fri34 = np_result.get("has_fri34", False)
+        has_g4    = np_result.get("has_g4", False)
+        has_b2    = np_result.get("has_b2", False)
+
+        valid_setup   = bool(has_l34 or has_fri34) and (
+            (age_l34   is not None and age_l34   <= _FRESHNESS["setup"]) or
+            (age_fri34 is not None and age_fri34 <= _FRESHNESS["setup"])
+        )
+        valid_trigger = bool(has_g4) and age_g4 is not None and age_g4 <= _FRESHNESS["trigger"]
+        valid_confirm = bool(has_b2) and age_b2 is not None and age_b2 <= _FRESHNESS["confirm"]
+        valid_full    = valid_setup and valid_trigger and valid_confirm
+
+        # G4→B2 gap
+        days_g4_to_b2: Optional[int] = None
+        if age_g4 is not None and age_b2 is not None and age_b2 < age_g4:
+            days_g4_to_b2 = age_g4 - age_b2
+
+        # Timing relative to breakout (using breakout event if available)
+        evs = await get_pump_episode_events(episode_id)
+        breakout_ev = next((e for e in evs if e["event_type"] == "breakout_day"), None)
+        days_setup_to_breakout:   Optional[int] = None
+        days_trigger_to_breakout: Optional[int] = None
+        if breakout_ev:
+            dbp = breakout_ev.get("days_before_pump")  # positive = N days before pump start
+            if dbp is not None:
+                if (has_l34 or has_fri34) and age_l34 is not None:
+                    days_setup_to_breakout = int(dbp) + int(age_l34)
+                if has_g4 and age_g4 is not None:
+                    days_trigger_to_breakout = int(dbp) + int(age_g4)
+
+        # Extra aggregates from daily features (PRE window)
+        pre_rows = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=500
+        )
+        fjs = [r.get("feature_json") or {} for r in pre_rows]
+
+        # Max consecutive bull-stack run
+        max_run = cur_run = 0
+        for fj in fjs:
+            if fj.get("bull_stack_active") or fj.get("bullish_stack"):
+                cur_run += 1
+                max_run = max(max_run, cur_run)
+            else:
+                cur_run = 0
+
+        extreme_anom_count = sum(1 for fj in fjs if fj.get("extreme_anomaly_flag"))
+        dvols = [fj.get("dollar_volume") for fj in fjs if fj.get("dollar_volume")]
+        median_dvol = _median(dvols) if dvols else None
+
+        await update_raw_pattern_episode_features(raw_run_id, episode_id, {
+            "had_valid_recent_setup":          valid_setup   or None,
+            "had_valid_recent_trigger":        valid_trigger or None,
+            "had_valid_recent_confirm":        valid_confirm or None,
+            "had_valid_full_sequence":         valid_full    or None,
+            "best_new_pump_label_rank":        lbl_rank,
+            "best_new_pump_sequence_type":     seq,
+            "days_from_last_setup_to_breakout":   days_setup_to_breakout,
+            "days_from_last_trigger_to_breakout": days_trigger_to_breakout,
+            "days_from_g4_to_b2":              days_g4_to_b2,
+            "max_bull_stack_days_pre":         max_run or None,
+            "extreme_anomaly_day_count_pre":   extreme_anom_count or None,
+            "median_dollar_volume_pre":        median_dvol,
+        })
+        patched += 1
+        await asyncio.sleep(0)   # yield control in the event loop
+
+    logger.info(f"[RawNP] NP episode features patched: {patched}/{len(episodes)}")
     return patched
 
 
@@ -2822,11 +3008,6 @@ def _extract_episode_features(
         first_pump_gap = round(first_pump_gap, 3)
 
     # ── Structural signals ────────────────────────────────────────────────────
-    had_ribbon = any(
-        (s.get("ribbon_class") or "") in _RIBBON_QUALIFY
-        for s in pre_snaps + pump_snaps
-    )
-    had_ignition   = "first_ignition_day"   in event_types
     had_compression = "first_compression_day" in event_types
 
     # ── Wyckoff: strongest state seen in PRE + early PUMP ────────────────────
@@ -2859,15 +3040,6 @@ def _extract_episode_features(
                 (worst_close - start_price) / start_price * 100, 2
             )
 
-    # ── Ignition ──────────────────────────────────────────────────────────────
-    ignition_quality: Optional[float] = None
-    ignition_bucket:  Optional[str]   = None
-    for e in evs:
-        if e["event_type"] == "first_ignition_day":
-            ignition_quality = e.get("event_value")
-            ignition_bucket  = (e.get("event_detail") or {}).get("ignition_bucket")
-            break
-
     return {
         "pump_multiple":                ep_dict.get("pump_multiple"),
         "pump_return_pct":              ep_dict.get("pump_return_pct"),
@@ -2877,15 +3049,11 @@ def _extract_episode_features(
         "max_volume_anomaly":           max_vol_anomaly,
         "largest_gap_pct":              largest_gap,
         "first_pump_gap_pct":           first_pump_gap,
-        "had_ribbon":                   had_ribbon,
-        "had_ignition":                 had_ignition,
         "had_compression":              had_compression,
         "strongest_wyckoff_state":      strongest_wyckoff,
         "max_toxicity_score":           max_tox,
         "avg_toxicity_score":           avg_tox,
         "worst_post_return_from_start": worst_post_return_from_start,
-        "ignition_quality":             ignition_quality,
-        "ignition_bucket":              ignition_bucket,
         # Not yet enriched (pending future phases)
         "sector":                       ep_dict.get("sector"),
         "industry":                     ep_dict.get("industry"),
@@ -2903,7 +3071,7 @@ def _classify_pump_family(
     Priority (first matching rule wins):
       1. ACCUMULATION_TO_EXPANSION  — strong Wyckoff + structural convergence
       2. POST_COMPRESSION_BREAKOUT  — BB squeeze before move + breakout
-      3. CATALYST_IGNITION           — early strong ignition signal
+      3. CATALYST_DRIVEN             — abnormal volume surge with no base
       4. GAP_AND_GO                  — large gap on first PUMP day, no prior base
       5. LOW_FLOAT_VELOCITY          — fast peak (≤5 days) + high volume shock
       6. CHAOTIC_SPECULATIVE         — high toxicity, no structure
@@ -2915,66 +3083,52 @@ def _classify_pump_family(
     event_types    = {e["event_type"] for e in evs}
     days_to_peak   = features.get("days_to_peak") or 999
     max_vol        = features.get("max_volume_anomaly") or 0.0
-    had_ribbon     = features.get("had_ribbon", False)
-    had_ignition   = features.get("had_ignition", False)
     had_compression = features.get("had_compression", False)
     strongest_wyk  = features.get("strongest_wyckoff_state") or "NONE"
     first_gap      = features.get("first_pump_gap_pct") or 0.0
     max_tox        = features.get("max_toxicity_score") or 0
     avg_tox        = features.get("avg_toxicity_score") or 0
-    ign_qual       = features.get("ignition_quality") or 0
-    ign_bucket     = features.get("ignition_bucket") or "NONE"
-    ign_evt        = next(
-        (e for e in evs if e["event_type"] == "first_ignition_day"), None
-    )
 
     # ── 1. ACCUMULATION_TO_EXPANSION ─────────────────────────────────────────
     # Convergence of multiple accumulation signals before the explosive move.
     acc_score = 0
     if "first_accumulation_like_day"   in event_types: acc_score += 2
     if "first_spring_test_lps_day"     in event_types: acc_score += 2
-    if "first_ribbon_constructive_day" in event_types: acc_score += 1
-    if had_ribbon:                                      acc_score += 1
     if strongest_wyk in ("FIRE", "ARM"):                acc_score += 2
     if strongest_wyk in ("STEALTH_ARM", "STEALTH_BASE"): acc_score += 1
     if had_compression and "breakout_day" in event_types: acc_score += 1
+    if "first_abnormal_volume_day"     in event_types: acc_score += 1
 
-    if acc_score >= 5:
+    if acc_score >= 4:
         return (
             "ACCUMULATION_TO_EXPANSION",
-            f"Convergent accumulation: state={strongest_wyk}, ribbon={had_ribbon}, "
+            f"Convergent accumulation: state={strongest_wyk}, "
             f"spring={'yes' if 'first_spring_test_lps_day' in event_types else 'no'}, "
             f"acc_score={acc_score}",
         )
 
     # ── 2. POST_COMPRESSION_BREAKOUT ─────────────────────────────────────────
-    # BB squeeze in PRE followed by breakout (+optional ribbon confirmation).
+    # BB squeeze in PRE followed by breakout.
     pcb_score = 0
-    if had_compression:                                 pcb_score += 3
-    if "breakout_day" in event_types:                   pcb_score += 2
-    if "first_ribbon_constructive_day" in event_types:  pcb_score += 1
-    if had_ribbon:                                      pcb_score += 1
-    if acc_score >= 2:                                  pcb_score += 1
+    if had_compression:                 pcb_score += 3
+    if "breakout_day" in event_types:   pcb_score += 2
+    if acc_score >= 2:                  pcb_score += 1
 
-    if pcb_score >= 5 and had_compression:
+    if pcb_score >= 4 and had_compression:
         return (
             "POST_COMPRESSION_BREAKOUT",
             f"Squeeze before move: compression={had_compression}, "
             f"breakout={'yes' if 'breakout_day' in event_types else 'no'}, "
-            f"ribbon={had_ribbon}, pcb_score={pcb_score}",
+            f"pcb_score={pcb_score}",
         )
 
-    # ── 3. CATALYST_IGNITION ─────────────────────────────────────────────────
-    # Early strong ignition signal — quality >= 30, preferably in PRE phase.
-    if had_ignition and ign_qual >= 30:
-        ign_rel_day = ign_evt.get("days_before_pump") if ign_evt else None
-        is_early    = ign_rel_day is not None and ign_rel_day <= 2
-        if is_early or ign_qual >= 50:
-            return (
-                "CATALYST_IGNITION",
-                f"Early strong ignition: quality={ign_qual:.0f}, bucket={ign_bucket}, "
-                f"days_from_start={ign_rel_day}",
-            )
+    # ── 3. CATALYST_DRIVEN ───────────────────────────────────────────────────
+    # High abnormal volume surge in PRE without structural base — externally driven.
+    if "first_abnormal_volume_day" in event_types and max_vol >= 3.0 and not had_compression:
+        return (
+            "CATALYST_DRIVEN",
+            f"Catalyst-driven surge: max_vol_anomaly={max_vol:.1f}x, no compression base",
+        )
 
     # ── 4. GAP_AND_GO ─────────────────────────────────────────────────────────
     # Large gap on first PUMP day with minimal prior base-building.
@@ -3004,11 +3158,7 @@ def _classify_pump_family(
 
     # ── 6. CHAOTIC_SPECULATIVE ────────────────────────────────────────────────
     # Explosive but structurally dirty: high toxicity and no prior structural setup.
-    no_structure = (
-        not had_ribbon
-        and not had_ignition
-        and "first_accumulation_like_day" not in event_types
-    )
+    no_structure = "first_accumulation_like_day" not in event_types
     chaotic = no_structure and (avg_tox >= 40 or max_tox >= 60 or max_vol >= 5.0)
     if chaotic:
         return (
@@ -3022,11 +3172,6 @@ def _classify_pump_family(
     # Reserved for future enrichment.
 
     # ── Late-catch: partial evidence rules ────────────────────────────────────
-    if had_ignition:
-        return (
-            "CATALYST_IGNITION",
-            f"Ignition-assisted (moderate): quality={ign_qual:.0f}, bucket={ign_bucket}",
-        )
     if acc_score >= 2:
         return (
             "ACCUMULATION_TO_EXPANSION",
