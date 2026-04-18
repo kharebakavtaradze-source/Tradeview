@@ -821,3 +821,377 @@ def render_research_bundle_markdown(bundle: dict) -> str:
         add("")
 
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Raw Pattern Study — NP Count-Based Research Bundle
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _median(vals: list) -> Optional[float]:
+    cleaned = sorted(v for v in vals if v is not None)
+    n = len(cleaned)
+    if n == 0:
+        return None
+    mid = n // 2
+    return round((cleaned[mid - 1] + cleaned[mid]) / 2 if n % 2 == 0 else cleaned[mid], 2)
+
+
+_NP_COUNT_FIELDS = [
+    "l34_count_pre", "fri34_count_pre", "g4_count_pre", "b2_count_pre",
+    "setup_only_l34_count_pre", "setup_only_fri34_count_pre",
+    "trigger_after_l34_count_pre", "trigger_after_fri34_count_pre",
+    "full_l34_g4_b2_count_pre", "full_fri34_g4_b2_count_pre",
+    "isolated_g4_count_pre", "isolated_b2_count_pre",
+    "confirm_after_g4_count_pre",
+    "valid_setup_days_pre", "valid_trigger_days_pre",
+    "valid_confirm_days_pre", "valid_full_sequence_days_pre",
+]
+
+# Decision-useful subset for separation summary
+_NP_COUNT_PRIORITY = [
+    "l34_count_pre", "fri34_count_pre",
+    "setup_only_l34_count_pre", "trigger_after_fri34_count_pre",
+    "full_fri34_g4_b2_count_pre", "isolated_g4_count_pre",
+    "isolated_b2_count_pre", "valid_setup_days_pre",
+    "valid_full_sequence_days_pre",
+]
+
+_GROUPS = ["4x_pump", "false_positive", "normal_winner", "missed_mover"]
+
+
+def _group_count_stats(ep_rows_by_group: dict) -> dict:
+    """
+    Returns {field: {group: {median, mean, n, nonzero_pct}}} for all NP count fields.
+    """
+    out: dict = {}
+    for field in _NP_COUNT_FIELDS:
+        out[field] = {}
+        for grp, rows in ep_rows_by_group.items():
+            vals = [r[field] for r in rows if r.get(field) is not None]
+            n    = len(rows)
+            nv   = len(vals)
+            out[field][grp] = {
+                "median":      _median(vals),
+                "mean":        round(sum(vals) / nv, 2) if nv else None,
+                "n":           n,
+                "nonzero_pct": round(sum(1 for v in vals if v and v > 0) / n * 100, 1) if n else 0.0,
+            }
+    return out
+
+
+def _build_np_count_analysis(ep_rows_by_group: dict) -> dict:
+    """Builds NP count analysis sections A–E."""
+    gcs = _group_count_stats(ep_rows_by_group)
+
+    def _grp(field, group, stat="median"):
+        return (gcs.get(field) or {}).get(group, {}).get(stat)
+
+    # ── Section A: separation summary ─────────────────────────────────────────
+    sep_rows = []
+    for field in _NP_COUNT_PRIORITY:
+        p4  = _grp(field, "4x_pump")
+        pfp = _grp(field, "false_positive")
+        pnw = _grp(field, "normal_winner")
+        if p4 is None and pfp is None:
+            continue
+        lift = round(p4 - pfp, 2) if p4 is not None and pfp is not None else None
+        sep_rows.append({
+            "field":         field,
+            "pump_median":   p4,
+            "fp_median":     pfp,
+            "nw_median":     pnw,
+            "lift_4x_vs_fp": lift,
+            "pump_n":        _grp(field, "4x_pump", "n"),
+            "fp_n":          _grp(field, "false_positive", "n"),
+        })
+    sep_rows.sort(key=lambda r: abs(r.get("lift_4x_vs_fp") or 0), reverse=True)
+
+    # ── Section B: repeated setup insights ───────────────────────────────────
+    setup_insights: list[str] = []
+    p4_l34  = _grp("l34_count_pre",        "4x_pump")
+    fp_l34  = _grp("l34_count_pre",        "false_positive")
+    p4_vsd  = _grp("valid_setup_days_pre", "4x_pump")
+    fp_vsd  = _grp("valid_setup_days_pre", "false_positive")
+    p4_so   = _grp("setup_only_l34_count_pre", "4x_pump")
+
+    if p4_l34 is not None and fp_l34 is not None:
+        delta = round(p4_l34 - fp_l34, 2)
+        if delta > 0.5:
+            setup_insights.append(
+                f"Repeated L34 setup correlates with 4x: 4x_pump med={p4_l34} vs FP med={fp_l34} (Δ{delta:+.2f})"
+            )
+        elif delta < -0.5:
+            setup_insights.append(
+                f"L34 setup count higher in FP (med {fp_l34}) than 4x (med {p4_l34}) — repeated setup alone is not discriminating"
+            )
+        else:
+            setup_insights.append(f"L34 setup count similar across groups: 4x={p4_l34}, FP={fp_l34}")
+    if p4_vsd is not None and fp_vsd is not None:
+        delta = round(p4_vsd - fp_vsd, 2)
+        if delta > 1:
+            setup_insights.append(
+                f"Persistent valid setup (valid_setup_days): 4x med={p4_vsd} > FP med={fp_vsd} — sustained structure matters"
+            )
+        elif delta < -1:
+            setup_insights.append(
+                f"FP has more valid_setup_days (med {fp_vsd}) than 4x (med {p4_vsd}) — freshness density not a clean separator here"
+            )
+    if p4_so is not None:
+        fp_so = _grp("setup_only_l34_count_pre", "false_positive")
+        setup_insights.append(
+            f"setup_only_l34 (setup fires without trigger): 4x med={p4_so}, FP med={fp_so}"
+        )
+
+    # ── Section C: isolated signal insights ──────────────────────────────────
+    iso_insights: list[str] = []
+    for sig, label in [("isolated_g4_count_pre", "G4"), ("isolated_b2_count_pre", "B2")]:
+        p4v  = _grp(sig, "4x_pump")
+        fpv  = _grp(sig, "false_positive")
+        if p4v is None and fpv is None:
+            continue
+        if fpv is not None and p4v is not None:
+            if fpv > p4v + 0.3:
+                iso_insights.append(
+                    f"Isolated {label} is a red flag: FP med={fpv} > 4x med={p4v} — trigger/confirm without setup accumulates in false positives"
+                )
+            elif p4v > fpv + 0.3:
+                iso_insights.append(f"Isolated {label}: 4x med={p4v} > FP med={fpv} — unexpected; inspect outliers")
+            else:
+                iso_insights.append(f"Isolated {label} similar: 4x={p4v}, FP={fpv}")
+
+    # ── Section D: full-sequence density insights ─────────────────────────────
+    seq_insights: list[str] = []
+    for f, label in [
+        ("full_fri34_g4_b2_count_pre", "full_FRI34→G4→B2"),
+        ("full_l34_g4_b2_count_pre",   "full_L34→G4→B2"),
+        ("valid_full_sequence_days_pre", "valid_full_seq_days"),
+    ]:
+        p4v = _grp(f, "4x_pump")
+        fpv = _grp(f, "false_positive")
+        if p4v is None and fpv is None:
+            continue
+        delta = round(p4v - fpv, 2) if p4v is not None and fpv is not None else None
+        note = ""
+        if delta is not None:
+            if abs(delta) < 0.3:
+                note = "— similar; repeated full-sequence may be noisy, not separating"
+            elif delta > 0:
+                note = f"— 4x higher by {delta:+.2f}"
+            else:
+                note = f"— FP higher by {abs(delta):.2f}; repeated full-sequence could indicate over-extended chasing"
+        seq_insights.append(f"{label}: 4x med={p4v}, FP med={fpv} {note}".strip())
+
+    # ── Section E: validity density insights ─────────────────────────────────
+    valid_insights: list[str] = []
+    for f in ["valid_setup_days_pre", "valid_trigger_days_pre",
+              "valid_confirm_days_pre", "valid_full_sequence_days_pre"]:
+        p4v = _grp(f, "4x_pump")
+        fpv = _grp(f, "false_positive")
+        if p4v is None and fpv is None:
+            continue
+        delta = round(p4v - fpv, 2) if p4v is not None and fpv is not None else None
+        direction = f"Δ{delta:+.2f}" if delta is not None else "—"
+        valid_insights.append(f"{f}: 4x med={p4v}, FP med={fpv} ({direction})")
+
+    # ── Pattern review (count-based) ─────────────────────────────────────────
+    count_review: list[str] = []
+    # L34 setup density vs full-sequence density
+    p4_l34   = _grp("l34_count_pre",        "4x_pump")
+    p4_full  = _grp("full_fri34_g4_b2_count_pre", "4x_pump")
+    fp_full  = _grp("full_fri34_g4_b2_count_pre", "false_positive")
+    if p4_l34 and p4_full:
+        if p4_l34 > (p4_full or 0):
+            count_review.append(
+                "Repeated early L34 setup appears stronger signal than repeated full-sequence count "
+                f"(4x med: l34_count={p4_l34} > full_fri34_g4_b2={p4_full})"
+            )
+    iso_g4_fp = _grp("isolated_g4_count_pre", "false_positive")
+    iso_g4_4x = _grp("isolated_g4_count_pre", "4x_pump")
+    if iso_g4_fp is not None and iso_g4_4x is not None and iso_g4_fp > iso_g4_4x:
+        count_review.append(
+            "Isolated G4 clusters appear noisy/false-positive-prone: "
+            f"FP med {iso_g4_fp} > 4x med {iso_g4_4x}"
+        )
+    if fp_full is not None and p4_full is not None and abs(fp_full - p4_full) < 0.3:
+        count_review.append(
+            "Repeated full-sequence density does not cleanly separate groups — "
+            "avoid over-rewarding it vs setup density"
+        )
+    vsd_4x = _grp("valid_setup_days_pre", "4x_pump")
+    vcd_4x = _grp("valid_confirm_days_pre", "4x_pump")
+    if vsd_4x and vcd_4x and vsd_4x > vcd_4x:
+        count_review.append(
+            f"Setup freshness density (valid_setup_days med={vsd_4x}) > "
+            f"confirm density (valid_confirm_days med={vcd_4x}) in 4x_pump — "
+            "setup density deserves more weight than late confirm density"
+        )
+
+    return {
+        "field_stats":               gcs,
+        "separation_summary":        sep_rows,
+        "setup_analysis":            {"insights": setup_insights},
+        "isolated_signal_analysis":  {"insights": iso_insights},
+        "full_sequence_analysis":    {"insights": seq_insights},
+        "validity_density_analysis": {"insights": valid_insights},
+        "count_pattern_review":      count_review,
+    }
+
+
+async def build_raw_pattern_research_bundle(raw_run_id: int) -> dict:
+    """
+    Build NP count-based research bundle for a Raw Pattern Study run.
+    Groups episodes by group_type and computes NP count statistics across groups.
+    """
+    from collections import defaultdict as _dd
+    from database import get_raw_pattern_run, get_raw_pattern_episode_features
+
+    run = await get_raw_pattern_run(raw_run_id)
+    if not run:
+        raise ValueError(f"Raw pattern run {raw_run_id} not found")
+
+    episodes = await get_raw_pattern_episode_features(raw_run_id, limit=2000)
+
+    ep_by_group: dict = _dd(list)
+    for ep in episodes:
+        g = ep.get("group_type")
+        if g:
+            ep_by_group[g].append(ep)
+
+    group_counts = {g: len(rows) for g, rows in ep_by_group.items()}
+    np_count_analysis = _build_np_count_analysis(dict(ep_by_group)) if ep_by_group else {}
+
+    logger.info(
+        f"[RAW_BUNDLE] run_id={raw_run_id} groups: {group_counts} "
+        f"count_fields_populated={bool(ep_by_group)}"
+    )
+
+    return {
+        "run":               run,
+        "group_counts":      group_counts,
+        "np_count_analysis": np_count_analysis,
+        "total_episodes":    len(episodes),
+    }
+
+
+def render_raw_pattern_bundle_markdown(bundle: dict) -> str:
+    """Markdown report for a Raw Pattern Study NP count-based research bundle."""
+    run  = bundle.get("run", {})
+    gcs  = bundle.get("group_counts", {})
+    npa  = bundle.get("np_count_analysis", {})
+
+    lines: list[str] = []
+    add = lines.append
+
+    add(f"# Raw Pattern Study — NP Count Analysis (Run #{run.get('id', '?')})")
+    add(f"**Range:** {run.get('start_date')} → {run.get('end_date')} | "
+        f"**Episodes:** {bundle.get('total_episodes', 0)}")
+    gc_parts = [f"{g}={n}" for g, n in sorted(gcs.items())]
+    add(f"**Groups:** {', '.join(gc_parts) if gc_parts else '—'}")
+    add("")
+
+    if not npa:
+        add("*No NP count data — run `build_raw_pattern_episode_features_new_pump()` first.*")
+        return "\n".join(lines)
+
+    # ── Count-based pattern review ────────────────────────────────────────────
+    cpr = npa.get("count_pattern_review", [])
+    if cpr:
+        add("## Key Findings")
+        add("")
+        for item in cpr:
+            add(f"- {item}")
+        add("")
+
+    # ── Section A: separation summary ─────────────────────────────────────────
+    add("---")
+    add("")
+    add("## A. NP Count-Field Separation  *(4x_pump vs false_positive)*")
+    add("")
+    sep = npa.get("separation_summary", [])
+    if sep:
+        rows = []
+        for r in sep[:9]:
+            short = (r["field"]
+                     .replace("_count_pre", "")
+                     .replace("_days_pre", " days")
+                     .replace("_pre", ""))
+            rows.append([
+                short,
+                _fmt(r.get("pump_median")),
+                _fmt(r.get("fp_median")),
+                _fmt(r.get("nw_median")),
+                (_fmt(r["lift_4x_vs_fp"], sign=True) if r.get("lift_4x_vs_fp") is not None else "—"),
+                str(r.get("pump_n") or "—"),
+            ])
+        add(_mdtable(
+            ["Field", "4x median", "FP median", "NW median", "Lift(4x-FP)", "4x n"],
+            rows,
+        ))
+    else:
+        add("*No data — count fields may all be null.*")
+    add("")
+
+    # ── Section B: repeated setup ─────────────────────────────────────────────
+    add("## B. Repeated Setup Analysis")
+    add("")
+    sa = npa.get("setup_analysis", {}).get("insights", [])
+    if sa:
+        for i in sa:
+            add(f"- {i}")
+    else:
+        add("*No setup count data.*")
+    add("")
+
+    # ── Section C: isolated signals ───────────────────────────────────────────
+    add("## C. Isolated-Signal Penalty")
+    add("")
+    ia = npa.get("isolated_signal_analysis", {}).get("insights", [])
+    if ia:
+        for i in ia:
+            add(f"- {i}")
+    else:
+        add("*No isolated signal count data.*")
+    add("")
+
+    # ── Section D: full-sequence density ──────────────────────────────────────
+    add("## D. Full-Sequence Density")
+    add("")
+    add("> Higher count ≠ better — check direction vs false_positive group.")
+    add("")
+    fa = npa.get("full_sequence_analysis", {}).get("insights", [])
+    if fa:
+        for i in fa:
+            add(f"- {i}")
+    else:
+        add("*No full-sequence count data.*")
+    add("")
+
+    # ── Section E: validity / freshness density ────────────────────────────────
+    add("## E. Validity / Freshness Density")
+    add("")
+    gcs_full = npa.get("field_stats", {})
+    valid_fields = ["valid_setup_days_pre", "valid_trigger_days_pre",
+                    "valid_confirm_days_pre", "valid_full_sequence_days_pre"]
+    vrows = []
+    for f in valid_fields:
+        fg = gcs_full.get(f, {})
+        if not fg:
+            continue
+        short = f.replace("_days_pre", "d").replace("_pre", "")
+        vrows.append([
+            short,
+            _fmt((fg.get("4x_pump") or {}).get("median")),
+            _fmt((fg.get("false_positive") or {}).get("median")),
+            _fmt((fg.get("normal_winner") or {}).get("median")),
+            _fmt((fg.get("missed_mover") or {}).get("median")),
+        ])
+    if vrows:
+        add(_mdtable(["Field", "4x_pump", "false_pos", "normal_win", "missed_mv"], vrows))
+    va = npa.get("validity_density_analysis", {}).get("insights", [])
+    if va:
+        add("")
+        for i in va:
+            add(f"- {i}")
+    add("")
+
+    return "\n".join(lines)
