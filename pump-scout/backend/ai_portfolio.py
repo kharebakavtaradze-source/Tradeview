@@ -592,6 +592,20 @@ STRICT RULES (not negotiable):
 
 For each BUY include stop_loss, target_price (TP1), target_price_2 (TP2), sell_pct_at_target_1 (default 50).
 
+RANKING INSTRUCTIONS:
+Rank candidates explicitly before committing. For each candidate you consider, apply:
+1. Source quality: new_pump FIRE > new_pump STRONG > scanner FIRE > scanner ARM
+2. Context quality: boost if early_setup / bull_stack / CMF+ / ACCUMULATION
+3. Caution: downrank if isolated_signal_penalty / extreme_anomaly / bad ticker memory
+4. Wallet fit: reject if remaining cash < min position; prefer smaller size under wallet pressure
+5. Tie-break: favor the candidate with cleaner research prior stack
+
+For each BUY include structured explanation fields (lists, 2–4 items max each):
+- confidence_drivers: what boosted this idea
+- caution_drivers: what penalised or flagged this idea (empty list if none)
+- sizing_reason: one sentence on why this exact size
+- why_selected_over_peers: one sentence on why this beat other candidates today
+
 Respond in Russian. Return JSON only:
 {{
   "decisions": [
@@ -603,7 +617,11 @@ Respond in Russian. Return JSON only:
       "target_price": 18.50,
       "target_price_2": 23.50,
       "sell_pct_at_target_1": 50,
-      "reason": "подробное объяснение: источник сигнала (scanner/new_pump), ключевые метрики, память по тикеру"
+      "confidence_drivers": ["new_pump_fire", "bull_stack_context", "positive_memory"],
+      "caution_drivers": [],
+      "sizing_reason": "стандартный размер, контекст чистый, кошелёк позволяет",
+      "why_selected_over_peers": "лучший контекст и источник среди NP-кандидатов сегодня",
+      "reason": "краткое объяснение: источник, ключевые метрики, приоритет над конкурентами"
     }},
     {{
       "symbol": "TICK2",
@@ -619,7 +637,7 @@ Respond in Russian. Return JSON only:
         client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1000,
+            max_tokens=1800,
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.content[0].text.replace("```json", "").replace("```", "").strip()
@@ -683,7 +701,14 @@ Respond in Russian. Return JSON only:
                 shares=shares,
                 invested_usd=amount,
                 reason=reason,
-                scan_data={**r_data, "atr": atr},
+                scan_data={
+                    **r_data,
+                    "atr": atr,
+                    "confidence_drivers": d.get("confidence_drivers") or [],
+                    "caution_drivers":    d.get("caution_drivers")    or [],
+                    "sizing_reason":      d.get("sizing_reason")      or "",
+                    "why_selected_over_peers": d.get("why_selected_over_peers") or "",
+                },
                 stop_loss=stop_loss,
                 target_price=target_price,
                 target_price_2=target_price_2,
