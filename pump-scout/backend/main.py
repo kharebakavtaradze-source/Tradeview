@@ -1260,6 +1260,18 @@ async def new_pump_latest(
     }
 
 
+@app.get("/api/new-pump/ticker/{symbol}")
+async def new_pump_ticker_detail(symbol: str):
+    """
+    Structured drawer payload for one New Pump ticker.
+    Aggregates: NP fields, signal timeline, company identity, news,
+    technical context, market regime, red flags, final verdict.
+    Cache: 30 min per symbol. Each section fails independently.
+    """
+    from scanner.np_drawer import build_drawer_payload
+    return await build_drawer_payload(symbol.upper())
+
+
 @app.get("/api/scan/pump")
 async def get_pump_scan(
     mode:         str  = "all",

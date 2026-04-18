@@ -1,0 +1,565 @@
+/* ── Overlay + drawer shell ───────────────────────────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 200;
+  animation: fadeIn 0.18s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 440px;
+  max-width: 96vw;
+  height: 100dvh;
+  background: #111316;
+  border-left: 1px solid #1e2228;
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+.drawerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #1e2228;
+  flex-shrink: 0;
+}
+
+.drawerSym {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #e0e0e0;
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.closeBtn:hover { color: #ccc; }
+
+/* ── Scrollable body ─────────────────────────────────────────────────────── */
+
+.drawerBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.drawerBody::-webkit-scrollbar { width: 4px; }
+.drawerBody::-webkit-scrollbar-track { background: transparent; }
+.drawerBody::-webkit-scrollbar-thumb { background: #2a2d33; border-radius: 2px; }
+
+.stateMsg   { color: #666; font-size: 12px; padding: 24px 0; text-align: center; }
+.stateError { color: #ff5252; font-size: 12px; padding: 16px 0; }
+
+/* ── Section card ────────────────────────────────────────────────────────── */
+
+.secCard {
+  background: #161920;
+  border: 1px solid #1e2228;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.secTitle {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: #555;
+  text-transform: uppercase;
+}
+
+/* ── Identity block (S1) ─────────────────────────────────────────────────── */
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0 6px;
+}
+
+.identityTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.symbolBig {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  color: #f0f0f0;
+}
+
+.exchangeTag {
+  font-size: 9px;
+  font-weight: 600;
+  color: #555;
+  background: #1c1f25;
+  border: 1px solid #2a2d33;
+  border-radius: 3px;
+  padding: 2px 5px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.identityScoreBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.scoreNum {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.labelBadge {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  border-radius: 3px;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+}
+
+.companyName {
+  font-size: 12px;
+  font-weight: 500;
+  color: #bbb;
+  line-height: 1.3;
+}
+
+.identityMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.identityMeta span {
+  font-size: 10px;
+  color: #666;
+  background: #1c1f25;
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+.identityPriceRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.priceTag {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e0e0e0;
+}
+
+.mcapTag {
+  font-size: 10px;
+  color: #888;
+  background: #1c1f25;
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+.seqBadge {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #00e5ff;
+  background: rgba(0,229,255,0.08);
+  border: 1px solid rgba(0,229,255,0.2);
+  border-radius: 3px;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+
+/* ── Score pips (S2) ────────────────────────────────────────────────────── */
+
+.scoreRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.scorePip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 36px;
+}
+
+.scorePipVal {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.scorePipLbl {
+  font-size: 8px;
+  font-weight: 600;
+  color: #555;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.explList {
+  margin: 0;
+  padding: 0 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.explList li {
+  font-size: 10px;
+  color: #aaa;
+  line-height: 1.4;
+}
+
+/* ── Signal timeline (S3) ─────────────────────────────────────────────────── */
+
+.sigStrip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.sigArrow {
+  font-size: 12px;
+  color: #333;
+  flex-shrink: 0;
+}
+
+.sigChip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+.sigChip[data-state='fresh']  { background: rgba(68,255,136,0.10); border-color: rgba(68,255,136,0.25); }
+.sigChip[data-state='stale']  { background: rgba(255,153,0,0.09);  border-color: rgba(255,153,0,0.22);  }
+.sigChip[data-state='absent'] { background: rgba(80,80,80,0.06);   border-color: rgba(80,80,80,0.15);   }
+
+.sigChipLabel {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.sigChip[data-state='fresh']  .sigChipLabel { color: #44ff88; }
+.sigChip[data-state='stale']  .sigChipLabel { color: #ff9800; }
+.sigChip[data-state='absent'] .sigChipLabel { color: #444;    }
+
+.sigChipAge {
+  font-size: 8px;
+  color: #666;
+}
+
+.sigChipDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sigChip[data-state='fresh']  .sigChipDot { background: #44ff88; }
+.sigChip[data-state='stale']  .sigChipDot { background: #ff9800; }
+.sigChip[data-state='absent'] .sigChipDot { background: #2a2d33; }
+
+.notesList {
+  margin: 0;
+  padding: 0 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.notesList li {
+  font-size: 10px;
+  color: #777;
+  line-height: 1.4;
+}
+
+/* ── Company (S4) ─────────────────────────────────────────────────────────── */
+
+.companyDesc {
+  font-size: 11px;
+  color: #aaa;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ── News (S5) ────────────────────────────────────────────────────────────── */
+
+.newsMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.catalystSummary {
+  font-size: 10px;
+  color: #bbb;
+  line-height: 1.4;
+}
+
+.noNews {
+  font-size: 10px;
+  color: #555;
+}
+
+.headlineList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.headline {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.headlineMeta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.headlineTag {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #00e5ff;
+  background: rgba(0,229,255,0.08);
+  border: 1px solid rgba(0,229,255,0.2);
+  border-radius: 2px;
+  padding: 1px 4px;
+  text-transform: uppercase;
+}
+
+.headlineSource {
+  font-size: 9px;
+  color: #666;
+}
+
+.headlineAge {
+  font-size: 9px;
+  color: #555;
+}
+
+.sentDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sent_bullish  { background: #00e676; }
+.sent_bearish  { background: #ff5252; }
+.sent_neutral  { background: #555;    }
+
+.headlineTitle {
+  font-size: 11px;
+  color: #ccc;
+  line-height: 1.4;
+  text-decoration: none;
+}
+a.headlineTitle:hover { color: #00e5ff; }
+
+/* ── Technical context (S6) ──────────────────────────────────────────────── */
+
+.techGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.techRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.techLbl {
+  font-size: 10px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.techVal {
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
+}
+
+/* ── Market context (S7) ─────────────────────────────────────────────────── */
+
+.regimeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.regimeRec {
+  font-size: 10px;
+  color: #888;
+  line-height: 1.4;
+  flex: 1;
+}
+
+.sectorRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.sectorHdr {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #555;
+  flex-shrink: 0;
+}
+
+.sectorPill {
+  font-size: 9px;
+  color: #aaa;
+  background: #1c1f25;
+  border: 1px solid #2a2d33;
+  border-radius: 10px;
+  padding: 2px 7px;
+}
+
+/* ── AI analysis (S8) ────────────────────────────────────────────────────── */
+
+.aiRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aiLbl {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.aiVal {
+  font-size: 10px;
+  color: #aaa;
+  line-height: 1.4;
+}
+
+.dimText {
+  font-size: 10px;
+  color: #555;
+}
+
+/* ── Red flags (S9) ──────────────────────────────────────────────────────── */
+
+.flagsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.flagPill {
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  padding: 2px 7px;
+  letter-spacing: 0.03em;
+}
+
+/* ── Final verdict (S10) ─────────────────────────────────────────────────── */
+
+.verdictBlock {
+  border-radius: 6px;
+  border: 1px solid transparent;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.verdictTop {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.verdictLabel {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  flex-shrink: 0;
+}
+
+.verdictReason {
+  font-size: 11px;
+  color: #bbb;
+  line-height: 1.4;
+}
+
+.verdictNote {
+  font-size: 10px;
+  color: #aaa;
+  line-height: 1.5;
+}
+
+.verdictNoteHdr {
+  font-weight: 700;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
