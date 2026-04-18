@@ -588,6 +588,27 @@ async def build_research_bundle(run_id: int) -> dict:
         "signal_combo",
     )
 
+    # ── New Pump Engine buckets ───────────────────────────────────────────────
+    _NP_LABEL_ORDER = [
+        "NEW_PUMP_FIRE", "NEW_PUMP_STRONG", "NEW_PUMP_SETUP",
+        "NEW_PUMP_TRIGGER_ONLY", "NEW_PUMP_WEAK", "NEW_PUMP_NONE",
+    ]
+    perf_new_pump_label = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("new_pump_label") or "NEW_PUMP_NONE",
+        "new_pump_label",
+    )
+    perf_new_pump_label.sort(
+        key=lambda x: _NP_LABEL_ORDER.index(x["bucket"])
+        if x["bucket"] in _NP_LABEL_ORDER else 99
+    )
+
+    perf_new_pump_seq = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("new_pump_sequence_label") or "NONE",
+        "new_pump_sequence",
+    )
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -605,16 +626,18 @@ async def build_research_bundle(run_id: int) -> dict:
     )
 
     bundle = {
-        "run":                          run,
-        "summary":                      summary,
-        "performance_by_tier":          perf_tier,
-        "performance_by_ribbon_signal": perf_ribbon,
-        "performance_by_ignition_signal": perf_ignition,
-        "performance_by_source":        perf_source,
-        "false_positives":              false_positives,
-        "missed_movers":                missed_section,
-        "pattern_review":               pattern_review,
-        "suggested_experiments":        suggested_experiments,
+        "run":                              run,
+        "summary":                          summary,
+        "performance_by_tier":              perf_tier,
+        "performance_by_ribbon_signal":     perf_ribbon,
+        "performance_by_ignition_signal":   perf_ignition,
+        "performance_by_source":            perf_source,
+        "performance_by_new_pump_label":    perf_new_pump_label,
+        "performance_by_new_pump_sequence": perf_new_pump_seq,
+        "false_positives":                  false_positives,
+        "missed_movers":                    missed_section,
+        "pattern_review":                   pattern_review,
+        "suggested_experiments":            suggested_experiments,
     }
 
     logger.info(
@@ -728,10 +751,12 @@ def render_research_bundle_markdown(bundle: dict) -> str:
         ))
         add("")
 
-    _bucket_section("Performance by Tier",           bundle.get("performance_by_tier", []))
-    _bucket_section("Performance by Signal Combo",   bundle.get("performance_by_source", []))
-    _bucket_section("Performance by Ignition Signal",bundle.get("performance_by_ignition_signal", []))
-    _bucket_section("Performance by Ribbon Signal",  bundle.get("performance_by_ribbon_signal", []))
+    _bucket_section("Performance by Tier",             bundle.get("performance_by_tier", []))
+    _bucket_section("Performance by Signal Combo",     bundle.get("performance_by_source", []))
+    _bucket_section("Performance by Ignition Signal",  bundle.get("performance_by_ignition_signal", []))
+    _bucket_section("Performance by Ribbon Signal",    bundle.get("performance_by_ribbon_signal", []))
+    _bucket_section("Performance by New Pump Label",   bundle.get("performance_by_new_pump_label", []))
+    _bucket_section("Performance by New Pump Sequence",bundle.get("performance_by_new_pump_sequence", []))
 
     # ── Section C: Top False Positives ────────────────────────────────────────
     add("## Top False Positives")

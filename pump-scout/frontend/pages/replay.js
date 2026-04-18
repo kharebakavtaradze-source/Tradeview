@@ -24,6 +24,44 @@ function pctCell(v) {
   return <span style={{ color, fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{v >= 0 ? '+' : ''}{fmt(v)}%</span>;
 }
 
+const NP_LABEL_COLORS = {
+  NEW_PUMP_FIRE:         '#ff4400',
+  NEW_PUMP_STRONG:       '#ff8800',
+  NEW_PUMP_SETUP:        '#ffd600',
+  NEW_PUMP_TRIGGER_ONLY: '#00e5ff',
+  NEW_PUMP_WEAK:         '#888',
+  NEW_PUMP_NONE:         '#444',
+};
+const NP_LABEL_SHORT = {
+  NEW_PUMP_FIRE:         'FIRE',
+  NEW_PUMP_STRONG:       'STRONG',
+  NEW_PUMP_SETUP:        'SETUP',
+  NEW_PUMP_TRIGGER_ONLY: 'TRIGGER',
+  NEW_PUMP_WEAK:         'WEAK',
+  NEW_PUMP_NONE:         'NONE',
+};
+function npScoreColor(s) {
+  if (s == null) return 'var(--text-muted)';
+  if (s >= 70) return '#ff4400';
+  if (s >= 55) return '#ff8800';
+  if (s >= 40) return '#ffd600';
+  if (s >= 25) return '#00e5ff';
+  if (s >= 10) return '#888';
+  return '#444';
+}
+function NpLabelBadge({ label }) {
+  const color = NP_LABEL_COLORS[label] || '#444';
+  const short = NP_LABEL_SHORT[label] || label || '—';
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.06em',
+      padding: '1px 5px', borderRadius: 3,
+      background: color === '#444' ? 'transparent' : color + '18',
+      border: `1px solid ${color}44`,
+    }}>{short}</span>
+  );
+}
+
 function TierBadge({ tier }) {
   const cls = {
     FIRE: styles.tierFire,
@@ -296,6 +334,21 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
           <div className={styles.bundleSectionTitle}>By Ribbon Signal</div>
           <BucketTable data={bundle.performance_by_ribbon_signal} />
         </div>
+      </div>
+
+      {/* ── New Pump Engine ─────────────────────────────────────────────────── */}
+      <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+        <div className={styles.bundleSectionTitle} style={{ color: '#ff8800' }}>
+          ◈ New Pump Engine — Performance by Label
+        </div>
+        <BucketTable data={bundle.performance_by_new_pump_label} />
+      </div>
+
+      <div className={styles.bundleSection}>
+        <div className={styles.bundleSectionTitle} style={{ color: '#ff8800' }}>
+          ◈ New Pump Engine — Performance by Sequence
+        </div>
+        <BucketTable data={bundle.performance_by_new_pump_sequence} />
       </div>
 
       {/* False Positives */}
@@ -902,6 +955,9 @@ export default function ReplayPage() {
                           <th>Score</th>
                           <th>Ignition</th>
                           <th>Ribbon</th>
+                          <th>NP Score</th>
+                          <th>NP Label</th>
+                          <th>NP Sequence</th>
                           <th>Wyckoff</th>
                           <th>Sector</th>
                         </tr>
@@ -925,6 +981,15 @@ export default function ReplayPage() {
                             </td>
                             <td style={{ color: c.ribbon_signal ? 'var(--cyan)' : 'var(--text-muted)' }}>
                               {c.ribbon_signal ? '✓' : '—'}
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono)', color: npScoreColor(c.new_pump_score) }}>
+                              {c.new_pump_score != null ? Number(c.new_pump_score).toFixed(1) : '—'}
+                            </td>
+                            <td style={{ fontSize: 9 }}>
+                              <NpLabelBadge label={c.new_pump_label} />
+                            </td>
+                            <td style={{ fontSize: 9, color: 'var(--text-muted)', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.new_pump_sequence_label || '—'}
                             </td>
                             <td style={{ fontSize: 9, color: 'var(--text-muted)' }}>
                               {c.wyckoff_state || '—'}
