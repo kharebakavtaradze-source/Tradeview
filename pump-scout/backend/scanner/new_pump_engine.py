@@ -358,12 +358,13 @@ def _setup_score(age_l34, age_fri34, count_l34_8, count_fri34_8):
     if count_fri34_8 >= 2:
         score += 6
 
+    # L34 boosted — replay shows SETUP_ONLY_L34 is the best-performing sequence
     if age_l34 == 0:
-        score += 10
+        score += 14          # was 10
     elif age_l34 is not None and age_l34 <= 3:
-        score += 8
+        score += 11          # was 8
     if count_l34_8 >= 2:
-        score += 4
+        score += 6           # was 4
 
     return score
 
@@ -386,7 +387,7 @@ def _trigger_score(age_g4, age_l34, age_fri34):
     if best_setup_age is not None and best_setup_age <= 5:
         score += 6
         if age_fri34 is not None and age_fri34 <= 5:
-            score += 3   # extra for FRI34 specifically
+            score += 5   # was 3 — replay shows TRIGGER_AFTER_FRI34 avg +2.3%
 
     return score
 
@@ -396,14 +397,15 @@ def _confirm_score(age_b2, age_g4, age_l34, age_fri34):
     if age_b2 is None:
         return 0
 
+    # Confirm contribution reduced — replay shows CONFIRM_AFTER_G4 avg -3.7%, FULL_* avg -1.5 to -1.9%
     if age_b2 == 0:
-        score += 10
+        score += 6           # was 10
     elif age_b2 <= 3:
-        score += 8
+        score += 5           # was 8
 
-    # B2 within 4 bars of G4 bonus
+    # B2 within 4 bars of G4 bonus — halved
     if age_g4 is not None and age_b2 >= age_g4 and (age_b2 - age_g4) <= 4:
-        score += 8
+        score += 3           # was 8
 
     # Penalty: isolated B2 with no recent G4 or setup
     has_recent_g4    = age_g4    is not None and age_g4    <= 5
@@ -435,14 +437,16 @@ def _sequence_bonus(age_l34, age_fri34, age_g4, age_b2):
     good_fri34 = valid_setup(age_fri34)
     good_l34   = valid_setup(age_l34)
 
+    # Full-sequence bonus sharply cut — replay FULL_* both negative
+    # TRIGGER_AFTER_* bonuses mildly increased — replay positive
     if good_fri34 and valid_b2:
-        return 12
+        return 4             # was 12
     if good_l34 and valid_b2:
-        return 10
+        return 3             # was 10
     if good_fri34:
-        return 8
+        return 9             # was 8 — TRIGGER_AFTER_FRI34 avg +2.3%
     if good_l34:
-        return 6
+        return 7             # was 6 — TRIGGER_AFTER_L34 positive
     return 0
 
 
@@ -605,11 +609,15 @@ def _sequence_label(age_l34, age_fri34, age_g4, age_b2):
 
 
 def _final_label(score):
-    if score >= 70:  return "NEW_PUMP_FIRE"
-    if score >= 55:  return "NEW_PUMP_STRONG"
-    if score >= 40:  return "NEW_PUMP_SETUP"
-    if score >= 25:  return "NEW_PUMP_TRIGGER_ONLY"
-    if score >= 10:  return "NEW_PUMP_WEAK"
+    # Thresholds recalibrated after Replay Run #7:
+    # — lowered across the board to rescue good cases from NONE (+2.6% avg leaked there)
+    # — FIRE loosened slightly (single-case sample, old threshold was unreachable)
+    # — STRONG kept meaningful (avg +2.4% in replay, best reliable label)
+    if score >= 62:  return "NEW_PUMP_FIRE"       # was 70
+    if score >= 46:  return "NEW_PUMP_STRONG"     # was 55
+    if score >= 34:  return "NEW_PUMP_SETUP"      # was 40
+    if score >= 22:  return "NEW_PUMP_TRIGGER_ONLY"  # was 25
+    if score >=  8:  return "NEW_PUMP_WEAK"       # was 10
     return "NEW_PUMP_NONE"
 
 
