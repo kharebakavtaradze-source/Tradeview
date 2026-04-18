@@ -431,6 +431,19 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             except Exception:
                 pass
 
+            # New Pump Engine — setup/trigger/confirmation structured analysis
+            new_pump_result = {}
+            try:
+                from scanner.new_pump_engine import analyze as _np_analyze
+                _np_bars = [
+                    {"open": b["o"], "high": b["h"], "low": b["l"],
+                     "close": b["c"], "volume": b["v"]}
+                    for b in candles
+                ]
+                new_pump_result = _np_analyze(_np_bars)
+            except Exception:
+                pass
+
             # Sector from cache (best-effort, not time-sensitive for training)
             sector = None
             if _get_sector:
@@ -440,7 +453,8 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 except Exception:
                     pass
 
-            snapshot = {**indicators, **scored, "wyckoff": wyckoff, **ignition_result}
+            snapshot = {**indicators, **scored, "wyckoff": wyckoff, **ignition_result,
+                        "new_pump": new_pump_result}
             # Remove non-serialisable items from snapshot (keep it JSON-safe)
             clean_snapshot = {
                 k: v for k, v in snapshot.items()
@@ -448,15 +462,19 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             }
 
             return {
-                "symbol":          sym,
-                "price":           eod.get("close", 0),
-                "tier":            tier,
-                "total_score":     scored.get("total_score", 0),
-                "wyckoff_state":   wyckoff.get("state", ""),
-                "ignition_signal": ignition_result.get("ignition_signal", "NO_IGNITION"),
-                "ribbon_signal":   bool(indicators.get("compression_and_bullish", False)),
-                "sector":          sector,
-                "snapshot":        clean_snapshot,
+                "symbol":                  sym,
+                "price":                   eod.get("close", 0),
+                "tier":                    tier,
+                "total_score":             scored.get("total_score", 0),
+                "wyckoff_state":           wyckoff.get("state", ""),
+                "ignition_signal":         ignition_result.get("ignition_signal", "NO_IGNITION"),
+                "ribbon_signal":           bool(indicators.get("compression_and_bullish", False)),
+                "sector":                  sector,
+                "new_pump_score":          new_pump_result.get("new_pump_score"),
+                "new_pump_label":          new_pump_result.get("new_pump_label"),
+                "new_pump_sequence_label": new_pump_result.get("new_pump_sequence_label"),
+                "new_pump":                new_pump_result,
+                "snapshot":                clean_snapshot,
             }
         except Exception as exc:
             logger.debug(f"[REPLAY] {sym} on {as_of_date} skipped: {exc}")
