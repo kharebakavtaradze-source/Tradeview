@@ -38,7 +38,7 @@ _np_progress: dict = {
 # ── Neutral prefilters (no signal/tier bias) ───────────────────────────────────
 MIN_PRICE    = 1.00
 MAX_PRICE    = 500.0
-MIN_VOLUME   = 100_000    # shares on universe date
+MIN_VOLUME   = 50_000     # was 100K — replay: 6 strong movers blocked by vol gate
 MIN_CANDLES  = 60         # bars required to run engine
 CANDLES_DAYS = 200        # lookback depth (EMA200 + RSI + z-score + all signals)
 BATCH_SIZE   = 20         # concurrent Massive candle calls
