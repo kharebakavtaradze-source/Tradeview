@@ -60,14 +60,16 @@ def get_progress() -> dict:
 
 # ── Main runner ────────────────────────────────────────────────────────────────
 
-async def run_new_pump_scan(max_tickers: int = 2000) -> dict:
+async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
     """
     Standalone New Pump scan using Massive/Polygon exclusively.
     1. Universe via fetch_grouped_daily()
-    2. Neutral prefilters (price, volume, ticker shape)
+    2. Neutral prefilters (price, volume, ticker shape) — NO ranking cut
     3. Candles via fetch_candles_massive() (200 bars, 20 concurrent)
     4. new_pump_engine.analyze() per ticker — per-symbol failures are skipped
-    5. Sort by label tier -> score descending
+    5. Sort by new_pump_score descending (AFTER analysis, not before)
+    max_tickers: explicit safety cap (None = unlimited, use a number only as
+                 an operational override — not as the normal universe restriction).
     Updates _latest and _np_progress; returns _latest.
     """
     global _latest, _running, _np_progress
@@ -105,15 +107,9 @@ async def run_new_pump_scan(max_tickers: int = 2000) -> dict:
                 continue
             candidates.append(sym)
 
-        # Rank by dollar-volume descending, cap universe
-        candidates.sort(
-            key=lambda s: (
-                (all_bars[s].get("close") or all_bars[s].get("c") or 0) *
-                (all_bars[s].get("volume") or all_bars[s].get("v") or 0)
-            ),
-            reverse=True,
-        )
-        candidates = candidates[:max_tickers]
+        # Optional hard cap — only for operational override, not normal use
+        if max_tickers is not None:
+            candidates = candidates[:max_tickers]
         _np_progress["universe_size"] = len(candidates)
         logger.info(f"[NpRunner] Universe after neutral prefilters: {len(candidates)} tickers")
 
