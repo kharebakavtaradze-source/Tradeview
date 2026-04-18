@@ -530,7 +530,8 @@ async def ai_portfolio_decisions():
     losing_positions = [p for p in portfolio_ctx if p["pnl_pct"] < -3]
     near_stop_positions = [p for p in portfolio_ctx if p.get("risk_flag") == "NEAR_STOP"]
     total_invested = sum(p["invested_usd"] for p in portfolio_ctx)
-    portfolio_drawdown = round((state["total_value"] - 2000) / 2000 * 100, 2)
+    _baseline = state.get("baseline_value") or 2000.0
+    portfolio_drawdown = round((state["total_value"] - _baseline) / _baseline * 100, 2)
 
     # Ticker-level win/loss memory from closed position history
     portfolio_memory = await _build_portfolio_memory()
@@ -540,7 +541,7 @@ async def ai_portfolio_decisions():
     # Research priors — broad evidence-based biases from Replay + Raw Pattern
     research_priors = await _build_research_priors(scan_ctx, np_ctx)
 
-    prompt = f"""You are an AI trader managing a $2000 paper trading portfolio.
+    prompt = f"""You are an AI trader managing a ${_baseline:.0f} paper trading portfolio.
 Your goal is to maximize risk-adjusted returns using Wyckoff accumulation and New Pump signals.
 
 CURRENT DATE: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
@@ -742,7 +743,7 @@ Respond in Russian. Return JSON only:
             total_value += pos.get("invested_usd") or 0
 
     invested = total_value - cash
-    pnl_pct = (total_value - 2000) / 2000 * 100
+    pnl_pct = (total_value - _baseline) / _baseline * 100
 
     await update_portfolio_state(
         cash=cash,
@@ -805,7 +806,8 @@ async def generate_daily_report():
         else:
             total_value += pos.get("invested_usd") or 0
 
-    total_pnl_pct = (total_value - 2000) / 2000 * 100
+    _bl = state.get("baseline_value") or 2000.0
+    total_pnl_pct = (total_value - _bl) / _bl * 100
 
     # Get today's closed positions
     all_pos = await get_all_ai_positions(50)

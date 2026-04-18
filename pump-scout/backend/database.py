@@ -234,6 +234,7 @@ class AIPortfolioState(Base):
     cash = Column(Float, default=2000.0)
     invested = Column(Float, default=0)
     total_pnl_pct = Column(Float, default=0)
+    baseline_value = Column(Float, default=2000.0)  # starting capital for P&L %
     decisions_json = Column(Text, nullable=True)   # JSON
     daily_report = Column(Text, nullable=True)     # JSON
 
@@ -410,6 +411,11 @@ _SECTOR_CACHE_MIGRATIONS = [
     ("massive_fetched_at", "TIMESTAMP"),
 ]
 
+_AI_PORTFOLIO_STATE_MIGRATIONS = [
+    # DEFAULT 1000.0 so existing portfolios that started at $1000 get the right baseline
+    ("baseline_value", "FLOAT DEFAULT 1000.0"),
+]
+
 _AI_PORTFOLIO_MIGRATIONS = [
     ("current_price",        "FLOAT"),
     ("max_gain_pct",         "FLOAT DEFAULT 0"),
@@ -516,6 +522,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE scan_candidates ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for col, coltype in _AI_PORTFOLIO_STATE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE ai_portfolio_state ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
         for col, coltype in _AI_PORTFOLIO_MIGRATIONS:
             try:
                 await conn.execute(text(f"ALTER TABLE ai_portfolio ADD COLUMN {col} {coltype}"))
@@ -555,6 +566,13 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration scan_candidates.{col} failed (non-fatal): {e}")
+        for col, coltype in _AI_PORTFOLIO_STATE_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE ai_portfolio_state ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration ai_portfolio_state.{col} failed (non-fatal): {e}")
         for col, coltype in _AI_PORTFOLIO_MIGRATIONS:
             try:
                 await conn.execute(text(
@@ -1159,8 +1177,8 @@ async def get_portfolio_state() -> dict:
         )
         state = result.scalar_one_or_none()
         if not state:
-            # Bootstrap with $1000
-            state = AIPortfolioState(date=today_str, cash=2000.0, total_value=2000.0)
+            state = AIPortfolioState(date=today_str, cash=2000.0, total_value=2000.0,
+                                     baseline_value=2000.0)
             session.add(state)
             await session.commit()
             await session.refresh(state)
@@ -1170,6 +1188,7 @@ async def get_portfolio_state() -> dict:
         "cash": state.cash,
         "invested": state.invested or 0,
         "total_pnl_pct": state.total_pnl_pct or 0,
+        "baseline_value": state.baseline_value or 2000.0,
         "decisions_json": json.loads(state.decisions_json) if state.decisions_json else None,
         "daily_report": json.loads(state.daily_report) if state.daily_report else None,
     }
@@ -1308,6 +1327,46 @@ async def update_portfolio_value_from_positions() -> None:
         invested=invested,
         total_pnl_pct=total_pnl_pct,
     )
+
+
+async def reset_ai_portfolio(new_capital: float = 2000.0) -> dict:
+    """
+    Reset the AI portfolio to a clean state with new_capital.
+    Closes all open positions at their last known price and wipes the state row.
+    Returns the new state dict.
+    """
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    async with get_session_factory()() as session:
+        # Force-close all open positions at current_price or entry_price
+        result = await session.execute(
+            select(AIPortfolio).where(AIPortfolio.status == "OPEN")
+        )
+        open_pos = result.scalars().all()
+        for pos in open_pos:
+            close_price = pos.current_price or pos.entry_price or 0
+            pos.status = "CLOSED"
+            pos.exit_price = close_price
+            pos.exit_date = datetime.utcnow()
+            pos.exit_reason = "RESET"
+            if pos.entry_price and pos.entry_price > 0 and close_price:
+                pos.pnl_pct = round((close_price - pos.entry_price) / pos.entry_price * 100, 2)
+                pos.pnl_usd = round((close_price - pos.entry_price) * (pos.shares or 0), 2)
+
+        # Upsert today's state row
+        state_result = await session.execute(
+            select(AIPortfolioState).where(AIPortfolioState.date == today_str)
+        )
+        state = state_result.scalar_one_or_none()
+        if not state:
+            state = AIPortfolioState(date=today_str)
+            session.add(state)
+        state.cash = new_capital
+        state.total_value = new_capital
+        state.invested = 0.0
+        state.total_pnl_pct = 0.0
+        state.baseline_value = new_capital
+        await session.commit()
+    return {"status": "reset", "new_capital": new_capital}
 
 
 async def partial_exit_ai_position(position_id: int, current_price: float, sell_pct: int = 50) -> float:
