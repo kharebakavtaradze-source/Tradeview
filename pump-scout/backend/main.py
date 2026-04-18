@@ -3154,6 +3154,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             build_raw_pattern_episode_features_volume_compression,
             build_raw_pattern_episode_features_structure,
             build_raw_pattern_episode_features_ema,
+            build_raw_pattern_episode_features_new_pump,
             build_raw_pattern_comparisons,
         )
         try:
@@ -3165,6 +3166,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             await build_raw_pattern_episode_features_volume_compression(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_ema(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_new_pump(raw_run_id, pump_study_run_id)
             await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
             await _upd(raw_run_id, {"status": "complete",
                                     "finished_at": datetime.utcnow()})
@@ -3625,6 +3627,48 @@ async def raw_pattern_study_repair(run_id: int):
 
     result = await repair_raw_pattern_group_types(run_id, run["pump_study_run_id"])
     return {"ok": True, "run_id": run_id, "pump_study_run_id": run["pump_study_run_id"], **result}
+
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/repair-np-fields")
+async def raw_pattern_repair_np_fields(run_id: int, background_tasks: BackgroundTasks):
+    """
+    Backfill NP episode feature fields (had_valid_recent_*, best_new_pump_*,
+    all count-based aggregates) for a completed run where they are null.
+
+    Runs build_raw_pattern_episode_features_new_pump() then rebuilds
+    comparison rows so new fields appear in comparison stats.
+    Safe to call on any completed run — idempotent.
+    """
+    from database import get_raw_pattern_run, update_raw_pattern_run as _upd
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    pump_study_run_id = run.get("pump_study_run_id")
+    if not pump_study_run_id:
+        raise HTTPException(400, detail="Run has no pump_study_run_id.")
+
+    async def _repair(raw_run_id: int, ps_run_id: int) -> None:
+        from replay.pump_study_engine import (
+            build_raw_pattern_episode_features_new_pump,
+            build_raw_pattern_comparisons,
+        )
+        try:
+            patched = await build_raw_pattern_episode_features_new_pump(raw_run_id, ps_run_id)
+            comp    = await build_raw_pattern_comparisons(raw_run_id, ps_run_id)
+            logger.info("repair-np-fields run_id=%s patched=%s comp_rows=%s", raw_run_id, patched, comp)
+        except Exception as exc:
+            logger.error("repair-np-fields run_id=%s failed: %s", raw_run_id, exc)
+
+    background_tasks.add_task(_repair, run_id, pump_study_run_id)
+
+    return {
+        "ok":               True,
+        "run_id":           run_id,
+        "pump_study_run_id": pump_study_run_id,
+        "message":          "NP field backfill started in background. "
+                            f"Poll GET /api/replay/raw-pattern-study/{run_id} for status.",
+    }
 
 
 # ── 10. Top pre-pump schemes ───────────────────────────────────────────────────
