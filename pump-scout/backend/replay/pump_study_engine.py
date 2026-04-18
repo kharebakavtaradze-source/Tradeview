@@ -487,6 +487,11 @@ def _build_snapshots(
     from scanner.early_ignition import calc_ignition
     from scanner.toxic_filter  import score_toxicity
     from scanner.pump_engine   import score_pump
+    try:
+        from scanner.new_pump_engine import analyze as _np_analyze
+        _np_available = True
+    except ImportError:
+        _np_available = False
 
     pump_start = episode["pump_start_date"]
     pump_peak  = episode["pump_peak_date"]
@@ -629,6 +634,14 @@ def _build_snapshots(
         if volume and avg_vol_20 and avg_vol_20 > 0:
             volume_vs_avg20 = round(volume / avg_vol_20, 4)
 
+        # ── New Pump Engine per-day analysis ─────────────────────────────────
+        new_pump_result: dict = {}
+        if _np_available and n_trailing >= _MIN_CANDLES_REGIME:
+            try:
+                new_pump_result = _np_analyze(trailing_raw[-200:]) or {}
+            except Exception as exc:
+                logger.debug(f"[PUMP_STUDY][3C] {symbol}/{d} new_pump_engine: {exc}")
+
         # ── Full snapshot dict ────────────────────────────────────────────────
         # snapshot_json stores the raw indicator sub-dicts for deep-dive queries
         snapshot_detail = {
@@ -637,6 +650,7 @@ def _build_snapshots(
             "ignition":      ignition,
             "toxicity":      toxicity,
             "pump":          pump_result,
+            "new_pump":      new_pump_result,
         }
 
         snapshots.append({
