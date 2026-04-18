@@ -3710,3 +3710,33 @@ async def raw_pattern_research_context(run_id: int):
         "date_range":   f"{run.get('start_date')} to {run.get('end_date')}",
         "context_text": context_text,
     }
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/np-count-bundle")
+async def raw_pattern_np_count_bundle(run_id: int, fmt: str = "json"):
+    """
+    NP count-based research bundle for a Raw Pattern Study run.
+    Compares l34/fri34/g4/b2 fire counts, isolated signal counts,
+    full-sequence density, and validity-freshness density across
+    episode groups (4x_pump, false_positive, normal_winner, missed_mover).
+
+    ?fmt=markdown  → returns plain-text Markdown report
+    ?fmt=json      → returns structured JSON (default)
+    """
+    from replay.research_bundle import (
+        build_raw_pattern_research_bundle,
+        render_raw_pattern_bundle_markdown,
+    )
+    from fastapi.responses import PlainTextResponse
+
+    try:
+        bundle = await build_raw_pattern_research_bundle(run_id)
+    except ValueError as exc:
+        raise HTTPException(404, detail=str(exc))
+    except Exception as exc:
+        logger.exception("np_count_bundle run_id=%s failed", run_id)
+        raise HTTPException(500, detail=str(exc))
+
+    if fmt == "markdown":
+        return PlainTextResponse(render_raw_pattern_bundle_markdown(bundle))
+    return bundle
