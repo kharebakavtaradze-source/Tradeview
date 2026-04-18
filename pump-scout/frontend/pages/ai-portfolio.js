@@ -104,6 +104,54 @@ function TickerMemoryMini({ symbol, closedPositions }) {
   );
 }
 
+function DecisionTrace({ pos }) {
+  const sd = pos.scan_data || {};
+  const boosts = [];
+  const cautions = [];
+
+  if (pos.source === 'new_pump') boosts.push('NP source');
+  const via = sd.np_setup_via || '';
+  if (via && via !== 'NONE') boosts.push(`${via} setup`);
+  if (sd.wyckoff === 'ACCUMULATION') boosts.push('Wyckoff ACCUM');
+  else if (sd.wyckoff === 'BREAKOUT') boosts.push('Wyckoff BKT');
+  if ((sd.cmf_pctl || 0) >= 80) boosts.push(`CMF ${sd.cmf_pctl}%ile`);
+  if ((sd.tier === 'FIRE') || (sd.new_pump_label === 'FIRE')) boosts.push('FIRE label');
+  if (pos.tp1_hit) boosts.push('TP1 banked');
+
+  if (sd.np_is_isolated_trigger) cautions.push('isolated trigger');
+  if ((sd.vol_ratio || 0) >= 5) cautions.push(`vol×${(sd.vol_ratio||0).toFixed(1)}`);
+  if ((pos.max_loss_pct || 0) < -4) cautions.push(`drawdown ${(pos.max_loss_pct||0).toFixed(1)}%`);
+
+  const rr = (pos.target_price && pos.stop_loss && pos.entry_price &&
+              pos.entry_price > pos.stop_loss)
+    ? ((pos.target_price - pos.entry_price) / (pos.entry_price - pos.stop_loss)).toFixed(1)
+    : null;
+
+  if (!boosts.length && !cautions.length && !rr) return null;
+  return (
+    <div style={{ fontSize: 9, marginTop: 5, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {boosts.length > 0 && (
+        <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ color: 'rgba(0,200,100,0.5)', fontWeight: 700 }}>↑</span>
+          <span style={{ color: 'rgba(0,200,100,0.75)' }}>{boosts.join(' · ')}</span>
+        </div>
+      )}
+      {cautions.length > 0 && (
+        <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ color: 'rgba(255,165,0,0.6)', fontWeight: 700 }}>↓</span>
+          <span style={{ color: 'rgba(255,165,0,0.8)' }}>{cautions.join(' · ')}</span>
+        </div>
+      )}
+      {rr && (
+        <div style={{ color: 'var(--text-muted)' }}>
+          R/R <b style={{ color: parseFloat(rr) >= 2 ? 'var(--lime)' : '#ffa500' }}>{rr}:1</b>
+          {pos.invested_usd ? <span style={{ marginLeft: 6 }}>${pos.invested_usd.toFixed(0)} deployed</span> : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PnlBadge({ pct, size = 14 }) {
   if (pct == null) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
   const color = pct > 0 ? 'var(--lime)' : pct < 0 ? 'var(--red)' : 'var(--text-muted)';
@@ -236,6 +284,20 @@ export default function AIPortfolio() {
     return stop && price && ((price - stop) / stop * 100) < 2;
   }).length;
 
+  // Unrealized P&L from open positions
+  const unrealizedPnlUsd = positions.reduce((s, p) => {
+    const price = p.current_price || p.entry_price;
+    if (!price || !p.entry_price || !p.shares) return s;
+    return s + (price - p.entry_price) * p.shares;
+  }, 0);
+
+  // Realized P&L from closed positions
+  const realizedPnlUsd = closedPositions.reduce((s, p) => s + (p.pnl_usd || 0), 0);
+
+  // Wallet deployment %
+  const deployedPct = totalValue > 0 ? Math.round(invested / totalValue * 100) : 0;
+  const cashPct = 100 - deployedPct;
+
   return (
     <>
       <Head>
@@ -297,13 +359,35 @@ export default function AIPortfolio() {
                 </span>
               )}
             </div>
-            <div style={{ display: 'flex', gap: 20, marginTop: 8, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-              <span>💵 Cash: <b style={{ color: 'var(--text-primary)' }}>${cash.toFixed(2)}</b></span>
-              <span>📈 Invested: <b style={{ color: 'var(--text-primary)' }}>${invested.toFixed(2)}</b></span>
-              <span>Started: <b>$2,000.00</b></span>
-              <span>Positions: <b>{positions.length}/5</b></span>
-              {aiWinRate !== null && <span>AI WR: <b style={{ color: aiWinRate >= 50 ? 'var(--lime)' : 'var(--red)' }}>{aiWinRate}%</b> ({aiWins.length}W/{aiLosses.length}L)</span>}
-              {aiAvgPnl !== null && <span>Avg trade: <b style={{ color: parseFloat(aiAvgPnl) >= 0 ? 'var(--lime)' : 'var(--red)' }}>{parseFloat(aiAvgPnl) >= 0 ? '+' : ''}{aiAvgPnl}%</b></span>}
+            {/* Wallet metrics row */}
+            <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
+              <span>💵 Cash <b style={{ color: 'var(--lime)' }}>${cash.toFixed(0)}</b></span>
+              <span>📈 Deployed <b style={{ color: 'var(--text-primary)' }}>${invested.toFixed(0)}</b> <span style={{ fontSize: 9, opacity: 0.6 }}>({deployedPct}%)</span></span>
+              <span style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 16 }}>
+                Unrealized <b style={{ color: unrealizedPnlUsd >= 0 ? 'var(--lime)' : 'var(--red)' }}>{unrealizedPnlUsd >= 0 ? '+' : ''}${unrealizedPnlUsd.toFixed(0)}</b>
+              </span>
+              {Math.abs(realizedPnlUsd) > 0 && (
+                <span>Realized <b style={{ color: realizedPnlUsd >= 0 ? 'var(--lime)' : 'var(--red)' }}>{realizedPnlUsd >= 0 ? '+' : ''}${realizedPnlUsd.toFixed(0)}</b></span>
+              )}
+              <span style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 16 }}>
+                <b>{positions.length}/5</b> open · <b>{closedPositions.length}</b> closed
+              </span>
+            </div>
+            {/* Cash/deployed bar */}
+            <div style={{ marginTop: 8, display: 'flex', gap: 3, alignItems: 'center' }}>
+              <div style={{ flex: 1, height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden', display: 'flex' }}>
+                <div style={{ width: `${deployedPct}%`, background: 'rgba(0,212,245,0.5)', transition: 'width 0.3s' }} />
+                <div style={{ flex: 1, background: 'rgba(0,200,100,0.25)' }} />
+              </div>
+              <span style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                {cashPct}% free
+              </span>
+            </div>
+            {/* Trade stats row */}
+            <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 10, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+              <span>Capital: <b>$2,000</b></span>
+              {aiWinRate !== null && <span>WR <b style={{ color: aiWinRate >= 50 ? 'var(--lime)' : 'var(--red)' }}>{aiWinRate}%</b> ({aiWins.length}W/{aiLosses.length}L)</span>}
+              {aiAvgPnl !== null && <span>Avg <b style={{ color: parseFloat(aiAvgPnl) >= 0 ? 'var(--lime)' : 'var(--red)' }}>{parseFloat(aiAvgPnl) >= 0 ? '+' : ''}{aiAvgPnl}%</b></span>}
             </div>
 
             {/* Value history sparkline */}
@@ -413,7 +497,10 @@ export default function AIPortfolio() {
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', gap: 10, marginBottom: 2, flexWrap: 'wrap' }}>
                   <span>Entry <b style={{ color: 'var(--text-primary)' }}>${p.entry_price?.toFixed(2)}</b></span>
                   <span>Now <b style={{ color: pnl >= 0 ? 'var(--lime)' : 'var(--red)' }}>${(p.current_price || p.entry_price)?.toFixed(2)}</b></span>
-                  <span>Size <b>${p.invested_usd?.toFixed(0)}</b></span>
+                  <span>
+                    <b>${p.invested_usd?.toFixed(0)}</b>
+                    <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 9 }}> / $2000</span>
+                  </span>
                   <span>Day <b>{p.days_held}</b></span>
                 </div>
 
@@ -454,15 +541,29 @@ export default function AIPortfolio() {
                   </div>
                 )}
 
+                {/* NP supporting metadata (secondary) */}
+                {p.source === 'new_pump' && p.scan_data && (
+                  <div style={{ fontSize: 9, color: 'rgba(124,90,245,0.7)', marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {p.scan_data.np_sequence && p.scan_data.np_sequence !== 'NONE' && (
+                      <span>seq: <b>{p.scan_data.np_sequence}</b></span>
+                    )}
+                    {p.scan_data.score > 0 && <span>score: <b>{p.scan_data.score.toFixed(1)}</b></span>}
+                    {p.scan_data.scan_date && <span>signal: <b>{p.scan_data.scan_date}</b></span>}
+                  </div>
+                )}
+
                 {/* Research prior pills */}
                 <PriorPills scanData={p.scan_data} />
 
                 {/* Ticker memory */}
                 <TickerMemoryMini symbol={p.symbol} closedPositions={closedPositions} />
 
-                {/* AI reasoning */}
+                {/* Decision trace */}
+                <DecisionTrace pos={p} />
+
+                {/* AI reasoning (collapsed to 2 lines) */}
                 {p.reason && (
-                  <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.5, fontStyle: 'italic', marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.5, fontStyle: 'italic', marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.05)', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                     {p.reason}
                   </div>
                 )}
