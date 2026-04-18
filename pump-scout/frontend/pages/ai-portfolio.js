@@ -410,22 +410,25 @@ export default function AIPortfolio() {
             </div>
 
             {/* Value history sparkline */}
-            {portfolioHistory.length > 1 && (
-              <div style={{ marginTop: 10, display: 'flex', gap: 2, alignItems: 'flex-end', height: 32 }}>
-                {portfolioHistory.map((h, i) => {
-                  const pct = (h.total_value - 2000) / 2000;
-                  const height = Math.max(4, Math.abs(pct) * 300 + 4);
-                  return (
-                    <div key={i} title={`${h.date}: $${h.total_value.toFixed(0)} (${h.total_pnl_pct >= 0 ? '+' : ''}${h.total_pnl_pct.toFixed(1)}%)`}
-                      style={{
-                        flex: 1, height, borderRadius: 2, alignSelf: 'flex-end',
-                        background: pct >= 0 ? 'rgba(0,200,100,0.5)' : 'rgba(255,68,68,0.5)',
-                        minWidth: 6,
-                      }} />
-                  );
-                })}
-              </div>
-            )}
+            {portfolioHistory.length > 1 && (() => {
+              const vals = portfolioHistory.map(h => h.total_value);
+              const minV = Math.min(...vals);
+              const maxV = Math.max(...vals);
+              const range = maxV - minV || 1;
+              return (
+                <div style={{ marginTop: 10, display: 'flex', gap: 2, alignItems: 'flex-end', height: 32, overflow: 'hidden' }}>
+                  {portfolioHistory.map((h, i) => {
+                    const norm = (h.total_value - minV) / range;
+                    const barH = Math.max(3, Math.round(norm * 26 + 4));
+                    const pct = (h.total_value - 2000) / 2000;
+                    return (
+                      <div key={i} title={`${h.date}: $${h.total_value.toFixed(0)} (${h.total_pnl_pct >= 0 ? '+' : ''}${h.total_pnl_pct.toFixed(1)}%)`}
+                        style={{ flex: 1, height: barH, borderRadius: 2, alignSelf: 'flex-end', background: pct >= 0 ? 'rgba(0,200,100,0.5)' : 'rgba(255,68,68,0.5)', minWidth: 6 }} />
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 
