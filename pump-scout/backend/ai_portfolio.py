@@ -1,6 +1,6 @@
 """
-AI Paper Trading Portfolio — $1000 virtual account.
-AI makes buy/sell decisions daily at 9:00 AM ET using scan results.
+AI Paper Trading Portfolio — $2000 virtual account.
+AI makes buy/sell decisions daily at 9:45 AM ET using scan + New Pump signals.
 End-of-day report at 16:30 ET.
 """
 import json
@@ -17,7 +17,9 @@ from database import (
     get_all_ai_positions,
     get_open_ai_positions,
     get_portfolio_state,
+    get_recent_np_signals,
     insert_ai_position,
+    partial_exit_ai_position,
     update_ai_position_price,
     update_portfolio_state,
     update_portfolio_value_from_positions,
@@ -140,7 +142,86 @@ def _atr_position_size(portfolio_value: float, entry: float, atr: float,
         return 50.0
     shares = risk_per_trade / risk_per_share
     size = shares * entry
-    return round(max(50.0, min(300.0, size)), 2)
+    return round(max(50.0, min(600.0, size)), 2)
+
+
+async def _get_np_candidates() -> list[dict]:
+    """
+    Fetch recent New Pump FIRE/STRONG signals from replay history (last 5 days).
+    Skips isolated triggers (G4 with no setup) and non-stock securities.
+    Returns list of candidate dicts compatible with the scan_ctx format.
+    """
+    from scanner.sector_map import NON_STOCK_SECURITIES
+    try:
+        np_signals = await get_recent_np_signals(days=5)
+    except Exception as e:
+        logger.warning(f"NP candidate fetch failed: {e}")
+        return []
+
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for s in np_signals:
+        sym = s["symbol"]
+        if sym in NON_STOCK_SECURITIES or sym in seen:
+            continue
+        if s.get("np_is_isolated_trigger"):
+            continue
+        seen.add(sym)
+        price = await _fetch_price(sym) or s.get("price") or 0
+        if price <= 0:
+            continue
+        candidates.append({
+            "symbol": sym,
+            "price": price,
+            "tier": s["new_pump_label"],
+            "score": round(s.get("new_pump_score") or 0, 1),
+            "source": "new_pump",
+            "np_setup_via": s.get("np_setup_via"),
+            "np_sequence": s.get("new_pump_sequence_label"),
+            "scan_date": s.get("scan_date"),
+            "sector": s.get("sector", ""),
+            "atr": 0,
+            "wyckoff": "NONE",
+            "cmf_pctl": 0,
+            "rsi": None,
+            "vol_ratio": 0,
+            "hype": 0,
+            "rs_score": 0,
+        })
+    return candidates
+
+
+async def _build_portfolio_memory() -> dict[str, dict]:
+    """
+    Derive per-ticker win/loss memory from the last 100 closed positions.
+    Returns {symbol: {wins, losses, avg_pnl, last_result}}.
+    """
+    positions = await get_all_ai_positions(100)
+    memory: dict[str, dict] = {}
+    for p in positions:
+        if p.get("status") != "CLOSED":
+            continue
+        pnl = p.get("pnl_pct")
+        if pnl is None:
+            continue
+        sym = p["symbol"]
+        if sym not in memory:
+            memory[sym] = {"wins": 0, "losses": 0, "_pnls": []}
+        memory[sym]["_pnls"].append(pnl)
+        if pnl >= 0:
+            memory[sym]["wins"] += 1
+        else:
+            memory[sym]["losses"] += 1
+    result = {}
+    for sym, m in memory.items():
+        pnls = m["_pnls"]
+        result[sym] = {
+            "wins": m["wins"],
+            "losses": m["losses"],
+            "avg_pnl": round(sum(pnls) / len(pnls), 2),
+            "last_result": "WIN" if pnls[-1] >= 0 else "LOSS",
+        }
+    return result
 
 
 async def update_ai_positions_intraday():
@@ -200,13 +281,31 @@ async def update_ai_positions_intraday():
                             f"(stop=${atr_stop:.2f})")
             continue
 
-        # Auto-close on target hit
-        if target and price >= target:
-            closed = await close_ai_position(sym, price, f"Target hit ${target:.2f}",
-                                             exit_reason="TARGET_HIT")
+        target2 = pos.get("target_price_2")
+        sell_pct = pos.get("sell_pct_at_target_1", 50)
+        tp1_hit = pos.get("tp1_hit", False)
+
+        # TP1: partial exit
+        if target and price >= target and not tp1_hit:
+            proceeds = await partial_exit_ai_position(pos["id"], price, sell_pct)
+            cash += proceeds
+            logger.info(f"AI portfolio: {sym} TP1 hit at ${price:.2f} — sold {sell_pct}% "
+                        f"(${proceeds:.2f})")
+            if not target2:
+                # No TP2 — close the remaining shares fully
+                closed = await close_ai_position(sym, price, f"Target hit ${target:.2f}",
+                                                 exit_reason="TARGET_HIT")
+                if closed:
+                    cash += closed.get("current_value", 0)
+            continue
+
+        # TP2: close remainder
+        if tp1_hit and target2 and price >= target2:
+            closed = await close_ai_position(sym, price, f"Target 2 hit ${target2:.2f}",
+                                             exit_reason="TARGET2_HIT")
             if closed:
-                cash += price * shares
-                logger.info(f"AI portfolio: {sym} target hit at ${price:.2f}")
+                cash += closed.get("current_value", 0)
+                logger.info(f"AI portfolio: {sym} TP2 hit at ${price:.2f}")
             continue
 
         # Update price, P&L, days_held
@@ -262,8 +361,11 @@ async def ai_portfolio_decisions():
     # Hard code-level filter — AI only sees pre-qualified candidates
     qualified = _filter_ai_candidates(all_fire_arm)
 
+    # New Pump candidates from replay history (last 5 days)
+    np_candidates = await _get_np_candidates()
+
     # No qualified candidates → hold cash, skip API call
-    if not qualified:
+    if not qualified and not np_candidates:
         no_trade = {
             "decisions": [],
             "portfolio_note": (
@@ -305,6 +407,7 @@ async def ai_portfolio_decisions():
                     "OVER_TARGET" if dist_to_target is not None and dist_to_target <= 0 else "OK")
         portfolio_ctx.append({
             "symbol": pos["symbol"],
+            "source": pos.get("source", "scanner"),
             "entry_price": entry,
             "current_price": price,
             "pnl_pct": pnl,
@@ -314,6 +417,8 @@ async def ai_portfolio_decisions():
             "invested_usd": pos.get("invested_usd", 0),
             "stop_loss": stop,
             "target_price": target,
+            "target_price_2": pos.get("target_price_2"),
+            "tp1_hit": pos.get("tp1_hit", False),
             "dist_to_stop_pct": dist_to_stop,
             "dist_to_target_pct": dist_to_target,
             "risk_flag": risk_flag,
@@ -322,6 +427,7 @@ async def ai_portfolio_decisions():
     scan_ctx = [
         {
             "symbol": r["symbol"],
+            "source": "scanner",
             "price": r.get("price", 0),
             "tier": r["score"]["tier"],
             "score": round(r["score"]["total_score"], 1),
@@ -336,6 +442,8 @@ async def ai_portfolio_decisions():
         }
         for r in qualified[:10]
     ]
+
+    np_ctx = np_candidates[:8]
 
     # Load market regime and sector strength for context
     regime_ctx = {}
@@ -356,10 +464,15 @@ async def ai_portfolio_decisions():
     losing_positions = [p for p in portfolio_ctx if p["pnl_pct"] < -3]
     near_stop_positions = [p for p in portfolio_ctx if p.get("risk_flag") == "NEAR_STOP"]
     total_invested = sum(p["invested_usd"] for p in portfolio_ctx)
-    portfolio_drawdown = round((state["total_value"] - 1000) / 1000 * 100, 2)
+    portfolio_drawdown = round((state["total_value"] - 2000) / 2000 * 100, 2)
 
-    prompt = f"""You are an AI trader managing a $1000 paper trading portfolio.
-Your goal is to maximize risk-adjusted returns using Wyckoff accumulation signals.
+    # Ticker-level win/loss memory from closed position history
+    portfolio_memory = await _build_portfolio_memory()
+    all_candidate_syms = {r["symbol"] for r in scan_ctx} | {r["symbol"] for r in np_ctx}
+    memory_ctx = {sym: m for sym, m in portfolio_memory.items() if sym in all_candidate_syms}
+
+    prompt = f"""You are an AI trader managing a $2000 paper trading portfolio.
+Your goal is to maximize risk-adjusted returns using Wyckoff accumulation and New Pump signals.
 
 CURRENT DATE: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
 CASH: ${cash:.2f} | INVESTED: ${total_invested:.2f} | TOTAL VALUE: ${state['total_value']:.2f}
@@ -370,17 +483,20 @@ Recommendation: {regime_rec}
 Strong sectors: {', '.join(strong_sectors) if strong_sectors else 'none'}
 Weak sectors: {', '.join(weak_sectors) if weak_sectors else 'none'}
 
-Strong sectors: {', '.join(strong_sectors) if strong_sectors else 'none'}
-Weak sectors: {', '.join(weak_sectors) if weak_sectors else 'none'}
-
 OPEN POSITIONS ({len(portfolio_ctx)} total, {len(near_stop_positions)} near stop, {len(losing_positions)} losing >3%):
 {json.dumps(portfolio_ctx, indent=2)}
 
-PRE-QUALIFIED CANDIDATES (hard-filtered, only quality setups):
+SCANNER CANDIDATES (Wyckoff/CMF pre-filtered):
 {json.dumps(scan_ctx, indent=2)}
+
+NEW PUMP CANDIDATES (NP engine FIRE/STRONG, last 5 days):
+{json.dumps(np_ctx, indent=2)}
 
 USER WATCHLIST (manual trades for context):
 {watchlist_symbols}
+
+TICKER MEMORY (prior trades in current candidates):
+{json.dumps(memory_ctx, indent=2) if memory_ctx else 'none'}
 
 RISK FLAGS:
 - Near stop (within 3%): {[p['symbol'] for p in near_stop_positions] or 'none'}
@@ -388,15 +504,18 @@ RISK FLAGS:
 - Slots used: {len(open_positions)}/5
 
 STRICT RULES (not negotiable):
-1. Only buy FIRE tier OR ARM with CMF > 70%ile (pre-filtered)
-2. Never buy RSI > 65, hype > 40, Wyckoff = NONE/DISTRIBUTION
-3. R/R minimum 2.5:1: stop = entry - (ATR × 1.5), target = entry + (ATR × 3.75)
-4. Risk 2% of portfolio per trade via ATR sizing (min $50, max $300)
-5. Max 5 positions — prefer cash in RISK_OFF/FEAR regime
-6. SELL if: held > 14d without 10% gain, hype > 70, dist_to_stop < 3%, Wyckoff→DISTRIBUTION
-7. Never chase: skip if moved >5% today, sector in weak_sectors list
+1. Scanner candidates: FIRE tier or ARM with CMF > 70%ile (pre-filtered)
+2. New Pump candidates: FIRE or STRONG label, prefer non-NONE np_setup_via
+3. Never buy RSI > 65, hype > 40, Wyckoff = DISTRIBUTION
+4. Two-target exits: TP1 = entry + ATR×3.75 (sell 50%), TP2 = entry + ATR×7.5 (sell rest)
+   Stop: entry - ATR×1.5. For NP candidates without ATR use price-based estimate.
+5. Risk 2% of portfolio per trade via ATR sizing (min $50, max $600)
+6. Max 5 positions — prefer cash in RISK_OFF/FEAR regime
+7. SELL if: held > 14d without 10% gain, hype > 70, dist_to_stop < 3%, Wyckoff→DISTRIBUTION
+8. Never chase: skip if moved >5% today, sector in weak_sectors list
+9. Use TICKER MEMORY: avoid repeat losers; prefer proven winners
 
-For each BUY include exact stop_loss and target_price in the JSON.
+For each BUY include stop_loss, target_price (TP1), target_price_2 (TP2), sell_pct_at_target_1 (default 50).
 
 Respond in Russian. Return JSON only:
 {{
@@ -407,7 +526,9 @@ Respond in Russian. Return JSON only:
       "price": 13.47,
       "stop_loss": 12.20,
       "target_price": 18.50,
-      "reason": "подробное объяснение: почему этот тикер, что подтверждает сигнал, ключевые метрики"
+      "target_price_2": 23.50,
+      "sell_pct_at_target_1": 50,
+      "reason": "подробное объяснение: источник сигнала (scanner/new_pump), ключевые метрики, память по тикеру"
     }},
     {{
       "symbol": "TICK2",
@@ -448,26 +569,37 @@ Respond in Russian. Return JSON only:
             if price <= 0 or len(open_positions) >= 5:
                 continue
 
-            # ATR-based position sizing
-            r_data = next((r for r in scan_ctx if r["symbol"] == symbol), {})
+            # Find source — check scan_ctx first, then np_ctx
+            r_data = next((r for r in scan_ctx if r["symbol"] == symbol), None)
+            np_data = next((r for r in np_ctx if r["symbol"] == symbol), None)
+            if r_data is None and np_data is not None:
+                r_data = np_data
+            elif r_data is None:
+                r_data = {}
             atr = r_data.get("atr") or 0
+            source = r_data.get("source", "scanner")
+
             if atr and atr > 0:
                 amount = _atr_position_size(state["total_value"], price, atr)
             else:
-                amount = d.get("amount_usd", 100)
+                amount = d.get("amount_usd", 150)
 
             if cash < amount:
                 amount = min(amount, cash)
             if amount < 50:
                 continue
 
-            # Compute stop/target from AI decision (preferred) or ATR fallback
+            # Compute stop/targets from AI decision (preferred) or ATR fallback
             stop_loss = d.get("stop_loss")
             target_price = d.get("target_price")
+            target_price_2 = d.get("target_price_2")
+            sell_pct_at_target_1 = d.get("sell_pct_at_target_1", 50)
             if not stop_loss and atr:
                 stop_loss = round(price - atr * 1.5, 4)
             if not target_price and atr:
                 target_price = round(price + atr * 3.75, 4)
+            if not target_price_2 and atr:
+                target_price_2 = round(price + atr * 7.5, 4)
 
             shares = amount / price
             await insert_ai_position(
@@ -479,6 +611,9 @@ Respond in Russian. Return JSON only:
                 scan_data={**r_data, "atr": atr},
                 stop_loss=stop_loss,
                 target_price=target_price,
+                target_price_2=target_price_2,
+                sell_pct_at_target_1=sell_pct_at_target_1,
+                source=source,
             )
             cash -= amount
             executed_buys += 1
@@ -507,7 +642,7 @@ Respond in Russian. Return JSON only:
             total_value += pos.get("invested_usd") or 0
 
     invested = total_value - cash
-    pnl_pct = (total_value - 1000) / 1000 * 100
+    pnl_pct = (total_value - 2000) / 2000 * 100
 
     await update_portfolio_state(
         cash=cash,
@@ -570,7 +705,7 @@ async def generate_daily_report():
         else:
             total_value += pos.get("invested_usd") or 0
 
-    total_pnl_pct = (total_value - 1000) / 1000 * 100
+    total_pnl_pct = (total_value - 2000) / 2000 * 100
 
     # Get today's closed positions
     all_pos = await get_all_ai_positions(50)
@@ -583,7 +718,7 @@ async def generate_daily_report():
     prompt = f"""Generate a daily trading report in Russian. Be concise and analytical. Return JSON only.
 
 DATE: {today_str}
-PORTFOLIO VALUE: ${total_value:.2f} (started $1000)
+PORTFOLIO VALUE: ${total_value:.2f} (started $2000)
 TOTAL P&L: {total_pnl_pct:+.1f}%
 CASH: ${state['cash']:.2f}
 

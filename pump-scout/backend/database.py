@@ -212,13 +212,17 @@ class AIPortfolio(Base):
     max_gain_pct = Column(Float, default=0)          # peak P&L since entry
     max_loss_pct = Column(Float, default=0)          # worst P&L since entry
     stop_loss = Column(Float, nullable=True)         # ATR-based stop price
-    target_price = Column(Float, nullable=True)      # ATR-based target price
+    target_price = Column(Float, nullable=True)      # TP1 — first target, partial exit here
+    target_price_2 = Column(Float, nullable=True)    # TP2 — second target, exit remainder
+    sell_pct_at_target_1 = Column(Integer, default=50)  # % to sell at TP1 (default 50%)
+    tp1_hit = Column(Boolean, default=False)         # True after partial exit at TP1
     status = Column(String(10), default="OPEN")      # OPEN / CLOSED
-    exit_reason = Column(String(20), nullable=True)  # ATR_STOP / TARGET_HIT / AI_SELL / CEF_FILTER
+    exit_reason = Column(String(20), nullable=True)  # ATR_STOP / TARGET_HIT / TARGET2_HIT / AI_SELL / CEF_FILTER
     reason = Column(Text, nullable=True)
     scan_data = Column(Text, nullable=True)          # JSON
     exit_date = Column(DateTime, nullable=True)
     days_held = Column(Integer, default=0)
+    source = Column(String(20), nullable=True)       # "scanner" | "new_pump"
 
 
 class AIPortfolioState(Base):
@@ -226,8 +230,8 @@ class AIPortfolioState(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     date = Column(String(10), unique=True, nullable=False, index=True)  # YYYY-MM-DD
-    total_value = Column(Float, default=1000.0)
-    cash = Column(Float, default=1000.0)
+    total_value = Column(Float, default=2000.0)
+    cash = Column(Float, default=2000.0)
     invested = Column(Float, default=0)
     total_pnl_pct = Column(Float, default=0)
     decisions_json = Column(Text, nullable=True)   # JSON
@@ -407,13 +411,17 @@ _SECTOR_CACHE_MIGRATIONS = [
 ]
 
 _AI_PORTFOLIO_MIGRATIONS = [
-    ("current_price",    "FLOAT"),
-    ("max_gain_pct",     "FLOAT DEFAULT 0"),
-    ("max_loss_pct",     "FLOAT DEFAULT 0"),
-    ("stop_loss",        "FLOAT"),
-    ("target_price",     "FLOAT"),
-    ("exit_reason",      "VARCHAR(20)"),
-    ("price_updated_at", "TIMESTAMP"),
+    ("current_price",        "FLOAT"),
+    ("max_gain_pct",         "FLOAT DEFAULT 0"),
+    ("max_loss_pct",         "FLOAT DEFAULT 0"),
+    ("stop_loss",            "FLOAT"),
+    ("target_price",         "FLOAT"),
+    ("exit_reason",          "VARCHAR(20)"),
+    ("price_updated_at",     "TIMESTAMP"),
+    ("target_price_2",       "FLOAT"),
+    ("sell_pct_at_target_1", "INTEGER DEFAULT 50"),
+    ("tp1_hit",              "BOOLEAN DEFAULT FALSE"),
+    ("source",               "VARCHAR(20)"),
 ]
 
 _PUMP_AI_SUMMARY_MIGRATIONS = [
@@ -1130,10 +1138,14 @@ def _portfolio_to_dict(p: AIPortfolio) -> dict:
         "max_loss_pct": p.max_loss_pct or 0,
         "stop_loss": p.stop_loss,
         "target_price": p.target_price,
+        "target_price_2": p.target_price_2,
+        "sell_pct_at_target_1": p.sell_pct_at_target_1 if p.sell_pct_at_target_1 is not None else 50,
+        "tp1_hit": p.tp1_hit or False,
         "status": p.status,
         "exit_reason": p.exit_reason,
         "reason": p.reason,
         "days_held": p.days_held or 0,
+        "source": p.source,
         "scan_data": json.loads(p.scan_data) if p.scan_data else None,
         "price_updated_at": p.price_updated_at.isoformat() if p.price_updated_at else None,
     }
@@ -1148,7 +1160,7 @@ async def get_portfolio_state() -> dict:
         state = result.scalar_one_or_none()
         if not state:
             # Bootstrap with $1000
-            state = AIPortfolioState(date=today_str, cash=1000.0, total_value=1000.0)
+            state = AIPortfolioState(date=today_str, cash=2000.0, total_value=2000.0)
             session.add(state)
             await session.commit()
             await session.refresh(state)
@@ -1208,7 +1220,10 @@ async def insert_ai_position(symbol: str, entry_price: float, shares: float,
                               invested_usd: float, reason: str,
                               scan_data: dict | None = None,
                               stop_loss: float | None = None,
-                              target_price: float | None = None) -> dict:
+                              target_price: float | None = None,
+                              target_price_2: float | None = None,
+                              sell_pct_at_target_1: int = 50,
+                              source: str | None = None) -> dict:
     async with get_session_factory()() as session:
         pos = AIPortfolio(
             symbol=symbol.upper(),
@@ -1221,8 +1236,12 @@ async def insert_ai_position(symbol: str, entry_price: float, shares: float,
             current_price=entry_price,
             stop_loss=stop_loss,
             target_price=target_price,
+            target_price_2=target_price_2,
+            sell_pct_at_target_1=sell_pct_at_target_1,
+            tp1_hit=False,
             status="OPEN",
             reason=reason,
+            source=source,
             scan_data=json.dumps(scan_data) if scan_data else None,
         )
         session.add(pos)
@@ -1282,13 +1301,69 @@ async def update_portfolio_value_from_positions() -> None:
     state = await get_portfolio_state()
     invested = sum(p.get("current_value") or p.get("invested_usd") or 0 for p in positions)
     total_value = state["cash"] + invested
-    total_pnl_pct = round((total_value - 1000) / 1000 * 100, 2)
+    total_pnl_pct = round((total_value - 2000) / 2000 * 100, 2)
     await update_portfolio_state(
         cash=state["cash"],
         total_value=total_value,
         invested=invested,
         total_pnl_pct=total_pnl_pct,
     )
+
+
+async def partial_exit_ai_position(position_id: int, current_price: float, sell_pct: int = 50) -> float:
+    """
+    Sell sell_pct% of shares at current_price, mark tp1_hit=True.
+    Returns cash proceeds. Idempotent — no-op if tp1_hit already True.
+    """
+    async with get_session_factory()() as session:
+        result = await session.execute(select(AIPortfolio).where(AIPortfolio.id == position_id))
+        pos = result.scalar_one_or_none()
+        if not pos or pos.tp1_hit:
+            return 0.0
+        sell_ratio = sell_pct / 100.0
+        shares_sold = (pos.shares or 0) * sell_ratio
+        proceeds = round(shares_sold * current_price, 2)
+        pos.shares = round((pos.shares or 0) * (1 - sell_ratio), 6)
+        pos.invested_usd = round((pos.invested_usd or 0) * (1 - sell_ratio), 2)
+        pos.current_value = round(pos.shares * current_price, 2)
+        pos.tp1_hit = True
+        await session.commit()
+    return proceeds
+
+
+async def get_recent_np_signals(days: int = 5) -> list[dict]:
+    """Return recent NP FIRE/STRONG signals from replay candidates (for AI portfolio)."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplaySignalCandidate).where(
+                ReplaySignalCandidate.new_pump_label.in_(["FIRE", "STRONG"]),
+                ReplaySignalCandidate.scan_date >= cutoff,
+            ).order_by(ReplaySignalCandidate.scan_date.desc()).limit(30)
+        )
+        rows = result.scalars().all()
+    return [
+        {
+            "symbol": r.symbol,
+            "scan_date": r.scan_date,
+            "new_pump_label": r.new_pump_label,
+            "new_pump_score": r.new_pump_score,
+            "new_pump_sequence_label": r.new_pump_sequence_label,
+            "np_setup_via": r.np_setup_via,
+            "np_has_l34": r.np_has_l34,
+            "np_has_fri34": r.np_has_fri34,
+            "np_has_g4": r.np_has_g4,
+            "np_has_b2": r.np_has_b2,
+            "np_age_l34": r.np_age_l34,
+            "np_age_fri34": r.np_age_fri34,
+            "np_is_isolated_trigger": r.np_is_isolated_trigger,
+            "sector": r.sector,
+            "price": r.price,
+            "tier": r.tier,
+        }
+        for r in rows
+    ]
 
 
 async def get_ai_portfolio_history(limit: int = 10) -> List[dict]:
