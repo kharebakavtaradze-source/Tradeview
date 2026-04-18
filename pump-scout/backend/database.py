@@ -423,13 +423,26 @@ _PUMP_AI_SUMMARY_MIGRATIONS = [
 ]
 
 _RAW_PATTERN_EP_MIGRATIONS = [
-    ("had_bull_stack_pre",          "BOOLEAN"),
-    ("bull_stack_days_pre",         "INTEGER"),
-    ("days_above_ema50_pre",        "INTEGER"),
-    ("days_above_ema200_pre",       "INTEGER"),
-    ("ema50_reclaim_count_pre",     "INTEGER"),
-    ("avg_close_vs_ema50_pct_pre",  "FLOAT"),
-    ("avg_close_vs_ema200_pct_pre", "FLOAT"),
+    ("had_bull_stack_pre",                   "BOOLEAN"),
+    ("bull_stack_days_pre",                  "INTEGER"),
+    ("days_above_ema50_pre",                 "INTEGER"),
+    ("days_above_ema200_pre",                "INTEGER"),
+    ("ema50_reclaim_count_pre",              "INTEGER"),
+    ("avg_close_vs_ema50_pct_pre",           "FLOAT"),
+    ("avg_close_vs_ema200_pct_pre",          "FLOAT"),
+    # New Pump episode aggregates (added in NP refactor)
+    ("had_valid_recent_setup",               "BOOLEAN"),
+    ("had_valid_recent_trigger",             "BOOLEAN"),
+    ("had_valid_recent_confirm",             "BOOLEAN"),
+    ("had_valid_full_sequence",              "BOOLEAN"),
+    ("best_new_pump_label_rank",             "INTEGER"),
+    ("best_new_pump_sequence_type",          "VARCHAR(40)"),
+    ("days_from_last_setup_to_breakout",     "INTEGER"),
+    ("days_from_last_trigger_to_breakout",   "INTEGER"),
+    ("days_from_g4_to_b2",                   "INTEGER"),
+    ("max_bull_stack_days_pre",              "INTEGER"),
+    ("extreme_anomaly_day_count_pre",        "INTEGER"),
+    ("median_dollar_volume_pre",             "FLOAT"),
 ]
 
 _JOURNAL_MIGRATIONS = [
@@ -3167,6 +3180,20 @@ class RawPatternEpisodeFeatures(Base):
     strongest_wyckoff_state       = Column(String(20), nullable=True)
     strongest_sequence_type       = Column(String(40), nullable=True)  # e.g. ACCUMULATION_SPRING_ARM
     strongest_structural_bias     = Column(String(20), nullable=True)  # BULLISH|BEARISH|NEUTRAL
+
+    # ── New Pump engine episode aggregates ─────────────────────────────────────
+    had_valid_recent_setup        = Column(Boolean,    nullable=True)  # fresh L34 or FRI34 ≤ age_max
+    had_valid_recent_trigger      = Column(Boolean,    nullable=True)  # fresh G4 ≤ age_max
+    had_valid_recent_confirm      = Column(Boolean,    nullable=True)  # fresh B2 ≤ age_max
+    had_valid_full_sequence       = Column(Boolean,    nullable=True)  # all three valid + gaps ok
+    best_new_pump_label_rank      = Column(Integer,    nullable=True)  # FIRE=0…NONE=5
+    best_new_pump_sequence_type   = Column(String(40), nullable=True)  # NP sequence label at scan date
+    days_from_last_setup_to_breakout   = Column(Integer, nullable=True)
+    days_from_last_trigger_to_breakout = Column(Integer, nullable=True)
+    days_from_g4_to_b2            = Column(Integer,    nullable=True)  # G4→B2 confirmation gap
+    max_bull_stack_days_pre       = Column(Integer,    nullable=True)  # longest consecutive bull-stack run
+    extreme_anomaly_day_count_pre = Column(Integer,    nullable=True)  # vol_z>4 OR range>3×avg days
+    median_dollar_volume_pre      = Column(Float,      nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
