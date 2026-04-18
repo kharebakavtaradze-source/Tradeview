@@ -2154,6 +2154,46 @@ async def build_raw_pattern_episode_features_ema(
     return patched
 
 
+# ── Shared NP sequence resolver ───────────────────────────────────────────────
+# Single source of truth for sequence-type classification.
+# Used by both best-state assignment and per-day count accumulation.
+
+_NP_SEQ_PRIORITY: list[str] = [
+    "FULL_FRI34_G4_B2",    # 0 — strongest (FRI34 is more selective)
+    "FULL_L34_G4_B2",      # 1
+    "TRIGGER_AFTER_FRI34", # 2
+    "TRIGGER_AFTER_L34",   # 3
+    "SETUP_ONLY_FRI34",    # 4
+    "SETUP_ONLY_L34",      # 5
+    "CONFIRM_AFTER_G4",    # 6
+    "ISOLATED_G4",         # 7
+    "ISOLATED_B2",         # 8
+    "NONE",                # 9 — weakest / absent
+]
+_NP_SEQ_RANK: dict[str, int] = {s: i for i, s in enumerate(_NP_SEQ_PRIORITY)}
+
+
+def _np_sequence_state(
+    has_l34:   bool, has_fri34: bool, has_g4: bool, has_b2: bool,
+    fired_l34: bool, fired_fri34: bool, fired_g4: bool, fired_b2: bool,
+) -> str:
+    """
+    Classify one day's NP signal state by the highest-priority sequence it satisfies.
+    Evaluated in _NP_SEQ_PRIORITY order — first match wins.
+    FRI34-based variants outrank L34-based at every tier (more selective filter).
+    """
+    if fired_b2 and has_g4 and has_fri34:              return "FULL_FRI34_G4_B2"
+    if fired_b2 and has_g4 and has_l34:                return "FULL_L34_G4_B2"
+    if fired_g4 and has_fri34:                         return "TRIGGER_AFTER_FRI34"
+    if fired_g4 and has_l34:                           return "TRIGGER_AFTER_L34"
+    if fired_fri34 and not has_g4:                     return "SETUP_ONLY_FRI34"
+    if fired_l34  and not has_g4:                      return "SETUP_ONLY_L34"
+    if fired_b2 and has_g4:                            return "CONFIRM_AFTER_G4"
+    if fired_g4 and not has_l34 and not has_fri34:     return "ISOLATED_G4"
+    if fired_b2 and not has_l34 and not has_fri34:     return "ISOLATED_B2"
+    return "NONE"
+
+
 async def build_raw_pattern_episode_features_new_pump(
     raw_run_id: int,
     pump_study_run_id: int,
@@ -2232,6 +2272,9 @@ async def build_raw_pattern_episode_features_new_pump(
 
         candles = await _fetch_candles_range(symbol, start_date, end_date)
         if len(candles) < 60:
+            await update_raw_pattern_episode_features(
+                raw_run_id, episode_id, {"np_skip_reason": "insufficient_candles"}
+            )
             continue
 
         # ── Build bars list in NP engine format ───────────────────────────
@@ -2245,11 +2288,13 @@ async def build_raw_pattern_episode_features_new_pump(
             np_result = np_analyze(bars)
         except Exception as exc:
             logger.debug(f"[RawNP] NP analyze failed {symbol}: {exc}")
+            await update_raw_pattern_episode_features(
+                raw_run_id, episode_id, {"np_skip_reason": "np_analysis_failed"}
+            )
             continue
 
         # ── Extract per-episode NP aggregate fields ────────────────────────
-        lbl  = np_result.get("new_pump_label") or "NEW_PUMP_NONE"
-        seq  = np_result.get("new_pump_sequence_label") or "NONE"
+        lbl      = np_result.get("new_pump_label") or "NEW_PUMP_NONE"
         lbl_rank = _NP_LABEL_RANK.get(lbl, 5)
 
         age_l34   = np_result.get("age_l34")
@@ -2307,8 +2352,13 @@ async def build_raw_pattern_episode_features_new_pump(
         median_dvol = _median(dvols) if dvols else None
 
         # ── Rolling per-PRE-day NP count aggregates ───────────────────────────
+        # best_seq tracks the highest-priority sequence type seen across all PRE
+        # days, using _np_sequence_state/_NP_SEQ_RANK — the single shared resolver.
         candle_date_idx = {c["date"]: i for i, c in enumerate(candles) if c.get("date")}
         sorted_pre      = sorted(pre_rows, key=lambda r: r.get("date") or "")
+
+        best_seq_rank  = _NP_SEQ_RANK["NONE"]
+        best_seq_label = "NONE"
 
         cnt_l34 = cnt_fri34 = cnt_g4 = cnt_b2 = 0
         cnt_setup_only_l34 = cnt_setup_only_fri34 = 0
@@ -2351,6 +2401,16 @@ async def build_raw_pattern_episode_features_new_pump(
             fired_g4    = w_has_g4    and w_age_g4    == 0
             fired_b2    = w_has_b2    and w_age_b2    == 0
 
+            # Update best sequence type via shared resolver
+            day_seq  = _np_sequence_state(
+                w_has_l34, w_has_fri34, w_has_g4, w_has_b2,
+                fired_l34, fired_fri34, fired_g4, fired_b2,
+            )
+            day_rank = _NP_SEQ_RANK.get(day_seq, 9)
+            if day_rank < best_seq_rank:
+                best_seq_rank  = day_rank
+                best_seq_label = day_seq
+
             if fired_l34:   cnt_l34   += 1
             if fired_fri34: cnt_fri34 += 1
             if fired_g4:    cnt_g4    += 1
@@ -2388,31 +2448,33 @@ async def build_raw_pattern_episode_features_new_pump(
             "had_valid_recent_confirm":        valid_confirm or None,
             "had_valid_full_sequence":         valid_full    or None,
             "best_new_pump_label_rank":        lbl_rank,
-            "best_new_pump_sequence_type":     seq,
+            # best_seq derived from rolling loop via shared _np_sequence_state resolver
+            "best_new_pump_sequence_type":     best_seq_label,
             "days_from_last_setup_to_breakout":   days_setup_to_breakout,
             "days_from_last_trigger_to_breakout": days_trigger_to_breakout,
             "days_from_g4_to_b2":              days_g4_to_b2,
             "max_bull_stack_days_pre":         max_run or None,
             "extreme_anomaly_day_count_pre":   extreme_anom_count or None,
             "median_dollar_volume_pre":        median_dvol,
-            # count-based aggregates
-            "l34_count_pre":                  cnt_l34   or None,
-            "fri34_count_pre":                cnt_fri34 or None,
-            "g4_count_pre":                   cnt_g4    or None,
-            "b2_count_pre":                   cnt_b2    or None,
-            "setup_only_l34_count_pre":       cnt_setup_only_l34   or None,
-            "setup_only_fri34_count_pre":     cnt_setup_only_fri34 or None,
-            "trigger_after_l34_count_pre":    cnt_trig_after_l34   or None,
-            "trigger_after_fri34_count_pre":  cnt_trig_after_fri34 or None,
-            "full_l34_g4_b2_count_pre":       cnt_full_l34_g4_b2   or None,
-            "full_fri34_g4_b2_count_pre":     cnt_full_fri34_g4_b2 or None,
-            "isolated_g4_count_pre":          cnt_isolated_g4      or None,
-            "isolated_b2_count_pre":          cnt_isolated_b2      or None,
-            "confirm_after_g4_count_pre":     cnt_confirm_after_g4 or None,
-            "valid_setup_days_pre":           cnt_valid_setup   or None,
-            "valid_trigger_days_pre":         cnt_valid_trigger or None,
-            "valid_confirm_days_pre":         cnt_valid_confirm or None,
-            "valid_full_sequence_days_pre":   cnt_valid_full    or None,
+            "np_skip_reason":                  None,   # explicitly clear on success
+            # count fields — 0 when absent, never null
+            "l34_count_pre":                  cnt_l34,
+            "fri34_count_pre":                cnt_fri34,
+            "g4_count_pre":                   cnt_g4,
+            "b2_count_pre":                   cnt_b2,
+            "setup_only_l34_count_pre":       cnt_setup_only_l34,
+            "setup_only_fri34_count_pre":     cnt_setup_only_fri34,
+            "trigger_after_l34_count_pre":    cnt_trig_after_l34,
+            "trigger_after_fri34_count_pre":  cnt_trig_after_fri34,
+            "full_l34_g4_b2_count_pre":       cnt_full_l34_g4_b2,
+            "full_fri34_g4_b2_count_pre":     cnt_full_fri34_g4_b2,
+            "isolated_g4_count_pre":          cnt_isolated_g4,
+            "isolated_b2_count_pre":          cnt_isolated_b2,
+            "confirm_after_g4_count_pre":     cnt_confirm_after_g4,
+            "valid_setup_days_pre":           cnt_valid_setup,
+            "valid_trigger_days_pre":         cnt_valid_trigger,
+            "valid_confirm_days_pre":         cnt_valid_confirm,
+            "valid_full_sequence_days_pre":   cnt_valid_full,
         })
         patched += 1
         await asyncio.sleep(0)   # yield control in the event loop

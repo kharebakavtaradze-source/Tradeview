@@ -443,6 +443,7 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("max_bull_stack_days_pre",              "INTEGER"),
     ("extreme_anomaly_day_count_pre",        "INTEGER"),
     ("median_dollar_volume_pre",             "FLOAT"),
+    ("np_skip_reason",                       "VARCHAR(40)"),
     # NP count-based PRE-window aggregates
     ("l34_count_pre",                        "INTEGER"),
     ("fri34_count_pre",                      "INTEGER"),
@@ -3241,6 +3242,7 @@ class RawPatternEpisodeFeatures(Base):
     max_bull_stack_days_pre       = Column(Integer,    nullable=True)  # longest consecutive bull-stack run
     extreme_anomaly_day_count_pre = Column(Integer,    nullable=True)  # vol_z>4 OR range>3×avg days
     median_dollar_volume_pre      = Column(Float,      nullable=True)
+    np_skip_reason                = Column(String(40), nullable=True)  # why NP phase was skipped
     # NP count-based PRE-window aggregates
     l34_count_pre                 = Column(Integer,    nullable=True)
     fri34_count_pre               = Column(Integer,    nullable=True)
