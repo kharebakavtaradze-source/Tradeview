@@ -583,9 +583,17 @@ async def _run_migrations(conn):
 
         # New Pump columns on replay_signal_candidates
         for col, coltype in (
-            ("new_pump_score",          "FLOAT"),
-            ("new_pump_label",          "VARCHAR(30)"),
-            ("new_pump_sequence_label", "VARCHAR(40)"),
+            ("new_pump_score",           "FLOAT"),
+            ("new_pump_label",           "VARCHAR(30)"),
+            ("new_pump_sequence_label",  "VARCHAR(40)"),
+            ("np_has_l34",              "BOOLEAN"),
+            ("np_has_fri34",            "BOOLEAN"),
+            ("np_has_g4",               "BOOLEAN"),
+            ("np_has_b2",               "BOOLEAN"),
+            ("np_age_l34",              "INTEGER"),
+            ("np_age_fri34",            "INTEGER"),
+            ("np_setup_via",            "VARCHAR(10)"),
+            ("np_is_isolated_trigger",  "BOOLEAN"),
         ):
             try:
                 await conn.execute(text(
@@ -2365,12 +2373,21 @@ class ReplaySignalCandidate(Base):
     tier                  = Column(String(10), nullable=True)
     total_score           = Column(Float,      nullable=True)
     wyckoff_state         = Column(String(20), nullable=True)
-    ignition_signal       = Column(Boolean,    default=False)
-    ribbon_signal         = Column(Boolean,    default=False)
+    ignition_signal       = Column(Boolean,    default=False)   # legacy — no longer written
+    ribbon_signal         = Column(Boolean,    default=False)   # legacy — no longer written
     sector                = Column(String(60), nullable=True)
     new_pump_score        = Column(Float,      nullable=True)
     new_pump_label        = Column(String(30), nullable=True)
     new_pump_sequence_label = Column(String(40), nullable=True)
+    # NP signal detail fields
+    np_has_l34            = Column(Boolean,    nullable=True)
+    np_has_fri34          = Column(Boolean,    nullable=True)
+    np_has_g4             = Column(Boolean,    nullable=True)
+    np_has_b2             = Column(Boolean,    nullable=True)
+    np_age_l34            = Column(Integer,    nullable=True)
+    np_age_fri34          = Column(Integer,    nullable=True)
+    np_setup_via          = Column(String(10), nullable=True)   # L34 | FRI34 | BOTH | NONE
+    np_is_isolated_trigger = Column(Boolean,   nullable=True)   # G4 fired without any setup
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -2558,12 +2575,18 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 tier                    = c.get("tier"),
                 total_score             = c.get("total_score"),
                 wyckoff_state           = c.get("wyckoff_state"),
-                ignition_signal         = bool(c.get("ignition_signal", False)),
-                ribbon_signal           = bool(c.get("ribbon_signal", False)),
                 sector                  = c.get("sector"),
                 new_pump_score          = c.get("new_pump_score"),
                 new_pump_label          = c.get("new_pump_label"),
                 new_pump_sequence_label = c.get("new_pump_sequence_label"),
+                np_has_l34              = c.get("np_has_l34"),
+                np_has_fri34            = c.get("np_has_fri34"),
+                np_has_g4               = c.get("np_has_g4"),
+                np_has_b2               = c.get("np_has_b2"),
+                np_age_l34              = c.get("np_age_l34"),
+                np_age_fri34            = c.get("np_age_fri34"),
+                np_setup_via            = c.get("np_setup_via"),
+                np_is_isolated_trigger  = c.get("np_is_isolated_trigger"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -2709,15 +2732,21 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "price":            r.price,
         "tier":             r.tier,
         "total_score":      r.total_score,
-        "wyckoff_state":    r.wyckoff_state,
-        "ignition_signal":        r.ignition_signal,
-        "ribbon_signal":          r.ribbon_signal,
-        "sector":                 r.sector,
-        "new_pump_score":         r.new_pump_score,
-        "new_pump_label":         r.new_pump_label,
+        "wyckoff_state":           r.wyckoff_state,
+        "sector":                  r.sector,
+        "new_pump_score":          r.new_pump_score,
+        "new_pump_label":          r.new_pump_label,
         "new_pump_sequence_label": r.new_pump_sequence_label,
-        "snapshot":               json.loads(r.candidate_snapshot_json or "{}"),
-        "created_at":       r.created_at.isoformat() if r.created_at else None,
+        "np_has_l34":              r.np_has_l34,
+        "np_has_fri34":            r.np_has_fri34,
+        "np_has_g4":               r.np_has_g4,
+        "np_has_b2":               r.np_has_b2,
+        "np_age_l34":              r.np_age_l34,
+        "np_age_fri34":            r.np_age_fri34,
+        "np_setup_via":            r.np_setup_via,
+        "np_is_isolated_trigger":  r.np_is_isolated_trigger,
+        "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
+        "created_at":              r.created_at.isoformat() if r.created_at else None,
     }
 
 
