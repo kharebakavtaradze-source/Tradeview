@@ -1910,6 +1910,25 @@ _COMPARISON_FEATURES = [
     "days_from_last_setup_to_breakout",
     "days_from_last_trigger_to_breakout",
     "days_from_g4_to_b2",
+    # ── PRIMARY: NP count-based PRE-window aggregates ──
+    "l34_count_pre",
+    "fri34_count_pre",
+    "g4_count_pre",
+    "b2_count_pre",
+    "isolated_g4_count_pre",
+    "isolated_b2_count_pre",
+    "full_fri34_g4_b2_count_pre",
+    "valid_setup_days_pre",
+    "valid_full_sequence_days_pre",
+    # ── SECONDARY: NP count details ──
+    "setup_only_l34_count_pre",
+    "setup_only_fri34_count_pre",
+    "trigger_after_l34_count_pre",
+    "trigger_after_fri34_count_pre",
+    "full_l34_g4_b2_count_pre",
+    "confirm_after_g4_count_pre",
+    "valid_trigger_days_pre",
+    "valid_confirm_days_pre",
     # ── PRIMARY: sequence / duration ──
     "days_from_breakout_to_peak",
     "compression_days_pre",
@@ -1975,6 +1994,25 @@ _FEATURE_PRIORITY: dict[str, str] = {
     "days_from_last_setup_to_breakout":            "PRIMARY",
     "days_from_last_trigger_to_breakout":          "PRIMARY",
     "days_from_g4_to_b2":                          "PRIMARY",
+    # PRIMARY — NP count-based aggregates
+    "l34_count_pre":                               "PRIMARY",
+    "fri34_count_pre":                             "PRIMARY",
+    "g4_count_pre":                                "PRIMARY",
+    "b2_count_pre":                                "PRIMARY",
+    "isolated_g4_count_pre":                       "PRIMARY",
+    "isolated_b2_count_pre":                       "PRIMARY",
+    "full_fri34_g4_b2_count_pre":                  "PRIMARY",
+    "valid_setup_days_pre":                        "PRIMARY",
+    "valid_full_sequence_days_pre":                "PRIMARY",
+    # SECONDARY — NP count details
+    "setup_only_l34_count_pre":                    "SECONDARY",
+    "setup_only_fri34_count_pre":                  "SECONDARY",
+    "trigger_after_l34_count_pre":                 "SECONDARY",
+    "trigger_after_fri34_count_pre":               "SECONDARY",
+    "full_l34_g4_b2_count_pre":                    "SECONDARY",
+    "confirm_after_g4_count_pre":                  "SECONDARY",
+    "valid_trigger_days_pre":                      "SECONDARY",
+    "valid_confirm_days_pre":                      "SECONDARY",
     # PRIMARY — core sequence/duration separators
     "days_from_breakout_to_peak":                  "PRIMARY",
     "compression_days_pre":                        "PRIMARY",
@@ -2254,6 +2292,82 @@ async def build_raw_pattern_episode_features_new_pump(
         dvols = [fj.get("dollar_volume") for fj in fjs if fj.get("dollar_volume")]
         median_dvol = _median(dvols) if dvols else None
 
+        # ── Rolling per-PRE-day NP count aggregates ───────────────────────────
+        candle_date_idx = {c["date"]: i for i, c in enumerate(candles) if c.get("date")}
+        sorted_pre      = sorted(pre_rows, key=lambda r: r.get("date") or "")
+
+        cnt_l34 = cnt_fri34 = cnt_g4 = cnt_b2 = 0
+        cnt_setup_only_l34 = cnt_setup_only_fri34 = 0
+        cnt_trig_after_l34 = cnt_trig_after_fri34 = 0
+        cnt_full_l34_g4_b2 = cnt_full_fri34_g4_b2 = 0
+        cnt_isolated_g4 = cnt_isolated_b2 = 0
+        cnt_confirm_after_g4 = 0
+        cnt_valid_setup = cnt_valid_trigger = cnt_valid_confirm = cnt_valid_full = 0
+
+        for row in sorted_pre:
+            row_date = row.get("date") or ""
+            cidx = candle_date_idx.get(row_date)
+            if cidx is None:
+                continue
+            window = candles[max(0, cidx - 199): cidx + 1]
+            if len(window) < 10:
+                continue
+            w_bars = [
+                {"open": c["open"], "high": c["high"],
+                 "low":  c["low"],  "close": c["close"], "volume": c["volume"]}
+                for c in window
+            ]
+            try:
+                wr = np_analyze(w_bars)
+            except Exception:
+                continue
+
+            w_age_l34   = wr.get("age_l34")
+            w_age_fri34 = wr.get("age_fri34")
+            w_age_g4    = wr.get("age_g4")
+            w_age_b2    = wr.get("age_b2")
+            w_has_l34   = wr.get("has_l34",   False)
+            w_has_fri34 = wr.get("has_fri34", False)
+            w_has_g4    = wr.get("has_g4",    False)
+            w_has_b2    = wr.get("has_b2",    False)
+
+            # Signal fired on the last bar (age == 0)
+            fired_l34   = w_has_l34   and w_age_l34   == 0
+            fired_fri34 = w_has_fri34 and w_age_fri34 == 0
+            fired_g4    = w_has_g4    and w_age_g4    == 0
+            fired_b2    = w_has_b2    and w_age_b2    == 0
+
+            if fired_l34:   cnt_l34   += 1
+            if fired_fri34: cnt_fri34 += 1
+            if fired_g4:    cnt_g4    += 1
+            if fired_b2:    cnt_b2    += 1
+
+            if fired_l34   and not w_has_g4: cnt_setup_only_l34   += 1
+            if fired_fri34 and not w_has_g4: cnt_setup_only_fri34 += 1
+
+            if fired_g4 and w_has_l34:                    cnt_trig_after_l34   += 1
+            if fired_g4 and w_has_fri34 and not w_has_l34: cnt_trig_after_fri34 += 1
+
+            if fired_b2 and w_has_g4 and w_has_l34:                    cnt_full_l34_g4_b2   += 1
+            if fired_b2 and w_has_g4 and w_has_fri34 and not w_has_l34: cnt_full_fri34_g4_b2 += 1
+
+            if fired_g4 and not w_has_l34 and not w_has_fri34: cnt_isolated_g4 += 1
+            if fired_b2 and not w_has_l34 and not w_has_fri34: cnt_isolated_b2 += 1
+
+            if fired_b2 and w_has_g4: cnt_confirm_after_g4 += 1
+
+            # Valid-freshness day counts
+            w_vs = bool(w_has_l34 or w_has_fri34) and (
+                (w_age_l34   is not None and w_age_l34   <= _FRESHNESS["setup"]) or
+                (w_age_fri34 is not None and w_age_fri34 <= _FRESHNESS["setup"])
+            )
+            w_vt = bool(w_has_g4) and w_age_g4 is not None and w_age_g4 <= _FRESHNESS["trigger"]
+            w_vc = bool(w_has_b2) and w_age_b2 is not None and w_age_b2 <= _FRESHNESS["confirm"]
+            if w_vs: cnt_valid_setup    += 1
+            if w_vt: cnt_valid_trigger  += 1
+            if w_vc: cnt_valid_confirm  += 1
+            if w_vs and w_vt and w_vc: cnt_valid_full += 1
+
         await update_raw_pattern_episode_features(raw_run_id, episode_id, {
             "had_valid_recent_setup":          valid_setup   or None,
             "had_valid_recent_trigger":        valid_trigger or None,
@@ -2267,6 +2381,24 @@ async def build_raw_pattern_episode_features_new_pump(
             "max_bull_stack_days_pre":         max_run or None,
             "extreme_anomaly_day_count_pre":   extreme_anom_count or None,
             "median_dollar_volume_pre":        median_dvol,
+            # count-based aggregates
+            "l34_count_pre":                  cnt_l34   or None,
+            "fri34_count_pre":                cnt_fri34 or None,
+            "g4_count_pre":                   cnt_g4    or None,
+            "b2_count_pre":                   cnt_b2    or None,
+            "setup_only_l34_count_pre":       cnt_setup_only_l34   or None,
+            "setup_only_fri34_count_pre":     cnt_setup_only_fri34 or None,
+            "trigger_after_l34_count_pre":    cnt_trig_after_l34   or None,
+            "trigger_after_fri34_count_pre":  cnt_trig_after_fri34 or None,
+            "full_l34_g4_b2_count_pre":       cnt_full_l34_g4_b2   or None,
+            "full_fri34_g4_b2_count_pre":     cnt_full_fri34_g4_b2 or None,
+            "isolated_g4_count_pre":          cnt_isolated_g4      or None,
+            "isolated_b2_count_pre":          cnt_isolated_b2      or None,
+            "confirm_after_g4_count_pre":     cnt_confirm_after_g4 or None,
+            "valid_setup_days_pre":           cnt_valid_setup   or None,
+            "valid_trigger_days_pre":         cnt_valid_trigger or None,
+            "valid_confirm_days_pre":         cnt_valid_confirm or None,
+            "valid_full_sequence_days_pre":   cnt_valid_full    or None,
         })
         patched += 1
         await asyncio.sleep(0)   # yield control in the event loop

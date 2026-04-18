@@ -430,7 +430,7 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("ema50_reclaim_count_pre",              "INTEGER"),
     ("avg_close_vs_ema50_pct_pre",           "FLOAT"),
     ("avg_close_vs_ema200_pct_pre",          "FLOAT"),
-    # New Pump episode aggregates (added in NP refactor)
+    # New Pump engine episode aggregates (added in NP refactor)
     ("had_valid_recent_setup",               "BOOLEAN"),
     ("had_valid_recent_trigger",             "BOOLEAN"),
     ("had_valid_recent_confirm",             "BOOLEAN"),
@@ -443,6 +443,24 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("max_bull_stack_days_pre",              "INTEGER"),
     ("extreme_anomaly_day_count_pre",        "INTEGER"),
     ("median_dollar_volume_pre",             "FLOAT"),
+    # NP count-based PRE-window aggregates
+    ("l34_count_pre",                        "INTEGER"),
+    ("fri34_count_pre",                      "INTEGER"),
+    ("g4_count_pre",                         "INTEGER"),
+    ("b2_count_pre",                         "INTEGER"),
+    ("setup_only_l34_count_pre",             "INTEGER"),
+    ("setup_only_fri34_count_pre",           "INTEGER"),
+    ("trigger_after_l34_count_pre",          "INTEGER"),
+    ("trigger_after_fri34_count_pre",        "INTEGER"),
+    ("full_l34_g4_b2_count_pre",             "INTEGER"),
+    ("full_fri34_g4_b2_count_pre",           "INTEGER"),
+    ("isolated_g4_count_pre",                "INTEGER"),
+    ("isolated_b2_count_pre",                "INTEGER"),
+    ("confirm_after_g4_count_pre",           "INTEGER"),
+    ("valid_setup_days_pre",                 "INTEGER"),
+    ("valid_trigger_days_pre",               "INTEGER"),
+    ("valid_confirm_days_pre",               "INTEGER"),
+    ("valid_full_sequence_days_pre",         "INTEGER"),
 ]
 
 _JOURNAL_MIGRATIONS = [
@@ -3194,6 +3212,24 @@ class RawPatternEpisodeFeatures(Base):
     max_bull_stack_days_pre       = Column(Integer,    nullable=True)  # longest consecutive bull-stack run
     extreme_anomaly_day_count_pre = Column(Integer,    nullable=True)  # vol_z>4 OR range>3×avg days
     median_dollar_volume_pre      = Column(Float,      nullable=True)
+    # NP count-based PRE-window aggregates
+    l34_count_pre                 = Column(Integer,    nullable=True)
+    fri34_count_pre               = Column(Integer,    nullable=True)
+    g4_count_pre                  = Column(Integer,    nullable=True)
+    b2_count_pre                  = Column(Integer,    nullable=True)
+    setup_only_l34_count_pre      = Column(Integer,    nullable=True)
+    setup_only_fri34_count_pre    = Column(Integer,    nullable=True)
+    trigger_after_l34_count_pre   = Column(Integer,    nullable=True)
+    trigger_after_fri34_count_pre = Column(Integer,    nullable=True)
+    full_l34_g4_b2_count_pre      = Column(Integer,    nullable=True)
+    full_fri34_g4_b2_count_pre    = Column(Integer,    nullable=True)
+    isolated_g4_count_pre         = Column(Integer,    nullable=True)
+    isolated_b2_count_pre         = Column(Integer,    nullable=True)
+    confirm_after_g4_count_pre    = Column(Integer,    nullable=True)
+    valid_setup_days_pre          = Column(Integer,    nullable=True)
+    valid_trigger_days_pre        = Column(Integer,    nullable=True)
+    valid_confirm_days_pre        = Column(Integer,    nullable=True)
+    valid_full_sequence_days_pre  = Column(Integer,    nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
