@@ -40,6 +40,32 @@ const SCORE_COLOR = (s) => {
   return '#444';
 };
 
+// ── NP State badge — derived purely from sequence label ───────────────────────
+const NP_STATE = {
+  FULL_FRI34_G4_B2:    { label: 'CONFIRMING', color: '#ff4400', bg: 'rgba(255,68,0,0.12)'   },
+  FULL_L34_G4_B2:      { label: 'CONFIRMING', color: '#ff4400', bg: 'rgba(255,68,0,0.12)'   },
+  CONFIRM_AFTER_G4:    { label: 'CONFIRMING', color: '#ff8800', bg: 'rgba(255,136,0,0.12)'  },
+  TRIGGER_AFTER_FRI34: { label: 'ARMED',      color: '#ffd600', bg: 'rgba(255,214,0,0.10)'  },
+  TRIGGER_AFTER_L34:   { label: 'ARMED',      color: '#ffd600', bg: 'rgba(255,214,0,0.10)'  },
+  ISOLATED_G4:         { label: 'TRIGGERED',  color: '#00e5ff', bg: 'rgba(0,229,255,0.09)'  },
+  SETUP_ONLY_FRI34:    { label: 'SETUP',      color: '#44ff88', bg: 'rgba(68,255,136,0.09)' },
+  SETUP_ONLY_L34:      { label: 'SETUP',      color: '#44ff88', bg: 'rgba(68,255,136,0.09)' },
+  ISOLATED_B2:         { label: 'ISOLATED',   color: '#888',    bg: 'rgba(128,128,128,0.08)'},
+};
+
+function npState(seq) {
+  return NP_STATE[seq] || { label: '—', color: '#444', bg: 'transparent' };
+}
+
+// ── Market regime colors ──────────────────────────────────────────────────────
+const REGIME_CFG = {
+  RISK_ON:  { color: '#00e676', bg: 'rgba(0,230,118,0.10)', label: 'RISK ON'  },
+  RISK_OFF: { color: '#ff5252', bg: 'rgba(255,82,82,0.10)', label: 'RISK OFF' },
+  FEAR:     { color: '#ff6d00', bg: 'rgba(255,109,0,0.10)', label: 'FEAR'     },
+  ROTATION: { color: '#ffd740', bg: 'rgba(255,215,64,0.10)',label: 'ROTATION' },
+  NEUTRAL:  { color: '#888',    bg: 'rgba(128,128,128,0.08)', label: 'NEUTRAL'},
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(n, d = 1) { return n == null ? '—' : Number(n).toFixed(d); }
@@ -60,6 +86,20 @@ function Pill({ on, label }) {
   return (
     <span className={`${styles.pill} ${on ? styles.pillOn : styles.pillOff}`}>
       {label}
+    </span>
+  );
+}
+
+function NpStateBadge({ seq }) {
+  const s = npState(seq);
+  if (s.label === '—') return <span style={{ color: '#444', fontSize: 9 }}>—</span>;
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 6px', borderRadius: 3,
+      fontSize: 8, fontWeight: 800, letterSpacing: '0.06em',
+      color: s.color, background: s.bg, border: `1px solid ${s.color}44`,
+    }}>
+      {s.label}
     </span>
   );
 }
@@ -86,6 +126,7 @@ export default function NewPumpPage() {
   const [seqF,       setSeqF]       = useState('');
   const [scanning,   setScanning]   = useState(false);
   const [scanStatus, setScanStatus] = useState(null);
+  const [regime,     setRegime]     = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -116,7 +157,6 @@ export default function NewPumpPage() {
     setScanning(true);
     try {
       await fetch(`${API_URL}/api/new-pump/run`, { method: 'POST' });
-      // Poll until scan completes
       for (let i = 0; i < 120; i++) {
         await new Promise(r => setTimeout(r, 3000));
         const st = await fetch(`${API_URL}/api/new-pump/status`).then(r => r.json());
@@ -136,8 +176,17 @@ export default function NewPumpPage() {
     return () => clearInterval(iv);
   }, [fetchData]);
 
+  // Fetch market regime once on mount
+  useEffect(() => {
+    fetch(`${API_URL}/api/market-regime`)
+      .then(r => r.json())
+      .then(setRegime)
+      .catch(() => {});
+  }, []);
+
   const results = data?.results || [];
   const counts  = labelCounts(results);
+  const regCfg  = REGIME_CFG[regime?.regime] || REGIME_CFG.NEUTRAL;
 
   return (
     <>
@@ -157,6 +206,30 @@ export default function NewPumpPage() {
             </div>
           )}
         </div>
+
+        {/* Market regime banner — context only, not scoring */}
+        {regime && (
+          <div className={styles.regimeBanner} style={{ borderColor: regCfg.color + '44', background: regCfg.bg }}>
+            <span className={styles.regimeLabel} style={{ color: regCfg.color }}>
+              {regCfg.label}
+            </span>
+            {regime.strong_sectors?.length > 0 && (
+              <span className={styles.regimeSectors}>
+                <span className={styles.regimeSectorsHdr}>Strong:</span>
+                {regime.strong_sectors.slice(0, 4).join(' · ')}
+              </span>
+            )}
+            {regime.weak_sectors?.length > 0 && (
+              <span className={styles.regimeSectors} style={{ color: '#ff5252' }}>
+                <span className={styles.regimeSectorsHdr} style={{ color: '#ff5252' }}>Weak:</span>
+                {regime.weak_sectors.slice(0, 4).join(' · ')}
+              </span>
+            )}
+            {regime.recommendation && (
+              <span className={styles.regimeRec}>{regime.recommendation}</span>
+            )}
+          </div>
+        )}
 
         {/* Summary bar */}
         {results.length > 0 && (
@@ -263,6 +336,7 @@ export default function NewPumpPage() {
               <thead>
                 <tr>
                   <th>Symbol</th>
+                  <th>State</th>
                   <th>Score</th>
                   <th>Label</th>
                   <th>Sequence</th>
@@ -280,7 +354,7 @@ export default function NewPumpPage() {
                   <th>Mod</th>
                   <th>Price</th>
                   <th>Volume</th>
-                  <th>Tier</th>
+                  <th>Sector</th>
                 </tr>
               </thead>
               <tbody>
@@ -293,6 +367,7 @@ export default function NewPumpPage() {
                           {r.symbol}
                         </Link>
                       </td>
+                      <td><NpStateBadge seq={r.new_pump_sequence_label} /></td>
                       <td className={styles.scoreCell}
                           style={{ color: SCORE_COLOR(r.new_pump_score) }}>
                         {fmt(r.new_pump_score)}
@@ -313,15 +388,7 @@ export default function NewPumpPage() {
                       <td className={styles.ageCell}>{fmt(r.new_pump_modifier_score,0)}</td>
                       <td>{r.price != null ? `$${fmt(r.price, 2)}` : '—'}</td>
                       <td>{fmtVol(r.volume_today)}</td>
-                      <td>
-                        {r.tier && (
-                          <span className={styles.badge} style={{
-                            color: '#aaa',
-                            background: 'transparent',
-                            border: '1px solid #333',
-                          }}>{r.tier}</span>
-                        )}
-                      </td>
+                      <td className={styles.sectorCell}>{r.sector || '—'}</td>
                     </tr>
                   );
                 })}

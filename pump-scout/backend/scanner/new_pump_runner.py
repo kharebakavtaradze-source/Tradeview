@@ -202,6 +202,30 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
             f"SETUP={_np_progress['setup_count']}, {elapsed}s"
         )
 
+        # ── Step 6: Sector enrichment (single batch DB query) ─────────────────
+        _np_progress["phase"] = "enriching"
+        try:
+            from database import get_session_factory
+            from database import SectorCache
+            from sqlalchemy import select as _sa_select
+            syms = [r["symbol"] for r in results]
+            async with get_session_factory()() as _sess:
+                _rows = await _sess.execute(
+                    _sa_select(SectorCache).where(SectorCache.symbol.in_(syms))
+                )
+                _sec_map = {row.symbol: {"sector": row.sector, "industry": row.industry}
+                            for row in _rows.scalars()}
+            for r in results:
+                sc = _sec_map.get(r["symbol"])
+                r["sector"]   = sc["sector"]   if sc else None
+                r["industry"] = sc["industry"] if sc else None
+            logger.info(f"[NpRunner] Sector enriched: {len(_sec_map)}/{len(results)}")
+        except Exception as exc:
+            logger.warning(f"[NpRunner] sector enrichment skipped: {exc}")
+            for r in results:
+                r.setdefault("sector", None)
+                r.setdefault("industry", None)
+
         _latest = {
             "results":        results,
             "total":          len(results),
