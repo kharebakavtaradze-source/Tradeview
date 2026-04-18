@@ -1198,80 +1198,65 @@ async def get_ignition_scan(
     }
 
 
-@app.get("/api/scan/new-pump")
-async def get_new_pump_scan(
+# ─── New Pump standalone pipeline ────────────────────────────────────────────
+# Completely separate from old scanner. Own universe → own candles → own engine.
+
+@app.get("/api/new-pump/run")
+@app.post("/api/new-pump/run")
+async def new_pump_run(background_tasks: BackgroundTasks):
+    """Trigger a New Pump standalone scan in background."""
+    from scanner.new_pump_runner import is_running, run_new_pump_scan
+    if is_running():
+        return {"status": "already_running", "message": "New Pump scan already in progress"}
+    background_tasks.add_task(run_new_pump_scan)
+    return {"status": "started", "message": "New Pump scan started in background"}
+
+
+@app.get("/api/new-pump/status")
+async def new_pump_status():
+    """Return running status and metadata of latest New Pump scan."""
+    from scanner.new_pump_runner import is_running, get_latest
+    data = get_latest()
+    return {
+        "running":     is_running(),
+        "scanned_at":  data.get("scanned_at"),
+        "total":       data.get("total", 0),
+        "universe":    data.get("universe", 0),
+        "elapsed_secs": data.get("elapsed_secs"),
+        "has_data":    bool(data.get("results")),
+    }
+
+
+@app.get("/api/new-pump/latest")
+async def new_pump_latest(
     min_score:  float = 0.0,
     label:      str   = "",
     sequence:   str   = "",
-    max_results: int  = 200,
+    max_results: int  = 500,
 ):
     """
-    New Pump Engine — structured setup/trigger/confirmation view.
-    Returns tickers from latest scan sorted by new_pump_score descending.
-    Filters: min_score, label (e.g. NEW_PUMP_FIRE), sequence (e.g. FULL_FRI34_G4_B2).
+    Return latest New Pump scan results from standalone pipeline.
+    Filters: min_score, label, sequence.
+    Sorted by label tier then score descending.
     """
-    scan     = await get_latest_scan()
-    eod_scan = await get_latest_scan_by_type("massive_eod")
-    main_res = scan.get("results", [])     if scan     else []
-    eod_res  = eod_scan.get("results", []) if eod_scan else []
-    main_syms = {r["symbol"] for r in main_res}
-    combined  = main_res + [r for r in eod_res if r["symbol"] not in main_syms]
+    from scanner.new_pump_runner import get_latest
+    data = get_latest()
+    results = data.get("results", [])
 
-    exclusions = await _get_exclusion_set()
-    combined   = _strip_non_stocks(combined, exclusions)
+    if min_score > 0:
+        results = [r for r in results if (r.get("new_pump_score") or 0) >= min_score]
+    if label:
+        results = [r for r in results if r.get("new_pump_label") == label]
+    if sequence:
+        results = [r for r in results if r.get("new_pump_sequence_label") == sequence]
 
-    out = []
-    for r in combined:
-        np = r.get("new_pump")
-        if not np:
-            continue
-        score = np.get("new_pump_score", 0) or 0
-        if score < min_score:
-            continue
-        if label and np.get("new_pump_label") != label:
-            continue
-        if sequence and np.get("new_pump_sequence_label") != sequence:
-            continue
-        out.append({
-            "symbol":                  r.get("symbol"),
-            "price":                   r.get("price"),
-            "volume_today":            r.get("volume_today"),
-            "tier":                    (r.get("score") or {}).get("tier"),
-            "total_score":             (r.get("score") or {}).get("total_score"),
-            # new pump fields
-            "new_pump_score":          np.get("new_pump_score"),
-            "new_pump_label":          np.get("new_pump_label"),
-            "new_pump_sequence_label": np.get("new_pump_sequence_label"),
-            "new_pump_setup_score":    np.get("new_pump_setup_score"),
-            "new_pump_trigger_score":  np.get("new_pump_trigger_score"),
-            "new_pump_confirm_score":  np.get("new_pump_confirm_score"),
-            "new_pump_modifier_score": np.get("new_pump_modifier_score"),
-            "has_l34":   np.get("has_l34"),
-            "has_fri34": np.get("has_fri34"),
-            "has_g4":    np.get("has_g4"),
-            "has_b2":    np.get("has_b2"),
-            "age_l34":   np.get("age_l34"),
-            "age_fri34": np.get("age_fri34"),
-            "age_g4":    np.get("age_g4"),
-            "age_b2":    np.get("age_b2"),
-        })
-
-    _LABEL_ORDER = {
-        "NEW_PUMP_FIRE": 0, "NEW_PUMP_STRONG": 1, "NEW_PUMP_SETUP": 2,
-        "NEW_PUMP_TRIGGER_ONLY": 3, "NEW_PUMP_WEAK": 4, "NEW_PUMP_NONE": 5,
-    }
-    out.sort(key=lambda x: (
-        _LABEL_ORDER.get(x["new_pump_label"] or "", 9),
-        -(x["new_pump_score"] or 0),
-    ))
-    out = out[:min(max_results, 500)]
-
-    scanned_at = (scan or eod_scan or {}).get("scanned_at") if (scan or eod_scan) else None
     return {
-        "results":    out,
-        "total":      len(out),
-        "scanned_at": scanned_at,
-        "filters":    {"min_score": min_score, "label": label, "sequence": sequence},
+        "results":      results[:min(max_results, 1000)],
+        "total":        len(results),
+        "universe":     data.get("universe", 0),
+        "scanned_at":   data.get("scanned_at"),
+        "elapsed_secs": data.get("elapsed_secs"),
+        "filters":      {"min_score": min_score, "label": label, "sequence": sequence},
     }
 
 

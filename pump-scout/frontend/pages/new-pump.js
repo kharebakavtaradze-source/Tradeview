@@ -78,12 +78,14 @@ function labelCounts(results) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function NewPumpPage() {
-  const [data,      setData]      = useState(null);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState(null);
-  const [minScore,  setMinScore]  = useState(0);
-  const [labelF,    setLabelF]    = useState('');
-  const [seqF,      setSeqF]      = useState('');
+  const [data,       setData]       = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState(null);
+  const [minScore,   setMinScore]   = useState(0);
+  const [labelF,     setLabelF]     = useState('');
+  const [seqF,       setSeqF]       = useState('');
+  const [scanning,   setScanning]   = useState(false);
+  const [scanStatus, setScanStatus] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -93,15 +95,40 @@ export default function NewPumpPage() {
       if (minScore > 0) params.set('min_score', minScore);
       if (labelF)       params.set('label', labelF);
       if (seqF)         params.set('sequence', seqF);
-      const res = await fetch(`${API_URL}/api/scan/new-pump?${params}`);
+      const res = await fetch(`${API_URL}/api/new-pump/latest?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const json = await res.json();
+      setData(json);
+      setScanStatus({
+        universe: json.universe,
+        elapsed:  json.elapsed_secs,
+        scanned_at: json.scanned_at,
+      });
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
   }, [minScore, labelF, seqF]);
+
+  const triggerScan = useCallback(async () => {
+    if (scanning) return;
+    setScanning(true);
+    try {
+      await fetch(`${API_URL}/api/new-pump/run`, { method: 'POST' });
+      // Poll until scan completes
+      for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const st = await fetch(`${API_URL}/api/new-pump/status`).then(r => r.json());
+        if (!st.running && st.has_data) break;
+      }
+      await fetchData();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setScanning(false);
+    }
+  }, [scanning, fetchData]);
 
   useEffect(() => {
     fetchData();
@@ -144,6 +171,16 @@ export default function NewPumpPage() {
               <span className={styles.summaryNum}>{results.length}</span>
               <span className={styles.summaryLbl}>Total</span>
             </div>
+          </div>
+        )}
+
+        {/* Scan meta */}
+        {scanStatus && (
+          <div className={styles.scanMeta}>
+            <span>Universe: <strong>{scanStatus.universe?.toLocaleString()}</strong> tickers</span>
+            {scanStatus.elapsed != null && (
+              <span>Elapsed: <strong>{scanStatus.elapsed}s</strong></span>
+            )}
           </div>
         )}
 
@@ -197,6 +234,14 @@ export default function NewPumpPage() {
           >
             {loading ? '…' : '⟳ Refresh'}
           </button>
+
+          <button
+            className={styles.scanBtn}
+            onClick={triggerScan}
+            disabled={scanning || loading}
+          >
+            {scanning ? '⏳ Scanning…' : '▶ Run Scan'}
+          </button>
         </div>
 
         {/* Body */}
@@ -204,6 +249,10 @@ export default function NewPumpPage() {
           <div className={styles.error}>Error: {error}</div>
         ) : loading && !data ? (
           <div className={styles.loading}>Loading New Pump data…</div>
+        ) : !data ? (
+          <div className={styles.empty}>
+            No scan data yet. Click <strong>▶ Run Scan</strong> to start.
+          </div>
         ) : results.length === 0 ? (
           <div className={styles.empty}>
             No tickers match the current filters.
