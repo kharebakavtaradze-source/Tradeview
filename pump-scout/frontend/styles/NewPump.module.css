@@ -110,6 +110,33 @@
 .refreshBtn:hover { color: var(--text); background: var(--surface2); }
 .refreshBtn:disabled { opacity: 0.4; cursor: default; }
 
+.scanBtn {
+  padding: 5px 16px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(0,229,255,0.4);
+  background: rgba(0,229,255,0.08);
+  color: #00e5ff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--t-fast);
+  letter-spacing: 0.04em;
+}
+.scanBtn:hover { background: rgba(0,229,255,0.16); border-color: rgba(0,229,255,0.6); }
+.scanBtn:disabled { opacity: 0.45; cursor: default; }
+
+/* ── Scan meta ───────────────────────────────────────────── */
+.scanMeta {
+  display: flex;
+  gap: 20px;
+  padding: 5px var(--page-px);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+.scanMeta strong { color: var(--text); }
+
 /* ── Table ───────────────────────────────────────────────── */
 .tableWrap {
   overflow-x: auto;
