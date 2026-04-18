@@ -3,6 +3,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import styles from '../styles/NewPump.module.css';
 import AppNav from '../components/AppNav';
+import NpDrawer from '../components/NpDrawer';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 60 * 1000;
@@ -118,15 +119,19 @@ function labelCounts(results) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function NewPumpPage() {
-  const [data,       setData]       = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState(null);
-  const [minScore,   setMinScore]   = useState(0);
-  const [labelF,     setLabelF]     = useState('');
-  const [seqF,       setSeqF]       = useState('');
-  const [scanning,   setScanning]   = useState(false);
-  const [scanStatus, setScanStatus] = useState(null);
-  const [regime,     setRegime]     = useState(null);
+  const [data,         setData]         = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
+  const [minScore,     setMinScore]     = useState(0);
+  const [labelF,       setLabelF]       = useState('');
+  const [seqF,         setSeqF]         = useState('');
+  const [scanning,     setScanning]     = useState(false);
+  const [scanStatus,   setScanStatus]   = useState(null);
+  const [regime,       setRegime]       = useState(null);
+  const [drawerSym,    setDrawerSym]    = useState(null);
+  const [drawerData,   setDrawerData]   = useState({});
+  const [drawerLoading,setDrawerLoading]= useState(false);
+  const [drawerError,  setDrawerError]  = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -183,6 +188,30 @@ export default function NewPumpPage() {
       .then(setRegime)
       .catch(() => {});
   }, []);
+
+  const openDrawer = useCallback(async (sym) => {
+    setDrawerSym(sym);
+    setDrawerError(null);
+    if (drawerData[sym]) return;
+    setDrawerLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/new-pump/ticker/${sym}`);
+      const json = await res.json();
+      setDrawerData(prev => ({ ...prev, [sym]: json }));
+    } catch (e) {
+      setDrawerError(e.message);
+    } finally {
+      setDrawerLoading(false);
+    }
+  }, [drawerData]);
+
+  // ESC to close drawer
+  useEffect(() => {
+    if (!drawerSym) return;
+    const handler = (e) => { if (e.key === 'Escape') setDrawerSym(null); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [drawerSym]);
 
   const results = data?.results || [];
   const counts  = labelCounts(results);
@@ -361,8 +390,13 @@ export default function NewPumpPage() {
                 {results.map(r => {
                   const isNone = r.new_pump_label === 'NEW_PUMP_NONE';
                   return (
-                    <tr key={r.symbol} className={isNone ? styles.rowDim : ''}>
-                      <td className={styles.symbolCell}>
+                    <tr
+                      key={r.symbol}
+                      className={isNone ? styles.rowDim : ''}
+                      onClick={() => openDrawer(r.symbol)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <td className={styles.symbolCell} onClick={e => e.stopPropagation()}>
                         <Link href={`/ticker/${r.symbol}`} className={styles.symLink}>
                           {r.symbol}
                         </Link>
@@ -397,6 +431,14 @@ export default function NewPumpPage() {
           </div>
         )}
       </div>
+
+      <NpDrawer
+        sym={drawerSym}
+        dataCache={drawerData}
+        loading={drawerLoading}
+        error={drawerError}
+        onClose={() => setDrawerSym(null)}
+      />
     </>
   );
 }
