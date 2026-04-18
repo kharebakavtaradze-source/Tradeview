@@ -224,6 +224,72 @@ async def _build_portfolio_memory() -> dict[str, dict]:
     return result
 
 
+async def _build_research_priors(scan_ctx: list[dict], np_ctx: list[dict]) -> dict:
+    """
+    Compact structured research priors from Replay + Raw Pattern evidence.
+    Deliberately broad and stable — avoids fragile sequence-label micro-claims.
+    Returns {"global": {...}, "candidate_adjustments": {sym: [notes]}}.
+    """
+    global_priors = {
+        "early_setup_bias":        "positive",   # L34/FRI34 setups tend to precede 4x moves
+        "late_confirm_caution":    "negative",   # confirm-heavy late structures run noisier
+        "isolated_signal_penalty": "negative",   # G4/B2 without setup → false-positive-prone
+        "extreme_anomaly_penalty": "negative",   # extreme vol_ratio adds volatility tax
+        "bull_stack_context":      "positive",   # quality Wyckoff/regime context compounds edge
+        "strong_label_bias":       "positive",   # NP FIRE > STRONG > TRIGGER_ONLY / WEAK
+        "none_label_neutrality":   "neutral",
+        "volume_gate_note":        "do_not_overfilter",
+    }
+
+    # Attach evidence trail — proves priors are backed by actual research runs,
+    # not fabricated. AI can reference run ids in reasoning.
+    try:
+        from database import get_raw_pattern_runs, get_replay_history, get_pump_study_runs
+        rp_runs  = await get_raw_pattern_runs(limit=1)
+        rep_runs = await get_replay_history(limit=1)
+        ps_runs  = await get_pump_study_runs(limit=1)
+        global_priors["evidence_refs"] = {
+            "raw_pattern_run_id": (rp_runs[0].get("id") if rp_runs else None),
+            "replay_run_id":      (rep_runs[0].get("id") if rep_runs else None),
+            "pump_study_run_id":  (ps_runs[0].get("id") if ps_runs else None),
+        }
+    except Exception as e:
+        logger.debug(f"Research prior evidence refs skipped: {e}")
+
+    # Candidate-level adjustments (derived per-row from visible attributes)
+    adjustments: dict[str, list[str]] = {}
+
+    for r in scan_ctx:
+        notes: list[str] = []
+        vol_ratio = r.get("vol_ratio") or 0
+        if vol_ratio >= 5:
+            notes.append("extreme_anomaly_caution")
+        wyckoff = r.get("wyckoff") or "NONE"
+        if wyckoff in ("ACCUMULATION", "BREAKOUT"):
+            notes.append("bull_stack_context_positive")
+        cmf = r.get("cmf_pctl") or 0
+        if cmf >= 80:
+            notes.append("healthy_accumulation_context")
+        if notes:
+            adjustments[r["symbol"]] = notes
+
+    for r in np_ctx:
+        notes: list[str] = []
+        setup_via = r.get("np_setup_via") or "NONE"
+        if setup_via == "NONE":
+            notes.append("isolated_signal_penalty")
+        elif setup_via in ("L34", "FRI34", "BOTH"):
+            notes.append("early_setup_context_positive")
+        if r.get("tier") == "FIRE":
+            notes.append("strong_label_bias_positive")
+        existing = adjustments.get(r["symbol"], [])
+        merged = list(dict.fromkeys(existing + notes))
+        if merged:
+            adjustments[r["symbol"]] = merged
+
+    return {"global": global_priors, "candidate_adjustments": adjustments}
+
+
 async def update_ai_positions_intraday():
     """
     Runs every 5 minutes during market hours (9:30–16:00 ET).
@@ -471,6 +537,9 @@ async def ai_portfolio_decisions():
     all_candidate_syms = {r["symbol"] for r in scan_ctx} | {r["symbol"] for r in np_ctx}
     memory_ctx = {sym: m for sym, m in portfolio_memory.items() if sym in all_candidate_syms}
 
+    # Research priors — broad evidence-based biases from Replay + Raw Pattern
+    research_priors = await _build_research_priors(scan_ctx, np_ctx)
+
     prompt = f"""You are an AI trader managing a $2000 paper trading portfolio.
 Your goal is to maximize risk-adjusted returns using Wyckoff accumulation and New Pump signals.
 
@@ -498,6 +567,9 @@ USER WATCHLIST (manual trades for context):
 TICKER MEMORY (prior trades in current candidates):
 {json.dumps(memory_ctx, indent=2) if memory_ctx else 'none'}
 
+RESEARCH PRIORS (broad biases from Replay + Raw Pattern + Pump Study evidence):
+{json.dumps(research_priors, indent=2)}
+
 RISK FLAGS:
 - Near stop (within 3%): {[p['symbol'] for p in near_stop_positions] or 'none'}
 - Losing >3%: {[p['symbol'] for p in losing_positions] or 'none'}
@@ -514,6 +586,9 @@ STRICT RULES (not negotiable):
 7. SELL if: held > 14d without 10% gain, hype > 70, dist_to_stop < 3%, Wyckoff→DISTRIBUTION
 8. Never chase: skip if moved >5% today, sector in weak_sectors list
 9. Use TICKER MEMORY: avoid repeat losers; prefer proven winners
+10. Use RESEARCH PRIORS: downsize/caution candidates with isolated_signal_penalty or
+    extreme_anomaly_caution; boost confidence when early_setup / bull_stack / strong_label
+    notes stack. Priors do NOT override New Pump source, but shape sizing and tone.
 
 For each BUY include stop_loss, target_price (TP1), target_price_2 (TP2), sell_pct_at_target_1 (default 50).
 
