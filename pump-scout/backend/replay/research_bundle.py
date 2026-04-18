@@ -202,27 +202,31 @@ def _build_false_positives(candidates: list[dict], outcome_map: dict,
         tier    = c.get("tier", "?")
         np_lbl  = c.get("new_pump_label") or "UNKNOWN"
         np_seq  = c.get("new_pump_sequence_label") or "NONE"
+        np_via  = c.get("np_setup_via") or "NONE"
+        np_iso  = c.get("np_is_isolated_trigger", False)
         score   = c.get("total_score")
 
-        why = f"{tier} tier | {np_lbl}"
-        if np_seq and np_seq != "NONE":
-            why += f" | {np_seq}"
+        why = f"{tier} tier | {np_lbl} | via {np_via}"
+        if np_iso:
+            why += " | ISOLATED_TRIGGER"
         if score is not None:
             why += f" | Score {round(score, 1)}"
 
         rows.append({
-            "symbol":            c.get("symbol", "?"),
-            "scan_date":         c.get("scan_date"),
-            "tier":              tier,
-            "total_score":       score,
-            "new_pump_label":    np_lbl,
-            "new_pump_sequence": np_seq,
-            "sector":            c.get("sector"),
-            "why_selected":      why,
-            "return_3d":         o3.get("return_pct"),
-            "return_5d":         ret5,
-            "max_drawdown_pct":  o5.get("max_drawdown_pct"),
-            "outcome_label":     o5.get("outcome_label"),
+            "symbol":                  c.get("symbol", "?"),
+            "scan_date":               c.get("scan_date"),
+            "tier":                    tier,
+            "total_score":             score,
+            "new_pump_label":          np_lbl,
+            "new_pump_sequence":       np_seq,
+            "np_setup_via":            np_via,
+            "np_is_isolated_trigger":  np_iso,
+            "sector":                  c.get("sector"),
+            "why_selected":            why,
+            "return_3d":               o3.get("return_pct"),
+            "return_5d":               ret5,
+            "max_drawdown_pct":        o5.get("max_drawdown_pct"),
+            "outcome_label":           o5.get("outcome_label"),
         })
 
     rows.sort(key=lambda x: x["return_5d"])
@@ -257,7 +261,9 @@ def _build_missed_section(missed: list[dict], limit: int = 20) -> list[dict]:
 def _build_pattern_review(summary: dict,
                            perf_tier: list,
                            perf_np_label: list,
-                           false_positives: list, missed: list) -> dict:
+                           false_positives: list, missed: list,
+                           perf_np_setup_type: list = None,
+                           perf_np_freshness: list = None) -> dict:
     """Section E — Deterministic pattern analysis (New Pump-centric)."""
     what_worked:    list = []
     what_failed:    list = []
@@ -369,6 +375,53 @@ def _build_pattern_review(summary: dict,
                     "check if L34/FRI34/G4/B2 thresholds are too strict"
                 )
 
+    # ── NP setup type analysis ────────────────────────────────────────────────
+    np_setup_insights: list[str] = []
+    if perf_np_setup_type:
+        by_st = {b["bucket"]: b for b in perf_np_setup_type}
+        l34  = by_st.get("L34");   fri34 = by_st.get("FRI34")
+        none = by_st.get("NONE");  iso   = by_st.get("BOTH")
+        if l34 and fri34 and l34.get("count", 0) >= 2 and fri34.get("count", 0) >= 2:
+            l5 = l34.get("avg_return_5d") or 0
+            f5 = fri34.get("avg_return_5d") or 0
+            if l5 - f5 >= 2:
+                np_setup_insights.append(
+                    f"L34-based setups outperform FRI34 ({l5:+.1f}% vs {f5:+.1f}% avg 5d)"
+                )
+            elif f5 - l5 >= 2:
+                np_setup_insights.append(
+                    f"FRI34-based setups outperform L34 ({f5:+.1f}% vs {l5:+.1f}% avg 5d)"
+                )
+        if none and (none.get("avg_return_5d") or 0) < -2.0 and none.get("count", 0) >= 3:
+            np_setup_insights.append(
+                f"Candidates with no setup signal (np_setup_via=NONE) avg 5d "
+                f"{none['avg_return_5d']:+.1f}% — no-setup candidates are destructive"
+            )
+            likely_noisy.append(
+                f"np_setup_via=NONE group avg 5d {none['avg_return_5d']:+.1f}% — "
+                "filter out candidates without L34/FRI34 setup"
+            )
+
+    # ── NP freshness analysis ─────────────────────────────────────────────────
+    np_freshness_insights: list[str] = []
+    if perf_np_freshness:
+        by_fr = {b["bucket"]: b for b in perf_np_freshness}
+        fresh = by_fr.get("FRESH");  stale = by_fr.get("STALE")
+        if fresh and stale and fresh.get("count", 0) >= 2 and stale.get("count", 0) >= 2:
+            fr5 = fresh.get("avg_return_5d") or 0
+            st5 = stale.get("avg_return_5d") or 0
+            if fr5 - st5 >= 3:
+                np_freshness_insights.append(
+                    f"Fresh setups (age ≤ 3) avg 5d {fr5:+.1f}% vs stale {st5:+.1f}% — freshness strongly discriminates"
+                )
+                what_worked.append(
+                    f"np_freshness=FRESH avg 5d {fr5:+.1f}% — signal age is a strong filter"
+                )
+            elif st5 - fr5 >= 3:
+                np_freshness_insights.append(
+                    f"Stale setups outperforming fresh ({st5:+.1f}% vs {fr5:+.1f}%) — unexpected; inspect regime"
+                )
+
     # ── Suggested focus ───────────────────────────────────────────────────────
     if what_worked:
         suggested_focus.append(f"Double down on: {what_worked[0]}")
@@ -380,12 +433,14 @@ def _build_pattern_review(summary: dict,
         suggested_focus.append(f"Investigate: {what_failed[0]}")
 
     return {
-        "what_worked":           what_worked,
-        "what_failed":           what_failed,
-        "missed_patterns":       missed_patterns,
-        "likely_strict_filters": likely_strict,
-        "likely_noisy_filters":  likely_noisy,
-        "suggested_focus":       suggested_focus,
+        "what_worked":              what_worked,
+        "what_failed":              what_failed,
+        "missed_patterns":          missed_patterns,
+        "likely_strict_filters":    likely_strict,
+        "likely_noisy_filters":     likely_noisy,
+        "suggested_focus":          suggested_focus,
+        "np_setup_type_insights":   np_setup_insights,
+        "np_freshness_insights":    np_freshness_insights,
     }
 
 
@@ -586,6 +641,39 @@ async def build_research_bundle(run_id: int) -> dict:
         "new_pump_sequence",
     )
 
+    _NP_SETUP_ORDER = ["L34", "FRI34", "BOTH", "NONE"]
+    perf_np_setup_type = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_setup_via") or "NONE",
+        "np_setup_via",
+    )
+    perf_np_setup_type.sort(
+        key=lambda x: _NP_SETUP_ORDER.index(x["bucket"])
+        if x["bucket"] in _NP_SETUP_ORDER else 99
+    )
+
+    def _np_freshness_tier(c: dict) -> str:
+        age_l34   = c.get("np_age_l34")
+        age_fri34 = c.get("np_age_fri34")
+        ages = [a for a in [age_l34, age_fri34] if a is not None]
+        if not ages:
+            return "NO_SETUP"
+        age = min(ages)
+        if age <= 3:   return "FRESH"
+        if age <= 7:   return "MODERATE"
+        return "STALE"
+
+    _NP_FRESH_ORDER = ["FRESH", "MODERATE", "STALE", "NO_SETUP"]
+    perf_np_freshness = _build_perf_buckets(
+        candidates, outcome_map,
+        _np_freshness_tier,
+        "np_freshness",
+    )
+    perf_np_freshness.sort(
+        key=lambda x: _NP_FRESH_ORDER.index(x["bucket"])
+        if x["bucket"] in _NP_FRESH_ORDER else 99
+    )
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -594,6 +682,8 @@ async def build_research_bundle(run_id: int) -> dict:
     pattern_review = _build_pattern_review(
         summary, perf_tier, perf_new_pump_label,
         false_positives, missed_section,
+        perf_np_setup_type=perf_np_setup_type,
+        perf_np_freshness=perf_np_freshness,
     )
 
     # ── Section F: Suggested experiments ─────────────────────────────────────
@@ -608,6 +698,8 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_tier":              perf_tier,
         "performance_by_new_pump_label":    perf_new_pump_label,
         "performance_by_new_pump_sequence": perf_new_pump_seq,
+        "performance_by_np_setup_type":     perf_np_setup_type,
+        "performance_by_np_freshness":      perf_np_freshness,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,
@@ -727,6 +819,8 @@ def render_research_bundle_markdown(bundle: dict) -> str:
 
     _bucket_section("Performance by New Pump Label",    bundle.get("performance_by_new_pump_label", []))
     _bucket_section("Performance by New Pump Sequence", bundle.get("performance_by_new_pump_sequence", []))
+    _bucket_section("Performance by NP Setup Type (L34 / FRI34 / BOTH / NONE)", bundle.get("performance_by_np_setup_type", []))
+    _bucket_section("Performance by NP Setup Freshness", bundle.get("performance_by_np_freshness", []))
     _bucket_section("Performance by Tier",              bundle.get("performance_by_tier", []))
 
     # ── Section C: Top False Positives ────────────────────────────────────────
@@ -736,18 +830,19 @@ def render_research_bundle_markdown(bundle: dict) -> str:
     if fps:
         rows = []
         for fp in fps[:10]:
+            iso_flag = "⚠️ ISO" if fp.get("np_is_isolated_trigger") else ""
             rows.append([
                 fp.get("symbol", "?"),
                 fp.get("tier", "?"),
                 fp.get("new_pump_label") or "—",
-                fp.get("new_pump_sequence") or "—",
+                fp.get("np_setup_via") or "—",
+                iso_flag,
                 _fmt(fp.get("return_3d"), sign=True, suffix="%"),
                 _fmt(fp.get("return_5d"), sign=True, suffix="%"),
                 _fmt(fp.get("max_drawdown_pct"), sign=True, suffix="%"),
-                fp.get("outcome_label") or "—",
             ])
         add(_mdtable(
-            ["Symbol", "Tier", "NP Label", "NP Sequence", "3d", "5d", "MaxDD", "Outcome"],
+            ["Symbol", "Tier", "NP Label", "Setup Via", "Isolated?", "3d", "5d", "MaxDD"],
             rows,
         ))
     else:
@@ -791,6 +886,8 @@ def render_research_bundle_markdown(bundle: dict) -> str:
 
     _bullet_list("What Worked",            pr.get("what_worked", []))
     _bullet_list("What Failed",            pr.get("what_failed", []))
+    _bullet_list("NP Setup Type Insights", pr.get("np_setup_type_insights", []))
+    _bullet_list("NP Freshness Insights",  pr.get("np_freshness_insights", []))
     _bullet_list("Missed Patterns",        pr.get("missed_patterns", []))
     _bullet_list("Likely Too Strict",      pr.get("likely_strict_filters", []))
     _bullet_list("Likely Too Noisy",       pr.get("likely_noisy_filters", []))
