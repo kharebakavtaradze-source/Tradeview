@@ -1394,6 +1394,32 @@ async def sector_strength_by_sector(sector: str):
 
 # ─── Admin / Maintenance routes ───────────────────────────────────────────────
 
+@app.get("/api/admin/run-new-pump-scan")
+async def admin_run_new_pump_scan(background_tasks: BackgroundTasks):
+    """
+    Trigger the standalone New Pump universe scan in background.
+    Uses Massive/Polygon exclusively — no Finviz, no Yahoo, no old-scanner input.
+    Poll /api/admin/new-pump-scan/status for live progress.
+    """
+    from scanner.new_pump_runner import is_running, run_new_pump_scan
+    if is_running():
+        return {"status": "already_running", "message": "New Pump scan already in progress"}
+    background_tasks.add_task(run_new_pump_scan)
+    return {"status": "started", "message": "New Pump universe scan started in background"}
+
+
+@app.get("/api/admin/new-pump-scan/status")
+async def admin_new_pump_scan_status():
+    """Return live progress of the standalone New Pump universe scan."""
+    from scanner.new_pump_runner import get_progress, get_latest
+    p = get_progress()
+    d = get_latest()
+    p["scanned_at"]  = d.get("scanned_at")
+    p["total"]       = d.get("total", 0)
+    p["has_data"]    = bool(d.get("results"))
+    return p
+
+
 @app.get("/api/admin/test-massive")
 async def admin_test_massive(symbol: str = "AAPL"):
     """
