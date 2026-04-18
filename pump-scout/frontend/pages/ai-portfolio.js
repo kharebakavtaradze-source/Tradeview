@@ -106,40 +106,53 @@ function TickerMemoryMini({ symbol, closedPositions }) {
 
 function DecisionTrace({ pos }) {
   const sd = pos.scan_data || {};
-  const boosts = [];
-  const cautions = [];
 
-  if (pos.source === 'new_pump') boosts.push('NP source');
-  const via = sd.np_setup_via || '';
-  if (via && via !== 'NONE') boosts.push(`${via} setup`);
-  if (sd.wyckoff === 'ACCUMULATION') boosts.push('Wyckoff ACCUM');
-  else if (sd.wyckoff === 'BREAKOUT') boosts.push('Wyckoff BKT');
-  if ((sd.cmf_pctl || 0) >= 80) boosts.push(`CMF ${sd.cmf_pctl}%ile`);
-  if ((sd.tier === 'FIRE') || (sd.new_pump_label === 'FIRE')) boosts.push('FIRE label');
-  if (pos.tp1_hit) boosts.push('TP1 banked');
+  // Prefer AI-generated structured fields stored in scan_data
+  const aiBoosts   = Array.isArray(sd.confidence_drivers) ? sd.confidence_drivers : [];
+  const aiCautions = Array.isArray(sd.caution_drivers)    ? sd.caution_drivers    : [];
+  const sizingNote = sd.sizing_reason         || '';
+  const peerNote   = sd.why_selected_over_peers || '';
 
-  if (sd.np_is_isolated_trigger) cautions.push('isolated trigger');
-  if ((sd.vol_ratio || 0) >= 5) cautions.push(`vol×${(sd.vol_ratio||0).toFixed(1)}`);
-  if ((pos.max_loss_pct || 0) < -4) cautions.push(`drawdown ${(pos.max_loss_pct||0).toFixed(1)}%`);
+  // Fallback: derive from position attributes when AI fields absent
+  const derivedBoosts   = [];
+  const derivedCautions = [];
+  if (!aiBoosts.length) {
+    if (pos.source === 'new_pump') derivedBoosts.push('NP source');
+    const via = sd.np_setup_via || '';
+    if (via && via !== 'NONE') derivedBoosts.push(`${via} setup`);
+    if (sd.wyckoff === 'ACCUMULATION') derivedBoosts.push('Wyckoff ACCUM');
+    else if (sd.wyckoff === 'BREAKOUT') derivedBoosts.push('Wyckoff BKT');
+    if ((sd.cmf_pctl || 0) >= 80) derivedBoosts.push(`CMF ${sd.cmf_pctl}%ile`);
+    if ((sd.tier === 'FIRE') || (sd.new_pump_label === 'FIRE')) derivedBoosts.push('FIRE label');
+    if (pos.tp1_hit) derivedBoosts.push('TP1 banked');
+  }
+  if (!aiCautions.length) {
+    if (sd.np_is_isolated_trigger) derivedCautions.push('isolated trigger');
+    if ((sd.vol_ratio || 0) >= 5) derivedCautions.push(`vol×${(sd.vol_ratio||0).toFixed(1)}`);
+    if ((pos.max_loss_pct || 0) < -4) derivedCautions.push(`drawdown ${(pos.max_loss_pct||0).toFixed(1)}%`);
+  }
+
+  const boosts   = aiBoosts.length   ? aiBoosts   : derivedBoosts;
+  const cautions = aiCautions.length ? aiCautions : derivedCautions;
 
   const rr = (pos.target_price && pos.stop_loss && pos.entry_price &&
               pos.entry_price > pos.stop_loss)
     ? ((pos.target_price - pos.entry_price) / (pos.entry_price - pos.stop_loss)).toFixed(1)
     : null;
 
-  if (!boosts.length && !cautions.length && !rr) return null;
+  if (!boosts.length && !cautions.length && !rr && !sizingNote && !peerNote) return null;
   return (
-    <div style={{ fontSize: 9, marginTop: 5, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div style={{ fontSize: 9, marginTop: 5, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column', gap: 3 }}>
       {boosts.length > 0 && (
         <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ color: 'rgba(0,200,100,0.5)', fontWeight: 700 }}>↑</span>
-          <span style={{ color: 'rgba(0,200,100,0.75)' }}>{boosts.join(' · ')}</span>
+          <span style={{ color: 'rgba(0,200,100,0.8)' }}>{boosts.join(' · ')}</span>
         </div>
       )}
       {cautions.length > 0 && (
         <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ color: 'rgba(255,165,0,0.6)', fontWeight: 700 }}>↓</span>
-          <span style={{ color: 'rgba(255,165,0,0.8)' }}>{cautions.join(' · ')}</span>
+          <span style={{ color: 'rgba(255,165,0,0.85)' }}>{cautions.join(' · ')}</span>
         </div>
       )}
       {rr && (
@@ -147,6 +160,12 @@ function DecisionTrace({ pos }) {
           R/R <b style={{ color: parseFloat(rr) >= 2 ? 'var(--lime)' : '#ffa500' }}>{rr}:1</b>
           {pos.invested_usd ? <span style={{ marginLeft: 6 }}>${pos.invested_usd.toFixed(0)} deployed</span> : null}
         </div>
+      )}
+      {sizingNote && (
+        <div style={{ color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>💼 {sizingNote}</div>
+      )}
+      {peerNote && (
+        <div style={{ color: 'rgba(0,212,245,0.6)', fontStyle: 'italic' }}>🏆 {peerNote}</div>
       )}
     </div>
   );
