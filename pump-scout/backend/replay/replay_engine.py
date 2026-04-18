@@ -317,7 +317,6 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
     from scanner.indicators import calc_all
     from scanner.scoring import score_ticker
     from scanner.wyckoff import detect_regime
-    from scanner.early_ignition import calc_ignition
 
     # Try to import sector_map NON_STOCK_SECURITIES; safe fallback if unavailable
     try:
@@ -424,13 +423,6 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             except Exception:
                 pass
 
-            # Compute ignition signal (calc_all does NOT include this — must call separately)
-            ignition_result = {}
-            try:
-                ignition_result = calc_ignition(indicators, wyckoff)
-            except Exception:
-                pass
-
             # New Pump Engine — setup/trigger/confirmation structured analysis
             new_pump_result = {}
             try:
@@ -444,6 +436,25 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             except Exception:
                 pass
 
+            # Derive NP signal detail fields from new_pump_result
+            np_has_l34   = bool(new_pump_result.get("has_l34",   False))
+            np_has_fri34 = bool(new_pump_result.get("has_fri34", False))
+            np_has_g4    = bool(new_pump_result.get("has_g4",    False))
+            np_has_b2    = bool(new_pump_result.get("has_b2",    False))
+            np_age_l34   = new_pump_result.get("age_l34")
+            np_age_fri34 = new_pump_result.get("age_fri34")
+
+            if np_has_l34 and np_has_fri34:
+                np_setup_via = "BOTH"
+            elif np_has_l34:
+                np_setup_via = "L34"
+            elif np_has_fri34:
+                np_setup_via = "FRI34"
+            else:
+                np_setup_via = "NONE"
+
+            np_is_isolated_trigger = np_has_g4 and not np_has_l34 and not np_has_fri34
+
             # Sector from cache (best-effort, not time-sensitive for training)
             sector = None
             if _get_sector:
@@ -453,7 +464,7 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 except Exception:
                     pass
 
-            snapshot = {**indicators, **scored, "wyckoff": wyckoff, **ignition_result,
+            snapshot = {**indicators, **scored, "wyckoff": wyckoff,
                         "new_pump": new_pump_result}
             # Remove non-serialisable items from snapshot (keep it JSON-safe)
             clean_snapshot = {
@@ -466,13 +477,19 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 "price":                   eod.get("close", 0),
                 "tier":                    tier,
                 "total_score":             scored.get("total_score", 0),
-                "wyckoff_state":           wyckoff.get("state", ""),
-                "ignition_signal":         ignition_result.get("ignition_signal", "NO_IGNITION"),
-                "ribbon_signal":           bool(indicators.get("compression_and_bullish", False)),
-                "sector":                  sector,
-                "new_pump_score":          new_pump_result.get("new_pump_score"),
-                "new_pump_label":          new_pump_result.get("new_pump_label"),
-                "new_pump_sequence_label": new_pump_result.get("new_pump_sequence_label"),
+                "wyckoff_state":            wyckoff.get("state", ""),
+                "sector":                   sector,
+                "new_pump_score":           new_pump_result.get("new_pump_score"),
+                "new_pump_label":           new_pump_result.get("new_pump_label"),
+                "new_pump_sequence_label":  new_pump_result.get("new_pump_sequence_label"),
+                "np_has_l34":              np_has_l34,
+                "np_has_fri34":            np_has_fri34,
+                "np_has_g4":               np_has_g4,
+                "np_has_b2":               np_has_b2,
+                "np_age_l34":              np_age_l34,
+                "np_age_fri34":            np_age_fri34,
+                "np_setup_via":            np_setup_via,
+                "np_is_isolated_trigger":  np_is_isolated_trigger,
                 "new_pump":                new_pump_result,
                 "snapshot":                clean_snapshot,
             }
