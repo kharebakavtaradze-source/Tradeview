@@ -281,12 +281,26 @@ export default function AIPortfolio() {
     }
   }
 
+  const [resetting, setResetting] = useState(false);
+  async function resetPortfolio() {
+    if (!confirm('Reset portfolio to $2000? This closes all open positions.')) return;
+    setResetting(true);
+    try {
+      await fetch(`${API_URL}/api/ai-portfolio/reset?capital=2000`, { method: 'POST' });
+      await load();
+    } finally {
+      setResetting(false);
+    }
+  }
+
   const allPositions = history.positions || [];
   const closedPositions = allPositions.filter(p => p.status === 'CLOSED').slice(0, 15);
   const portfolioHistory = history.history || [];
 
   const totalValue = state?.total_value || 2000;
-  const totalPnl = state?.total_pnl_pct || 0;
+  const baseline = state?.baseline_value || 2000;
+  // Always compute P&L from live values so it's correct regardless of stored total_pnl_pct
+  const totalPnl = totalValue > 0 ? parseFloat(((totalValue - baseline) / baseline * 100).toFixed(2)) : 0;
   const cash = state?.cash || 0;
   const invested = state?.invested || 0;
 
@@ -357,6 +371,19 @@ export default function AIPortfolio() {
           >
             {running ? '⏳ Running…' : '▶ Run AI Now'}
           </button>
+          <button
+            onClick={resetPortfolio}
+            disabled={resetting}
+            style={{
+              fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 5,
+              border: '1px solid rgba(255,68,68,0.3)',
+              background: 'rgba(255,68,68,0.07)',
+              color: 'var(--red)', cursor: resetting ? 'not-allowed' : 'pointer',
+              opacity: resetting ? 0.5 : 1, transition: 'opacity 0.15s',
+            }}
+          >
+            {resetting ? '⏳ Resetting…' : '↺ Reset $2000'}
+          </button>
         </div>
 
 
@@ -404,7 +431,7 @@ export default function AIPortfolio() {
             </div>
             {/* Trade stats row */}
             <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 10, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-              <span>Capital: <b>$2,000</b></span>
+              <span>Capital: <b>${baseline.toLocaleString()}</b></span>
               {aiWinRate !== null && <span>WR <b style={{ color: aiWinRate >= 50 ? 'var(--lime)' : 'var(--red)' }}>{aiWinRate}%</b> ({aiWins.length}W/{aiLosses.length}L)</span>}
               {aiAvgPnl !== null && <span>Avg <b style={{ color: parseFloat(aiAvgPnl) >= 0 ? 'var(--lime)' : 'var(--red)' }}>{parseFloat(aiAvgPnl) >= 0 ? '+' : ''}{aiAvgPnl}%</b></span>}
             </div>
@@ -420,7 +447,7 @@ export default function AIPortfolio() {
                   {portfolioHistory.map((h, i) => {
                     const norm = (h.total_value - minV) / range;
                     const barH = Math.max(3, Math.round(norm * 26 + 4));
-                    const pct = (h.total_value - 2000) / 2000;
+                    const pct = (h.total_value - baseline) / baseline;
                     return (
                       <div key={i} title={`${h.date}: $${h.total_value.toFixed(0)} (${h.total_pnl_pct >= 0 ? '+' : ''}${h.total_pnl_pct.toFixed(1)}%)`}
                         style={{ flex: 1, height: barH, borderRadius: 2, alignSelf: 'flex-end', background: pct >= 0 ? 'rgba(0,200,100,0.5)' : 'rgba(255,68,68,0.5)', minWidth: 6 }} />
@@ -521,7 +548,7 @@ export default function AIPortfolio() {
                   <span>Now <b style={{ color: pnl >= 0 ? 'var(--lime)' : 'var(--red)' }}>${(p.current_price || p.entry_price)?.toFixed(2)}</b></span>
                   <span>
                     <b>${p.invested_usd?.toFixed(0)}</b>
-                    <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 9 }}> / $2000</span>
+                    <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 9 }}> / ${baseline.toLocaleString()}</span>
                   </span>
                   <span>Day <b>{p.days_held}</b></span>
                 </div>

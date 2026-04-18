@@ -761,6 +761,17 @@ async def ai_portfolio_refresh_prices():
     }
 
 
+@app.post("/api/ai-portfolio/reset")
+async def ai_portfolio_reset(capital: float = 2000.0):
+    """
+    Reset AI portfolio to a clean state with the given capital base.
+    Closes all open positions (exit_reason=RESET) and sets cash/baseline to capital.
+    """
+    from database import reset_ai_portfolio
+    result = await reset_ai_portfolio(new_capital=capital)
+    return result
+
+
 # ─── Hype Monitor routes (specific routes BEFORE parameterized {symbol}) ───────
 
 @app.get("/api/hype/status")
