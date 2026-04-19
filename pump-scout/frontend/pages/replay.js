@@ -324,18 +324,6 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
         <BucketTable data={bundle.performance_by_source} />
       </div>
 
-      {/* Performance: Ignition + Ribbon side by side */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <div className={styles.bundleSection}>
-          <div className={styles.bundleSectionTitle}>By Ignition Signal</div>
-          <BucketTable data={bundle.performance_by_ignition_signal} />
-        </div>
-        <div className={styles.bundleSection}>
-          <div className={styles.bundleSectionTitle}>By Ribbon Signal</div>
-          <BucketTable data={bundle.performance_by_ribbon_signal} />
-        </div>
-      </div>
-
       {/* ── New Pump Engine ─────────────────────────────────────────────────── */}
       <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
         <div className={styles.bundleSectionTitle} style={{ color: '#ff8800' }}>
@@ -368,8 +356,6 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
                 <th>5d Ret</th>
                 <th>Max DD</th>
                 <th>Label</th>
-                <th>Ign</th>
-                <th>Rib</th>
               </tr>
             </thead>
             <tbody>
@@ -383,12 +369,6 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
                   <td>{pctCell(fp.return_5d)}</td>
                   <td>{pctCell(fp.max_drawdown_pct)}</td>
                   <td>{fp.outcome_label ? <OutcomeLabel label={fp.outcome_label} /> : '—'}</td>
-                  <td style={{ color: fp.ignition_signal ? 'var(--lime)' : 'var(--text-muted)' }}>
-                    {fp.ignition_signal ? '✓' : '—'}
-                  </td>
-                  <td style={{ color: fp.ribbon_signal ? 'var(--cyan)' : 'var(--text-muted)' }}>
-                    {fp.ribbon_signal ? '✓' : '—'}
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -953,8 +933,6 @@ export default function ReplayPage() {
                           <th>Price</th>
                           <th>Tier</th>
                           <th>Score</th>
-                          <th>Ignition</th>
-                          <th>Ribbon</th>
                           <th>NP Score</th>
                           <th>NP Label</th>
                           <th>NP Sequence</th>
@@ -976,12 +954,6 @@ export default function ReplayPage() {
                             </td>
                             <td><TierBadge tier={c.tier} /></td>
                             <td style={{ fontFamily: 'var(--font-mono)' }}>{c.total_score ?? '—'}</td>
-                            <td style={{ color: c.ignition_signal ? 'var(--lime)' : 'var(--text-muted)' }}>
-                              {c.ignition_signal ? '✓' : '—'}
-                            </td>
-                            <td style={{ color: c.ribbon_signal ? 'var(--cyan)' : 'var(--text-muted)' }}>
-                              {c.ribbon_signal ? '✓' : '—'}
-                            </td>
                             <td style={{ fontFamily: 'var(--font-mono)', color: npScoreColor(c.new_pump_score) }}>
                               {c.new_pump_score != null ? Number(c.new_pump_score).toFixed(1) : '—'}
                             </td>
