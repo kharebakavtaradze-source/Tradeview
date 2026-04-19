@@ -4199,6 +4199,46 @@ async def get_raw_pattern_runs(
         return [_raw_pattern_run_to_dict(r) for r in result.scalars().all()]
 
 
+async def get_np_coverage_stats(run_id: int) -> dict:
+    """
+    Count how many raw_pattern_episode_features rows for this run have NP
+    analysis results vs explicit skip reasons.
+
+    Returns:
+        total, analyzed, skipped, skip_insufficient_candles, skip_failed,
+        coverage_pct (0–100, None when total=0)
+    """
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(CASE WHEN np_skip_reason IS NULL THEN 1 END) AS analyzed,
+                    COUNT(CASE WHEN np_skip_reason IS NOT NULL THEN 1 END) AS skipped,
+                    COUNT(CASE WHEN np_skip_reason = 'insufficient_candles' THEN 1 END) AS skip_candles,
+                    COUNT(CASE WHEN np_skip_reason = 'np_analysis_failed'   THEN 1 END) AS skip_failed
+                FROM raw_pattern_episode_features
+                WHERE run_id = :run_id
+            """),
+            {"run_id": run_id},
+        )
+        row = result.mappings().one_or_none()
+        if not row:
+            return {"total": 0, "analyzed": 0, "skipped": 0,
+                    "skip_insufficient_candles": 0, "skip_failed": 0,
+                    "coverage_pct": None}
+        total    = int(row["total"] or 0)
+        analyzed = int(row["analyzed"] or 0)
+        return {
+            "total":                     total,
+            "analyzed":                  analyzed,
+            "skipped":                   int(row["skipped"] or 0),
+            "skip_insufficient_candles": int(row["skip_candles"] or 0),
+            "skip_failed":               int(row["skip_failed"] or 0),
+            "coverage_pct":              round(analyzed / total * 100, 1) if total else None,
+        }
+
+
 async def save_raw_pattern_daily_features(run_id: int, rows: list[dict]) -> int:
     """Bulk-insert daily feature rows. Returns count inserted."""
     if not rows:

@@ -3213,12 +3213,13 @@ async def raw_pattern_study_list_runs(
 
 @app.get("/api/replay/raw-pattern-study/{run_id}")
 async def raw_pattern_study_detail(run_id: int):
-    """Return metadata and counts for one raw-pattern-study run."""
-    from database import get_raw_pattern_run
+    """Return metadata, counts, and NP coverage stats for one raw-pattern-study run."""
+    from database import get_raw_pattern_run, get_np_coverage_stats
     run = await get_raw_pattern_run(run_id)
     if not run:
         raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
-    return {"ok": True, "run": run}
+    np_coverage = await get_np_coverage_stats(run_id)
+    return {"ok": True, "run": run, "np_coverage": np_coverage}
 
 
 # ── 4. Episode features ───────────────────────────────────────────────────────
