@@ -307,10 +307,8 @@ const COMP_FEATURES = [
   'dryup_day_count_pre',
   'days_in_base',
   'atr_contraction_days_pre',
-  // PRIMARY — EMA ribbon (computed from daily ema_spread_pct)
   'avg_ema_spread_pre',
   'min_ema_spread_pre',
-  // PRIMARY — EMA ribbon episode aggregates
   'had_bull_stack_pre',
   'bull_stack_days_pre',
   'days_above_ema50_pre',
@@ -842,7 +840,7 @@ const REC_AREA_LABEL = {
   compression_persistence:    'Compression Persistence',
   volume_sweet_spot:          'Volume Sweet-Spot',
   accumulation_spring_reclaim:'Accumulation / Spring / Reclaim',
-  ema_ribbon_quality:         'EMA Ribbon Quality',
+  ema_ribbon_quality:         'EMA Structure Quality',
   body_wick_noise_reduction:  'Body / Wick Noise Reduction',
   toxicity_penalty:           'Toxicity Penalty',
 };

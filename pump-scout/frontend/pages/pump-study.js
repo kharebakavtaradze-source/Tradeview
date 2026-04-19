@@ -104,8 +104,6 @@ function PhaseTag({ phase }) {
 const EVENT_CFG = {
   first_abnormal_volume_day:     { color: 'var(--amber)',  label: 'ABNORMAL VOL'    },
   first_compression_day:         { color: 'var(--cyan)',   label: 'BB COMPRESSION'  },
-  first_ribbon_constructive_day: { color: 'var(--lime)',   label: 'RIBBON QUAL'     },
-  first_ignition_day:            { color: '#ffd600',       label: 'IGNITION'        },
   first_accumulation_like_day:   { color: 'var(--accent)', label: 'ACCUMULATION'    },
   first_spring_test_lps_day:     { color: '#80aaff',       label: 'SPRING/LPS'      },
   breakout_day:                  { color: 'var(--lime)',   label: 'BREAKOUT'        },
@@ -195,16 +193,10 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
     { label: 'Days to 2×',    val: ep.days_to_double ?? '—' },
     { label: 'Caught',        val: caught == null ? '—' : caught ? 'CAUGHT' : 'MISSED',
                               color: caught == null ? null : caught ? 'var(--lime)' : 'var(--red)' },
-    { label: 'Ribbon',        val: ep.had_ribbon ? 'YES' : 'NO',
-                              color: ep.had_ribbon ? 'var(--lime)' : 'var(--text-muted)' },
-    { label: 'Ignition',      val: ep.had_ignition ? 'YES' : 'NO',
-                              color: ep.had_ignition ? 'var(--cyan)' : 'var(--text-muted)' },
     { label: 'Wyckoff',       val: ep.strongest_wyckoff_state || '—' },
     { label: 'Max Gap',       val: ep.largest_gap_pct != null ? fmtPct(ep.largest_gap_pct) : '—' },
     { label: 'Max Vol',       val: ep.max_volume_anomaly != null ? `${Number(ep.max_volume_anomaly).toFixed(1)}×` : '—',
                               color: ep.max_volume_anomaly >= 3 ? 'var(--amber)' : null },
-    { label: 'Ignition Q',    val: ep.ignition_quality ?? '—' },
-    { label: 'Ign Bucket',    val: ep.ignition_bucket || '—' },
     { label: 'Avg Tox PRE',   val: ep.avg_toxicity_pre != null ? Number(ep.avg_toxicity_pre).toFixed(0) : '—' },
     { label: 'Max Tox PRE',   val: ep.max_toxicity_pre != null ? Number(ep.max_toxicity_pre).toFixed(0) : '—' },
   ];
@@ -332,9 +324,7 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                   <th title="Overnight gap %">Gap%</th>
                   <th title="Daily return">Day%</th>
                   <th title="Cumulative return from start">Cum%</th>
-                  <th>Ribbon</th>
                   <th>Wyckoff</th>
-                  <th title="Ignition signal">Ign</th>
                   <th title="Sequence type">Seq</th>
                   <th title="Structural bias">Bias</th>
                   <th title="Toxicity score">Tox</th>
@@ -348,11 +338,9 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                   const peakNum = s.relative_day_from_peak;
                   // Extended fields — try direct first, then snapshot sub-dict
                   const sd      = s.snapshot_data || s.snapshot || {};
-                  const ign     = s.ignition_signal ?? sd.ignition?.ignition_signal ?? sd.ignition_signal ?? '—';
                   const seqType = s.sequence_type   ?? sd.regime?.sequence_type    ?? '—';
                   const bias    = s.structural_bias ?? sd.regime?.structural_bias  ?? '—';
                   const tox     = s.toxicity_score  ?? sd.toxicity?.toxicity_score ?? null;
-                  const ribbon  = (s.ribbon_class || '—').replace('RIBBON_', '');
                   return (
                     <tr key={i} className={styles.snapRow} style={{ background: bg }}>
                       <td><PhaseTag phase={s.window_phase} /></td>
@@ -384,15 +372,8 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                         {(s.cum_return_pct ?? s.cumulative_return_from_start) != null
                           ? fmtPct(s.cum_return_pct ?? s.cumulative_return_from_start, true) : '—'}
                       </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9,
-                                   color: ribbon !== '—' && ribbon !== 'NONE' ? 'var(--lime)' : 'var(--text-muted)' }}>
-                        {ribbon}
-                      </td>
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)' }}>
                         {s.wyckoff_state || '—'}
-                      </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>
-                        {String(ign).replace('_IGNITION', '').replace('IGNITION_', '')}
                       </td>
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>
                         {seqType !== '—' ? String(seqType).slice(0, 8) : '—'}
@@ -581,8 +562,6 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                 <th title="Trading days from start to peak">Days</th>
                 <th>Family</th>
                 <th title="Was it in scanner output on start date?">Caught</th>
-                <th title="Had qualifying ribbon class in PRE window">Ribbon</th>
-                <th title="Had ignition signal in PRE window">Ignition</th>
                 <th title="Highest Wyckoff state reached in PRE window">Wyckoff</th>
                 <th title="Largest gap up % in PRE+PUMP window">Max Gap</th>
                 <th title="Max volume vs 20-day average">Max Vol</th>
@@ -623,14 +602,6 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                             {caught ? 'CAUGHT' : 'MISSED'}
                           </span>
                       }
-                    </td>
-                    <td style={{ fontWeight: 700, fontSize: 10,
-                                 color: ep.had_ribbon ? 'var(--lime)' : 'var(--text-muted)' }}>
-                      {ep.had_ribbon ? 'YES' : 'NO'}
-                    </td>
-                    <td style={{ fontWeight: 700, fontSize: 10,
-                                 color: ep.had_ignition ? 'var(--cyan)' : 'var(--text-muted)' }}>
-                      {ep.had_ignition ? 'YES' : 'NO'}
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-dim)' }}>
                       {ep.strongest_wyckoff_state || '—'}
@@ -1099,14 +1070,10 @@ const GROUP_CFG = {
 
 // Signal rows for Section C — each row is one metric×stat combination
 const SIGNAL_ROWS = [
-  { key: 'had_ribbon',               label: 'Had Ribbon',          stat: 'mean',   isRate: true },
-  { key: 'had_ignition',             label: 'Had Ignition',        stat: 'mean',   isRate: true },
   { key: 'max_volume_anomaly',       label: 'Max Vol Anomaly (avg)', stat: 'mean', fmt: v => v != null ? `${Number(v).toFixed(1)}×` : '—' },
   { key: 'max_volume_anomaly',       label: 'Max Vol Anomaly (p90)', stat: 'p90',  fmt: v => v != null ? `${Number(v).toFixed(1)}×` : '—' },
   { key: 'largest_gap_pct',          label: 'Largest Gap (avg)',   stat: 'mean',   fmt: v => fmtPct(v) },
   { key: 'largest_gap_pct',          label: 'Largest Gap (p90)',   stat: 'p90',    fmt: v => fmtPct(v) },
-  { key: 'ignition_quality',         label: 'Ign Quality (avg)',   stat: 'mean',   fmt: v => v != null ? Number(v).toFixed(0) : '—' },
-  { key: 'ignition_quality',         label: 'Ign Quality (p90)',   stat: 'p90',    fmt: v => v != null ? Number(v).toFixed(0) : '—' },
   { key: 'days_to_peak',             label: 'Days to Peak (med)',  stat: 'median', fmt: v => v != null ? `${Number(v).toFixed(0)}d` : '—' },
   { key: 'max_drawdown_before_peak', label: 'Max DD Before (avg)', stat: 'mean',   fmt: v => fmtPct(v) },
   { key: 'avg_toxicity_pre',         label: 'Avg Tox PRE (avg)',   stat: 'mean',   fmt: v => v != null ? Number(v).toFixed(0) : '—' },
@@ -1207,9 +1174,6 @@ function GlobalSummary({ run, comparisons, episodes, loading, error }) {
                 ['Avg Multiple',  gs(g, 'pump_multiple') != null    ? fmtX(gs(g, 'pump_multiple'))                                       : '—'],
                 ['Median Days',   gs(g, 'days_to_peak', 'median') != null ? `${Number(gs(g, 'days_to_peak', 'median')).toFixed(0)}d`     : '—'],
                 ['Avg Max Vol',   gs(g, 'max_volume_anomaly') != null ? `${Number(gs(g, 'max_volume_anomaly')).toFixed(1)}×`              : '—'],
-                ['Ribbon Rate',   gs(g, 'had_ribbon')   != null ? fmtRate(gs(g, 'had_ribbon'))   : '—'],
-                ['Ignition Rate', gs(g, 'had_ignition') != null ? fmtRate(gs(g, 'had_ignition')) : '—'],
-                ['Ign Quality',   gs(g, 'ignition_quality')    != null ? Number(gs(g, 'ignition_quality')).toFixed(0)    : '—'],
                 ['Avg Tox PRE',   gs(g, 'avg_toxicity_pre')    != null ? Number(gs(g, 'avg_toxicity_pre')).toFixed(0)    : '—'],
               ];
               return (
