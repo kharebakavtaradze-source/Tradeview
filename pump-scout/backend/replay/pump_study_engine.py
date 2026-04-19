@@ -2163,6 +2163,12 @@ async def build_raw_pattern_episode_features_ema(
 # Priority order places FRI34 variants above L34 because FRI34 has a stricter gate.
 # Count buckets are mutually exclusive: FRI34 variants count only when FRI34 is present;
 # L34 variants count only when FRI34 is NOT present (matching resolver priority).
+#
+# Note: this priority list is a TAXONOMIC classifier (most-specific structural match wins)
+# and intentionally differs from the empirical weighting in new_pump_engine._sequence_bonus
+# (which downweights FULL_* because replay showed FULL underperforms TRIGGER_AFTER).
+# Every FULL_* state structurally contains a TRIGGER_AFTER_* state, so reordering would
+# collapse the B2-firing signal into the TRIGGER_AFTER buckets — we keep them separate.
 _NP_SEQ_PRIORITY: list[str] = [
     "FULL_FRI34_G4_B2",    # 0 — strongest (FRI34 is more selective)
     "FULL_L34_G4_B2",      # 1
