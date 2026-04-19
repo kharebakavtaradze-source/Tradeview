@@ -2416,14 +2416,23 @@ async def build_raw_pattern_episode_features_new_pump(
             if fired_g4:    cnt_g4    += 1
             if fired_b2:    cnt_b2    += 1
 
-            if fired_l34   and not w_has_g4: cnt_setup_only_l34   += 1
-            if fired_fri34 and not w_has_g4: cnt_setup_only_fri34 += 1
+            # Sub-category counts MUST mirror _np_sequence_state resolver priority:
+            # FRI34 variants take precedence over L34 variants. A count increments
+            # only if the day would actually be classified under that label.
+            if fired_fri34 and not w_has_g4:
+                cnt_setup_only_fri34 += 1
+            elif fired_l34 and not w_has_g4:
+                cnt_setup_only_l34 += 1
 
-            if fired_g4 and w_has_l34:                    cnt_trig_after_l34   += 1
-            if fired_g4 and w_has_fri34 and not w_has_l34: cnt_trig_after_fri34 += 1
+            if fired_g4 and w_has_fri34:
+                cnt_trig_after_fri34 += 1
+            elif fired_g4 and w_has_l34:
+                cnt_trig_after_l34 += 1
 
-            if fired_b2 and w_has_g4 and w_has_l34:                    cnt_full_l34_g4_b2   += 1
-            if fired_b2 and w_has_g4 and w_has_fri34 and not w_has_l34: cnt_full_fri34_g4_b2 += 1
+            if fired_b2 and w_has_g4 and w_has_fri34:
+                cnt_full_fri34_g4_b2 += 1
+            elif fired_b2 and w_has_g4 and w_has_l34:
+                cnt_full_l34_g4_b2 += 1
 
             if fired_g4 and not w_has_l34 and not w_has_fri34: cnt_isolated_g4 += 1
             if fired_b2 and not w_has_l34 and not w_has_fri34: cnt_isolated_b2 += 1
@@ -2441,6 +2450,32 @@ async def build_raw_pattern_episode_features_new_pump(
             if w_vt: cnt_valid_trigger  += 1
             if w_vc: cnt_valid_confirm  += 1
             if w_vs and w_vt and w_vc: cnt_valid_full += 1
+
+        # ── Consistency guard: best_seq_label must be supported by counts ────
+        # Without this, the resolver can report e.g. FULL_FRI34_G4_B2 on a day
+        # where has_fri34 was true only because FRI34 fired before the PRE window
+        # began — producing best = FULL_FRI34_* while cnt_full_fri34_g4_b2 = 0.
+        _SEQ_COUNT_MAP = {
+            "FULL_FRI34_G4_B2":    cnt_full_fri34_g4_b2,
+            "FULL_L34_G4_B2":      cnt_full_l34_g4_b2,
+            "TRIGGER_AFTER_FRI34": cnt_trig_after_fri34,
+            "TRIGGER_AFTER_L34":   cnt_trig_after_l34,
+            "SETUP_ONLY_FRI34":    cnt_setup_only_fri34,
+            "SETUP_ONLY_L34":      cnt_setup_only_l34,
+            "CONFIRM_AFTER_G4":    cnt_confirm_after_g4,
+            "ISOLATED_G4":         cnt_isolated_g4,
+            "ISOLATED_B2":         cnt_isolated_b2,
+        }
+        if best_seq_label in _SEQ_COUNT_MAP and _SEQ_COUNT_MAP[best_seq_label] == 0:
+            # Downgrade to the highest-priority sequence whose count is > 0
+            for lbl in _NP_SEQ_PRIORITY:
+                if _SEQ_COUNT_MAP.get(lbl, 0) > 0:
+                    best_seq_label = lbl
+                    best_seq_rank  = _NP_SEQ_RANK[lbl]
+                    break
+            else:
+                best_seq_label = "NONE"
+                best_seq_rank  = _NP_SEQ_RANK["NONE"]
 
         await update_raw_pattern_episode_features(raw_run_id, episode_id, {
             "had_valid_recent_setup":          valid_setup   or None,
@@ -3172,7 +3207,6 @@ def _build_group_stats(members: list[dict]) -> dict:
         "largest_gap_pct":              stat_for("largest_gap_pct"),
         "max_toxicity_score":           stat_for("max_toxicity_score"),
         "avg_toxicity_score":           stat_for("avg_toxicity_score"),
-        "ignition_quality":             stat_for("ignition_quality"),
         "worst_post_return_from_start": stat_for("worst_post_return_from_start"),
     }
 
@@ -3764,8 +3798,6 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             # Back-fill enriched fields onto the saved PumpEpisode row
             await update_pump_episode_enrichment(ep_id, {
                 "pump_type":               family,
-                "had_ribbon":              features.get("had_ribbon", False),
-                "had_ignition":            features.get("had_ignition", False),
                 "strongest_wyckoff_state": features.get("strongest_wyckoff_state"),
                 "max_volume_anomaly":      features.get("max_volume_anomaly"),
                 "largest_gap_pct":         features.get("largest_gap_pct"),
@@ -3899,8 +3931,6 @@ async def run_pump_study(run_id: int, params: dict) -> None:
 
             await update_pump_episode_enrichment(nw_ep_id, {
                 "pump_type":               "NORMAL_WINNER",
-                "had_ribbon":              nw_features.get("had_ribbon", False),
-                "had_ignition":            nw_features.get("had_ignition", False),
                 "strongest_wyckoff_state": nw_features.get("strongest_wyckoff_state"),
                 "max_volume_anomaly":      nw_features.get("max_volume_anomaly"),
                 "largest_gap_pct":         nw_features.get("largest_gap_pct"),

@@ -2163,8 +2163,8 @@ def _build_pump_study_markdown(run: dict, episodes: list[dict]) -> str:
             "## Canonical Episodes",
             "",
             "| # | Symbol | Family | Start | Peak | Multiple | Days | "
-            "Drawdown | Ribbon | Ignition | Wyckoff |",
-            "|---|---|---|---|---|---|---|---|---|---|---|",
+            "Drawdown | Wyckoff |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         shown = episodes[:200]
         for i, ep in enumerate(shown, 1):
@@ -2175,14 +2175,12 @@ def _build_pump_study_markdown(run: dict, episodes: list[dict]) -> str:
                 f"| {ep['pump_start_date']} | {ep['pump_peak_date']} "
                 f"| {ep['pump_multiple']:.2f}× | {ep.get('days_to_peak') or '?'} "
                 f"| {dd_str} "
-                f"| {'✓' if ep.get('had_ribbon') else '—'} "
-                f"| {'✓' if ep.get('had_ignition') else '—'} "
                 f"| {ep.get('strongest_wyckoff_state') or '—'} |"
             )
         if len(episodes) > 200:
             lines.append(
                 f"| — | *(+{len(episodes) - 200} more — use /export?format=json)* "
-                "| | | | | | | | | |"
+                "| | | | | | | | |"
             )
         lines.append("")
 

@@ -195,6 +195,98 @@ function ExperimentCard({ exp, idx }) {
   );
 }
 
+// Compact decision summary derived from bundle data
+function DecisionSummary({ bundle }) {
+  if (!bundle) return null;
+
+  const npLabelRows  = bundle.performance_by_new_pump_label    || [];
+  const npSeqRows    = bundle.performance_by_new_pump_sequence || [];
+  const exps         = bundle.suggested_experiments            || [];
+  const fps          = bundle.false_positives                  || [];
+  const mm           = bundle.missed_movers                    || [];
+
+  const nonTrivial   = r => (r?.count ?? 0) >= 3 && r?.bucket && r.bucket !== 'NEW_PUMP_NONE';
+  const byReturn     = rows => [...rows].filter(nonTrivial)
+                                .sort((a, b) => (b.avg_return_5d ?? -999) - (a.avg_return_5d ?? -999));
+
+  const lblRanked    = byReturn(npLabelRows);
+  const seqRanked    = byReturn(npSeqRows);
+  const bestLabel    = lblRanked[0];
+  const worstLabel   = lblRanked[lblRanked.length - 1];
+  const bestSeq      = seqRanked[0];
+  const worstSeq     = seqRanked[seqRanked.length - 1];
+
+  const topExps      = exps.slice(0, 2);
+
+  const Block = ({ color, title, children }) => (
+    <div style={{
+      borderTop: `3px solid ${color}`,
+      padding: '10px 12px',
+      background: 'var(--bg-elev)',
+      borderRadius: 'var(--r-sm)',
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em',
+                    color, textTransform: 'uppercase', marginBottom: 6 }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+
+  const Item = ({ label, value, sub }) => (
+    <div style={{ fontSize: 11, lineHeight: 1.45, marginBottom: 4 }}>
+      <span style={{ color: 'var(--text-muted)' }}>{label}: </span>
+      <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{value}</span>
+      {sub != null && (
+        <span style={{ color: 'var(--text-dim)', fontSize: 9, marginLeft: 6 }}>{sub}</span>
+      )}
+    </div>
+  );
+
+  const fmtReturn = r => {
+    if (r?.avg_return_5d == null) return '—';
+    const v = Number(r.avg_return_5d).toFixed(2);
+    return `${r.bucket} · ${v >= 0 ? '+' : ''}${v}% avg 5d`;
+  };
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+                    color: 'var(--accent)', textTransform: 'uppercase', marginBottom: 10 }}>
+        ◈ Decision Summary
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        <Block color="var(--lime)" title="Works Better">
+          <Item label="Best label"    value={bestLabel ? fmtReturn(bestLabel) : '—'}
+                sub={bestLabel ? `n=${bestLabel.count}` : null} />
+          <Item label="Best sequence" value={bestSeq   ? fmtReturn(bestSeq)   : '—'}
+                sub={bestSeq   ? `n=${bestSeq.count}`   : null} />
+        </Block>
+        <Block color="var(--red)" title="Looks Weak">
+          <Item label="Weakest label"    value={worstLabel && worstLabel !== bestLabel ? fmtReturn(worstLabel) : '—'}
+                sub={worstLabel && worstLabel !== bestLabel ? `n=${worstLabel.count}` : null} />
+          <Item label="Weakest sequence" value={worstSeq   && worstSeq   !== bestSeq   ? fmtReturn(worstSeq)   : '—'}
+                sub={worstSeq   && worstSeq   !== bestSeq   ? `n=${worstSeq.count}`   : null} />
+          <Item label="False positives"  value={`${fps.length}`} sub={`missed movers ${mm.length}`} />
+        </Block>
+        <Block color="var(--cyan)" title="Try Next">
+          {topExps.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No suggestions — insufficient data.</div>
+          ) : topExps.map((e, i) => (
+            <div key={i} style={{ fontSize: 11, lineHeight: 1.35, marginBottom: 4 }}>
+              <span style={{ fontWeight: 700 }}>{i + 1}. </span>
+              <span>{e.title}</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: 9, marginLeft: 4 }}>
+                [{e.experiment_type} · {e.confidence}]
+              </span>
+            </div>
+          ))}
+        </Block>
+      </div>
+    </div>
+  );
+}
+
 function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
   const [copied, setCopied] = useState(false);
 
@@ -311,6 +403,9 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
           </div>
         )}
       </div>
+
+      {/* Decision Summary — what works, what looks weak, next experiments */}
+      <DecisionSummary bundle={bundle} />
 
       {/* Performance by Tier */}
       <div className={styles.bundleSection}>
