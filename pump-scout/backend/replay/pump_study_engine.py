@@ -2158,6 +2158,11 @@ async def build_raw_pattern_episode_features_ema(
 # Single source of truth for sequence-type classification.
 # Used by both best-state assignment and per-day count accumulation.
 
+# FRI34 = BLUE & L34 (filtered/selective version of L34).
+# Implication: when FRI34 fires, L34 also fires on the same bar.
+# Priority order places FRI34 variants above L34 because FRI34 has a stricter gate.
+# Count buckets are mutually exclusive: FRI34 variants count only when FRI34 is present;
+# L34 variants count only when FRI34 is NOT present (matching resolver priority).
 _NP_SEQ_PRIORITY: list[str] = [
     "FULL_FRI34_G4_B2",    # 0 — strongest (FRI34 is more selective)
     "FULL_L34_G4_B2",      # 1
@@ -2359,6 +2364,9 @@ async def build_raw_pattern_episode_features_new_pump(
 
         best_seq_rank  = _NP_SEQ_RANK["NONE"]
         best_seq_label = "NONE"
+        # best_lbl_rank tracks the best label seen across PRE days, so it is
+        # consistent with the rolling-loop counts (not the stale at-pump-start snapshot).
+        best_lbl_rank  = _NP_LABEL_RANK.get("NEW_PUMP_NONE", 5)
 
         cnt_l34 = cnt_fri34 = cnt_g4 = cnt_b2 = 0
         cnt_setup_only_l34 = cnt_setup_only_fri34 = 0
@@ -2410,6 +2418,12 @@ async def build_raw_pattern_episode_features_new_pump(
             if day_rank < best_seq_rank:
                 best_seq_rank  = day_rank
                 best_seq_label = day_seq
+
+            # Track best NP label across PRE days (consistent with rolling counts)
+            day_lbl      = wr.get("new_pump_label") or "NEW_PUMP_NONE"
+            day_lbl_rank = _NP_LABEL_RANK.get(day_lbl, 5)
+            if day_lbl_rank < best_lbl_rank:
+                best_lbl_rank = day_lbl_rank
 
             if fired_l34:   cnt_l34   += 1
             if fired_fri34: cnt_fri34 += 1
@@ -2482,8 +2496,8 @@ async def build_raw_pattern_episode_features_new_pump(
             "had_valid_recent_trigger":        valid_trigger or None,
             "had_valid_recent_confirm":        valid_confirm or None,
             "had_valid_full_sequence":         valid_full    or None,
-            "best_new_pump_label_rank":        lbl_rank,
-            # best_seq derived from rolling loop via shared _np_sequence_state resolver
+            # Both derived from rolling PRE-window loop, not stale at-pump-start snapshot
+            "best_new_pump_label_rank":        best_lbl_rank,
             "best_new_pump_sequence_type":     best_seq_label,
             "days_from_last_setup_to_breakout":   days_setup_to_breakout,
             "days_from_last_trigger_to_breakout": days_trigger_to_breakout,

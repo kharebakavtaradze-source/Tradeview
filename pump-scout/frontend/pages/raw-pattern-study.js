@@ -53,7 +53,7 @@ function StatusBadge({ status }) {
 
 // ── Run header card ───────────────────────────────────────────────────────────
 
-function RunHeader({ run, onRepairDone, onDelete }) {
+function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
   const isRunning = run.status === 'running';
   const needsRepair = run.status === 'complete' && !run.comparison_count;
   const [repairing,   setRepairing]   = useState(false);
@@ -157,6 +157,18 @@ function RunHeader({ run, onRepairDone, onDelete }) {
           <span className={styles.countVal}>{fmtNum(run.comparison_count)}</span>
           <span className={styles.countLabel}>Comparisons</span>
         </div>
+        {npCoverage && (
+          <div className={styles.countItem}
+               title={`${npCoverage.analyzed} analyzed, ${npCoverage.skipped} skipped (${npCoverage.skip_insufficient_candles} thin candles, ${npCoverage.skip_failed} errors)`}>
+            <span className={styles.countVal}
+                  style={{ color: npCoverage.coverage_pct >= 70 ? 'var(--lime)'
+                                : npCoverage.coverage_pct >= 40 ? 'var(--amber)'
+                                : 'var(--red)' }}>
+              {npCoverage.coverage_pct != null ? `${npCoverage.coverage_pct}%` : '—'}
+            </span>
+            <span className={styles.countLabel}>NP Coverage</span>
+          </div>
+        )}
       </div>
 
       {run.notes && (
@@ -990,6 +1002,7 @@ export default function RawPatternStudy() {
   // Selected run detail
   const [selectedId,  setSelectedId]  = useState(null);
   const [run,         setRun]         = useState(null);
+  const [npCoverage,  setNpCoverage]  = useState(null);
   const [loadingRun,  setLoadingRun]  = useState(false);
 
   // Episodes
@@ -1049,8 +1062,10 @@ export default function RawPatternStudy() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setRun(data.run || null);
+      setNpCoverage(data.np_coverage || null);
     } catch {
       setRun(null);
+      setNpCoverage(null);
     } finally {
       setLoadingRun(false);
     }
@@ -1295,6 +1310,7 @@ export default function RawPatternStudy() {
               <>
                 <RunHeader
                   run={run}
+                  npCoverage={npCoverage}
                   onRepairDone={() => { loadRun(selectedId); loadRuns(); loadEpisodes(selectedId); loadComparisons(selectedId); }}
                   onDelete={() => { setConfirmDelete(true); setDeleteErr(''); }}
                 />
