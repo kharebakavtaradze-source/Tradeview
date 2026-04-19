@@ -2381,6 +2381,11 @@ async def build_raw_pattern_episode_features_new_pump(
         cnt_isolated_g4 = cnt_isolated_b2 = 0
         cnt_confirm_after_g4 = 0
         cnt_valid_setup = cnt_valid_trigger = cnt_valid_confirm = cnt_valid_full = 0
+        # Accumulated "has fired somewhere in the PRE window so far" flags.
+        # Subtype conditions use these instead of w_has_* (200-bar lookback) so that
+        # base counts are the guaranteed foundation of every subtype count.
+        pre_fired_any_l34 = pre_fired_any_fri34 = False
+        pre_fired_any_g4  = pre_fired_any_b2    = False
 
         for row in sorted_pre:
             row_date = row.get("date") or ""
@@ -2431,33 +2436,37 @@ async def build_raw_pattern_episode_features_new_pump(
             if day_lbl_rank < best_lbl_rank:
                 best_lbl_rank = day_lbl_rank
 
-            if fired_l34:   cnt_l34   += 1
-            if fired_fri34: cnt_fri34 += 1
-            if fired_g4:    cnt_g4    += 1
-            if fired_b2:    cnt_b2    += 1
+            # Base counts: raw PRE-window firing events (age == 0 on that PRE day).
+            # Update accumulated flags immediately so subtype conditions below can
+            # see "has fired in PRE window including today."
+            if fired_l34:   cnt_l34   += 1; pre_fired_any_l34   = True
+            if fired_fri34: cnt_fri34 += 1; pre_fired_any_fri34 = True
+            if fired_g4:    cnt_g4    += 1; pre_fired_any_g4    = True
+            if fired_b2:    cnt_b2    += 1; pre_fired_any_b2    = True
 
-            # Sub-category counts MUST mirror _np_sequence_state resolver priority:
-            # FRI34 variants take precedence over L34 variants. A count increments
-            # only if the day would actually be classified under that label.
-            if fired_fri34 and not w_has_g4:
+            # Sub-category counts use accumulated PRE-window flags (not the 200-bar
+            # lookback w_has_*) so every subtype count is guaranteed to be supported
+            # by the corresponding base counts.
+            # FRI34 variants take precedence over L34 variants (resolver priority).
+            if fired_fri34 and not pre_fired_any_g4:
                 cnt_setup_only_fri34 += 1
-            elif fired_l34 and not w_has_g4:
+            elif fired_l34 and not pre_fired_any_g4:
                 cnt_setup_only_l34 += 1
 
-            if fired_g4 and w_has_fri34:
+            if fired_g4 and pre_fired_any_fri34:
                 cnt_trig_after_fri34 += 1
-            elif fired_g4 and w_has_l34:
+            elif fired_g4 and pre_fired_any_l34:
                 cnt_trig_after_l34 += 1
 
-            if fired_b2 and w_has_g4 and w_has_fri34:
+            if fired_b2 and pre_fired_any_g4 and pre_fired_any_fri34:
                 cnt_full_fri34_g4_b2 += 1
-            elif fired_b2 and w_has_g4 and w_has_l34:
+            elif fired_b2 and pre_fired_any_g4 and pre_fired_any_l34:
                 cnt_full_l34_g4_b2 += 1
 
-            if fired_g4 and not w_has_l34 and not w_has_fri34: cnt_isolated_g4 += 1
-            if fired_b2 and not w_has_l34 and not w_has_fri34: cnt_isolated_b2 += 1
+            if fired_g4 and not pre_fired_any_l34 and not pre_fired_any_fri34: cnt_isolated_g4 += 1
+            if fired_b2 and not pre_fired_any_l34 and not pre_fired_any_fri34: cnt_isolated_b2 += 1
 
-            if fired_b2 and w_has_g4: cnt_confirm_after_g4 += 1
+            if fired_b2 and pre_fired_any_g4: cnt_confirm_after_g4 += 1
 
             # Valid-freshness day counts
             w_vs = bool(w_has_l34 or w_has_fri34) and (
