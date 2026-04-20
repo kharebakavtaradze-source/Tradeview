@@ -3005,7 +3005,8 @@ def generate_engine_patch_plan(comparisons: list[dict]) -> dict:
             reason  = f"4x_pump {sep_fp}× higher than false_positive (moderate)"
         elif sep_fp is not None and sep_fp <= _PENALIZE_THRESH:
             verdict = "PENALIZE"
-            reason  = f"false_positive median {round(1/sep_fp,2)}× higher — contra-signal"
+            inv = round(1 / sep_fp, 2) if sep_fp != 0 else "∞"
+            reason  = f"false_positive median {inv}× higher — contra-signal"
         elif mfp is None and sep_nw is not None and sep_nw >= _BOOST_THRESH:
             verdict = "BOOST"
             reason  = f"4x_pump {sep_nw}× vs normal_winner (fp unavailable)"

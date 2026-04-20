@@ -894,11 +894,16 @@ function EnginePatchPlan({ runId }) {
   if (loading) return <div className={styles.statusMsg}>Building patch plan…</div>;
   if (error)   return (
     <div className={styles.errorMsg}>
-      {error}
+      {error.replace('TypeError: ', '').replace('Error: ', '')}
       <button onClick={load} style={{ marginLeft: 12, fontSize: 11, cursor: 'pointer' }}>Retry</button>
     </div>
   );
   if (!data)   return null;
+  if (data.has_data === false) return (
+    <div className={styles.statusMsg}>
+      {(data.summary && data.summary.note) || 'No engine plan available for this run.'}
+    </div>
+  );
 
   const { feature_verdicts = [], recommendations = [], summary = {} } = data;
 

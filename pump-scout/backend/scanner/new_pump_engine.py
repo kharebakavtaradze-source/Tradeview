@@ -457,28 +457,45 @@ def _sequence_bonus(age_l34, age_fri34, age_g4, age_b2):
 
 
 def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
-                    ema20, ema50, ema200, close, volume_z, body_ratio, dv_ratio):
+                    ema20, ema50, ema200, close, volume_z, body_ratio, dv_ratio,
+                    bull_stack_len=0, days_above_ema50=0, ema50_reclaim_count=0,
+                    avg_ema_spread=None):
     mod = 0
-
-    # --- Positive modifiers ---
-
-    # 1. Bull stack persistence (up to +8)
     ema20_ok  = ema20  is not None
     ema50_ok  = ema50  is not None
     ema200_ok = ema200 is not None
+
+    # --- Positive modifiers ---
+
+    # 1. Bull stack presence + duration (up to +12)
+    # Research: bull_stack_days_pre median 14 for 4x_pump vs 8 for false_positive.
+    # Duration bonus separates sustained stacks from brief crossovers.
     if ema20_ok and ema50_ok and ema200_ok and ema20 > ema50 > ema200:
         mod += 8
+        if bull_stack_len >= 10:
+            mod += 4   # 4x_pump territory (median=14 days)
+        elif bull_stack_len >= 5:
+            mod += 2
     elif ema20_ok and ema50_ok and ema20 > ema50:
         mod += 4
     elif ema20_ok and ema200_ok and ema20 > ema200:
         mod += 2
 
-    # 2. Moderate expansion context (up to +4): body ratio 1.2x–2.5x is constructive
-    if body_ratio is not None:
-        if 1.2 <= body_ratio <= 2.5:
-            mod += 4
-        elif 1.0 <= body_ratio < 1.2:
-            mod += 2
+    # 2. Ribbon quality: EMA50 proximity + reclaim count (up to +4)
+    # Research: days_above_ema50 median 19 for 4x_pump vs 14 for normal_winner.
+    # ema50_reclaim_count sweet spot = 2 (4x_pump); ≥4 = choppy (false_positive territory).
+    rq = 0
+    if days_above_ema50 >= 15:
+        rq += 3
+    elif days_above_ema50 >= 10:
+        rq += 2
+    elif days_above_ema50 >= 5:
+        rq += 1
+    if ema50_reclaim_count == 2:
+        rq += 1   # persistent but recovers — 4x_pump sweet spot
+    elif ema50_reclaim_count >= 4:
+        rq -= 1   # choppy pattern more common in false_positives
+    mod += rq
 
     # 3. Quality dollar-volume context (up to +5)
     if dv_ratio is not None:
@@ -495,9 +512,13 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
     elif volume_z is not None and 2.5 < volume_z <= 3.5:
         mod += 1
 
+    # 5. Body expansion — deweighted per research (avg_body_pct gap <0.03, low discriminant)
+    if body_ratio is not None and 1.2 <= body_ratio <= 2.5:
+        mod += 1   # token tie-breaker only; was +4
+
     # --- Negative modifiers ---
 
-    # 5. Ultra-extreme anomaly spike (up to -8)
+    # 6. Ultra-extreme anomaly spike (up to -8)
     if volume_z is not None:
         if volume_z > 4.0:
             mod -= 8
@@ -506,17 +527,32 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
         elif volume_z > 3.0:
             mod -= 3
 
-    # 6. Wide EMA spread penalty (up to -6): EMA20 vs EMA200
-    if ema20_ok and ema200_ok and ema200 > 0:
+    # 7. EMA ribbon spread — recalibrated from Run #50 research
+    # 4x_pump avg_ema_spread_pre median=35.7%, false_positive=59.3%
+    # Tight ribbon (<20%) = reward; >60% = false_positive territory
+    if avg_ema_spread is not None:
+        if avg_ema_spread < 20:
+            mod += 3   # tight ribbon: superior squeeze persistence
+        elif avg_ema_spread < 40:
+            pass       # neutral — normal 4x_pump range
+        elif avg_ema_spread > 60:
+            mod -= 6   # false_positive median territory
+        elif avg_ema_spread > 50:
+            mod -= 3
+        elif avg_ema_spread > 45:
+            mod -= 1
+    elif ema20_ok and ema200_ok and ema200 > 0:
         spread_pct = (ema20 - ema200) / ema200 * 100
-        if spread_pct > 50:
+        if spread_pct < 20:
+            mod += 3
+        elif spread_pct > 60:
             mod -= 6
-        elif spread_pct > 30:
-            mod -= 4
-        elif spread_pct > 20:
-            mod -= 2
+        elif spread_pct > 50:
+            mod -= 3
+        elif spread_pct > 45:
+            mod -= 1
 
-    # 7. Overly extended above EMA200 (up to -4)
+    # 8. Overly extended above EMA200 (up to -4)
     if ema200_ok and ema200 > 0:
         ext = close / ema200
         if ext > 1.5:
@@ -524,7 +560,7 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
         elif ext > 1.3:
             mod -= 2
 
-    # 8. Stale setup penalty (up to -4)
+    # 9. Stale setup penalty (up to -4)
     best_setup_age = min(
         a for a in (age_l34, age_fri34) if a is not None
     ) if (age_l34 is not None or age_fri34 is not None) else None
@@ -538,7 +574,7 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
     elif best_setup_age > 3:
         mod -= 1
 
-    # 9. Isolated B2 penalty (up to -6)
+    # 10. Isolated B2 penalty (up to -6) — single source of truth
     if age_b2 is not None:
         has_g4_context    = age_g4    is not None and age_g4    <= 5
         has_setup_context = best_setup_age is not None and best_setup_age <= 10
@@ -702,6 +738,37 @@ def analyze(bars):
     avg_b20 = sum(bodies_20) / len(bodies_20) if bodies_20 else None
     body_ratio = avg_b5 / avg_b20 if avg_b5 and avg_b20 and avg_b20 > 0 else None
 
+    # Ribbon quality metrics (research-calibrated from Run #50)
+    # bull_stack_len: consecutive bars with full ema20 > ema50 > ema200 (up to 30 bars)
+    bull_stack_len = 0
+    for i in range(last, max(-1, last - 30), -1):
+        e20 = ema20_s[i]; e50 = ema50_s[i]; e200 = ema200_s[i]
+        if e20 is not None and e50 is not None and e200 is not None and e20 > e50 > e200:
+            bull_stack_len += 1
+        else:
+            break
+
+    # days_above_ema50: close > EMA50 count over last 20 bars
+    days_above_ema50 = sum(
+        1 for i in range(max(0, last - 19), last + 1)
+        if ema50_s[i] is not None and closes[i] > ema50_s[i]
+    )
+
+    # ema50_reclaim_count: close crossed from below to above EMA50 in last 20 bars
+    ema50_reclaim_count = sum(
+        1 for i in range(max(1, last - 19), last + 1)
+        if (ema50_s[i] is not None and ema50_s[i - 1] is not None
+            and closes[i] > ema50_s[i] and closes[i - 1] <= ema50_s[i - 1])
+    )
+
+    # avg_ema_spread_10: avg |EMA20 - EMA200| / EMA200 % over last 10 bars
+    ema_spreads = [
+        abs(ema20_s[i] - ema200_s[i]) / ema200_s[i] * 100
+        for i in range(max(0, last - 9), last + 1)
+        if ema20_s[i] is not None and ema200_s[i] is not None and ema200_s[i] > 0
+    ]
+    avg_ema_spread_10 = sum(ema_spreads) / len(ema_spreads) if ema_spreads else None
+
     # Ages (None = signal never fired)
     def _age(bar_list):
         return (last - max(bar_list)) if bar_list else None
@@ -729,6 +796,10 @@ def analyze(bars):
         age_l34, age_fri34, age_g4, age_b2,
         ema20, ema50, ema200, closes[last],
         volume_z, body_ratio, dv_ratio,
+        bull_stack_len=bull_stack_len,
+        days_above_ema50=days_above_ema50,
+        ema50_reclaim_count=ema50_reclaim_count,
+        avg_ema_spread=avg_ema_spread_10,
     )
 
     total = max(0, setup_score + trigger_score + confirm_score + seq_bonus + mod_score)

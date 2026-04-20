@@ -3732,9 +3732,23 @@ async def raw_pattern_study_engine_patch_plan(run_id: int):
     if run.get("status") != "complete":
         raise HTTPException(400, detail="Run is not complete yet.")
 
-    comps  = await get_raw_pattern_comparisons(run_id)
-    result = generate_engine_patch_plan(comps)
-    return {"ok": True, "run_id": run_id, **result}
+    comps = await get_raw_pattern_comparisons(run_id)
+    if not comps:
+        return {
+            "ok": True, "run_id": run_id,
+            "feature_verdicts": [], "recommendations": [], "has_data": False,
+            "summary": {"note": "No comparison data available for this run yet."},
+        }
+    try:
+        result = generate_engine_patch_plan(comps)
+    except Exception as exc:
+        logger.warning("engine_patch_plan run_id=%s failed: %s", run_id, exc)
+        return {
+            "ok": True, "run_id": run_id,
+            "feature_verdicts": [], "recommendations": [], "has_data": False,
+            "summary": {"note": f"Plan generation failed: {exc}"},
+        }
+    return {"ok": True, "run_id": run_id, "has_data": True, **result}
 
 
 @app.get("/api/replay/raw-pattern-study/{run_id}/research-context")
