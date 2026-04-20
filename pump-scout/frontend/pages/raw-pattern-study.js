@@ -68,7 +68,19 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
       const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/research-context`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
-      await navigator.clipboard.writeText(d.context_text);
+      const text = d.context_text || '';
+      // navigator.clipboard requires HTTPS; fall back to execCommand for HTTP dev environments
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const el = document.createElement('textarea');
+        el.value = text;
+        el.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+        document.body.appendChild(el);
+        el.focus(); el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      }
       setCopyDone(true);
       setTimeout(() => setCopyDone(false), 2500);
     } catch { /* ignore */ } finally { setCopying(false); }
@@ -82,7 +94,11 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
       const blob = new Blob([await r.text()], { type: 'application/json' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href = url; a.download = `raw-pattern-run-${run.id}-full.json`; a.click();
+      a.href = url; a.download = `raw-pattern-run-${run.id}-full.json`;
+      // Must be in DOM for Firefox and strict browser security policies
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch { /* ignore */ } finally { setDownloading(false); }
   };
@@ -862,16 +878,26 @@ function EnginePatchPlan({ runId }) {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
 
-  useEffect(() => {
-    setLoading(true); setError('');
+  const load = useCallback(() => {
+    setLoading(true); setError(''); setData(null);
     fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/engine-patch-plan`)
       .then(r => r.json())
-      .then(d => { setData(d); setLoading(false); })
+      .then(d => {
+        if (!d.ok) throw new Error(d.detail || 'Server error');
+        setData(d); setLoading(false);
+      })
       .catch(e => { setError(String(e)); setLoading(false); });
   }, [runId]);
 
+  useEffect(() => { load(); }, [load]);
+
   if (loading) return <div className={styles.statusMsg}>Building patch plan…</div>;
-  if (error)   return <div className={styles.errorMsg}>{error}</div>;
+  if (error)   return (
+    <div className={styles.errorMsg}>
+      {error}
+      <button onClick={load} style={{ marginLeft: 12, fontSize: 11, cursor: 'pointer' }}>Retry</button>
+    </div>
+  );
   if (!data)   return null;
 
   const { feature_verdicts = [], recommendations = [], summary = {} } = data;
