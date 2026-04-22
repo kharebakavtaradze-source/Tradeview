@@ -151,9 +151,55 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 skipped += 1
                 continue
 
-            last = candles[-1]
+            last     = candles[-1]
+            last_idx = len(candles) - 1
             vol_slice = [c["v"] for c in candles[-20:] if c.get("v")]
             avg_vol   = sum(vol_slice) / len(vol_slice) if vol_slice else 0
+
+            # ── Signal bar index (for signal_date + next_day) ─────────────
+            _ag4  = np.get("age_g4")
+            _al34 = np.get("age_l34")
+            _afr  = np.get("age_fri34")
+            _ab2  = np.get("age_b2")
+            if _ag4 is not None:
+                sig_idx = last_idx - _ag4
+            elif _afr is not None or _al34 is not None:
+                _ages = [a for a in [_afr, _al34] if a is not None]
+                sig_idx = last_idx - min(_ages)
+            elif _ab2 is not None:
+                sig_idx = last_idx - _ab2
+            else:
+                sig_idx = last_idx
+            sig_idx = max(0, min(sig_idx, last_idx))
+
+            # signal_date — UTC date of the signal bar
+            signal_date = None
+            _t = candles[sig_idx].get("t")
+            if _t:
+                signal_date = datetime.fromtimestamp(_t / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+            # next_day — OHLC + return for the bar immediately after signal
+            next_day = None
+            if sig_idx + 1 <= last_idx:
+                _nd  = candles[sig_idx + 1]
+                _sc  = candles[sig_idx].get("c") or 0
+                _ndo = _nd.get("o")
+                _ndc = _nd.get("c")
+                _ndh = _nd.get("h")
+                _ndl = _nd.get("l")
+                _ndt = _nd.get("t")
+                _ret = round((_ndc - _sc) / _sc * 100, 2) if _ndc and _sc else None
+                _gap = round((_ndo - _sc) / _sc * 100, 2) if _ndo and _sc else None
+                next_day = {
+                    "date":       datetime.fromtimestamp(_ndt / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if _ndt else None,
+                    "open":       _ndo,
+                    "high":       _ndh,
+                    "low":        _ndl,
+                    "close":      _ndc,
+                    "return_pct": _ret,
+                    "gap_pct":    _gap,
+                    "is_winner":  _ret is not None and _ret > 0,
+                }
 
             lbl = np.get("new_pump_label") or "NEW_PUMP_NONE"
             if lbl == "NEW_PUMP_FIRE":     _np_progress["fire_count"]   += 1
@@ -176,10 +222,12 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 "has_fri34": np.get("has_fri34"),
                 "has_g4":    np.get("has_g4"),
                 "has_b2":    np.get("has_b2"),
-                "age_l34":   np.get("age_l34"),
-                "age_fri34": np.get("age_fri34"),
-                "age_g4":    np.get("age_g4"),
-                "age_b2":    np.get("age_b2"),
+                "age_l34":    np.get("age_l34"),
+                "age_fri34":  np.get("age_fri34"),
+                "age_g4":     np.get("age_g4"),
+                "age_b2":     np.get("age_b2"),
+                "signal_date": signal_date,
+                "next_day":    next_day,
             })
             _np_progress["analyzed_count"] = len(results)
 

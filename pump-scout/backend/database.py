@@ -143,6 +143,10 @@ class Journal(Base):
     max_gain_day = Column(Integer, nullable=True)    # day number of max gain
     missed_exit_pct = Column(Float, nullable=True)   # max_gain_pct - final_pnl_pct
     last_updated = Column(DateTime, nullable=True)
+    # ── New Pump source tracking (v14+) ──────────────────────────────────────
+    source      = Column(String(20), nullable=True)  # "scanner" | "new_pump"
+    signal_date = Column(String(10), nullable=True)  # YYYY-MM-DD of signal bar
+    np_sequence = Column(String(40), nullable=True)  # e.g. "FULL_FRI34_G4_B2"
 
 
 class ScanCandidate(Base):
@@ -502,6 +506,10 @@ _JOURNAL_MIGRATIONS = [
     ("max_gain_day",    "INTEGER"),
     ("missed_exit_pct", "FLOAT"),
     ("last_updated",    "TIMESTAMP"),
+    # v14+ new pump tracking
+    ("source",      "VARCHAR(20)"),
+    ("signal_date", "VARCHAR(10)"),
+    ("np_sequence", "VARCHAR(40)"),
 ]
 
 
@@ -950,6 +958,10 @@ def _journal_to_dict(j: Journal) -> dict:
         "max_gain_day": j.max_gain_day,
         "missed_exit_pct": j.missed_exit_pct,
         "last_updated": j.last_updated.isoformat() if j.last_updated else None,
+        # v14+ new pump tracking
+        "source":      j.source,
+        "signal_date": j.signal_date,
+        "np_sequence": j.np_sequence,
     }
 
 
@@ -1005,6 +1017,9 @@ async def add_journal_entry(data: dict) -> dict:
             stop_loss=data.get("stop_loss"),
             target_price=data.get("target_price"),
             status="OPEN",
+            source=data.get("source"),
+            signal_date=data.get("signal_date"),
+            np_sequence=data.get("np_sequence"),
         )
         session.add(entry)
         await session.commit()
