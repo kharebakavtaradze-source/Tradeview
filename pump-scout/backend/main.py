@@ -1254,6 +1254,10 @@ async def new_pump_latest(
     data = get_latest()
     results = data.get("results", [])
 
+    # Strip ETFs/funds from New Pump results (same filter applied to other scan endpoints)
+    exclusions = await _get_exclusion_set()
+    results = _strip_non_stocks(results, exclusions)
+
     if min_score > 0:
         results = [r for r in results if (r.get("new_pump_score") or 0) >= min_score]
     if label:
@@ -1281,6 +1285,29 @@ async def new_pump_ticker_detail(symbol: str):
     """
     from scanner.np_drawer import build_drawer_payload
     return await build_drawer_payload(symbol.upper())
+
+
+@app.get("/api/new-pump/journal-check")
+async def new_pump_journal_check(symbols: str = ""):
+    """
+    Return which symbols (from comma-separated list) are already in the journal
+    with source='new_pump'.  Used by frontend to disable the Add-to-Journal button.
+    """
+    from database import get_session_factory
+    from database import Journal as JournalModel
+    from sqlalchemy import select as _sa_select
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        return {"journaled": []}
+    async with get_session_factory()() as sess:
+        rows = await sess.execute(
+            _sa_select(JournalModel.symbol).where(
+                JournalModel.symbol.in_(sym_list),
+                JournalModel.source == "new_pump",
+            )
+        )
+        journaled = list({r[0] for r in rows.fetchall()})
+    return {"journaled": journaled}
 
 
 @app.get("/api/scan/pump")
