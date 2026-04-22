@@ -237,6 +237,9 @@ export default function NewPumpPage() {
   const [liveUpdated,  setLiveUpdated]  = useState(null);
   const [sortCol,      setSortCol]      = useState(null);
   const [sortDir,      setSortDir]      = useState('desc');
+  const [journaledSyms,setJournaledSyms]= useState(new Set());
+  const [journalAdding,setJournalAdding]= useState(new Set());
+  const [journalErrors,setJournalErrors]= useState({});
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -313,6 +316,16 @@ export default function NewPumpPage() {
     return () => clearInterval(iv);
   }, [data]);
 
+  // Journal check — which symbols already journaled from source='new_pump'
+  useEffect(() => {
+    const syms = (data?.results || []).map(r => r.symbol);
+    if (!syms.length) return;
+    fetch(`${API_URL}/api/new-pump/journal-check?symbols=${syms.join(',')}`)
+      .then(r => r.json())
+      .then(j => setJournaledSyms(new Set(j.journaled || [])))
+      .catch(() => {});
+  }, [data]);
+
   const toggleSort = useCallback((col) => {
     setSortCol(prev => {
       if (prev !== col) { setSortDir('desc'); return col; }
@@ -320,6 +333,58 @@ export default function NewPumpPage() {
       return col;
     });
   }, []);
+
+  const addToJournal = useCallback(async (r) => {
+    const sym = r.symbol;
+    if (journaledSyms.has(sym) || journalAdding.has(sym)) return;
+
+    setJournalAdding(prev => new Set([...prev, sym]));
+    setJournalErrors(prev => ({ ...prev, [sym]: null }));
+
+    // Preserve both prices: signal_price = EOD scan price; live_price_at_add = current
+    const lp            = livePrices[sym];
+    const signalPrice   = r.price;
+    const liveAtAdd     = lp?.price ?? null;
+    const entryPrice    = liveAtAdd ?? signalPrice;
+
+    try {
+      const res = await fetch(`${API_URL}/api/journal`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol:      sym,
+          entry_price: entryPrice,
+          entry_date:  new Date().toISOString().slice(0, 10),
+          source:      'new_pump',
+          tier:        r.new_pump_label,
+          score:       r.new_pump_score,
+          signal_date: r.signal_date,
+          np_sequence: r.new_pump_sequence_label,
+          notes: `New Pump | ${r.new_pump_sequence_label || '—'} | Score: ${r.new_pump_score ?? '—'}`,
+          indicators_snapshot: {
+            signal_price:      signalPrice,
+            live_price_at_add: liveAtAdd,
+            np_label:          r.new_pump_label,
+            np_sequence:       r.new_pump_sequence_label,
+            signal_date:       r.signal_date,
+            age_g4:            r.age_g4,
+            age_l34:           r.age_l34,
+            has_fri34:         r.has_fri34,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setJournalErrors(prev => ({ ...prev, [sym]: err.detail || `HTTP ${res.status}` }));
+        return;
+      }
+      setJournaledSyms(prev => new Set([...prev, sym]));
+    } catch (e) {
+      setJournalErrors(prev => ({ ...prev, [sym]: e.message }));
+    } finally {
+      setJournalAdding(prev => { const n = new Set(prev); n.delete(sym); return n; });
+    }
+  }, [journaledSyms, journalAdding, livePrices]);
 
   const openDrawer = useCallback(async (sym) => {
     setDrawerSym(sym);
@@ -525,6 +590,7 @@ export default function NewPumpPage() {
               <thead>
                 <tr>
                   <th>Symbol</th>
+                  <th className={styles.actionTh}>Action</th>
                   <th>State</th>
                   <SortTh col="score"    sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Score</SortTh>
                   <th>Label</th>
@@ -564,6 +630,22 @@ export default function NewPumpPage() {
                         <Link href={`/ticker/${r.symbol}`} className={styles.symLink}>
                           {r.symbol}
                         </Link>
+                      </td>
+                      <td className={styles.actionCell} onClick={e => e.stopPropagation()}>
+                        {journaledSyms.has(r.symbol) ? (
+                          <span className={styles.journaledBadge}>✓ Added</span>
+                        ) : (
+                          <button
+                            className={styles.journalBtn}
+                            disabled={journalAdding.has(r.symbol)}
+                            onClick={() => addToJournal(r)}
+                          >
+                            {journalAdding.has(r.symbol) ? '…' : '+ Journal'}
+                          </button>
+                        )}
+                        {journalErrors[r.symbol] && (
+                          <div className={styles.journalError}>{journalErrors[r.symbol]}</div>
+                        )}
                       </td>
                       <td><NpStateBadge seq={r.new_pump_sequence_label} /></td>
                       <td className={styles.scoreCell}
