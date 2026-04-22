@@ -116,6 +116,78 @@ function labelCounts(results) {
   return c;
 }
 
+// ── Sort helpers ──────────────────────────────────────────────────────────────
+
+function applySort(rows, lp, col, dir) {
+  if (!col) return rows;
+  const m = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    let va, vb;
+    switch (col) {
+      case 'score':    va = a.new_pump_score;               vb = b.new_pump_score;               break;
+      case 'sig_date': va = a.signal_date;                  vb = b.signal_date;                  break;
+      case 'price':    va = lp[a.symbol]?.price ?? a.price; vb = lp[b.symbol]?.price ?? b.price; break;
+      case 'change':   va = lp[a.symbol]?.change_pct;       vb = lp[b.symbol]?.change_pct;       break;
+      case 'nd_ret':   va = a.next_day?.return_pct;         vb = b.next_day?.return_pct;         break;
+      case 'volume':   va = a.volume_today;                 vb = b.volume_today;                 break;
+      default: return 0;
+    }
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;   // nulls always last
+    if (vb == null) return -1;
+    return va < vb ? -m : va > vb ? m : 0;
+  });
+}
+
+function SortTh({ col, sortCol, sortDir, onSort, children }) {
+  const active = sortCol === col;
+  return (
+    <th className={styles.sortTh} onClick={() => onSort(col)}>
+      {children}
+      <span className={styles.sortArrow} style={{ opacity: active ? 1 : 0.2 }}>
+        {active && sortDir === 'asc' ? ' ↑' : ' ↓'}
+      </span>
+    </th>
+  );
+}
+
+function ChgCell({ sym, livePrices }) {
+  const chg = livePrices[sym]?.change_pct;
+  if (chg == null) return <span style={{ color: '#333' }}>—</span>;
+  const color = chg > 0 ? '#00ff88' : chg < 0 ? '#ff4444' : '#888';
+  return (
+    <span style={{ color, fontVariantNumeric: 'tabular-nums' }}>
+      {chg > 0 ? '+' : ''}{fmt(chg, 2)}%
+    </span>
+  );
+}
+
+function NdRetCell({ nd }) {
+  if (!nd || nd.return_pct == null) return <span style={{ color: '#333' }}>—</span>;
+  const color = nd.return_pct > 0 ? '#00ff88' : '#ff4444';
+  return (
+    <span style={{ color, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+      {nd.return_pct > 0 ? '+' : ''}{fmt(nd.return_pct, 1)}%
+    </span>
+  );
+}
+
+function NdWLCell({ nd }) {
+  if (!nd || nd.return_pct == null) return <span style={{ color: '#333' }}>—</span>;
+  const win = nd.is_winner;
+  return (
+    <span style={{
+      display: 'inline-block', padding: '1px 5px', borderRadius: 3,
+      fontSize: 8, fontWeight: 800, letterSpacing: '0.06em',
+      color:      win ? '#00ff88' : '#ff4444',
+      background: win ? 'rgba(0,255,136,0.10)' : 'rgba(255,68,68,0.10)',
+      border:    `1px solid ${win ? 'rgba(0,255,136,0.22)' : 'rgba(255,68,68,0.22)'}`,
+    }}>
+      {win ? 'WIN' : 'LOSS'}
+    </span>
+  );
+}
+
 // ── Live price cell ───────────────────────────────────────────────────────────
 
 function LivePriceCell({ sym, eodPrice, livePrices }) {
@@ -163,6 +235,11 @@ export default function NewPumpPage() {
   const [drawerError,  setDrawerError]  = useState(null);
   const [livePrices,   setLivePrices]   = useState({});
   const [liveUpdated,  setLiveUpdated]  = useState(null);
+  const [sortCol,      setSortCol]      = useState(null);
+  const [sortDir,      setSortDir]      = useState('desc');
+  const [journaledSyms,setJournaledSyms]= useState(new Set());
+  const [journalAdding,setJournalAdding]= useState(new Set());
+  const [journalErrors,setJournalErrors]= useState({});
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -239,6 +316,76 @@ export default function NewPumpPage() {
     return () => clearInterval(iv);
   }, [data]);
 
+  // Journal check — which symbols already journaled from source='new_pump'
+  useEffect(() => {
+    const syms = (data?.results || []).map(r => r.symbol);
+    if (!syms.length) return;
+    fetch(`${API_URL}/api/new-pump/journal-check?symbols=${syms.join(',')}`)
+      .then(r => r.json())
+      .then(j => setJournaledSyms(new Set(j.journaled || [])))
+      .catch(() => {});
+  }, [data]);
+
+  const toggleSort = useCallback((col) => {
+    setSortCol(prev => {
+      if (prev !== col) { setSortDir('desc'); return col; }
+      setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+      return col;
+    });
+  }, []);
+
+  const addToJournal = useCallback(async (r) => {
+    const sym = r.symbol;
+    if (journaledSyms.has(sym) || journalAdding.has(sym)) return;
+
+    setJournalAdding(prev => new Set([...prev, sym]));
+    setJournalErrors(prev => ({ ...prev, [sym]: null }));
+
+    // Preserve both prices: signal_price = EOD scan price; live_price_at_add = current
+    const lp            = livePrices[sym];
+    const signalPrice   = r.price;
+    const liveAtAdd     = lp?.price ?? null;
+    const entryPrice    = liveAtAdd ?? signalPrice;
+
+    try {
+      const res = await fetch(`${API_URL}/api/journal`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol:      sym,
+          entry_price: entryPrice,
+          entry_date:  new Date().toISOString().slice(0, 10),
+          source:      'new_pump',
+          tier:        r.new_pump_label,
+          score:       r.new_pump_score,
+          signal_date: r.signal_date,
+          np_sequence: r.new_pump_sequence_label,
+          notes: `New Pump | ${r.new_pump_sequence_label || '—'} | Score: ${r.new_pump_score ?? '—'}`,
+          indicators_snapshot: {
+            signal_price:      signalPrice,
+            live_price_at_add: liveAtAdd,
+            np_label:          r.new_pump_label,
+            np_sequence:       r.new_pump_sequence_label,
+            signal_date:       r.signal_date,
+            age_g4:            r.age_g4,
+            age_l34:           r.age_l34,
+            has_fri34:         r.has_fri34,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setJournalErrors(prev => ({ ...prev, [sym]: err.detail || `HTTP ${res.status}` }));
+        return;
+      }
+      setJournaledSyms(prev => new Set([...prev, sym]));
+    } catch (e) {
+      setJournalErrors(prev => ({ ...prev, [sym]: e.message }));
+    } finally {
+      setJournalAdding(prev => { const n = new Set(prev); n.delete(sym); return n; });
+    }
+  }, [journaledSyms, journalAdding, livePrices]);
+
   const openDrawer = useCallback(async (sym) => {
     setDrawerSym(sym);
     setDrawerError(null);
@@ -266,6 +413,13 @@ export default function NewPumpPage() {
   const results = data?.results || [];
   const counts  = labelCounts(results);
   const regCfg  = REGIME_CFG[regime?.regime] || REGIME_CFG.NEUTRAL;
+  const sorted  = applySort(results, livePrices, sortCol, sortDir);
+  const ndRows  = results.filter(r => r.next_day?.return_pct != null);
+  const ndWin   = ndRows.filter(r => r.next_day.return_pct > 0).length;
+  const ndLoss  = ndRows.length - ndWin;
+  const ndAvg   = ndRows.length
+    ? ndRows.reduce((s, r) => s + r.next_day.return_pct, 0) / ndRows.length
+    : null;
 
   return (
     <>
@@ -415,13 +569,30 @@ export default function NewPumpPage() {
             No tickers match the current filters.
           </div>
         ) : (
-          <div className={styles.tableWrap}>
+          <>
+            {ndRows.length > 0 && (
+              <div className={styles.ndSummary}>
+                <span className={styles.ndSummaryTitle}>Next-Day History</span>
+                <div className={styles.ndSummaryItems}>
+                  <span><strong>{ndRows.length}</strong> with data</span>
+                  <span className={styles.ndWinText}><strong>{ndWin}</strong> ↑ Win</span>
+                  <span className={styles.ndLossText}><strong>{ndLoss}</strong> ↓ Loss</span>
+                  {ndAvg != null && (
+                    <span className={ndAvg > 0 ? styles.ndWinText : styles.ndLossText}>
+                      Avg: <strong>{ndAvg > 0 ? '+' : ''}{ndAvg.toFixed(1)}%</strong>
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className={styles.tableWrap}>
             <table className={styles.table}>
               <thead>
                 <tr>
                   <th>Symbol</th>
+                  <th className={styles.actionTh}>Action</th>
                   <th>State</th>
-                  <th>Score</th>
+                  <SortTh col="score"    sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Score</SortTh>
                   <th>Label</th>
                   <th>Sequence</th>
                   <th>L34</th>
@@ -436,14 +607,17 @@ export default function NewPumpPage() {
                   <th>Trigger</th>
                   <th>Confirm</th>
                   <th>Mod</th>
-                  <th>Signal Date</th>
-                  <th>Price / Live</th>
-                  <th>Volume</th>
+                  <SortTh col="sig_date" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Sig Date</SortTh>
+                  <SortTh col="price"    sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Price / Live</SortTh>
+                  <SortTh col="change"   sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Δ%</SortTh>
+                  <SortTh col="nd_ret"   sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Next Day</SortTh>
+                  <th>W/L</th>
+                  <SortTh col="volume"   sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Volume</SortTh>
                   <th>Sector</th>
                 </tr>
               </thead>
               <tbody>
-                {results.map(r => {
+                {sorted.map(r => {
                   const isNone = r.new_pump_label === 'NEW_PUMP_NONE';
                   return (
                     <tr
@@ -456,6 +630,22 @@ export default function NewPumpPage() {
                         <Link href={`/ticker/${r.symbol}`} className={styles.symLink}>
                           {r.symbol}
                         </Link>
+                      </td>
+                      <td className={styles.actionCell} onClick={e => e.stopPropagation()}>
+                        {journaledSyms.has(r.symbol) ? (
+                          <span className={styles.journaledBadge}>✓ Added</span>
+                        ) : (
+                          <button
+                            className={styles.journalBtn}
+                            disabled={journalAdding.has(r.symbol)}
+                            onClick={() => addToJournal(r)}
+                          >
+                            {journalAdding.has(r.symbol) ? '…' : '+ Journal'}
+                          </button>
+                        )}
+                        {journalErrors[r.symbol] && (
+                          <div className={styles.journalError}>{journalErrors[r.symbol]}</div>
+                        )}
                       </td>
                       <td><NpStateBadge seq={r.new_pump_sequence_label} /></td>
                       <td className={styles.scoreCell}
@@ -478,6 +668,9 @@ export default function NewPumpPage() {
                       <td className={styles.ageCell}>{fmt(r.new_pump_modifier_score,0)}</td>
                       <td className={styles.sigDateCell}>{r.signal_date || '—'}</td>
                       <td><LivePriceCell sym={r.symbol} eodPrice={r.price} livePrices={livePrices} /></td>
+                      <td><ChgCell sym={r.symbol} livePrices={livePrices} /></td>
+                      <td><NdRetCell nd={r.next_day} /></td>
+                      <td><NdWLCell nd={r.next_day} /></td>
                       <td>{fmtVol(r.volume_today)}</td>
                       <td className={styles.sectorCell}>{r.sector || '—'}</td>
                     </tr>
@@ -485,7 +678,8 @@ export default function NewPumpPage() {
                 })}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
       </div>
 
