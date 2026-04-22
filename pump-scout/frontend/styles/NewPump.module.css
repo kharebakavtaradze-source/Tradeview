@@ -187,6 +187,50 @@
   white-space: nowrap;
 }
 
+/* ── Sort headers ─────────────────────────────────────────── */
+.sortTh {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sortTh:hover { color: var(--text); }
+.sortArrow {
+  display: inline-block;
+  font-size: 8px;
+  margin-left: 1px;
+}
+
+/* ── Next-day summary block ──────────────────────────────── */
+.ndSummary {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 7px var(--page-px);
+  background: rgba(0, 229, 255, 0.03);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+.ndSummaryTitle {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.ndSummaryItems {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+}
+.ndSummaryItems strong { color: var(--text); }
+.ndWinText       { color: #00ff88; }
+.ndWinText strong { color: #00ff88; }
+.ndLossText       { color: #ff4444; }
+.ndLossText strong { color: #ff4444; }
+
 /* ── Table ───────────────────────────────────────────────── */
 .tableWrap {
   overflow-x: auto;
