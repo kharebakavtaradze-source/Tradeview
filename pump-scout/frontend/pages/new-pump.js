@@ -217,6 +217,58 @@ function LivePriceCell({ sym, eodPrice, livePrices }) {
   );
 }
 
+// ── Scan progress bar ─────────────────────────────────────────────────────────
+
+const PHASE_LABEL = {
+  idle:              'Idle',
+  fetching_universe: 'Fetching universe…',
+  filtering:         'Filtering tickers…',
+  fetching_candles:  'Fetching candles…',
+  analyzing:         'Analyzing signals…',
+  enriching:         'Enriching sectors…',
+  done:              'Done',
+  error:             'Error',
+};
+
+function scanPct(p) {
+  if (!p) return 2;
+  const { phase, universe_size: u, fetched_count: f, analyzed_count: a } = p;
+  if (phase === 'fetching_universe') return 3;
+  if (phase === 'filtering')         return 6;
+  if (phase === 'fetching_candles')  return u > 0 ? 6 + Math.round((f / u) * 54) : 10;
+  if (phase === 'analyzing')         return f > 0 ? 60 + Math.round((a / f) * 35) : 62;
+  if (phase === 'enriching')         return 96;
+  if (phase === 'done')              return 100;
+  return 2;
+}
+
+function ScanProgressBar({ progress: p }) {
+  const pct = scanPct(p);
+  const phase = p?.phase || 'starting';
+  const elapsed = p?.elapsed_secs;
+
+  let detail = '';
+  if (phase === 'fetching_candles' && p?.universe_size > 0)
+    detail = `${(p.fetched_count || 0).toLocaleString()} / ${p.universe_size.toLocaleString()} candles`;
+  else if (phase === 'analyzing' && p?.fetched_count > 0)
+    detail = `${(p.analyzed_count || 0).toLocaleString()} / ${p.fetched_count.toLocaleString()} symbols`;
+
+  return (
+    <div className={styles.progressWrap}>
+      <div className={styles.progressTop}>
+        <span className={styles.progressPhase}>{PHASE_LABEL[phase] || phase}</span>
+        {detail && <span className={styles.progressDetail}>{detail}</span>}
+        {p?.fire_count > 0 && <span className={styles.progressFire}>FIRE: {p.fire_count}</span>}
+        {p?.strong_count > 0 && <span className={styles.progressStrong}>STRONG: {p.strong_count}</span>}
+        {elapsed != null && <span className={styles.progressElapsed}>{elapsed}s</span>}
+      </div>
+      <div className={styles.progressTrack}>
+        <div className={styles.progressFill} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function NewPumpPage() {
@@ -240,6 +292,7 @@ export default function NewPumpPage() {
   const [journaledSyms,setJournaledSyms]= useState(new Set());
   const [journalAdding,setJournalAdding]= useState(new Set());
   const [journalErrors,setJournalErrors]= useState({});
+  const [scanProgress, setScanProgress] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -268,18 +321,21 @@ export default function NewPumpPage() {
   const triggerScan = useCallback(async () => {
     if (scanning) return;
     setScanning(true);
+    setScanProgress(null);
     try {
       await fetch(`${API_URL}/api/new-pump/run`, { method: 'POST' });
       for (let i = 0; i < 120; i++) {
-        await new Promise(r => setTimeout(r, 3000));
-        const st = await fetch(`${API_URL}/api/new-pump/status`).then(r => r.json());
-        if (!st.running && st.has_data) break;
+        await new Promise(r => setTimeout(r, 2000));
+        const p = await fetch(`${API_URL}/api/admin/new-pump-scan/status`).then(r => r.json());
+        setScanProgress(p);
+        if (!p.running && p.has_data) break;
       }
       await fetchData();
     } catch (e) {
       setError(e.message);
     } finally {
       setScanning(false);
+      setScanProgress(null);
     }
   }, [scanning, fetchData]);
 
@@ -554,6 +610,9 @@ export default function NewPumpPage() {
             {scanning ? '⏳ Scanning…' : '▶ Run Scan'}
           </button>
         </div>
+
+        {/* Scan progress bar */}
+        {scanning && <ScanProgressBar progress={scanProgress} />}
 
         {/* Body */}
         {error ? (

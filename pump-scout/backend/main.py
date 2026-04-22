@@ -1310,6 +1310,37 @@ async def new_pump_journal_check(symbols: str = ""):
     return {"journaled": journaled}
 
 
+@app.get("/api/new-pump/anatomy/{symbol}")
+async def new_pump_anatomy(symbol: str):
+    """
+    Signal anatomy diagnostic for one symbol.
+    Fetches 200 daily candles, runs compute_anatomy(), returns full diagnostic
+    report: per-bar signal detail (last 30 bars), per-signal fire/near-miss
+    counts, G4 arm/consume history, and human-readable diagnosis list.
+    """
+    sym = symbol.upper()
+    try:
+        from scanner.massive_data import fetch_candles_massive
+        from scanner.signal_anatomy import compute_anatomy
+
+        candles = await fetch_candles_massive(sym, days=200)
+        if not candles:
+            return {"error": "no_candles", "symbol": sym}
+
+        bars = [
+            {"open": c["o"], "high": c["h"], "low": c["l"],
+             "close": c["c"], "volume": c["v"]}
+            for c in candles
+        ]
+        report = compute_anatomy(bars)
+        report["symbol"] = sym
+        report["n_candles"] = len(candles)
+        return report
+    except Exception as exc:
+        logger.error(f"[anatomy] {sym}: {exc}", exc_info=True)
+        return {"error": str(exc), "symbol": sym}
+
+
 @app.get("/api/scan/pump")
 async def get_pump_scan(
     mode:         str  = "all",
