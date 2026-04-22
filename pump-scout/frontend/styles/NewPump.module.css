@@ -173,6 +173,20 @@
 }
 .scanMeta strong { color: var(--text); }
 
+.liveUpdated {
+  margin-left: auto;
+  color: #00e676;
+  opacity: 0.7;
+}
+.liveUpdated strong { color: #00e676; }
+
+.sigDateCell {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ── Table ───────────────────────────────────────────────── */
 .tableWrap {
   overflow-x: auto;
