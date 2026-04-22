@@ -116,6 +116,35 @@ function labelCounts(results) {
   return c;
 }
 
+// ── Live price cell ───────────────────────────────────────────────────────────
+
+function LivePriceCell({ sym, eodPrice, livePrices }) {
+  const lp = livePrices[sym];
+  if (!lp) {
+    return <span style={{ color: '#555' }}>{eodPrice != null ? `$${fmt(eodPrice, 2)}` : '—'}</span>;
+  }
+  const chg = lp.change_pct;
+  const dollar = lp.prev_close != null ? lp.price - lp.prev_close : null;
+  const color = chg == null ? '#888' : chg > 0 ? '#00ff88' : chg < 0 ? '#ff4444' : '#888';
+  return (
+    <>
+      <span style={{ color: '#e0e0e0', fontVariantNumeric: 'tabular-nums' }}>
+        ${fmt(lp.price, 2)}
+      </span>
+      {chg != null && (
+        <span style={{ color, fontSize: 10, marginLeft: 4 }}>
+          {chg > 0 ? '+' : ''}{fmt(chg, 2)}%
+        </span>
+      )}
+      {dollar != null && (
+        <span style={{ color, fontSize: 9, marginLeft: 3, opacity: 0.75 }}>
+          {dollar >= 0 ? '+' : ''}${Math.abs(dollar).toFixed(2)}
+        </span>
+      )}
+    </>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function NewPumpPage() {
@@ -132,6 +161,8 @@ export default function NewPumpPage() {
   const [drawerData,   setDrawerData]   = useState({});
   const [drawerLoading,setDrawerLoading]= useState(false);
   const [drawerError,  setDrawerError]  = useState(null);
+  const [livePrices,   setLivePrices]   = useState({});
+  const [liveUpdated,  setLiveUpdated]  = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -188,6 +219,25 @@ export default function NewPumpPage() {
       .then(setRegime)
       .catch(() => {});
   }, []);
+
+  // Live price polling — starts immediately when scan data loads, refreshes every 30s
+  useEffect(() => {
+    const syms = (data?.results || []).map(r => r.symbol);
+    if (!syms.length) return;
+    setLivePrices({});  // clear stale prices on new scan data
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/prices/live?symbols=${syms.join(',')}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        setLivePrices(json);
+        setLiveUpdated(new Date());
+      } catch {}
+    };
+    poll();
+    const iv = setInterval(poll, 30_000);
+    return () => clearInterval(iv);
+  }, [data]);
 
   const openDrawer = useCallback(async (sym) => {
     setDrawerSym(sym);
@@ -282,6 +332,11 @@ export default function NewPumpPage() {
             <span>Universe: <strong>{scanStatus.universe?.toLocaleString()}</strong> tickers</span>
             {scanStatus.elapsed != null && (
               <span>Elapsed: <strong>{scanStatus.elapsed}s</strong></span>
+            )}
+            {liveUpdated && (
+              <span className={styles.liveUpdated}>
+                Live prices: <strong>{liveUpdated.toLocaleTimeString()}</strong>
+              </span>
             )}
           </div>
         )}
@@ -381,7 +436,8 @@ export default function NewPumpPage() {
                   <th>Trigger</th>
                   <th>Confirm</th>
                   <th>Mod</th>
-                  <th>Price</th>
+                  <th>Signal Date</th>
+                  <th>Price / Live</th>
                   <th>Volume</th>
                   <th>Sector</th>
                 </tr>
@@ -420,7 +476,8 @@ export default function NewPumpPage() {
                       <td className={styles.ageCell}>{fmt(r.new_pump_trigger_score, 0)}</td>
                       <td className={styles.ageCell}>{fmt(r.new_pump_confirm_score, 0)}</td>
                       <td className={styles.ageCell}>{fmt(r.new_pump_modifier_score,0)}</td>
-                      <td>{r.price != null ? `$${fmt(r.price, 2)}` : '—'}</td>
+                      <td className={styles.sigDateCell}>{r.signal_date || '—'}</td>
+                      <td><LivePriceCell sym={r.symbol} eodPrice={r.price} livePrices={livePrices} /></td>
                       <td>{fmtVol(r.volume_today)}</td>
                       <td className={styles.sectorCell}>{r.sector || '—'}</td>
                     </tr>
