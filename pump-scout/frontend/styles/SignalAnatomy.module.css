@@ -95,6 +95,38 @@
   margin-bottom: 12px;
 }
 
+.resultHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.resultHeader .sectionHdr {
+  margin-bottom: 0;
+}
+
+.downloadBtn {
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+
+.downloadBtn:hover {
+  background: var(--cyan-dim);
+  border-color: var(--cyan-border);
+  color: var(--cyan);
+}
+
 .sectionNote {
   font-weight: 400;
   font-size: 9px;

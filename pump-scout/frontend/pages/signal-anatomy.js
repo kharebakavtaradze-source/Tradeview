@@ -7,6 +7,65 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function buildAiPacket(report) {
+  const recentBars = (report.bar_anatomy || [])
+    .filter((b) => b.bars_ago <= 14)
+    .map((b) => ({
+      bars_ago: b.bars_ago,
+      close: b.close,
+      volume_z: b.volume_z,
+      rsi_range3: b.rsi_range3,
+      v_ratio: b.v_ratio,
+      signals: {
+        l34: b.l34,
+        fri34: b.fri34,
+        g4: b.g4,
+        b2: b.b2,
+        g4_armed: b.g4_armed,
+      },
+      l34_conditions: b.l34_conditions,
+      l34_near_miss: b.l34_near_miss,
+      t_signals_fired: b.t_signals_fired || [],
+      z_signals_fired: b.z_signals_fired || [],
+    }));
+
+  return {
+    packet_type: 'pump_scout_signal_anatomy_ai_packet',
+    prompt: [
+      'You are analyzing a small-cap momentum setup using Pump Scout Signal Anatomy data.',
+      'Explain why the New Pump Engine did or did not fire.',
+      'Judge whether the setup is improving, stale, invalid, or actionable.',
+      'Name the exact missing confirmation and the main risk.',
+      'Do not invent market data. Use only the JSON fields in this packet.',
+    ].join(' '),
+    symbol: report.symbol,
+    n_candles: report.n_candles || report.n_bars,
+    final_engine_result: {
+      label: report.final?.new_pump_label || null,
+      score: report.final?.new_pump_score ?? null,
+      sequence: report.final?.new_pump_sequence_label || null,
+      is_no_signal: report.is_no_signal,
+    },
+    signal_history: report.signal_analysis || {},
+    diagnosis: report.diagnosis || [],
+    l34_near_misses_30: report.l34_near_misses_30 || [],
+    recent_bar_anatomy: recentBars,
+    full_report: report,
+  };
+}
+
+function downloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function SignalPill({ on, label }) {
   return (
     <span className={on ? styles.pillOn : styles.pillOff}>{label}</span>
@@ -325,6 +384,13 @@ export default function SignalAnatomy() {
     if (e.key === 'Enter') analyze();
   }, [analyze]);
 
+  const downloadAiPacket = useCallback(() => {
+    if (!report) return;
+    const sym = (report.symbol || input || 'signal').toUpperCase();
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadJson(`${sym}-signal-anatomy-ai-packet-${stamp}.json`, buildAiPacket(report));
+  }, [input, report]);
+
   return (
     <>
       <Head><title>Signal Anatomy — Pump Scout</title></Head>
@@ -357,7 +423,12 @@ export default function SignalAnatomy() {
 
             {/* ── Final result ── */}
             <div className={styles.section}>
-              <div className={styles.sectionHdr}>Engine Result</div>
+              <div className={styles.resultHeader}>
+                <div className={styles.sectionHdr}>Engine Result</div>
+                <button className={styles.downloadBtn} onClick={downloadAiPacket}>
+                  Download AI Packet
+                </button>
+              </div>
               <FinalBadge result={report.final} />
               <div className={styles.metaRow}>
                 <span className={styles.metaItem}>bars: <strong>{report.n_candles}</strong></span>
