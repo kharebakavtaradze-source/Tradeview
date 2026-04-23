@@ -226,6 +226,12 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 "age_fri34":  np.get("age_fri34"),
                 "age_g4":     np.get("age_g4"),
                 "age_b2":     np.get("age_b2"),
+                "state":          np.get("state"),
+                "engine_path":    np.get("engine_path"),
+                "missing_piece":  np.get("missing_piece"),
+                "main_risk":      np.get("main_risk"),
+                "impulse_score":  np.get("impulse_score"),
+                "impulse_label":  np.get("impulse_label"),
                 "signal_date": signal_date,
                 "next_day":    next_day,
             })

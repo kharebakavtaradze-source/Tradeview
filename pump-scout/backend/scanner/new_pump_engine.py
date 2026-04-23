@@ -443,17 +443,32 @@ def _sequence_bonus(age_l34, age_fri34, age_g4, age_b2):
     good_l34   = _valid_setup_before_trigger(age_l34,   age_g4)
     good_b2    = _valid_confirm_after_trigger(age_b2,   age_g4)
 
-    # Full-sequence bonus sharply cut — replay FULL_* both negative
-    # TRIGGER_AFTER_* bonuses mildly increased — replay positive
+    # Full-sequence bonus stays low — replay FULL_* both negative
+    # TRIGGER_AFTER_L34 strongly upweighted — Replay 14: strongest meaningful bucket
+    # TRIGGER_AFTER_FRI34 mildly upweighted — positive but smaller sample
     if good_fri34 and good_b2:
         return 4
     if good_l34 and good_b2:
         return 3
     if good_fri34:
-        return 9             # TRIGGER_AFTER_FRI34 avg +2.3%
+        return 10            # TRIGGER_AFTER_FRI34 — positive replay evidence
     if good_l34:
-        return 7             # TRIGGER_AFTER_L34 positive
+        return 13            # TRIGGER_AFTER_L34 — strongest replay bucket (was 7)
     return 0
+
+
+def _progression_adjustment(seq_label: str) -> int:
+    """
+    Per-sequence score adjustment derived from Replay 14 evidence.
+    Penalizes structurally empty or isolated sequences; rewards nothing
+    that the sequence_bonus already handles (TRIGGER_AFTER_* rewarded there).
+    """
+    return {
+        "ISOLATED_G4":      -8,   # Replay 14: weak, no setup context
+        "SETUP_ONLY_FRI34": -4,   # structure stalled despite FRI34 signal
+        "NONE":             -5,   # no progression — most destructive (np_setup_via=NONE)
+        "ISOLATED_B2":      -3,   # orphaned confirmation without trigger context
+    }.get(seq_label, 0)
 
 
 def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
@@ -666,7 +681,175 @@ def _empty_analysis():
         new_pump_score=0,
         new_pump_sequence_label="NONE",
         new_pump_label="NEW_PUMP_NONE",
+        state="NEUTRAL",
+        engine_path="structure",
+        missing_piece="structure_not_present",
+        main_risk="no_progression",
+        impulse_score=0,
+        impulse_label=None,
+        volume_z=None,
+        ema_extended=None,
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: State classifier
+# ---------------------------------------------------------------------------
+
+_CONFIRMED_SEQS = {"FULL_FRI34_G4_B2", "FULL_L34_G4_B2", "CONFIRM_AFTER_G4"}
+_TRIGGERED_SEQS = {"TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34"}
+_SETUP_SEQS     = {"SETUP_ONLY_L34", "SETUP_ONLY_FRI34"}
+
+
+def classify_state(ctx: dict) -> str:
+    """
+    Derive market state from analyze() context.
+    ctx must include: new_pump_sequence_label, has_*/age_* fields,
+    volume_z, ema_extended.
+
+    States (priority order):
+      CONFIRMED     — full G4+B2 progression completed
+      TRIGGERED     — valid setup→trigger sequence (WSHP-type: PRE_TRIGGER)
+      PRE_TRIGGER   — fresh setup, trigger not yet fired
+      OVEREXTENDED  — price extended above EMA200, trigger absent/stale (TORO-type)
+      IMPULSE       — explosive volume/price without NP structure (FRMM-type)
+      FAILED_SETUP  — L34 historically present, not progressing (AGPU-type)
+      BROKEN_SETUP  — all signals stale, structure decayed
+      NEUTRAL       — none of the above apply
+    """
+    seq      = ctx.get("new_pump_sequence_label", "NONE")
+    age_l34  = ctx.get("age_l34")
+    age_fri34= ctx.get("age_fri34")
+    age_g4   = ctx.get("age_g4")
+    has_l34  = ctx.get("has_l34", False)
+    has_fri34= ctx.get("has_fri34", False)
+    has_g4   = ctx.get("has_g4", False)
+    volume_z = ctx.get("volume_z")
+    ema_ext  = ctx.get("ema_extended") or 1.0
+
+    fresh_g4    = has_g4 and age_g4 is not None and age_g4 <= _MAX_TRIGGER_AGE
+    fresh_setup = (
+        (has_l34   and age_l34   is not None and age_l34   <= _MAX_SETUP_AGE) or
+        (has_fri34 and age_fri34 is not None and age_fri34 <= _MAX_SETUP_AGE)
+    )
+
+    if seq in _CONFIRMED_SEQS:
+        return "CONFIRMED"
+
+    if seq in _TRIGGERED_SEQS:
+        return "TRIGGERED"
+
+    if seq in _SETUP_SEQS:
+        return "PRE_TRIGGER"
+
+    # OVEREXTENDED: price well above EMA200, no valid trigger (TORO example)
+    if ema_ext > 1.3 and not fresh_g4 and (has_l34 or has_fri34 or has_g4):
+        return "OVEREXTENDED"
+
+    # IMPULSE: explosive volume without NP structure (FRMM example)
+    if volume_z is not None and volume_z >= 1.8 and not fresh_setup and not fresh_g4:
+        return "IMPULSE"
+
+    # FAILED_SETUP vs BROKEN_SETUP: L34 present but no G4 (AGPU example)
+    if has_l34 and not fresh_g4:
+        ages = [a for a in (age_l34, age_fri34) if a is not None]
+        best_age = min(ages) if ages else None
+        if best_age is not None and best_age > _MAX_SETUP_AGE:
+            return "BROKEN_SETUP"
+        return "FAILED_SETUP"
+
+    # BROKEN_SETUP: had G4 historically, all signals now stale
+    if has_g4 and not fresh_g4 and not fresh_setup and seq == "NONE":
+        return "BROKEN_SETUP"
+
+    return "NEUTRAL"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Explanation fields
+# ---------------------------------------------------------------------------
+
+def _explain(seq_label: str, state: str,
+             age_g4, age_l34, age_fri34, age_b2) -> tuple:
+    """Return (missing_piece, main_risk) for explainable output."""
+    if state == "CONFIRMED":
+        missing = None
+    elif seq_label in ("SETUP_ONLY_L34", "SETUP_ONLY_FRI34"):
+        missing = "G4"
+    elif seq_label in ("TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34", "ISOLATED_G4"):
+        missing = "B2"
+    elif age_l34 is None and age_fri34 is None:
+        missing = "structure_not_present"
+    elif seq_label == "NONE":
+        missing = "fresh_trigger"
+    else:
+        missing = None
+
+    if state == "OVEREXTENDED":
+        risk = "move_without_confirm"
+    elif state == "IMPULSE":
+        risk = "external_move_without_base"
+    elif state in ("FAILED_SETUP", "BROKEN_SETUP", "PRE_TRIGGER", "NEUTRAL"):
+        risk = "no_progression"
+    elif state == "TRIGGERED":
+        risk = "no_progression"
+    elif state == "CONFIRMED" and seq_label == "CONFIRM_AFTER_G4":
+        risk = "move_without_confirm"
+    else:
+        risk = None
+
+    return missing, risk
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Impulse engine (separate path, does not contaminate structure score)
+# ---------------------------------------------------------------------------
+
+def compute_impulse_score(bars: list) -> dict:
+    """
+    Score explosive volume/price expansion regardless of NP structure.
+    Returns impulse_score (int) and impulse_label (str or None).
+    Lives on a separate path — never added to new_pump_score.
+    """
+    n = len(bars)
+    if n < 20:
+        return {"impulse_score": 0, "impulse_label": None}
+
+    closes  = [b["close"]  for b in bars]
+    volumes = [b["volume"] for b in bars]
+    last = n - 1
+
+    vol_win = volumes[max(0, last - 19): last + 1]
+    vol_mid = sum(vol_win) / len(vol_win) if vol_win else 0
+    vol_var = sum((v - vol_mid) ** 2 for v in vol_win) / len(vol_win) if vol_win else 0
+    vol_std = vol_var ** 0.5
+    vz = (volumes[last] - vol_mid) / vol_std if vol_std > 0 else 0
+
+    low_10   = min(b["low"] for b in bars[max(0, last - 9): last + 1])
+    price_exp = (closes[last] - low_10) / low_10 * 100 if low_10 > 0 else 0
+
+    ref5 = closes[max(0, last - 4)]
+    mom5 = (closes[last] - ref5) / ref5 * 100 if ref5 > 0 else 0
+
+    score = 0
+    if vz >= 3.0:          score += 30
+    elif vz >= 2.0:        score += 20
+    elif vz >= 1.5:        score += 10
+
+    if price_exp >= 15:    score += 25
+    elif price_exp >= 8:   score += 15
+    elif price_exp >= 4:   score += 8
+
+    if mom5 >= 10:         score += 20
+    elif mom5 >= 5:        score += 12
+    elif mom5 >= 2:        score += 6
+
+    if score >= 50:        label = "IMPULSE_STRONG"
+    elif score >= 25:      label = "IMPULSE_WATCH"
+    else:                  label = None
+
+    return {"impulse_score": score, "impulse_label": label}
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +985,23 @@ def analyze(bars):
         avg_ema_spread=avg_ema_spread_10,
     )
 
-    total = max(0, setup_score + trigger_score + confirm_score + seq_bonus + mod_score)
+    seq_lbl  = _sequence_label(age_l34, age_fri34, age_g4, age_b2)
+    prog_adj = _progression_adjustment(seq_lbl)
+    total    = max(0, setup_score + trigger_score + confirm_score + seq_bonus + mod_score + prog_adj)
+
+    # Phase 1–5: state, engine path, explanation, impulse
+    ema_extended = (closes[last] / ema200) if (ema200 and ema200 > 0) else None
+    _ctx = dict(
+        new_pump_sequence_label=seq_lbl,
+        has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
+        age_l34=age_l34, age_fri34=age_fri34, age_g4=age_g4, age_b2=age_b2,
+        volume_z=volume_z,
+        ema_extended=ema_extended,
+    )
+    state       = classify_state(_ctx)
+    engine_path = "impulse" if state == "IMPULSE" else "structure"
+    missing_piece, main_risk = _explain(seq_lbl, state, age_g4, age_l34, age_fri34, age_b2)
+    impulse     = compute_impulse_score(bars)
 
     return dict(
         has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
@@ -812,8 +1011,16 @@ def analyze(bars):
         new_pump_confirm_score=confirm_score,
         new_pump_modifier_score=mod_score,
         new_pump_score=total,
-        new_pump_sequence_label=_sequence_label(age_l34, age_fri34, age_g4, age_b2),
+        new_pump_sequence_label=seq_lbl,
         new_pump_label=_final_label(total),
+        state=state,
+        engine_path=engine_path,
+        missing_piece=missing_piece,
+        main_risk=main_risk,
+        impulse_score=impulse["impulse_score"],
+        impulse_label=impulse["impulse_label"],
+        volume_z=round(volume_z, 3) if volume_z is not None else None,
+        ema_extended=round(ema_extended, 3) if ema_extended is not None else None,
     )
 
 

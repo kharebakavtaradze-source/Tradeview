@@ -49,11 +49,11 @@
 .regimeSectorsHdr {
   font-weight: 700;
   margin-right: 5px;
-  color: rgba(255,255,255,0.3);
+  color: var(--text-muted);
 }
 .regimeRec {
   font-size: 9px;
-  color: rgba(255,255,255,0.3);
+  color: var(--text-muted);
   margin-left: auto;
   font-style: italic;
   max-width: 320px;
@@ -349,7 +349,7 @@
   letter-spacing: 0.04em;
 }
 .pillOn  { color: #00ff88; background: rgba(0,255,136,0.12); border: 1px solid rgba(0,255,136,0.25); }
-.pillOff { color: #444;    background: transparent;           border: 1px solid #333; }
+.pillOff { color: var(--text-muted); background: transparent; border: 1px solid var(--border2); }
 
 .ageCell {
   font-size: 10px;
@@ -377,7 +377,7 @@
 
 .subScores {
   font-size: 9px;
-  color: var(--text-dim, #555);
+  color: var(--text-muted);
   display: flex;
   gap: 6px;
 }
@@ -415,7 +415,7 @@
 
 .progressElapsed {
   font-size: 10px;
-  color: #555;
+  color: var(--text-muted);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
