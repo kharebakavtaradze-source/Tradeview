@@ -19,139 +19,6 @@ logger = logging.getLogger(__name__)
 REGIME_ETFS = {"SPY", "QQQ", "XLE", "XLV", "XLU", "GLD", "IWM"}
 
 
-# Ribbon secondary pass is for analytical discovery only.
-# It intentionally captures liquid compression setups that lack breakout
-# volume confirmation and were excluded from the main scoring pipeline.
-async def run_ribbon_pass(
-    all_candles: dict,
-    main_scan_symbols: set,
-    spy_pct_5d: float = 0.0,
-) -> int:
-    """
-    Ribbon secondary pass — analytical discovery only.
-
-    Finds tickers with EMA compression that were excluded from the main scan
-    (anomaly_ratio < 2.0). Uses already-fetched OHLCV candles — no new
-    price data API calls.
-
-    Returns count of ribbon candidates saved to DB.
-    """
-    from scanner.sector_map import NON_STOCK_SECURITIES
-
-    # Load full ETF exclusion list (cached 7 days — fast after first call)
-    etf_symbols: set = set()
-    try:
-        from scanner.massive_data import get_us_etf_symbols
-        etf_symbols = await get_us_etf_symbols()
-    except Exception as e:
-        logger.warning(f"Ribbon pass: exclusion list unavailable (non-fatal): {e}")
-
-    candidates = []
-
-    for symbol, candles in all_candles.items():
-        sym_upper = symbol.upper()
-        # Skip ETFs / regime ETFs
-        if symbol in REGIME_ETFS:
-            continue
-        if sym_upper in etf_symbols:
-            continue
-        # Skip non-stock securities (CEFs, ETNs)
-        if sym_upper in NON_STOCK_SECURITIES:
-            continue
-        # Skip symbols already captured by main scan
-        if symbol in main_scan_symbols:
-            continue
-        # Need enough history for EMA89
-        if not candles or len(candles) < 100:
-            continue
-
-        try:
-            ind = calc_all(candles)
-            if not ind:
-                continue
-
-            price         = ind.get("price", 0)
-            today_vol     = ind.get("today_vol", 0)
-            anomaly_ratio = ind.get("anomaly_ratio", 0)
-            spread        = ind.get("ema_spread_pct", 999.0)
-
-            # Main scan already took anomaly_ratio >= 2.0
-            if anomaly_ratio >= 2.0:
-                continue
-            # Require EMA compression (spread < 3%)
-            if spread >= 3.0:
-                continue
-            # Minimum liquidity gate
-            if today_vol < 300_000:
-                continue
-
-            # Relative strength vs SPY (5-day)
-            rs_score = 0.0
-            if spy_pct_5d != 0.0 and len(candles) >= 6:
-                price_5d = candles[-6].get("c", price)
-                if price_5d > 0:
-                    rs_score = round((price - price_5d) / price_5d * 100 - spy_pct_5d, 2)
-
-            obv_data = ind.get("obv") or {}
-            rsi_data = ind.get("rsi") or {}
-
-            candidates.append({
-                "symbol":      symbol,
-                "price":       price,
-                "today_vol":   today_vol,
-                "anomaly_ratio": anomaly_ratio,
-                "ema8":        ind.get("ema8"),
-                "ema13":       ind.get("ema13"),
-                "ema20":       ind.get("ema20"),
-                "ema21":       ind.get("ema21"),
-                "ema34":       ind.get("ema34"),
-                "ema50":       ind.get("ema50"),
-                "ema55":       ind.get("ema55"),
-                "ema89":       ind.get("ema89"),
-                "ema200":      ind.get("ema200"),
-                "ema_spread_pct":          spread,
-                "ribbon_compression":      ind.get("ribbon_compression", "NONE"),
-                "bullish_stack":           ind.get("bullish_stack", False),
-                "bearish_stack":           ind.get("bearish_stack", False),
-                "compression_and_bullish": ind.get("compression_and_bullish", False),
-                "ribbon_position":         ind.get("ribbon_position"),
-                "ema8_slope":              ind.get("ema8_slope", "FLAT"),
-                "cmf_pctl":    ind.get("cmf_pctl"),
-                "rsi":         rsi_data.get("value"),
-                "bb_sqz_bars": ind.get("bb_sqz_bars", 0),
-                "bb_squeeze":  ind.get("bb_squeeze", False),
-                "obv_strength": obv_data.get("obv_strength"),
-                "rs_score":    rs_score,
-                "sector":      None,  # resolved below via batch lookup
-            })
-
-        except Exception as e:
-            logger.warning(f"Ribbon pass: error processing {symbol}: {e}")
-            continue
-
-    if not candidates:
-        return 0
-
-    # Batch sector lookup for ribbon symbols (single API round-trip)
-    try:
-        ribbon_symbols = [c["symbol"] for c in candidates]
-        sectors = await get_sectors_batch(ribbon_symbols)
-        for c in candidates:
-            c["sector"] = sectors.get(c["symbol"], "Unknown")
-    except Exception as e:
-        logger.warning(f"Ribbon pass: sector lookup failed (non-fatal): {e}")
-
-    # Persist to DB
-    try:
-        from database import save_ribbon_candidates
-        saved = await save_ribbon_candidates(candidates)
-        logger.info(f"Ribbon secondary pass: {saved} candidates saved ({len(candidates)} qualified)")
-        return saved
-    except Exception as e:
-        logger.error(f"Ribbon pass: save_ribbon_candidates failed: {e}")
-        return 0
-
-
 async def get_scan_symbols() -> tuple[list[str], dict]:
     """
     Build intraday validation symbol list.
@@ -533,20 +400,6 @@ async def run_scan() -> dict:
     except Exception as e:
         logger.warning(f"Earnings enrichment failed (non-fatal): {e}")
 
-    # ── Ribbon secondary pass (non-fatal) ────────────────────────────────────
-    # Discovers liquid compression setups excluded from main scan (no vol anomaly).
-    ribbon_extra = 0
-    try:
-        main_symbols = {r["symbol"] for r in final}
-        ribbon_extra = await run_ribbon_pass(
-            all_candles=all_data,
-            main_scan_symbols=main_symbols,
-            spy_pct_5d=spy_pct_5d,
-        )
-        logger.info(f"Ribbon pass added {ribbon_extra} tickers to ribbon_candidates")
-    except Exception as e:
-        logger.error(f"Ribbon pass failed (non-fatal): {e}")
-
     return {
         "results":            final,
         "scanned_at":         scan_start.isoformat(),
@@ -557,6 +410,5 @@ async def run_scan() -> dict:
         "sector_performance": sector_perf,
         "market_regime":      regime,
         "symbol_sources":     symbol_sources,
-        "ribbon_extra_count": ribbon_extra,
         "scan_type":          "yahoo_intraday",
     }
