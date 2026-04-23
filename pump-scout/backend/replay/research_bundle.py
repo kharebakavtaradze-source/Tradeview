@@ -674,6 +674,28 @@ async def build_research_bundle(run_id: int) -> dict:
         if x["bucket"] in _NP_FRESH_ORDER else 99
     )
 
+    # ── Phase 6: Performance by NP state ─────────────────────────────────────
+    _NP_STATE_ORDER = [
+        "CONFIRMED", "TRIGGERED", "PRE_TRIGGER",
+        "FAILED_SETUP", "BROKEN_SETUP", "OVEREXTENDED", "IMPULSE", "NEUTRAL",
+    ]
+    perf_np_state = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_state") or "NEUTRAL",
+        "np_state",
+    )
+    perf_np_state.sort(
+        key=lambda x: _NP_STATE_ORDER.index(x["bucket"])
+        if x["bucket"] in _NP_STATE_ORDER else 99
+    )
+
+    # ── Phase 6: Performance by engine path ──────────────────────────────────
+    perf_engine_path = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_engine_path") or "structure",
+        "np_engine_path",
+    )
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -700,6 +722,8 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_new_pump_sequence": perf_new_pump_seq,
         "performance_by_np_setup_type":     perf_np_setup_type,
         "performance_by_np_freshness":      perf_np_freshness,
+        "performance_by_np_state":          perf_np_state,
+        "performance_by_engine_path":       perf_engine_path,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,
