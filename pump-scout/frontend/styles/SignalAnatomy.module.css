@@ -244,7 +244,7 @@
 
 .sigDesc {
   font-size: 10px;
-  color: #555;
+  color: var(--text-muted);
 }
 
 .num {
@@ -268,7 +268,7 @@
 .legendFired    { color: #00ff88; }
 .legendNearMiss { color: #ff8800; }
 .legendArmed    { color: rgba(0,229,255,0.6); }
-.legendNone     { color: #333; }
+.legendNone     { color: var(--text-muted); }
 
 .timeline {
   display: flex;
@@ -418,12 +418,12 @@
 .nmDetails { margin-top: 8px; }
 .nmDetailsSummary {
   font-size: 10px;
-  color: #555;
+  color: var(--text-muted);
   cursor: pointer;
   user-select: none;
   padding: 4px 0;
 }
-.nmDetailsSummary:hover { color: var(--text-muted); }
+.nmDetailsSummary:hover { color: var(--text-dim); }
 
 .nmTable {
   width: 100%;
