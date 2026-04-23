@@ -16,8 +16,7 @@ Architecture:
   8. Sector enrichment      → get_sectors_batch()
   9. save_scan()            → persisted as scan_type='massive_eod'
   10. save_scan_candidates  → FIRE/ARM saved for tomorrow's intraday validation
-  11. Ribbon pass           → EMA compression from full universe
-  12. Unknown sector enrich → fetch_ticker_details for sector_cache
+  11. Unknown sector enrich → fetch_ticker_details for sector_cache
 """
 import asyncio
 import logging
@@ -198,7 +197,6 @@ async def run_universe_scan(target_date: str = None) -> dict:
     # ── STEP 4–7: Fetch candle history, calc indicators, score ──────────────
     results   = []
     errors    = 0
-    all_scored_candles: dict = {}  # kept for ribbon pass
 
     # Fetch market regime once (used in scoring)
     try:
@@ -293,8 +291,6 @@ async def run_universe_scan(target_date: str = None) -> dict:
                     "scan_date":   target_date,
                 }
                 results.append(result)
-                all_scored_candles[sym] = candles  # keep for ribbon pass
-
             except Exception as e:
                 logger.warning(f"Scoring failed for {sym}: {e}")
                 errors += 1
@@ -472,21 +468,7 @@ async def run_universe_scan(target_date: str = None) -> dict:
     except Exception as e:
         logger.warning(f"save_scan_candidates failed (non-fatal): {e}")
 
-    # ── STEP 11: Ribbon pass (EMA compression from full universe) ────────────
-    try:
-        from scanner.runner import run_ribbon_pass
-        main_symbols = {r["symbol"] for r in results}
-        ribbon_count = await run_ribbon_pass(
-            all_candles=all_scored_candles,
-            main_scan_symbols=main_symbols,
-            spy_pct_5d=spy_pct_5d,
-        )
-        scan_result["ribbon_extra_count"] = ribbon_count
-        logger.info(f"Ribbon pass: {ribbon_count} EMA compression candidates")
-    except Exception as e:
-        logger.warning(f"Ribbon pass failed (non-fatal): {e}")
-
-    # ── STEP 12: Enrich unknown sectors via ticker details ───────────────────
+    # ── STEP 11: Enrich unknown sectors via ticker details ───────────────────
     unknown_symbols = [r["symbol"] for r in results if r.get("sector") == "Unknown"]
     if unknown_symbols:
         logger.info(f"Enriching {min(len(unknown_symbols), 50)} unknown sectors via Massive")

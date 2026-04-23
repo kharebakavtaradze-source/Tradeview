@@ -7,9 +7,6 @@ import { useRouter } from 'next/router';
 
 const NAV_LINKS = [
   { href: '/',             label: 'Scanner' },
-  { href: '/ribbon',       label: 'Ribbon' },
-  { href: '/ignition',     label: 'Ignition' },
-  { href: '/pump-engine',  label: 'Pump Engine' },
   { href: '/new-pump',       label: 'New Pump' },
   { href: '/signal-anatomy', label: 'Signal Anatomy' },
   { href: '/sectors',      label: 'Sectors' },
