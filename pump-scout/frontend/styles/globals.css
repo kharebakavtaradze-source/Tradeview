@@ -39,20 +39,20 @@
   /* Surface scale — 5-tier MD3 system */
   --md-surface-dim:                #07070f;   /* darkest — page bg */
   --md-surface:                    #0d0d1e;   /* cards, panels */
-  --md-surface-bright:             #1e1e38;   /* elevated / focus */
+  --md-surface-bright:             #242444;   /* elevated / focus */
   --md-surface-container-lowest:   #04040a;
   --md-surface-container-low:      #0d0d1e;
   --md-surface-container:          #121228;   /* standard container */
   --md-surface-container-high:     #181836;
-  --md-surface-container-highest:  #1e1e42;
+  --md-surface-container-highest:  #222247;
 
   /* On-surface */
   --md-on-surface:         #eaeaf6;
-  --md-on-surface-variant: #9898c0;
+  --md-on-surface-variant: #b8b8d8;
 
   /* Outline */
-  --md-outline:         #222246;
-  --md-outline-variant: #1a1a32;
+  --md-outline:         #4b4b72;
+  --md-outline-variant: #323252;
 
   /* Inverse */
   --md-inverse-surface:    #eaeaf6;
@@ -91,29 +91,29 @@
   ══════════════════════════════════════════════════════════ */
 
   /* Display */
-  --md-display-lg-size:    30px;  --md-display-lg-weight:  400; --md-display-lg-tracking: -0.02em; --md-display-lg-height: 1.15;
-  --md-display-md-size:    24px;  --md-display-md-weight:  400; --md-display-md-tracking: 0em;     --md-display-md-height: 1.2;
-  --md-display-sm-size:    20px;  --md-display-sm-weight:  400; --md-display-sm-tracking: 0em;     --md-display-sm-height: 1.25;
+  --md-display-lg-size:    34px;  --md-display-lg-weight:  500; --md-display-lg-tracking: 0;       --md-display-lg-height: 1.18;
+  --md-display-md-size:    28px;  --md-display-md-weight:  500; --md-display-md-tracking: 0;       --md-display-md-height: 1.2;
+  --md-display-sm-size:    24px;  --md-display-sm-weight:  500; --md-display-sm-tracking: 0;       --md-display-sm-height: 1.25;
 
   /* Headline */
-  --md-headline-lg-size:   22px;  --md-headline-lg-weight: 800; --md-headline-lg-tracking: -0.01em; --md-headline-lg-height: 1.25;
-  --md-headline-md-size:   18px;  --md-headline-md-weight: 700; --md-headline-md-tracking: 0em;     --md-headline-md-height: 1.3;
-  --md-headline-sm-size:   15px;  --md-headline-sm-weight: 700; --md-headline-sm-tracking: 0em;     --md-headline-sm-height: 1.35;
+  --md-headline-lg-size:   24px;  --md-headline-lg-weight: 800; --md-headline-lg-tracking: 0;       --md-headline-lg-height: 1.3;
+  --md-headline-md-size:   20px;  --md-headline-md-weight: 700; --md-headline-md-tracking: 0;       --md-headline-md-height: 1.35;
+  --md-headline-sm-size:   17px;  --md-headline-sm-weight: 700; --md-headline-sm-tracking: 0;       --md-headline-sm-height: 1.4;
 
   /* Title */
-  --md-title-lg-size:      14px;  --md-title-lg-weight:    600; --md-title-lg-tracking: 0.01em;  --md-title-lg-height: 1.4;
-  --md-title-md-size:      13px;  --md-title-md-weight:    600; --md-title-md-tracking: 0.01em;  --md-title-md-height: 1.45;
-  --md-title-sm-size:      11px;  --md-title-sm-weight:    600; --md-title-sm-tracking: 0.04em;  --md-title-sm-height: 1.45;
+  --md-title-lg-size:      16px;  --md-title-lg-weight:    700; --md-title-lg-tracking: 0;       --md-title-lg-height: 1.45;
+  --md-title-md-size:      15px;  --md-title-md-weight:    600; --md-title-md-tracking: 0;       --md-title-md-height: 1.5;
+  --md-title-sm-size:      14px;  --md-title-sm-weight:    600; --md-title-sm-tracking: 0;       --md-title-sm-height: 1.5;
 
   /* Body */
-  --md-body-lg-size:       13px;  --md-body-lg-weight:     400; --md-body-lg-tracking: 0.02em;   --md-body-lg-height: 1.55;
-  --md-body-md-size:       11px;  --md-body-md-weight:     400; --md-body-md-tracking: 0.025em;  --md-body-md-height: 1.55;
-  --md-body-sm-size:        9px;  --md-body-sm-weight:     400; --md-body-sm-tracking: 0.04em;   --md-body-sm-height: 1.5;
+  --md-body-lg-size:       16px;  --md-body-lg-weight:     400; --md-body-lg-tracking: 0;        --md-body-lg-height: 1.65;
+  --md-body-md-size:       14px;  --md-body-md-weight:     400; --md-body-md-tracking: 0;        --md-body-md-height: 1.6;
+  --md-body-sm-size:       13px;  --md-body-sm-weight:     400; --md-body-sm-tracking: 0;        --md-body-sm-height: 1.55;
 
   /* Label */
-  --md-label-lg-size:      12px;  --md-label-lg-weight:    700; --md-label-lg-tracking: 0.07em;  --md-label-lg-height: 1.4;
-  --md-label-md-size:      10px;  --md-label-md-weight:    700; --md-label-md-tracking: 0.07em;  --md-label-md-height: 1.4;
-  --md-label-sm-size:       9px;  --md-label-sm-weight:    700; --md-label-sm-tracking: 0.08em;  --md-label-sm-height: 1.4;
+  --md-label-lg-size:      14px;  --md-label-lg-weight:    700; --md-label-lg-tracking: 0;       --md-label-lg-height: 1.45;
+  --md-label-md-size:      13px;  --md-label-md-weight:    700; --md-label-md-tracking: 0;       --md-label-md-height: 1.45;
+  --md-label-sm-size:      12px;  --md-label-sm-weight:    700; --md-label-sm-tracking: 0;       --md-label-sm-height: 1.45;
 
   /* ══════════════════════════════════════════════════════════
      MD3 MOTION
@@ -211,25 +211,25 @@
   --text-primary: var(--text);
 
   /* Borders → MD3 outline */
-  --border:  #1a1a32;   /* = md-outline-variant */
-  --border2: #222246;   /* = md-outline */
+  --border:  #323252;   /* = md-outline-variant */
+  --border2: #4b4b72;   /* = md-outline */
 
   /* Text → MD3 on-surface */
   --text:       #eaeaf6;   /* = md-on-surface */
-  --text-dim:   #9898c0;   /* = md-on-surface-variant */
-  --text-muted: #56567a;   /* tertiary label */
+  --text-dim:   #b8b8d8;   /* = md-on-surface-variant */
+  --text-muted: #8f8fba;   /* tertiary label */
 
   /* Typography */
   --font-ui:   'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
 
   /* Font size scale */
-  --text-2xs:  9px;
-  --text-xs:   10px;
-  --text-sm:   11px;
-  --text-base: 13px;
-  --text-md:   14px;
-  --text-lg:   16px;
+  --text-2xs:  12px;
+  --text-xs:   13px;
+  --text-sm:   14px;
+  --text-base: 16px;
+  --text-md:   16px;
+  --text-lg:   18px;
   --text-xl:   20px;
   --text-2xl:  24px;
   --text-3xl:  30px;
@@ -282,7 +282,7 @@ html, body {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--text-base);
-  line-height: 1.5;
+  line-height: 1.6;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -294,7 +294,11 @@ a {
   color: var(--cyan);
   text-decoration: none;
 }
-a:hover { text-decoration: none; opacity: 0.85; }
+a:hover {
+  color: var(--md-secondary, var(--cyan));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 
 button {
   cursor: pointer;
@@ -304,6 +308,16 @@ button {
 input, textarea, select {
   font-family: var(--font-ui);
   font-size: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--md-secondary, var(--cyan));
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
 }
 
 /* ── Scrollbar ────────────────────────────────────────────── */
