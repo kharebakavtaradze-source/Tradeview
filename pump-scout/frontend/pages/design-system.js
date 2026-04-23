@@ -29,12 +29,12 @@ const MD3_SURFACES = [
   { name: 'Surface Container Low',    hex: '#0d0d1e', var: '--md-surface-container-low' },
   { name: 'Surface Container',        hex: '#121228', var: '--md-surface-container' },
   { name: 'Surface Container High',   hex: '#181836', var: '--md-surface-container-high' },
-  { name: 'Surface Container Highest',hex: '#1e1e42', var: '--md-surface-container-highest' },
-  { name: 'Surface Bright',           hex: '#1e1e38', var: '--md-surface-bright' },
+  { name: 'Surface Container Highest',hex: '#222247', var: '--md-surface-container-highest' },
+  { name: 'Surface Bright',           hex: '#242444', var: '--md-surface-bright' },
   { name: 'On Surface',               hex: '#eaeaf6', var: '--md-on-surface' },
-  { name: 'On Surface Variant',       hex: '#9898c0', var: '--md-on-surface-variant' },
-  { name: 'Outline',                  hex: '#222246', var: '--md-outline' },
-  { name: 'Outline Variant',          hex: '#1a1a32', var: '--md-outline-variant' },
+  { name: 'On Surface Variant',       hex: '#b8b8d8', var: '--md-on-surface-variant' },
+  { name: 'Outline',                  hex: '#4b4b72', var: '--md-outline' },
+  { name: 'Outline Variant',          hex: '#323252', var: '--md-outline-variant' },
 ];
 
 const SIGNAL_COLORS = [
@@ -47,21 +47,21 @@ const SIGNAL_COLORS = [
 ];
 
 const TYPE_SCALE = [
-  { role: 'display-lg',  label: 'Display Large',   size: '30px', weight: '400', tracking: '-0.02em', sample: 'Market Scanner' },
-  { role: 'display-md',  label: 'Display Medium',  size: '24px', weight: '400', tracking: '0',       sample: 'Market Scanner' },
-  { role: 'display-sm',  label: 'Display Small',   size: '20px', weight: '400', tracking: '0',       sample: 'Market Scanner' },
-  { role: 'headline-lg', label: 'Headline Large',  size: '22px', weight: '800', tracking: '-0.01em', sample: 'Ticker Watchlist' },
-  { role: 'headline-md', label: 'Headline Medium', size: '18px', weight: '700', tracking: '0',       sample: 'Ticker Watchlist' },
-  { role: 'headline-sm', label: 'Headline Small',  size: '15px', weight: '700', tracking: '0',       sample: 'Ticker Watchlist' },
-  { role: 'title-lg',    label: 'Title Large',     size: '14px', weight: '600', tracking: '0.01em',  sample: 'Scan Candidates · 42 results' },
-  { role: 'title-md',    label: 'Title Medium',    size: '13px', weight: '600', tracking: '0.01em',  sample: 'Scan Candidates · 42 results' },
-  { role: 'title-sm',    label: 'Title Small',     size: '11px', weight: '600', tracking: '0.04em',  sample: 'Scan Candidates · 42 results' },
-  { role: 'body-lg',     label: 'Body Large',      size: '13px', weight: '400', tracking: '0.02em',  sample: 'Volume confirms breakout, ribbon coiled, OBV rising.' },
-  { role: 'body-md',     label: 'Body Medium',     size: '11px', weight: '400', tracking: '0.025em', sample: 'Volume confirms breakout, ribbon coiled, OBV rising.' },
-  { role: 'body-sm',     label: 'Body Small',      size: '9px',  weight: '400', tracking: '0.04em',  sample: 'Volume confirms breakout, ribbon coiled, OBV rising.' },
-  { role: 'label-lg',    label: 'Label Large',     size: '12px', weight: '700', tracking: '0.07em',  sample: 'STRONG WATCH' },
-  { role: 'label-md',    label: 'Label Medium',    size: '10px', weight: '700', tracking: '0.07em',  sample: 'STRONG WATCH' },
-  { role: 'label-sm',    label: 'Label Small',     size: '9px',  weight: '700', tracking: '0.08em',  sample: 'STRONG WATCH' },
+  { role: 'display-lg',  label: 'Display Large',   size: '34px', weight: '500', tracking: '0',       sample: 'Market Scanner' },
+  { role: 'display-md',  label: 'Display Medium',  size: '28px', weight: '500', tracking: '0',       sample: 'Market Scanner' },
+  { role: 'display-sm',  label: 'Display Small',   size: '24px', weight: '500', tracking: '0',       sample: 'Market Scanner' },
+  { role: 'headline-lg', label: 'Headline Large',  size: '24px', weight: '800', tracking: '0',       sample: 'Ticker Watchlist' },
+  { role: 'headline-md', label: 'Headline Medium', size: '20px', weight: '700', tracking: '0',       sample: 'Ticker Watchlist' },
+  { role: 'headline-sm', label: 'Headline Small',  size: '17px', weight: '700', tracking: '0',       sample: 'Ticker Watchlist' },
+  { role: 'title-lg',    label: 'Title Large',     size: '16px', weight: '700', tracking: '0',       sample: 'Scan Candidates · 42 results' },
+  { role: 'title-md',    label: 'Title Medium',    size: '15px', weight: '600', tracking: '0',       sample: 'Scan Candidates · 42 results' },
+  { role: 'title-sm',    label: 'Title Small',     size: '14px', weight: '600', tracking: '0',       sample: 'Scan Candidates · 42 results' },
+  { role: 'body-lg',     label: 'Body Large',      size: '16px', weight: '400', tracking: '0',       sample: 'Volume confirms breakout, ribbon coiled, OBV rising.' },
+  { role: 'body-md',     label: 'Body Medium',     size: '14px', weight: '400', tracking: '0',       sample: 'Volume confirms breakout, ribbon coiled, OBV rising.' },
+  { role: 'body-sm',     label: 'Body Small',      size: '13px', weight: '400', tracking: '0',       sample: 'Volume confirms breakout, ribbon coiled, OBV rising.' },
+  { role: 'label-lg',    label: 'Label Large',     size: '14px', weight: '700', tracking: '0',       sample: 'STRONG WATCH' },
+  { role: 'label-md',    label: 'Label Medium',    size: '13px', weight: '700', tracking: '0',       sample: 'STRONG WATCH' },
+  { role: 'label-sm',    label: 'Label Small',     size: '12px', weight: '700', tracking: '0',       sample: 'STRONG WATCH' },
 ];
 
 const SHAPES = [
@@ -190,7 +190,7 @@ function TypeRow({ role, label, size, weight, tracking, sample }) {
       </span>
       <span className={styles.typeMeta}>{size}</span>
       <span className={styles.typeMeta}>{weight}</span>
-      <span className={styles.typeMeta} style={{ fontFamily: 'var(--font-mono)', fontSize: 9 }}>{tracking}</span>
+      <span className={styles.typeMeta} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--md-label-sm-size)' }}>{tracking}</span>
     </div>
   );
 }
