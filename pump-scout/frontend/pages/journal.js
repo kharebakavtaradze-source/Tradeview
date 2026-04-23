@@ -727,6 +727,13 @@ export default function Journal() {
                           border: `1px solid ${(TIER_COLORS[e.tier] || '#888')}44`,
                         }}>{e.tier}</span>
                       )}
+                      {e.source === 'new_pump' && (
+                        <span style={{
+                          fontSize: 9, padding: '2px 6px', borderRadius: 3,
+                          background: 'rgba(0,229,255,0.1)', border: '1px solid rgba(0,229,255,0.25)',
+                          color: '#00e5ff', fontWeight: 700, letterSpacing: '0.04em',
+                        }}>⚡ NP</span>
+                      )}
                       {isOpen && e.days_held > 0 && (
                         <span className={styles.dayPill}>Day {e.days_held}</span>
                       )}
@@ -781,6 +788,34 @@ export default function Journal() {
 
                   {/* ── Signal + context ── */}
                   <SignalRow e={e} />
+                  {e.source === 'new_pump' && (e.np_sequence || e.signal_date) && (() => {
+                    let signalPrice = null;
+                    try {
+                      const snap = typeof e.indicators_snapshot === 'string'
+                        ? JSON.parse(e.indicators_snapshot)
+                        : e.indicators_snapshot;
+                      if (snap?.signal_price) signalPrice = parseFloat(snap.signal_price);
+                    } catch {}
+                    return (
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)', display: 'flex', gap: 6, flexWrap: 'wrap', padding: '0 14px 4px' }}>
+                        {e.np_sequence && (
+                          <span style={{ background: 'rgba(0,229,255,0.07)', padding: '2px 6px', borderRadius: 3, color: '#00e5ff', fontWeight: 700, letterSpacing: '0.03em' }}>
+                            {e.np_sequence.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        {e.signal_date && (
+                          <span style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 3 }}>
+                            signal {e.signal_date}
+                          </span>
+                        )}
+                        {signalPrice != null && (
+                          <span style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 3 }}>
+                            @ ${signalPrice.toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {e.catalyst && <div className={styles.catalyst}>📌 {e.catalyst}</div>}
                   {e.notes && <div className={styles.tradeNotes}>{e.notes}</div>}
                   {e.tags?.length > 0 && (
