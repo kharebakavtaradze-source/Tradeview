@@ -135,6 +135,81 @@
   color: #555;
 }
 
+/* ── State / path / impulse row ── */
+.stateRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+}
+
+.stateChip {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+
+.pathChip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.missingChip {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: rgba(255,214,0,0.06);
+  border: 1px solid rgba(255,214,0,0.18);
+  border-radius: 3px;
+}
+.missingChip strong { color: #ffd600; }
+
+.riskChip {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: rgba(255,68,68,0.05);
+  border: 1px solid rgba(255,68,68,0.18);
+  border-radius: 3px;
+}
+.riskChip strong { color: #ff6644; }
+
+/* ── Impulse block ── */
+.impulseBlock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin: 8px 0 4px;
+  border: 1px solid;
+  border-radius: var(--r-sm);
+  background: rgba(0,229,255,0.04);
+}
+
+.impulseLabel {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.impulseScore {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.impulseNote {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* ── Final badge ── */
 .finalBadge {
   display: inline-flex;
