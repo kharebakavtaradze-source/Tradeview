@@ -144,9 +144,9 @@
 }
 
 .swatchBlockLabel {
-  font-size: 9px;
+  font-size: var(--md-label-sm-size);
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--md-label-sm-tracking);
   mix-blend-mode: difference;
   filter: invert(1);
   opacity: 0.7;
@@ -166,7 +166,7 @@
 }
 
 .swatchHex {
-  font-size: 9px;
+  font-size: var(--md-label-sm-size);
   color: var(--md-on-surface-variant, var(--text-muted));
   font-family: var(--font-mono);
 }
@@ -216,7 +216,7 @@
 }
 
 .signalVar {
-  font-size: 9px;
+  font-size: var(--md-body-sm-size);
   font-family: var(--font-mono);
   color: var(--md-on-surface-variant, var(--text-muted));
   margin-top: 1px;
@@ -275,7 +275,7 @@
 }
 
 .typeMeta {
-  font-size: 9px;
+  font-size: var(--md-label-sm-size);
   color: var(--md-on-surface-variant, var(--text-muted));
   font-family: var(--font-mono);
   text-align: right;
@@ -365,7 +365,7 @@
 }
 
 .elevTint {
-  font-size: 9px;
+  font-size: var(--md-label-sm-size);
   font-family: var(--font-mono);
   color: var(--md-primary, var(--accent));
   margin-top: 8px;
@@ -405,7 +405,7 @@
 }
 
 .motionToken {
-  font-size: 9px;
+  font-size: var(--md-label-sm-size);
   font-family: var(--font-mono);
   color: var(--md-primary, var(--accent));
   margin-bottom: 14px;
@@ -744,9 +744,9 @@
 }
 
 .tierVars {
-  font-size: 9px;
+  font-size: var(--md-body-sm-size);
   font-family: var(--font-mono);
-  opacity: 0.65;
+  opacity: 0.8;
   line-height: 1.7;
 }
 
