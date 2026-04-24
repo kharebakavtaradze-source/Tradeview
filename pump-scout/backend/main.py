@@ -1849,6 +1849,99 @@ async def replay_research_bundle_download(run_id: int, format: str = "json"):
         raise HTTPException(500, detail=f"Download failed: {str(exc)[:200]}")
 
 
+# ── Replay recalculation (fast refresh, no full rescan) ───────────────────────
+# Three-tier refresh architecture:
+#   1. rebuild-research-bundle           — rebuild summary/buckets only
+#   2. recalculate-derived-fields        — re-run decision layer + rebuild
+#   3. POST /api/replay/run              — full replay (existing, unchanged)
+#
+# Recalc mode is ONLY for interpretation changes (decision-layer thresholds,
+# bundle bucketing). Changes to candidate generation, scanner gates, or any
+# upstream raw-detection logic still require a full replay.
+
+@app.post("/api/replay/{run_id}/rebuild-research-bundle")
+async def replay_rebuild_bundle(run_id: int):
+    """
+    Rebuild the research bundle for an existing replay run without touching
+    candidates. Use after bundle/bucketing/summary logic changes.
+    """
+    from database import get_replay_run
+    from replay.recalc_service import rebuild_research_bundle
+
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    try:
+        stats = await rebuild_research_bundle(run_id)
+    except Exception as exc:
+        logger.error(f"[REPLAY/REBUILD] run_id={run_id} failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Rebuild failed: {str(exc)[:200]}")
+    return {
+        "ok":                      True,
+        "run_id":                  run_id,
+        "mode":                    "rebuild_research_bundle",
+        "research_bundle_rebuilt": True,
+        "stats":                   stats,
+    }
+
+
+@app.post("/api/replay/{run_id}/recalculate-derived-fields")
+async def replay_recalculate_derived(run_id: int):
+    """
+    Re-run the decision layer for every candidate in an existing replay run
+    using current `_decide()` logic, then rebuild the research bundle.
+
+    Upstream engine outputs (state, base_quality, sustain, fake_trigger,
+    compression-expansion, impulse) are NOT recomputed — they need raw
+    candles that are not persisted on replay candidate rows. Change
+    detection / generation logic requires a full replay.
+    """
+    from database import get_replay_run
+    from replay.recalc_service import (
+        recalculate_decision_layer, rebuild_research_bundle,
+        RECALCULATED_FIELDS, SKIPPED_FIELDS_NEED_FULL_REPLAY,
+        REQUIRES_FULL_REPLAY_FOR,
+    )
+
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    try:
+        recalc_stats = await recalculate_decision_layer(run_id)
+    except Exception as exc:
+        logger.error(f"[REPLAY/RECALC] run_id={run_id} decide failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Recalc failed: {str(exc)[:200]}")
+
+    bundle_rebuilt = True
+    bundle_stats   = None
+    try:
+        bundle_stats = await rebuild_research_bundle(run_id)
+    except Exception as exc:
+        logger.warning(f"[REPLAY/RECALC] bundle rebuild failed: {exc}")
+        bundle_rebuilt = False
+
+    return {
+        "ok":                         True,
+        "run_id":                     run_id,
+        "mode":                       "recalculate_derived_fields",
+        "candidate_count_total":      recalc_stats["candidate_count_total"],
+        "updated_candidate_count":    recalc_stats["updated_candidate_count"],
+        "skipped_insufficient_count": recalc_stats["skipped_insufficient"],
+        "recalculated_fields":        RECALCULATED_FIELDS,
+        "skipped_fields":             SKIPPED_FIELDS_NEED_FULL_REPLAY,
+        "requires_full_replay_for":   REQUIRES_FULL_REPLAY_FOR,
+        "research_bundle_rebuilt":    bundle_rebuilt,
+        "bundle_stats":               bundle_stats,
+    }
+
+
+@app.post("/api/replay/{run_id}/refresh-derived-and-research")
+async def replay_refresh_combined(run_id: int):
+    """Alias combining decision-layer recalc + research bundle rebuild."""
+    return await replay_recalculate_derived(run_id)
+
+
 @app.delete("/api/replay/{run_id}")
 async def delete_replay_run_endpoint(run_id: int):
     """

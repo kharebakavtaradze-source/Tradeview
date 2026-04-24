@@ -2858,6 +2858,28 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
     return len(candidates)
 
 
+async def update_replay_candidate_decision(candidate_id: int,
+                                           decision: Optional[str],
+                                           decision_reason: Optional[str]) -> bool:
+    """
+    Patch only the decision-layer fields on an existing replay candidate row.
+    Used by the replay recalculation service so logic tweaks do not require
+    a full universe rescan. Never touches upstream engine outputs.
+    Returns True if the row was found and updated.
+    """
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplaySignalCandidate).where(ReplaySignalCandidate.id == candidate_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return False
+        row.np_decision        = decision
+        row.np_decision_reason = (decision_reason or "")[:200] if decision_reason else None
+        await session.commit()
+        return True
+
+
 async def get_replay_candidates(run_id: int, limit: int = 500) -> list[dict]:
     """Return all candidates for a replay run."""
     async with get_session_factory()() as session:
