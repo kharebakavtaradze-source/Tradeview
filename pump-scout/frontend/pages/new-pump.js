@@ -58,6 +58,35 @@ function npState(seq) {
   return NP_STATE[seq] || { label: '—', color: '#444', bg: 'transparent' };
 }
 
+// ── Engine state badge — uses new state field from engine ─────────────────────
+const STATE_CFG = {
+  CONFIRMED:    { color: '#ff4400', bg: 'rgba(255,68,0,0.12)'    },
+  TRIGGERED:    { color: '#ff8800', bg: 'rgba(255,136,0,0.10)'   },
+  PRE_TRIGGER:  { color: '#ffd600', bg: 'rgba(255,214,0,0.09)'   },
+  FAILED_SETUP: { color: '#888',    bg: 'rgba(128,128,128,0.07)' },
+  BROKEN_SETUP: { color: '#666',    bg: 'rgba(100,100,100,0.06)' },
+  OVEREXTENDED: { color: '#c084fc', bg: 'rgba(192,132,252,0.09)' },
+  IMPULSE:      { color: '#00e5ff', bg: 'rgba(0,229,255,0.10)'   },
+  NEUTRAL:      { color: '#555',    bg: 'transparent'            },
+};
+
+function StateBadge({ state, impulseLbl }) {
+  const cfg = STATE_CFG[state] || STATE_CFG.NEUTRAL;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      padding: '1px 6px', borderRadius: 3, fontSize: 9, fontWeight: 700,
+      letterSpacing: '0.05em', color: cfg.color, background: cfg.bg,
+      border: `1px solid ${cfg.color}44`, whiteSpace: 'nowrap',
+    }}>
+      {state || '—'}
+      {impulseLbl && (
+        <span style={{ color: '#00e5ff', marginLeft: 2, fontSize: 8 }}>⚡</span>
+      )}
+    </span>
+  );
+}
+
 // ── Market regime colors ──────────────────────────────────────────────────────
 const REGIME_CFG = {
   RISK_ON:  { color: '#00e676', bg: 'rgba(0,230,118,0.10)', label: 'RISK ON'  },
@@ -706,7 +735,7 @@ export default function NewPumpPage() {
                           <div className={styles.journalError}>{journalErrors[r.symbol]}</div>
                         )}
                       </td>
-                      <td><NpStateBadge seq={r.new_pump_sequence_label} /></td>
+                      <td><StateBadge state={r.state} impulseLbl={r.impulse_label} /></td>
                       <td className={styles.scoreCell}
                           style={{ color: SCORE_COLOR(r.new_pump_score) }}>
                         {fmt(r.new_pump_score)}
