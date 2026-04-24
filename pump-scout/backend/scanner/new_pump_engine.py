@@ -613,11 +613,16 @@ def _compute_sustain_proxy(base_quality_score, bull_stack_len, days_above_ema50,
 
 def _fake_trigger_risk(seq_lbl, base_quality_score, avg_ema_spread, volume_z):
     """
-    Assess fake trigger risk for trigger-after sequences.
-    Catches QNCX-type false positives: trigger fires but base quality is poor.
-    Returns "LOW", "MEDIUM", or "HIGH".
+    Assess fake trigger risk for trigger / full / confirm sequences.
+    Catches QNCX / WNW / ELPW / SPHL-type false positives where structure
+    looks complete but base quality is poor.  Returns "LOW"/"MEDIUM"/"HIGH".
     """
-    if seq_lbl not in ("TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34"):
+    FT_SEQS = (
+        "TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34",
+        "FULL_L34_G4_B2",    "FULL_FRI34_G4_B2",
+        "CONFIRM_AFTER_G4",
+    )
+    if seq_lbl not in FT_SEQS:
         return "LOW"
 
     risk = 0
@@ -632,13 +637,99 @@ def _fake_trigger_risk(seq_lbl, base_quality_score, avg_ema_spread, volume_z):
     if volume_z is not None and volume_z > 4.0:
         risk += 2   # chaotic spike = suspicious trigger
 
+    # FULL sequences with weak base are the most dangerous false positives
+    if seq_lbl in ("FULL_L34_G4_B2", "FULL_FRI34_G4_B2") and base_quality_score < 40:
+        risk += 1
+
     if risk >= 4:   return "HIGH"
     elif risk >= 2: return "MEDIUM"
     return "LOW"
 
 
-def _fake_trigger_penalty(ftr_val: str) -> int:
-    return {"HIGH": -10, "MEDIUM": -5, "LOW": 0}.get(ftr_val, 0)
+def _fake_trigger_penalty(ftr_val: str, seq_lbl: str = None) -> int:
+    """Sequence-aware penalty. FULL_* + HIGH risk is extra penalized."""
+    base = {"HIGH": -10, "MEDIUM": -5, "LOW": 0}.get(ftr_val, 0)
+    if ftr_val == "HIGH" and seq_lbl in ("FULL_L34_G4_B2", "FULL_FRI34_G4_B2"):
+        base -= 5
+    return base
+
+
+def _pre_trigger_gate(state: str, bq_score: int) -> tuple:
+    """
+    PRE_TRIGGER noise filter. Returns (weak_flag, score_penalty).
+    PRE_TRIGGER alone isn't bullish — require base quality ≥ 45 or apply penalty.
+    """
+    if state == "PRE_TRIGGER":
+        if bq_score < 30:
+            return True, -12
+        if bq_score < 45:
+            return True, -8
+    return False, 0
+
+
+def _compute_base_flags(bq_score, avg_ema_spread, bars, last, volumes) -> dict:
+    """
+    Explainable base-quality diagnostic flags.  Does NOT affect score —
+    scoring is done via _compute_base_quality + modifiers.  Used for UI and
+    as inputs to label capping.
+    """
+    flags = {}
+
+    if avg_ema_spread is not None and avg_ema_spread >= 55:
+        flags["wide_ema_spread"] = True
+
+    # Volume dry-up: if min_5 / avg_20 ratio is high, there was no dryup.
+    if last >= 19 and len(volumes) > last:
+        avg_v20 = sum(volumes[max(0, last - 19): last + 1]) / 20
+        if avg_v20 > 0:
+            dryup_ratio = min(volumes[max(0, last - 4): last + 1]) / avg_v20
+            if dryup_ratio >= 0.75:
+                flags["low_dryup"] = True
+
+    # Compression: 5-bar range / 20-bar range. High value = no compression.
+    if last >= 19:
+        hi5  = max(b["high"] for b in bars[max(0, last - 4):  last + 1])
+        lo5  = min(b["low"]  for b in bars[max(0, last - 4):  last + 1])
+        hi20 = max(b["high"] for b in bars[max(0, last - 19): last + 1])
+        lo20 = min(b["low"]  for b in bars[max(0, last - 19): last + 1])
+        r20 = hi20 - lo20
+        if r20 > 0 and (hi5 - lo5) / r20 >= 0.60:
+            flags["low_compression"] = True
+
+    # Chaotic base: avg true-range / close over last 10 bars.
+    if last >= 10:
+        trs = []
+        for i in range(max(1, last - 9), last + 1):
+            h, l, pc = bars[i]["high"], bars[i]["low"], bars[i - 1]["close"]
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        c = bars[last]["close"]
+        if trs and c > 0:
+            atr_pct = (sum(trs) / len(trs)) / c * 100
+            if atr_pct >= 7.0:
+                flags["chaotic_base"] = True
+
+    return flags
+
+
+def _cap_label(label: str, weak_pre_trigger_base: bool, ftr: str, bq_score: int) -> str:
+    """
+    Label cap gate.  Prevents high labels from emerging when the underlying
+    quality evidence contradicts the sequence.
+    """
+    ORDER = ["NEW_PUMP_NONE", "NEW_PUMP_WEAK", "NEW_PUMP_TRIGGER_ONLY",
+             "NEW_PUMP_SETUP", "NEW_PUMP_STRONG", "NEW_PUMP_FIRE"]
+    rank = ORDER.index(label) if label in ORDER else 0
+
+    # weak PRE_TRIGGER base: cap to SETUP
+    if weak_pre_trigger_base and rank > 3:
+        return "NEW_PUMP_SETUP"
+    # HIGH fake trigger risk: cap to SETUP
+    if ftr == "HIGH" and rank > 3:
+        return "NEW_PUMP_SETUP"
+    # very poor base: never allow FIRE regardless of sequence
+    if bq_score < 35 and rank > 4:
+        return "NEW_PUMP_STRONG"
+    return label
 
 
 def _quality_score_modifier(base_quality_score: int, state: str) -> int:
@@ -878,6 +969,7 @@ def _empty_analysis():
         sustain_proxy_score=0,
         sustain_profile="LOW",
         fake_trigger_risk="LOW",
+        quality_flags={},
     )
 
 
@@ -1194,13 +1286,15 @@ def analyze(bars):
     )
     prog_adj = _progression_adjustment(seq_lbl, bq_score)
 
-    # Fake trigger risk + quality modifier
+    # Fake trigger risk + quality modifier + PRE_TRIGGER gate
     ftr       = _fake_trigger_risk(seq_lbl, bq_score, avg_ema_spread_10, volume_z)
-    ftr_pen   = _fake_trigger_penalty(ftr)
+    ftr_pen   = _fake_trigger_penalty(ftr, seq_lbl)
     qmod      = _quality_score_modifier(bq_score, state)
+    weak_pre_trigger_base, pt_gate_pen = _pre_trigger_gate(state, bq_score)
+    base_flags = _compute_base_flags(bq_score, avg_ema_spread_10, bars, last, volumes)
 
     total = max(0, setup_score + trigger_score + confirm_score
-                   + seq_bonus + mod_score + prog_adj + ftr_pen + qmod)
+                   + seq_bonus + mod_score + prog_adj + ftr_pen + qmod + pt_gate_pen)
 
     # Sustain proxy + impulse (separate paths, do not contaminate new_pump_score)
     sp_score, sp_profile = _compute_sustain_proxy(
@@ -1209,6 +1303,19 @@ def analyze(bars):
     )
     missing_piece, main_risk = _explain(seq_lbl, state, age_g4, age_l34, age_fri34, age_b2)
     impulse = compute_impulse_score(bars)
+
+    # Assemble quality_flags + apply label cap
+    quality_flags = dict(base_flags)
+    if weak_pre_trigger_base:
+        quality_flags["weak_pre_trigger_base"] = True
+    if ftr == "HIGH" and seq_lbl in (
+        "TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34",
+        "FULL_L34_G4_B2", "FULL_FRI34_G4_B2", "CONFIRM_AFTER_G4",
+    ):
+        quality_flags["fake_trigger_low_quality"] = True
+
+    raw_label    = _final_label(total)
+    capped_label = _cap_label(raw_label, weak_pre_trigger_base, ftr, bq_score)
 
     return dict(
         has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
@@ -1219,7 +1326,7 @@ def analyze(bars):
         new_pump_modifier_score=mod_score,
         new_pump_score=total,
         new_pump_sequence_label=seq_lbl,
-        new_pump_label=_final_label(total),
+        new_pump_label=capped_label,
         state=state,
         engine_path=engine_path,
         missing_piece=missing_piece,
@@ -1232,6 +1339,7 @@ def analyze(bars):
         sustain_proxy_score=sp_score,
         sustain_profile=sp_profile,
         fake_trigger_risk=ftr,
+        quality_flags=quality_flags,
     )
 
 
