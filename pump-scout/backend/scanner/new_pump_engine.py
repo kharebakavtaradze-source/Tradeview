@@ -496,63 +496,76 @@ def _compute_base_quality(bars, last, bull_stack_len, days_above_ema50,
     Base quality score 0–100.  Measures how clean/structured the pre-breakout base is.
     Uses only live-safe pre-breakout features — zero outcome leakage.
 
-    Key research calibration (Run 52):
-      4x_pump  median: bull_stack_days=14, avg_ema_spread=35.7%, days_above_ema50=19
-      false_pos median: bull_stack_days=4,  avg_ema_spread=59.3%, days_above_ema50=11
+    v2 — recalibrated for small-cap universe (Replay 18: v1 produced 90% LOW scores).
+    Thresholds lowered, EMA-spread penalty softened, weight shifted toward
+    compression + dryup which are more universal signals across market caps.
+
+    Component weights:
+      Price compression      25 pts  (5-bar/20-bar ratio; most universal)
+      Volume dry-up          25 pts  (min_5/avg_20; coiled energy)
+      Bull stack persistence 20 pts  (lowered thresholds vs v1)
+      EMA50 proximity        15 pts  (lowered thresholds vs v1)
+      EMA ribbon spread      10 pts  (softer penalty for natural small-cap spread)
+      Intraday volatility     5 pts  (tight daily candles)
     """
     score = 0
 
-    # 1. Bull stack persistence (up to 28 pts)
-    if bull_stack_len >= 15:   score += 28
-    elif bull_stack_len >= 10: score += 22
-    elif bull_stack_len >= 5:  score += 14
-    elif bull_stack_len >= 2:  score += 7
-
-    # 2. EMA50 proximity persistence: 4x med=19d, normal=14d (up to 18 pts)
-    if days_above_ema50 >= 18:   score += 18
-    elif days_above_ema50 >= 14: score += 14
-    elif days_above_ema50 >= 10: score += 10
-    elif days_above_ema50 >= 6:  score += 5
-
-    # 3. EMA ribbon spread: tight=strong, wide=extended/choppy (up to 15 pts)
-    if avg_ema_spread is not None:
-        if avg_ema_spread < 15:    score += 15
-        elif avg_ema_spread < 25:  score += 12
-        elif avg_ema_spread < 40:  score += 8
-        elif avg_ema_spread < 55:  score += 2
-        elif avg_ema_spread >= 60: score -= 8   # false_positive median territory
-
-    # 4. EMA50 reclaim quality: sweet spot=2, ≥4=choppy (up to 8 pts)
-    if ema50_reclaim_count == 0:
-        score += 5   # clean hold
-    elif ema50_reclaim_count == 2:
-        score += 8   # bounce-recovery pattern
-    elif ema50_reclaim_count == 1:
-        score += 6
-    elif ema50_reclaim_count >= 4:
-        score -= 4   # choppy: false-positive territory
-
-    # 5. Volume dry-up proxy: min vol last 5 bars vs 20-bar avg (up to 15 pts)
-    if last >= 19 and len(volumes) > last:
-        avg_v20 = sum(volumes[max(0, last - 19): last + 1]) / 20
-        min_v5 = min(volumes[max(0, last - 4): last + 1])
-        dryup_ratio = min_v5 / avg_v20 if avg_v20 > 0 else 1.0
-        if dryup_ratio < 0.35:   score += 15
-        elif dryup_ratio < 0.55: score += 10
-        elif dryup_ratio < 0.75: score += 5
-
-    # 6. Price compression: 5-bar range / 20-bar range (up to 12 pts)
+    # 1. Price compression: 5-bar range / 20-bar range (up to 25 pts)
     if last >= 19:
         hi5  = max(b["high"] for b in bars[max(0, last - 4):  last + 1])
         lo5  = min(b["low"]  for b in bars[max(0, last - 4):  last + 1])
         hi20 = max(b["high"] for b in bars[max(0, last - 19): last + 1])
         lo20 = min(b["low"]  for b in bars[max(0, last - 19): last + 1])
-        range20 = hi20 - lo20
-        if range20 > 0:
-            compression = (hi5 - lo5) / range20
-            if compression < 0.25:   score += 12
-            elif compression < 0.40: score += 8
-            elif compression < 0.55: score += 4
+        r20  = hi20 - lo20
+        if r20 > 0:
+            comp = (hi5 - lo5) / r20
+            if comp < 0.20:   score += 25
+            elif comp < 0.35: score += 18
+            elif comp < 0.50: score += 12
+            elif comp < 0.65: score += 6
+
+    # 2. Volume dry-up: min vol last 5 bars vs 20-bar avg (up to 25 pts)
+    if last >= 19 and len(volumes) > last:
+        avg_v20  = sum(volumes[max(0, last - 19): last + 1]) / 20
+        min_v5   = min(volumes[max(0, last - 4): last + 1])
+        dryup    = min_v5 / avg_v20 if avg_v20 > 0 else 1.0
+        if dryup < 0.25:   score += 25
+        elif dryup < 0.45: score += 18
+        elif dryup < 0.65: score += 12
+        elif dryup < 0.80: score += 6
+
+    # 3. Bull stack persistence: lowered thresholds for small-cap (up to 20 pts)
+    if bull_stack_len >= 10:   score += 20
+    elif bull_stack_len >= 6:  score += 15
+    elif bull_stack_len >= 3:  score += 10
+    elif bull_stack_len >= 1:  score += 5
+
+    # 4. EMA50 proximity: lowered thresholds (up to 15 pts)
+    if days_above_ema50 >= 12:   score += 15
+    elif days_above_ema50 >= 8:  score += 11
+    elif days_above_ema50 >= 4:  score += 7
+    elif days_above_ema50 >= 1:  score += 3
+
+    # 5. EMA ribbon spread: softened penalty — small-caps naturally wider (up to 10 pts)
+    if avg_ema_spread is not None:
+        if avg_ema_spread < 20:    score += 10
+        elif avg_ema_spread < 35:  score += 7
+        elif avg_ema_spread < 50:  score += 4
+        elif avg_ema_spread < 65:  score += 1
+        else:                      score -= 3   # was -8; softened for small-cap universe
+
+    # 6. Intraday volatility control: tight daily ranges (up to 5 pts)
+    if last >= 9:
+        ranges = [
+            (b["high"] - b["low"]) / b["close"] * 100
+            for b in bars[max(0, last - 9): last + 1]
+            if b["close"] > 0
+        ]
+        if ranges:
+            avg_r = sum(ranges) / len(ranges)
+            if avg_r < 3.0:    score += 5
+            elif avg_r < 5.0:  score += 3
+            elif avg_r < 8.0:  score += 1
 
     return max(0, min(100, score))
 
@@ -563,30 +576,47 @@ def _compute_sustain_proxy(base_quality_score, bull_stack_len, days_above_ema50,
     Sustain proxy score 0–100 + profile label (LOW/MEDIUM/HIGH).
     Estimates whether setup conditions historically lead to sustained moves.
     Does NOT use days_from_breakout_to_peak or any outcome features.
+
+    v2 — independent of base_quality_score.  Previous formula anchored 40%
+    on bq which was under-calibrated → 99% of candidates collapsed to LOW.
+    New formula scores continuation quality directly from raw signals.
+
+    Components:
+      Volume discipline       35 pts  (low-vol days = coiled controlled rotation)
+      Compression stability   25 pts  (10-bar/30-bar ratio, multi-week tightness)
+      Intraday control        20 pts  (tight candles, not chaotic one-day spikes)
+      Bull persistence        15 pts  (continuation support structure)
+      EMA spread              5 pts   (room for expansion)
     """
     score = 0
 
-    # Base quality anchor (40% weight — sustain adds incremental signal)
-    score += int(base_quality_score * 0.40)
-
-    # Extended low-volume duration: coiled energy proxy (up to 20 pts)
+    # 1. Volume discipline: sustained low-vol = controlled rotation, not spike (up to 35 pts)
     if last >= 14 and len(volumes) > last:
         avg_v20 = sum(volumes[max(0, last - 19): last + 1]) / min(20, last + 1)
         low_vol_days = sum(
             1 for j in range(max(0, last - 9), last + 1)
             if avg_v20 > 0 and volumes[j] < 0.65 * avg_v20
         )
-        if low_vol_days >= 7:   score += 20
-        elif low_vol_days >= 5: score += 14
-        elif low_vol_days >= 3: score += 8
-        elif low_vol_days >= 1: score += 3
+        if low_vol_days >= 7:   score += 35
+        elif low_vol_days >= 5: score += 25
+        elif low_vol_days >= 3: score += 15
+        elif low_vol_days >= 1: score += 5
 
-    # Long bull stack duration: strongest sustain predictor (up to 15 pts)
-    if bull_stack_len >= 20:   score += 15
-    elif bull_stack_len >= 12: score += 10
-    elif bull_stack_len >= 6:  score += 5
+    # 2. Compression stability: 10-bar range / 30-bar range (up to 25 pts)
+    if last >= 29:
+        hi10 = max(b["high"] for b in bars[max(0, last - 9):  last + 1])
+        lo10 = min(b["low"]  for b in bars[max(0, last - 9):  last + 1])
+        hi30 = max(b["high"] for b in bars[max(0, last - 29): last + 1])
+        lo30 = min(b["low"]  for b in bars[max(0, last - 29): last + 1])
+        r30  = hi30 - lo30
+        if r30 > 0:
+            stab = (hi10 - lo10) / r30
+            if stab < 0.25:   score += 25
+            elif stab < 0.40: score += 18
+            elif stab < 0.55: score += 10
+            elif stab < 0.70: score += 5
 
-    # Controlled intraday volatility = tight base, not chaotic (up to 10 pts)
+    # 3. Intraday control: tight daily candles = controlled base (up to 20 pts)
     if last >= 9:
         ranges = [
             (b["high"] - b["low"]) / b["close"] * 100
@@ -594,20 +624,25 @@ def _compute_sustain_proxy(base_quality_score, bull_stack_len, days_above_ema50,
             if b["close"] > 0
         ]
         if ranges:
-            avg_range_pct = sum(ranges) / len(ranges)
-            if avg_range_pct < 2.0:   score += 10
-            elif avg_range_pct < 3.5: score += 6
-            elif avg_range_pct < 5.0: score += 2
-            elif avg_range_pct > 8.0: score -= 5   # chaotic base
+            avg_r = sum(ranges) / len(ranges)
+            if avg_r < 2.0:    score += 20
+            elif avg_r < 3.5:  score += 14
+            elif avg_r < 5.0:  score += 8
+            elif avg_r < 8.0:  score += 3
+            elif avg_r > 12.0: score -= 5   # chaotic parabolic — not controlled
 
-    # Tight EMA spread = expansion room (up to 10 pts)
+    # 4. Bull stack persistence: sustained trend support (up to 15 pts)
+    if bull_stack_len >= 8:    score += 15
+    elif bull_stack_len >= 4:  score += 10
+    elif bull_stack_len >= 2:  score += 5
+
+    # 5. EMA spread: tight = room to expand (up to 5 pts)
     if avg_ema_spread is not None:
-        if avg_ema_spread < 20:    score += 10
-        elif avg_ema_spread < 35:  score += 5
-        elif avg_ema_spread > 60:  score -= 8
+        if avg_ema_spread < 20:    score += 5
+        elif avg_ema_spread < 35:  score += 3
 
     score = max(0, min(100, score))
-    profile = "HIGH" if score >= 65 else ("MEDIUM" if score >= 40 else "LOW")
+    profile = "HIGH" if score >= 60 else ("MEDIUM" if score >= 35 else "LOW")
     return score, profile
 
 
@@ -669,34 +704,44 @@ def _pre_trigger_gate(state: str, bq_score: int) -> tuple:
 
 def _compute_base_flags(bq_score, avg_ema_spread, bars, last, volumes) -> dict:
     """
-    Explainable base-quality diagnostic flags.  Does NOT affect score —
-    scoring is done via _compute_base_quality + modifiers.  Used for UI and
-    as inputs to label capping.
+    Explainable base-quality diagnostic flags.  Advisory only — does not affect score.
+    Thresholds aligned with v2 quality-scoring formula for consistency.
     """
     flags = {}
 
-    if avg_ema_spread is not None and avg_ema_spread >= 55:
-        flags["wide_ema_spread"] = True
+    # EMA spread: flag truly wide (>= 65%); threshold raised from 55% so natural
+    # small-cap spread is not over-flagged. Also flag tight spread positively.
+    if avg_ema_spread is not None:
+        if avg_ema_spread >= 65:
+            flags["wide_ema_spread"] = True
+        elif avg_ema_spread < 20:
+            flags["tight_ema_spread"] = True
 
-    # Volume dry-up: if min_5 / avg_20 ratio is high, there was no dryup.
+    # Volume dry-up: threshold raised 0.75 → 0.80 to match new scoring formula
     if last >= 19 and len(volumes) > last:
         avg_v20 = sum(volumes[max(0, last - 19): last + 1]) / 20
         if avg_v20 > 0:
-            dryup_ratio = min(volumes[max(0, last - 4): last + 1]) / avg_v20
-            if dryup_ratio >= 0.75:
+            dryup = min(volumes[max(0, last - 4): last + 1]) / avg_v20
+            if dryup >= 0.80:
                 flags["low_dryup"] = True
+            elif dryup < 0.25:
+                flags["strong_dryup"] = True
 
-    # Compression: 5-bar range / 20-bar range. High value = no compression.
+    # Compression: 5-bar/20-bar ratio — threshold aligned with new formula
     if last >= 19:
         hi5  = max(b["high"] for b in bars[max(0, last - 4):  last + 1])
         lo5  = min(b["low"]  for b in bars[max(0, last - 4):  last + 1])
         hi20 = max(b["high"] for b in bars[max(0, last - 19): last + 1])
         lo20 = min(b["low"]  for b in bars[max(0, last - 19): last + 1])
-        r20 = hi20 - lo20
-        if r20 > 0 and (hi5 - lo5) / r20 >= 0.60:
-            flags["low_compression"] = True
+        r20  = hi20 - lo20
+        if r20 > 0:
+            comp = (hi5 - lo5) / r20
+            if comp >= 0.65:
+                flags["low_compression"] = True
+            elif comp < 0.20:
+                flags["strong_compression"] = True
 
-    # Chaotic base: avg true-range / close over last 10 bars.
+    # Chaotic base: ATR pct >= 7% (unchanged threshold)
     if last >= 10:
         trs = []
         for i in range(max(1, last - 9), last + 1):
@@ -707,6 +752,8 @@ def _compute_base_flags(bq_score, avg_ema_spread, bars, last, volumes) -> dict:
             atr_pct = (sum(trs) / len(trs)) / c * 100
             if atr_pct >= 7.0:
                 flags["chaotic_base"] = True
+            elif atr_pct < 3.0:
+                flags["controlled_expansion_context"] = True
 
     return flags
 
