@@ -257,6 +257,11 @@ export default function Journal() {
   const [deepLoading, setDeepLoading] = useState(false);
   const [livePrices, setLivePrices] = useState({});
   const [closeModal, setCloseModal] = useState(null); // { entry, initialReason }
+  const [resetModal, setResetModal] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [balanceInput, setBalanceInput] = useState('');
   const now = new Date();
   const [calendarYear, setCalendarYear] = useState(now.getFullYear());
   const [calendarMonth, setCalendarMonth] = useState(now.getMonth());
@@ -277,7 +282,11 @@ export default function Journal() {
         fetch(`${API_URL}/api/journal/stats`),
       ]);
       if (jRes.ok) setEntries((await jRes.json()).entries || []);
-      if (sRes.ok) setStats(await sRes.json());
+      if (sRes.ok) {
+        const s = await sRes.json();
+        setStats(s);
+        setBalanceInput(String(s.starting_balance ?? 2000));
+      }
     } catch (e) {
       console.error('Failed to load journal:', e);
     }
@@ -350,6 +359,32 @@ export default function Journal() {
     finally { setDeepLoading(false); }
   }
 
+  async function handleReset() {
+    if (resetConfirm !== 'RESET') return;
+    setResetLoading(true);
+    try {
+      await fetch(`${API_URL}/api/journal/reset`, { method: 'DELETE' });
+      setResetModal(false);
+      setResetConfirm('');
+      await loadData();
+    } catch { }
+    finally { setResetLoading(false); }
+  }
+
+  async function handleSaveBalance() {
+    const val = parseFloat(balanceInput);
+    if (!val || val <= 0) return;
+    try {
+      await fetch(`${API_URL}/api/journal/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ starting_balance: val }),
+      });
+      setSettingsOpen(false);
+      await loadData();
+    } catch { }
+  }
+
   const openCount = entries.filter(e => e.outcome === 'open').length;
   const winCount = entries.filter(e => e.outcome === 'win').length;
   const lossCount = entries.filter(e => e.outcome === 'loss').length;
@@ -363,6 +398,55 @@ export default function Journal() {
       <div className={styles.container}>
         <AppNav />
 
+        {/* Capital bar + Reset */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+          {stats && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '5px 12px' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.05em' }}>CAPITAL</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>${(stats.starting_balance ?? 2000).toLocaleString()}</span>
+              {stats.closed_trades > 0 && (
+                <>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', margin: '0 2px' }}>→</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: (stats.pnl_usd ?? 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                    ${(stats.portfolio_value_usd ?? stats.starting_balance ?? 2000).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </span>
+                  <span style={{ fontSize: 11, color: (stats.pnl_usd ?? 0) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                    ({(stats.pnl_usd ?? 0) >= 0 ? '+' : ''}${(stats.pnl_usd ?? 0).toFixed(0)})
+                  </span>
+                </>
+              )}
+              <button
+                onClick={() => setSettingsOpen(v => !v)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, padding: '0 2px', lineHeight: 1 }}
+                title="Change starting balance"
+              >⚙</button>
+            </div>
+          )}
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={() => { setResetModal(true); setResetConfirm(''); }}
+            style={{ background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.25)', color: '#ff6b6b', fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 5, cursor: 'pointer', letterSpacing: '0.04em' }}
+          >
+            🗑 Reset Journal
+          </button>
+        </div>
+
+        {/* Settings: change starting balance */}
+        {settingsOpen && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '8px 12px' }}>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>Starting capital $</span>
+            <input
+              type="number"
+              value={balanceInput}
+              onChange={e => setBalanceInput(e.target.value)}
+              style={{ width: 90, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: 'var(--text)', fontSize: 13, padding: '3px 8px', fontFamily: 'inherit' }}
+              min="1"
+            />
+            <button onClick={handleSaveBalance} className={styles.btn} style={{ fontSize: 11, padding: '4px 12px' }}>Save</button>
+            <button onClick={() => setSettingsOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>✕</button>
+          </div>
+        )}
+
         {/* Stats */}
         {stats && (
           <div className={styles.statsGrid}>
@@ -373,7 +457,7 @@ export default function Journal() {
             </div>
             {stats.closed_trades === 0 ? (
               <div className={styles.statCard} style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-                Нет закрытых сделок — закройте позицию чтобы увидеть статистику
+                No closed trades yet — close a position to see stats
               </div>
             ) : (
               <>
@@ -396,6 +480,9 @@ export default function Journal() {
                   <div className={styles.statLabel}>TOTAL PnL</div>
                   <div className={`${styles.statValue} ${stats.total_pnl_pct >= 0 ? styles.win : styles.loss}`}>
                     {stats.total_pnl_pct >= 0 ? '+' : ''}{stats.total_pnl_pct}%
+                  </div>
+                  <div className={styles.statMeta} style={{ color: (stats.pnl_usd ?? 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                    {(stats.pnl_usd ?? 0) >= 0 ? '+' : ''}${(stats.pnl_usd ?? 0).toFixed(0)}
                   </div>
                 </div>
               </>
@@ -923,6 +1010,42 @@ export default function Journal() {
           onClose={() => setCloseModal(null)}
           onConfirm={(price, reason, outcome) => handleClose(closeModal.entry, price, reason, outcome)}
         />
+      )}
+
+      {/* Reset confirmation modal */}
+      {resetModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: 'var(--card)', border: '1px solid rgba(255,60,60,0.35)', borderRadius: 10, padding: 28, maxWidth: 380, width: '100%' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#ff6b6b', marginBottom: 10 }}>⚠️ Reset Journal</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 16 }}>
+              This will permanently delete <strong style={{ color: 'var(--text)' }}>{entries.length} trade{entries.length !== 1 ? 's' : ''}</strong> and all position snapshots.
+              This action cannot be undone.
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+              Type <strong style={{ color: 'var(--text)', letterSpacing: '0.08em' }}>RESET</strong> to confirm:
+            </div>
+            <input
+              autoFocus
+              value={resetConfirm}
+              onChange={e => setResetConfirm(e.target.value)}
+              placeholder="RESET"
+              style={{ width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 5, color: 'var(--text)', fontSize: 14, padding: '6px 10px', fontFamily: 'inherit', marginBottom: 16, boxSizing: 'border-box', letterSpacing: '0.08em' }}
+              onKeyDown={e => { if (e.key === 'Enter' && resetConfirm === 'RESET') handleReset(); }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setResetModal(false); setResetConfirm(''); }} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--text-muted)', padding: '7px 16px', borderRadius: 5, cursor: 'pointer', fontSize: 12 }}>
+                Cancel
+              </button>
+              <button
+                onClick={handleReset}
+                disabled={resetConfirm !== 'RESET' || resetLoading}
+                style={{ background: resetConfirm === 'RESET' ? 'rgba(255,60,60,0.2)' : 'rgba(255,60,60,0.05)', border: `1px solid ${resetConfirm === 'RESET' ? 'rgba(255,60,60,0.5)' : 'rgba(255,60,60,0.15)'}`, color: resetConfirm === 'RESET' ? '#ff6b6b' : 'rgba(255,107,107,0.4)', padding: '7px 16px', borderRadius: 5, cursor: resetConfirm === 'RESET' ? 'pointer' : 'default', fontSize: 12, fontWeight: 700 }}
+              >
+                {resetLoading ? 'Resetting…' : '🗑 Delete All Trades'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

@@ -38,6 +38,7 @@ from database import (
     get_deep_analytics,
     get_journal,
     get_journal_entry,
+    get_journal_settings,
     get_journal_stats,
     get_latest_scan,
     get_latest_scan_by_type,
@@ -53,8 +54,10 @@ from database import (
     init_db,
     mark_candidate_journaled,
     remove_from_watchlist,
+    reset_journal,
     save_scan,
     update_journal_entry,
+    update_journal_settings,
     get_eod_log,
     get_latest_eod_log,
     get_macro_events_latest,
@@ -572,6 +575,26 @@ async def delete_entry(entry_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
     return {"status": "deleted"}
+
+
+@app.delete("/api/journal/reset")
+async def reset_journal_endpoint():
+    """Delete all journal entries and snapshots — irreversible."""
+    result = await reset_journal()
+    return {"status": "reset", **result}
+
+
+@app.get("/api/journal/settings")
+async def get_settings():
+    return await get_journal_settings()
+
+
+@app.put("/api/journal/settings")
+async def update_settings(data: Dict[str, Any]):
+    balance = data.get("starting_balance")
+    if balance is None or not isinstance(balance, (int, float)) or balance <= 0:
+        raise HTTPException(status_code=400, detail="starting_balance must be a positive number")
+    return await update_journal_settings(float(balance))
 
 
 @app.get("/api/journal/export")
