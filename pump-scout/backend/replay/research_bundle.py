@@ -784,6 +784,23 @@ async def build_research_bundle(run_id: int) -> dict:
         missed_section, pattern_review,
     )
 
+    # ── Section G: Decision-aligned research (additive) ──────────────────────
+    # Groups by BUY_CANDIDATE / WATCH / IMPULSE_RISK / AVOID with pairwise
+    # comparisons and chronology. Does NOT replace legacy group_type comparisons.
+    try:
+        from replay.decision_aligned_research import build_decision_aligned_research
+        decision_aligned = await build_decision_aligned_research(run_id)
+    except Exception as exc:
+        logger.warning(f"[BUNDLE] decision-aligned research skipped: {exc}")
+        decision_aligned = None
+
+    # Inject decision-aware insights into pattern_review alongside legacy ones
+    if decision_aligned and decision_aligned.get("insights"):
+        pattern_review.setdefault("decision_insights", []).extend(decision_aligned["insights"])
+        pattern_review["suggested_focus"].extend(
+            f"Decision-aligned: {line}" for line in decision_aligned["insights"][:2]
+        )
+
     bundle = {
         "run":                              run,
         "summary":                          summary,
@@ -804,6 +821,7 @@ async def build_research_bundle(run_id: int) -> dict:
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,
         "suggested_experiments":            suggested_experiments,
+        "decision_aligned_research":        decision_aligned,
     }
 
     logger.info(
@@ -922,6 +940,63 @@ def render_research_bundle_markdown(bundle: dict) -> str:
     _bucket_section("Performance by NP Setup Type (L34 / FRI34 / BOTH / NONE)", bundle.get("performance_by_np_setup_type", []))
     _bucket_section("Performance by NP Setup Freshness", bundle.get("performance_by_np_freshness", []))
     _bucket_section("Performance by Tier",              bundle.get("performance_by_tier", []))
+
+    # ── Section B-DAR: Decision-aligned research (compact) ────────────────────
+    dar = bundle.get("decision_aligned_research")
+    if dar:
+        add("## Decision-Aligned Research")
+        add("")
+        sbd = dar.get("summary_by_decision") or {}
+        rows = []
+        for d in ("BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID", "UNDECIDED"):
+            b = sbd.get(d)
+            if not b or not b.get("count"):
+                continue
+            rows.append([
+                d, b["count"],
+                _fmt(b.get("avg_return_5d"), sign=True, suffix="%"),
+                _fmt(b.get("avg_max_drawdown_5d"), sign=True, suffix="%"),
+                b.get("median_bq_score") or "—",
+                b.get("median_sustain_score") or "—",
+                b.get("median_ce_score") or "—",
+            ])
+        if rows:
+            add(_mdtable(
+                ["Decision", "N", "Avg 5d", "MaxDD 5d", "Med BQ", "Med Sustain", "Med CE"],
+                rows,
+            ))
+        add("")
+        add("### Pairwise Separation (A − B)")
+        for pw in dar.get("pairwise_comparisons") or []:
+            if pw.get("skipped_reason"):
+                continue
+            add(
+                f"- **{pw['comparison']}** — "
+                f"Δret5d={pw.get('return_5d_diff')}  "
+                f"Δbq={pw.get('bq_score_diff')}  "
+                f"Δsustain={pw.get('sustain_score_diff')}  "
+                f"Δdd={pw.get('max_drawdown_5d_diff')}"
+            )
+        add("")
+        add("### Chronology by Decision")
+        cbd = dar.get("chronology_by_decision") or {}
+        for d in ("BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID"):
+            c = cbd.get(d)
+            if not c or not c.get("count"):
+                continue
+            add(
+                f"- **{d}** (n={c['count']}) — "
+                f"g4_seen={c.get('pct_with_g4_trigger')}%  "
+                f"setup_before_trigger={c.get('pct_setup_before_trigger')}%  "
+                f"trigger_without_setup={c.get('pct_trigger_without_setup')}%  "
+                f"med_setup→trigger={c.get('median_days_setup_to_trigger')}d"
+            )
+        if dar.get("insights"):
+            add("")
+            add("### Decision-Aware Insights")
+            for line in dar["insights"]:
+                add(f"- {line}")
+        add("")
 
     # ── Section C: Top False Positives ────────────────────────────────────────
     add("## Top False Positives")
