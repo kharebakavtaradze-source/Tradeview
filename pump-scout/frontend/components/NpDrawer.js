@@ -64,8 +64,7 @@ const PHASE_COLOR = {
   EARLY_STRUCTURE:      { color: '#ffd600', label: 'EARLY STRUCTURE' },
   SETUP_PHASE:          { color: '#00b0ff', label: 'SETUP PHASE'     },
   IMPULSE_ONLY:         { color: '#e040fb', label: 'IMPULSE ONLY'    },
-  BROKEN:               { color: '#ff9800', label: 'BROKEN SETUP'    },
-  NO_STRUCTURE_IMPULSE: { color: '#888',    label: 'NO STR / IMPULSE'},
+  BROKEN_STRUCTURE:     { color: '#ff9800', label: 'BROKEN SETUP'    },
   TRUE_NONE:            { color: '#555',    label: 'TRUE NONE'       },
   DEGRADED:             { color: '#ff5252', label: 'DEGRADED'        },
 };
