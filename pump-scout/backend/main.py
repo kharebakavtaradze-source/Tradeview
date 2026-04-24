@@ -1942,6 +1942,37 @@ async def replay_refresh_combined(run_id: int):
     return await replay_recalculate_derived(run_id)
 
 
+# ── Decision-aligned research (additive to legacy Raw Pattern / Pump Study) ──
+
+@app.get("/api/replay/{run_id}/decision-aligned-research")
+async def replay_decision_aligned_research(run_id: int, format: str = "json"):
+    """
+    Return the decision-aligned research payload for a replay run.
+    Groups by current production decision buckets (BUY_CANDIDATE / WATCH /
+    IMPULSE_RISK / AVOID) with pairwise separation + chronology by decision.
+
+    ?format=json      (default) — returns JSON body
+    ?format=markdown           — returns rendered markdown string
+    Does NOT replace legacy Raw Pattern / Pump Study comparisons.
+    """
+    from replay.decision_aligned_research import (
+        build_decision_aligned_research, render_decision_aligned_markdown,
+    )
+    try:
+        payload = await build_decision_aligned_research(run_id)
+    except ValueError as exc:
+        raise HTTPException(404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"[DAR] run_id={run_id} failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Decision-aligned research failed: {str(exc)[:200]}")
+
+    if format == "markdown":
+        from fastapi.responses import Response
+        md = render_decision_aligned_markdown(payload)
+        return Response(content=md, media_type="text/markdown; charset=utf-8")
+    return payload
+
+
 @app.delete("/api/replay/{run_id}")
 async def delete_replay_run_endpoint(run_id: int):
     """
