@@ -1371,6 +1371,101 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
 
 
 # ---------------------------------------------------------------------------
+# Structure-phase layer (additive semantic layer on top of existing NP output)
+# ---------------------------------------------------------------------------
+
+# Base score by sequence — upweights progression sequences (R19 calibration)
+_STRUCTURE_SCORE_MAP = {
+    "CONFIRM_AFTER_G4":    90,
+    "FULL_L34_G4_B2":      90,
+    "FULL_FRI34_G4_B2":    85,
+    "TRIGGER_AFTER_L34":   75,  # R19: +5.81% 5d, upweighted
+    "TRIGGER_AFTER_FRI34": 60,
+    "SETUP_ONLY_FRI34":    55,  # R19: +6.37% 5d, upweighted vs L34
+    "SETUP_ONLY_L34":      38,  # boosted by freshness modifier below
+    "ISOLATED_G4":         22,
+    "ISOLATED_B2":          8,  # downweighted: R19 -3.60% 5d
+    "NONE":                 5,  # downweighted: no structural sequence
+}
+
+
+def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
+                              age_l34, age_fri34, impulse_label, impulse_score):
+    """
+    Semantic structure-phase layer — additive, does NOT modify existing labels.
+    Returns (structure_phase: str, structure_score: int, structure_advisory: list).
+
+    Phase values (best → worst):
+      CONFIRMED_STRUCTURE  — full NP sequence validated
+      TRIGGERED_STRUCTURE  — G4 trigger with known setup sequence
+      EARLY_STRUCTURE      — NP_WEAK + active setup (forming, not just "weak")
+      SETUP_PHASE          — active setup, trigger pending
+      IMPULSE_ONLY         — strong impulse, no structural sequence
+      BROKEN               — BROKEN_SETUP state (R19: +8.11% 5d — positive watch)
+      NO_STRUCTURE_IMPULSE — NP_NONE + impulse engine dominant
+      TRUE_NONE            — NP_NONE + no structural or impulse signal
+      DEGRADED             — NEUTRAL, FAILED_SETUP, OVEREXTENDED, ISOLATED_B2
+    """
+    advisory = []
+
+    # ── Base score from sequence ──────────────────────────────────────────────
+    score = _STRUCTURE_SCORE_MAP.get(seq_lbl, 15)
+
+    # SETUP_ONLY_L34: moderate age 4-7 bars earns bonus (R19: MODERATE +7.13% 5d)
+    if seq_lbl == "SETUP_ONLY_L34" and age_l34 is not None:
+        if 3 < age_l34 <= 7:
+            score += 10
+            advisory.append("moderate_setup_age_strength")
+        # FRESH (≤3) and STALE (>7): no bonus — do not auto-penalise
+
+    # NP label modifier — no penalty for absent FRI34
+    if np_label == "NEW_PUMP_STRONG":
+        score += 15
+    elif np_label == "NEW_PUMP_WEAK":
+        score += 10
+    elif np_label in ("NEW_PUMP_SETUP", "NEW_PUMP_TRIGGER_ONLY"):
+        score += 5
+
+    # Strong impulse modifier
+    _strong_impulse = (
+        impulse_label == "IMPULSE_STRONG" or (impulse_score or 0) >= 50
+    )
+    if engine_path == "impulse" and _strong_impulse:
+        score += 15
+
+    score = min(100, max(0, score))
+
+    # ── Phase classification ──────────────────────────────────────────────────
+    _CONFIRMED_SEQS = frozenset(("CONFIRM_AFTER_G4", "FULL_L34_G4_B2", "FULL_FRI34_G4_B2"))
+    _TRIGGERED_SEQS = frozenset(("TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34"))
+    _SETUP_SEQS     = frozenset(("SETUP_ONLY_L34", "SETUP_ONLY_FRI34"))
+    _has_setup      = (age_l34 is not None or age_fri34 is not None)
+
+    if state in ("NEUTRAL", "FAILED_SETUP", "OVEREXTENDED") or seq_lbl == "ISOLATED_B2":
+        phase = "DEGRADED"
+    elif state == "BROKEN_SETUP":
+        phase = "BROKEN"
+    elif seq_lbl in _CONFIRMED_SEQS or state == "CONFIRMED":
+        phase = "CONFIRMED_STRUCTURE"
+    elif seq_lbl in _TRIGGERED_SEQS or state == "TRIGGERED":
+        phase = "TRIGGERED_STRUCTURE"
+    elif np_label == "NEW_PUMP_WEAK" and _has_setup and seq_lbl in _SETUP_SEQS:
+        # WEAK + active setup = early structure forming, not merely "weak"
+        phase = "EARLY_STRUCTURE"
+        advisory.append("np_weak_with_setup_context")
+    elif seq_lbl in _SETUP_SEQS:
+        phase = "SETUP_PHASE"
+    elif engine_path == "impulse" and _strong_impulse:
+        phase = "IMPULSE_ONLY"
+    elif np_label == "NEW_PUMP_NONE" and engine_path == "impulse":
+        phase = "NO_STRUCTURE_IMPULSE"
+    else:
+        phase = "TRUE_NONE"
+
+    return phase, score, advisory
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -1593,6 +1688,18 @@ def analyze(bars):
         age_fri34=age_fri34,
     )
 
+    # Structure-phase layer (additive — does not touch existing outputs)
+    structure_phase, structure_score, structure_advisory = _compute_structure_phase(
+        seq_lbl=seq_lbl,
+        state=state,
+        engine_path=engine_path,
+        np_label=capped_label,
+        age_l34=age_l34,
+        age_fri34=age_fri34,
+        impulse_label=impulse["impulse_label"],
+        impulse_score=impulse["impulse_score"],
+    )
+
     return dict(
         has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
         age_l34=age_l34, age_fri34=age_fri34, age_g4=age_g4, age_b2=age_b2,
@@ -1624,6 +1731,9 @@ def analyze(bars):
         decision=decision,
         decision_reason=decision_reason,
         decision_flags=decision_flags,
+        structure_phase=structure_phase,
+        structure_score=structure_score,
+        structure_advisory=structure_advisory,
     )
 
 

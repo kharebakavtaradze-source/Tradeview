@@ -766,6 +766,40 @@ async def build_research_bundle(run_id: int) -> dict:
         key=lambda x: _DEC_ORDER.index(x["bucket"]) if x["bucket"] in _DEC_ORDER else 99
     )
 
+    # ── Phase 10: Structure-phase buckets (new semantic layer) ───────────────
+    _PHASE_ORDER = [
+        "CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE", "EARLY_STRUCTURE",
+        "SETUP_PHASE", "IMPULSE_ONLY", "BROKEN",
+        "NO_STRUCTURE_IMPULSE", "TRUE_NONE", "DEGRADED",
+    ]
+
+    def _structure_phase_tier(c: dict) -> str:
+        np_data = c.get("new_pump") or (c.get("snapshot") or {}).get("new_pump") or {}
+        return np_data.get("structure_phase", "TRUE_NONE")
+
+    perf_structure_phase = _build_perf_buckets(
+        candidates, outcome_map, _structure_phase_tier, "structure_phase"
+    )
+    perf_structure_phase.sort(
+        key=lambda x: _PHASE_ORDER.index(x["bucket"]) if x["bucket"] in _PHASE_ORDER else 99
+    )
+
+    def _structure_score_bucket(c: dict) -> str:
+        np_data = c.get("new_pump") or (c.get("snapshot") or {}).get("new_pump") or {}
+        s = np_data.get("structure_score")
+        if s is None: return "UNKNOWN"
+        if s >= 70:   return "HIGH"
+        if s >= 40:   return "MEDIUM"
+        return "LOW"
+
+    perf_structure_score = _build_perf_buckets(
+        candidates, outcome_map, _structure_score_bucket, "structure_score_bucket"
+    )
+    perf_structure_score.sort(
+        key=lambda x: ["HIGH", "MEDIUM", "LOW", "UNKNOWN"].index(x["bucket"])
+        if x["bucket"] in ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] else 99
+    )
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -817,6 +851,8 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_compression_expansion_state": perf_compression_expansion,
         "performance_by_expansion_timing_risk":       perf_expansion_timing,
         "performance_by_decision":                    perf_decision,
+        "performance_by_structure_phase":             perf_structure_phase,
+        "performance_by_structure_score_bucket":      perf_structure_score,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,
