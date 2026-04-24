@@ -334,6 +334,17 @@ const LABEL_COLOR = {
   NEW_PUMP_NONE:         '#444',
 };
 
+const STATE_COLOR = {
+  CONFIRMED:    '#ff4400',
+  TRIGGERED:    '#ff8800',
+  PRE_TRIGGER:  '#ffd600',
+  FAILED_SETUP: '#888',
+  BROKEN_SETUP: '#666',
+  OVEREXTENDED: '#c084fc',
+  IMPULSE:      '#00e5ff',
+  NEUTRAL:      '#555',
+};
+
 function FinalBadge({ result }) {
   if (!result) return null;
   const lbl = result.new_pump_label || 'NEW_PUMP_NONE';
@@ -347,6 +358,53 @@ function FinalBadge({ result }) {
       {result.new_pump_sequence_label && (
         <span className={styles.finalSeq}>{result.new_pump_sequence_label}</span>
       )}
+    </div>
+  );
+}
+
+function StateRow({ result }) {
+  if (!result) return null;
+  const state = result.state || 'NEUTRAL';
+  const path  = result.engine_path || 'structure';
+  const col   = STATE_COLOR[state] || '#555';
+  return (
+    <div className={styles.stateRow}>
+      <span className={styles.stateChip} style={{ color: col, borderColor: `${col}55`, background: `${col}14` }}>
+        {state}
+      </span>
+      <span className={styles.pathChip} style={{ color: path === 'impulse' ? '#00e5ff' : '#8f8fba' }}>
+        {path === 'impulse' ? '⚡ IMPULSE PATH' : '⬡ STRUCTURE PATH'}
+      </span>
+      {result.missing_piece && (
+        <span className={styles.missingChip}>
+          missing: <strong>{result.missing_piece}</strong>
+        </span>
+      )}
+      {result.main_risk && (
+        <span className={styles.riskChip}>
+          risk: <strong>{result.main_risk}</strong>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ImpulseBlock({ result }) {
+  if (!result || !result.impulse_score) return null;
+  const score = result.impulse_score;
+  const lbl   = result.impulse_label;
+  if (score < 1) return null;
+  const col = lbl === 'IMPULSE_STRONG' ? '#00e5ff' : '#8f8fba';
+  return (
+    <div className={styles.impulseBlock} style={{ borderColor: `${col}44` }}>
+      <span className={styles.impulseLabel} style={{ color: col }}>
+        {lbl || 'IMPULSE'} ⚡
+      </span>
+      <span className={styles.impulseScore}>score: {score}</span>
+      <span className={styles.impulseNote}>
+        Explosive volume/price move detected on the parallel impulse path.
+        {!lbl && ' Score below threshold — not labeled.'}
+      </span>
     </div>
   );
 }
@@ -430,6 +488,8 @@ export default function SignalAnatomy() {
                 </button>
               </div>
               <FinalBadge result={report.final} />
+              <StateRow result={report.final} />
+              <ImpulseBlock result={report.final} />
               <div className={styles.metaRow}>
                 <span className={styles.metaItem}>bars: <strong>{report.n_candles}</strong></span>
                 {report.final?.new_pump_score != null && (

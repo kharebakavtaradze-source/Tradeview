@@ -696,6 +696,43 @@ async def build_research_bundle(run_id: int) -> dict:
         "np_engine_path",
     )
 
+    # ── Phase 7: Base quality / sustain / fake trigger buckets ───────────────
+    def _bq_bucket(c):
+        score = c.get("np_base_quality_score")
+        if score is None:
+            return "UNKNOWN"
+        if score >= 60:   return "HIGH"
+        elif score >= 35: return "MEDIUM"
+        return "LOW"
+
+    _BQ_ORDER = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+    perf_base_quality = _build_perf_buckets(
+        candidates, outcome_map, _bq_bucket, "base_quality_bucket"
+    )
+    perf_base_quality.sort(
+        key=lambda x: _BQ_ORDER.index(x["bucket"]) if x["bucket"] in _BQ_ORDER else 99
+    )
+
+    _SUSTAIN_ORDER = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+    perf_sustain_profile = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_sustain_profile") or "UNKNOWN",
+        "sustain_profile",
+    )
+    perf_sustain_profile.sort(
+        key=lambda x: _SUSTAIN_ORDER.index(x["bucket"]) if x["bucket"] in _SUSTAIN_ORDER else 99
+    )
+
+    _FTR_ORDER = ["LOW", "MEDIUM", "HIGH"]
+    perf_fake_trigger = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_fake_trigger_risk") or "LOW",
+        "fake_trigger_risk",
+    )
+    perf_fake_trigger.sort(
+        key=lambda x: _FTR_ORDER.index(x["bucket"]) if x["bucket"] in _FTR_ORDER else 99
+    )
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -724,6 +761,9 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_np_freshness":      perf_np_freshness,
         "performance_by_np_state":          perf_np_state,
         "performance_by_engine_path":       perf_engine_path,
+        "performance_by_base_quality_bucket": perf_base_quality,
+        "performance_by_sustain_profile":   perf_sustain_profile,
+        "performance_by_fake_trigger_risk": perf_fake_trigger,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,

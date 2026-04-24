@@ -457,18 +457,203 @@ def _sequence_bonus(age_l34, age_fri34, age_g4, age_b2):
     return 0
 
 
-def _progression_adjustment(seq_label: str) -> int:
+def _progression_adjustment(seq_label: str, base_quality_score: int = 50) -> int:
     """
-    Per-sequence score adjustment derived from Replay 14 evidence.
-    Penalizes structurally empty or isolated sequences; rewards nothing
-    that the sequence_bonus already handles (TRIGGER_AFTER_* rewarded there).
+    Per-sequence score adjustment, now quality-conditional for setup-only sequences.
+    SETUP_ONLY_L34 is no longer blindly penalized — MOBX-type 4x pumps have strong
+    base quality with no G4 yet.
     """
-    return {
-        "ISOLATED_G4":      -8,   # Replay 14: weak, no setup context
-        "SETUP_ONLY_FRI34": -4,   # structure stalled despite FRI34 signal
-        "NONE":             -5,   # no progression — most destructive (np_setup_via=NONE)
-        "ISOLATED_B2":      -3,   # orphaned confirmation without trigger context
-    }.get(seq_label, 0)
+    if seq_label == "ISOLATED_G4":
+        return -8   # Replay 14: weak, no setup context
+    if seq_label == "NONE":
+        return -5   # no progression — most destructive
+    if seq_label == "ISOLATED_B2":
+        return -3   # orphaned confirmation without trigger context
+    if seq_label == "SETUP_ONLY_FRI34":
+        # Structure stalled despite FRI34 — severity depends on base quality
+        if base_quality_score >= 60:
+            return -1
+        if base_quality_score >= 40:
+            return -4
+        return -6
+    if seq_label == "SETUP_ONLY_L34":
+        # MOBX-type: strong base can still be a real 4x setup in pre-trigger phase
+        if base_quality_score >= 60:
+            return +4   # reward: clean early setup, watchlist candidate
+        if base_quality_score >= 40:
+            return 0    # neutral: wait for trigger
+        return -4       # weak base = likely failed setup
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Base Quality + Sustain Proxy + Fake Trigger Filter
+# ---------------------------------------------------------------------------
+
+def _compute_base_quality(bars, last, bull_stack_len, days_above_ema50,
+                           ema50_reclaim_count, avg_ema_spread, volumes):
+    """
+    Base quality score 0–100.  Measures how clean/structured the pre-breakout base is.
+    Uses only live-safe pre-breakout features — zero outcome leakage.
+
+    Key research calibration (Run 52):
+      4x_pump  median: bull_stack_days=14, avg_ema_spread=35.7%, days_above_ema50=19
+      false_pos median: bull_stack_days=4,  avg_ema_spread=59.3%, days_above_ema50=11
+    """
+    score = 0
+
+    # 1. Bull stack persistence (up to 28 pts)
+    if bull_stack_len >= 15:   score += 28
+    elif bull_stack_len >= 10: score += 22
+    elif bull_stack_len >= 5:  score += 14
+    elif bull_stack_len >= 2:  score += 7
+
+    # 2. EMA50 proximity persistence: 4x med=19d, normal=14d (up to 18 pts)
+    if days_above_ema50 >= 18:   score += 18
+    elif days_above_ema50 >= 14: score += 14
+    elif days_above_ema50 >= 10: score += 10
+    elif days_above_ema50 >= 6:  score += 5
+
+    # 3. EMA ribbon spread: tight=strong, wide=extended/choppy (up to 15 pts)
+    if avg_ema_spread is not None:
+        if avg_ema_spread < 15:    score += 15
+        elif avg_ema_spread < 25:  score += 12
+        elif avg_ema_spread < 40:  score += 8
+        elif avg_ema_spread < 55:  score += 2
+        elif avg_ema_spread >= 60: score -= 8   # false_positive median territory
+
+    # 4. EMA50 reclaim quality: sweet spot=2, ≥4=choppy (up to 8 pts)
+    if ema50_reclaim_count == 0:
+        score += 5   # clean hold
+    elif ema50_reclaim_count == 2:
+        score += 8   # bounce-recovery pattern
+    elif ema50_reclaim_count == 1:
+        score += 6
+    elif ema50_reclaim_count >= 4:
+        score -= 4   # choppy: false-positive territory
+
+    # 5. Volume dry-up proxy: min vol last 5 bars vs 20-bar avg (up to 15 pts)
+    if last >= 19 and len(volumes) > last:
+        avg_v20 = sum(volumes[max(0, last - 19): last + 1]) / 20
+        min_v5 = min(volumes[max(0, last - 4): last + 1])
+        dryup_ratio = min_v5 / avg_v20 if avg_v20 > 0 else 1.0
+        if dryup_ratio < 0.35:   score += 15
+        elif dryup_ratio < 0.55: score += 10
+        elif dryup_ratio < 0.75: score += 5
+
+    # 6. Price compression: 5-bar range / 20-bar range (up to 12 pts)
+    if last >= 19:
+        hi5  = max(b["high"] for b in bars[max(0, last - 4):  last + 1])
+        lo5  = min(b["low"]  for b in bars[max(0, last - 4):  last + 1])
+        hi20 = max(b["high"] for b in bars[max(0, last - 19): last + 1])
+        lo20 = min(b["low"]  for b in bars[max(0, last - 19): last + 1])
+        range20 = hi20 - lo20
+        if range20 > 0:
+            compression = (hi5 - lo5) / range20
+            if compression < 0.25:   score += 12
+            elif compression < 0.40: score += 8
+            elif compression < 0.55: score += 4
+
+    return max(0, min(100, score))
+
+
+def _compute_sustain_proxy(base_quality_score, bull_stack_len, days_above_ema50,
+                            avg_ema_spread, volumes, bars, last):
+    """
+    Sustain proxy score 0–100 + profile label (LOW/MEDIUM/HIGH).
+    Estimates whether setup conditions historically lead to sustained moves.
+    Does NOT use days_from_breakout_to_peak or any outcome features.
+    """
+    score = 0
+
+    # Base quality anchor (40% weight — sustain adds incremental signal)
+    score += int(base_quality_score * 0.40)
+
+    # Extended low-volume duration: coiled energy proxy (up to 20 pts)
+    if last >= 14 and len(volumes) > last:
+        avg_v20 = sum(volumes[max(0, last - 19): last + 1]) / min(20, last + 1)
+        low_vol_days = sum(
+            1 for j in range(max(0, last - 9), last + 1)
+            if avg_v20 > 0 and volumes[j] < 0.65 * avg_v20
+        )
+        if low_vol_days >= 7:   score += 20
+        elif low_vol_days >= 5: score += 14
+        elif low_vol_days >= 3: score += 8
+        elif low_vol_days >= 1: score += 3
+
+    # Long bull stack duration: strongest sustain predictor (up to 15 pts)
+    if bull_stack_len >= 20:   score += 15
+    elif bull_stack_len >= 12: score += 10
+    elif bull_stack_len >= 6:  score += 5
+
+    # Controlled intraday volatility = tight base, not chaotic (up to 10 pts)
+    if last >= 9:
+        ranges = [
+            (b["high"] - b["low"]) / b["close"] * 100
+            for b in bars[max(0, last - 9): last + 1]
+            if b["close"] > 0
+        ]
+        if ranges:
+            avg_range_pct = sum(ranges) / len(ranges)
+            if avg_range_pct < 2.0:   score += 10
+            elif avg_range_pct < 3.5: score += 6
+            elif avg_range_pct < 5.0: score += 2
+            elif avg_range_pct > 8.0: score -= 5   # chaotic base
+
+    # Tight EMA spread = expansion room (up to 10 pts)
+    if avg_ema_spread is not None:
+        if avg_ema_spread < 20:    score += 10
+        elif avg_ema_spread < 35:  score += 5
+        elif avg_ema_spread > 60:  score -= 8
+
+    score = max(0, min(100, score))
+    profile = "HIGH" if score >= 65 else ("MEDIUM" if score >= 40 else "LOW")
+    return score, profile
+
+
+def _fake_trigger_risk(seq_lbl, base_quality_score, avg_ema_spread, volume_z):
+    """
+    Assess fake trigger risk for trigger-after sequences.
+    Catches QNCX-type false positives: trigger fires but base quality is poor.
+    Returns "LOW", "MEDIUM", or "HIGH".
+    """
+    if seq_lbl not in ("TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34"):
+        return "LOW"
+
+    risk = 0
+    if base_quality_score < 25:    risk += 3
+    elif base_quality_score < 40:  risk += 2
+    elif base_quality_score < 55:  risk += 1
+
+    if avg_ema_spread is not None:
+        if avg_ema_spread > 65:   risk += 2
+        elif avg_ema_spread > 55: risk += 1
+
+    if volume_z is not None and volume_z > 4.0:
+        risk += 2   # chaotic spike = suspicious trigger
+
+    if risk >= 4:   return "HIGH"
+    elif risk >= 2: return "MEDIUM"
+    return "LOW"
+
+
+def _fake_trigger_penalty(ftr_val: str) -> int:
+    return {"HIGH": -10, "MEDIUM": -5, "LOW": 0}.get(ftr_val, 0)
+
+
+def _quality_score_modifier(base_quality_score: int, state: str) -> int:
+    """
+    Translate base quality into a score delta, conditioned on state.
+    Allows strong-base PRE_TRIGGER/TRIGGERED to rank higher,
+    and low-base TRIGGERED to be downgraded.
+    """
+    mod = 0
+    if state in ("PRE_TRIGGER", "TRIGGERED"):
+        if base_quality_score >= 70:   mod += 5
+        elif base_quality_score >= 55: mod += 2
+        elif base_quality_score < 30:  mod -= 5
+        elif base_quality_score < 45:  mod -= 2
+    return mod
 
 
 def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
@@ -689,6 +874,10 @@ def _empty_analysis():
         impulse_label=None,
         volume_z=None,
         ema_extended=None,
+        base_quality_score=0,
+        sustain_proxy_score=0,
+        sustain_profile="LOW",
+        fake_trigger_risk="LOW",
     )
 
 
@@ -970,7 +1159,26 @@ def analyze(bars):
     count_l34_w   = sum(1 for b in tracking["l34_bars"]   if last - b < _MAX_SETUP_AGE)
     count_fri34_w = sum(1 for b in tracking["fri34_bars"] if last - b < _MAX_SETUP_AGE)
 
-    # Scores
+    # Sequence label + state computed early so base_quality can condition scoring
+    seq_lbl      = _sequence_label(age_l34, age_fri34, age_g4, age_b2)
+    ema_extended = (closes[last] / ema200) if (ema200 and ema200 > 0) else None
+    _ctx = dict(
+        new_pump_sequence_label=seq_lbl,
+        has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
+        age_l34=age_l34, age_fri34=age_fri34, age_g4=age_g4, age_b2=age_b2,
+        volume_z=volume_z,
+        ema_extended=ema_extended,
+    )
+    state       = classify_state(_ctx)
+    engine_path = "impulse" if state == "IMPULSE" else "structure"
+
+    # Phase 3: base quality (needs pre-computed ribbon metrics)
+    bq_score = _compute_base_quality(
+        bars, last, bull_stack_len, days_above_ema50,
+        ema50_reclaim_count, avg_ema_spread_10, volumes,
+    )
+
+    # Scores — progression_adjustment is now quality-conditional
     setup_score   = _setup_score(age_l34, age_fri34, count_l34_w, count_fri34_w)
     trigger_score = _trigger_score(age_g4, age_l34, age_fri34)
     confirm_score = _confirm_score(age_b2, age_g4, age_l34, age_fri34)
@@ -984,24 +1192,23 @@ def analyze(bars):
         ema50_reclaim_count=ema50_reclaim_count,
         avg_ema_spread=avg_ema_spread_10,
     )
+    prog_adj = _progression_adjustment(seq_lbl, bq_score)
 
-    seq_lbl  = _sequence_label(age_l34, age_fri34, age_g4, age_b2)
-    prog_adj = _progression_adjustment(seq_lbl)
-    total    = max(0, setup_score + trigger_score + confirm_score + seq_bonus + mod_score + prog_adj)
+    # Fake trigger risk + quality modifier
+    ftr       = _fake_trigger_risk(seq_lbl, bq_score, avg_ema_spread_10, volume_z)
+    ftr_pen   = _fake_trigger_penalty(ftr)
+    qmod      = _quality_score_modifier(bq_score, state)
 
-    # Phase 1–5: state, engine path, explanation, impulse
-    ema_extended = (closes[last] / ema200) if (ema200 and ema200 > 0) else None
-    _ctx = dict(
-        new_pump_sequence_label=seq_lbl,
-        has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
-        age_l34=age_l34, age_fri34=age_fri34, age_g4=age_g4, age_b2=age_b2,
-        volume_z=volume_z,
-        ema_extended=ema_extended,
+    total = max(0, setup_score + trigger_score + confirm_score
+                   + seq_bonus + mod_score + prog_adj + ftr_pen + qmod)
+
+    # Sustain proxy + impulse (separate paths, do not contaminate new_pump_score)
+    sp_score, sp_profile = _compute_sustain_proxy(
+        bq_score, bull_stack_len, days_above_ema50,
+        avg_ema_spread_10, volumes, bars, last,
     )
-    state       = classify_state(_ctx)
-    engine_path = "impulse" if state == "IMPULSE" else "structure"
     missing_piece, main_risk = _explain(seq_lbl, state, age_g4, age_l34, age_fri34, age_b2)
-    impulse     = compute_impulse_score(bars)
+    impulse = compute_impulse_score(bars)
 
     return dict(
         has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
@@ -1021,6 +1228,10 @@ def analyze(bars):
         impulse_label=impulse["impulse_label"],
         volume_z=round(volume_z, 3) if volume_z is not None else None,
         ema_extended=round(ema_extended, 3) if ema_extended is not None else None,
+        base_quality_score=bq_score,
+        sustain_proxy_score=sp_score,
+        sustain_profile=sp_profile,
+        fake_trigger_risk=ftr,
     )
 
 
