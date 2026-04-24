@@ -58,6 +58,31 @@ const REGIME_COLOR = {
   RISK_ON:  '#00e676', RISK_OFF: '#ff5252', FEAR: '#ff6d00',
   ROTATION: '#ffd740', NEUTRAL:  '#888',
 };
+const PHASE_COLOR = {
+  CONFIRMED_STRUCTURE:  { color: '#00e676', label: 'CONFIRMED'       },
+  TRIGGERED_STRUCTURE:  { color: '#ff8800', label: 'TRIGGERED'       },
+  EARLY_STRUCTURE:      { color: '#ffd600', label: 'EARLY STRUCTURE' },
+  SETUP_PHASE:          { color: '#00b0ff', label: 'SETUP PHASE'     },
+  IMPULSE_ONLY:         { color: '#e040fb', label: 'IMPULSE ONLY'    },
+  BROKEN:               { color: '#ff9800', label: 'BROKEN SETUP'    },
+  NO_STRUCTURE_IMPULSE: { color: '#888',    label: 'NO STR / IMPULSE'},
+  TRUE_NONE:            { color: '#555',    label: 'TRUE NONE'       },
+  DEGRADED:             { color: '#ff5252', label: 'DEGRADED'        },
+};
+const ADVISORY_LABEL = {
+  moderate_setup_age_strength: 'Mod-Age Setup',
+  np_weak_with_setup_context:  'Early Structure',
+  np_l34_pure_strength:        'L34 Pure',
+  np_moderate_freshness:       'Mod Freshness',
+  np_fresh_early:              'Fresh Entry',
+  np_weak_elevated:            'NP Weak↑',
+  np_none_caution:             'NP None ⚠',
+  watch_fri34_setup_strength:  'FRI34 Strength',
+  bq_medium_bucket:            'BQ Mid',
+  ce_compressed_base_caution:  'Compressed ⚠',
+  ce_expansion_start_weak:     'Exp Start (weak)',
+  borderline_high_ftr:         'High FTR',
+};
 
 function SecCard({ title, children }) {
   return (
@@ -384,6 +409,43 @@ function S10_Verdict({ final_verdict: fv }) {
   );
 }
 
+function S11_StructurePhase({ np }) {
+  if (!np) return null;
+  const phase    = np.structure_phase;
+  const score    = np.structure_score;
+  const advisory = np.structure_advisory || [];
+  const dflags   = np.decision_flags    || [];
+  const allFlags = [...advisory, ...dflags].filter(Boolean);
+  if (!phase && !allFlags.length) return null;
+  const pcfg = PHASE_COLOR[phase] || { color: '#888', label: phase || '—' };
+  const scoreColor = score >= 70 ? '#00e676' : score >= 40 ? '#ffd600' : '#888';
+  return (
+    <SecCard title="Structure Phase">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: allFlags.length ? 8 : 0 }}>
+        <span style={{
+          padding: '2px 10px', borderRadius: 4, fontSize: 11, fontWeight: 700,
+          color: pcfg.color, background: pcfg.color + '1a', letterSpacing: '0.05em',
+        }}>{pcfg.label}</span>
+        {score != null && (
+          <span style={{ fontSize: 12, color: '#888' }}>
+            score <span style={{ color: scoreColor, fontWeight: 600 }}>{score}</span>
+          </span>
+        )}
+      </div>
+      {allFlags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {allFlags.map((f, i) => (
+            <span key={i} style={{
+              fontSize: 10, padding: '2px 6px', borderRadius: 3,
+              background: '#ffffff0c', color: '#aaa',
+            }}>{ADVISORY_LABEL[f] || f.replace(/_/g, ' ')}</span>
+          ))}
+        </div>
+      )}
+    </SecCard>
+  );
+}
+
 // ── Main drawer ───────────────────────────────────────────────────────────────
 
 export default function NpDrawer({ sym, dataCache, loading, error, onClose }) {
@@ -413,6 +475,7 @@ export default function NpDrawer({ sym, dataCache, loading, error, onClose }) {
             <>
               <S1_Identity identity={payload.identity} np={payload.new_pump} />
               <S2_WhyRanked np={payload.new_pump} />
+              <S11_StructurePhase np={payload.new_pump} />
               <S3_SignalTimeline signal_timeline={payload.signal_timeline} np={payload.new_pump} />
               <S4_CompanySummary company_summary={payload.company_summary} />
               <S5_News news={payload.news} />
