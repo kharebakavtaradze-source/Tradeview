@@ -350,7 +350,7 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
         return []
 
     # ── Step 2: Filter ────────────────────────────────────────────────────────
-    MIN_PRICE, MAX_PRICE, MIN_VOLUME = 1.50, 500.0, 150_000  # lowered 200K→150K (R18: TPC/MGRT/SKYQ/AKAN/LUD filtered at 150-190K with 150-346% 5d returns)
+    MIN_PRICE, MAX_PRICE, MIN_VOLUME = 1.50, 500.0, 100_000  # lowered 150K→100K (R19: SKYQ 148K filtered, +188% 5d missed)
     _REGIME_ETFS = {"SPY", "QQQ", "XLE", "XLV", "XLU", "GLD", "IWM"}
 
     etf_symbols: set = set()

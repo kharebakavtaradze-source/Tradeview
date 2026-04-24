@@ -273,7 +273,7 @@ async def detect_missed_movers(
         pass
 
     _REGIME_ETFS = {"SPY", "QQQ", "XLE", "XLV", "XLU", "GLD", "IWM"}
-    MIN_VOLUME, MIN_PRICE, MAX_PRICE = 150_000, 1.50, 500.0  # must match replay_engine MIN_VOLUME
+    MIN_VOLUME, MIN_PRICE, MAX_PRICE = 100_000, 1.50, 500.0  # must match replay_engine MIN_VOLUME
 
     # Symbols that the scanner DID find
     found_symbols = {c["symbol"] for c in candidates}
