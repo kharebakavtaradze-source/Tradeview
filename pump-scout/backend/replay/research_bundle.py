@@ -23,6 +23,11 @@ import logging
 from collections import defaultdict, Counter
 from typing import Optional
 
+try:
+    from scanner.new_pump_engine import _compute_structure_phase as _csp
+except ImportError:
+    _csp = None
+
 logger = logging.getLogger(__name__)
 
 # ── Outcome label helpers ─────────────────────────────────────────────────────
@@ -773,9 +778,50 @@ async def build_research_bundle(run_id: int) -> dict:
         "TRUE_NONE", "DEGRADED",
     ]
 
-    def _structure_phase_tier(c: dict) -> str:
+    def _resolve_structure(c: dict):
+        """Return (phase, score) from snapshot or compute on-the-fly for old snapshots."""
         np_data = c.get("new_pump") or (c.get("snapshot") or {}).get("new_pump") or {}
-        return np_data.get("structure_phase", "TRUE_NONE")
+        phase = np_data.get("structure_phase")
+        score = np_data.get("structure_score")
+        if phase is not None and score is not None:
+            return phase, score
+        if _csp is None:
+            return "ERROR_NO_CSP", None
+        # Compute on-the-fly — all fields available in stored candidate rows
+        seq_lbl     = c.get("new_pump_sequence_label") or np_data.get("new_pump_sequence_label") or "NONE"
+        state       = c.get("np_state")       or np_data.get("state")       or "NEUTRAL"
+        engine_path = c.get("np_engine_path") or np_data.get("engine_path") or "structure"
+        np_label    = c.get("new_pump_label") or np_data.get("new_pump_label") or "NEW_PUMP_NONE"
+        age_l34     = c.get("np_age_l34")     or np_data.get("age_l34")
+        age_fri34   = c.get("np_age_fri34")   or np_data.get("age_fri34")
+        impulse_label = np_data.get("impulse_label")
+        impulse_score = np_data.get("impulse_score") or 0
+        try:
+            phase, score, _ = _csp(
+                seq_lbl, state, engine_path, np_label,
+                age_l34, age_fri34, impulse_label, impulse_score,
+            )
+        except Exception:
+            logger.exception("_resolve_structure on-the-fly csp failed for %s", c.get("ticker"))
+            return "ERROR_CSP_FAIL", None
+        return phase, score
+
+    # Debug counters — log distribution before aggregation
+    _phase_counter: Counter = Counter()
+    _score_none_count = 0
+    for _c in candidates:
+        _ph, _sc = _resolve_structure(_c)
+        _phase_counter[_ph] += 1
+        if _sc is None:
+            _score_none_count += 1
+    logger.info(
+        "structure_phase distribution (n=%d): %s | score=None: %d",
+        len(candidates), dict(_phase_counter), _score_none_count,
+    )
+
+    def _structure_phase_tier(c: dict) -> str:
+        phase, _ = _resolve_structure(c)
+        return phase
 
     perf_structure_phase = _build_perf_buckets(
         candidates, outcome_map, _structure_phase_tier, "structure_phase"
@@ -787,8 +833,7 @@ async def build_research_bundle(run_id: int) -> dict:
     _SCORE_BUCKET_ORDER = ["66_100", "46_65", "26_45", "0_25", "NO_SCORE"]
 
     def _structure_score_bucket(c: dict) -> str:
-        np_data = c.get("new_pump") or (c.get("snapshot") or {}).get("new_pump") or {}
-        s = np_data.get("structure_score")
+        _, s = _resolve_structure(c)
         if s is None: return "NO_SCORE"
         if s >= 66:  return "66_100"
         if s >= 46:  return "46_65"
