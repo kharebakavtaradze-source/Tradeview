@@ -197,6 +197,15 @@ class PositionSnapshot(Base):
     spy_daily_pct = Column(Float, nullable=True)
 
 
+class JournalSettings(Base):
+    """Per-user journal configuration (single-row table)."""
+    __tablename__ = "journal_settings"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    starting_balance = Column(Float, default=2000.0, nullable=False)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AIPortfolio(Base):
     __tablename__ = "ai_portfolio"
 
@@ -1080,12 +1089,63 @@ async def delete_journal_entry(entry_id: int) -> bool:
     return True
 
 
+async def get_journal_settings() -> dict:
+    """Return the single journal settings row, creating it with defaults if absent."""
+    async with get_session_factory()() as session:
+        result = await session.execute(select(JournalSettings).limit(1))
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = JournalSettings(starting_balance=2000.0)
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+        return {"id": row.id, "starting_balance": row.starting_balance}
+
+
+async def update_journal_settings(starting_balance: float) -> dict:
+    """Update starting_balance in journal settings."""
+    async with get_session_factory()() as session:
+        result = await session.execute(select(JournalSettings).limit(1))
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = JournalSettings(starting_balance=starting_balance)
+            session.add(row)
+        else:
+            row.starting_balance = starting_balance
+            row.updated_at = datetime.utcnow()
+        await session.commit()
+        await session.refresh(row)
+        return {"id": row.id, "starting_balance": row.starting_balance}
+
+
+async def reset_journal() -> dict:
+    """Delete all journal entries and position snapshots. Returns count of deleted records."""
+    async with get_session_factory()() as session:
+        snap_result = await session.execute(select(PositionSnapshot))
+        snapshots = snap_result.scalars().all()
+        snap_count = len(snapshots)
+        for s in snapshots:
+            await session.delete(s)
+
+        entry_result = await session.execute(select(Journal))
+        journal_entries = entry_result.scalars().all()
+        entry_count = len(journal_entries)
+        for e in journal_entries:
+            await session.delete(e)
+
+        await session.commit()
+    return {"deleted_entries": entry_count, "deleted_snapshots": snap_count}
+
+
 async def get_journal_stats() -> dict:
     entries = await get_journal()
     closed = [e for e in entries if e["outcome"] in ("win", "loss")]
     wins = [e for e in entries if e["outcome"] == "win"]
     losses = [e for e in entries if e["outcome"] == "loss"]
     open_trades = [e for e in entries if e["outcome"] == "open"]
+
+    settings = await get_journal_settings()
+    starting_balance = settings.get("starting_balance", 2000.0)
 
     def _trade_pnl(e):
         return e.get("final_pnl_pct") or e.get("gain_pct") or 0
@@ -1094,6 +1154,8 @@ async def get_journal_stats() -> dict:
     avg_win = round(sum(_trade_pnl(e) for e in wins) / len(wins), 2) if wins else 0
     avg_loss = round(sum(_trade_pnl(e) for e in losses) / len(losses), 2) if losses else 0
     total_pnl = round(sum(_trade_pnl(e) for e in closed), 2)
+    pnl_usd = round(starting_balance * total_pnl / 100, 2)
+    portfolio_value_usd = round(starting_balance + pnl_usd, 2)
 
     # Best tier by win rate
     tier_stats: dict = {}
@@ -1153,6 +1215,9 @@ async def get_journal_stats() -> dict:
         "losses": len(losses),
         "best_trade": best_trade,
         "worst_trade": worst_trade,
+        "starting_balance": starting_balance,
+        "pnl_usd": pnl_usd,
+        "portfolio_value_usd": portfolio_value_usd,
     }
 
 
