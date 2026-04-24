@@ -490,6 +490,12 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 "np_age_fri34":            np_age_fri34,
                 "np_setup_via":            np_setup_via,
                 "np_is_isolated_trigger":  np_is_isolated_trigger,
+                "np_state":                new_pump_result.get("state"),
+                "np_engine_path":          new_pump_result.get("engine_path"),
+                "np_base_quality_score":   new_pump_result.get("base_quality_score"),
+                "np_sustain_proxy_score":  new_pump_result.get("sustain_proxy_score"),
+                "np_sustain_profile":      new_pump_result.get("sustain_profile"),
+                "np_fake_trigger_risk":    new_pump_result.get("fake_trigger_risk"),
                 "new_pump":                new_pump_result,
                 "snapshot":                clean_snapshot,
             }

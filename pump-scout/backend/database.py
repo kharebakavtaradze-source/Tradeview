@@ -629,6 +629,12 @@ async def _run_migrations(conn):
             ("np_age_fri34",            "INTEGER"),
             ("np_setup_via",            "VARCHAR(10)"),
             ("np_is_isolated_trigger",  "BOOLEAN"),
+            ("np_state",                "VARCHAR(20)"),
+            ("np_engine_path",          "VARCHAR(20)"),
+            ("np_base_quality_score",   "INTEGER"),
+            ("np_sustain_proxy_score",  "INTEGER"),
+            ("np_sustain_profile",      "VARCHAR(10)"),
+            ("np_fake_trigger_risk",    "VARCHAR(10)"),
         ):
             try:
                 await conn.execute(text(
@@ -2538,6 +2544,12 @@ class ReplaySignalCandidate(Base):
     np_age_fri34          = Column(Integer,    nullable=True)
     np_setup_via          = Column(String(10), nullable=True)   # L34 | FRI34 | BOTH | NONE
     np_is_isolated_trigger = Column(Boolean,   nullable=True)   # G4 fired without any setup
+    np_state               = Column(String(20), nullable=True)  # classify_state() output
+    np_engine_path         = Column(String(20), nullable=True)  # structure | impulse
+    np_base_quality_score  = Column(Integer,    nullable=True)  # 0–100
+    np_sustain_proxy_score = Column(Integer,    nullable=True)  # 0–100
+    np_sustain_profile     = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
+    np_fake_trigger_risk   = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -2737,6 +2749,12 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 np_age_fri34            = c.get("np_age_fri34"),
                 np_setup_via            = c.get("np_setup_via"),
                 np_is_isolated_trigger  = c.get("np_is_isolated_trigger"),
+                np_state               = c.get("np_state"),
+                np_engine_path         = c.get("np_engine_path"),
+                np_base_quality_score  = c.get("np_base_quality_score"),
+                np_sustain_proxy_score = c.get("np_sustain_proxy_score"),
+                np_sustain_profile     = c.get("np_sustain_profile"),
+                np_fake_trigger_risk   = c.get("np_fake_trigger_risk"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -2895,6 +2913,12 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "np_age_fri34":            r.np_age_fri34,
         "np_setup_via":            r.np_setup_via,
         "np_is_isolated_trigger":  r.np_is_isolated_trigger,
+        "np_state":                r.np_state,
+        "np_engine_path":          r.np_engine_path,
+        "np_base_quality_score":   r.np_base_quality_score,
+        "np_sustain_proxy_score":  r.np_sustain_proxy_score,
+        "np_sustain_profile":      r.np_sustain_profile,
+        "np_fake_trigger_risk":    r.np_fake_trigger_risk,
         "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":              r.created_at.isoformat() if r.created_at else None,
     }

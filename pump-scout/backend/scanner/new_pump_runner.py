@@ -232,6 +232,10 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 "main_risk":      np.get("main_risk"),
                 "impulse_score":  np.get("impulse_score"),
                 "impulse_label":  np.get("impulse_label"),
+                "base_quality_score":  np.get("base_quality_score"),
+                "sustain_proxy_score": np.get("sustain_proxy_score"),
+                "sustain_profile":     np.get("sustain_profile"),
+                "fake_trigger_risk":   np.get("fake_trigger_risk"),
                 "signal_date": signal_date,
                 "next_day":    next_day,
             })
