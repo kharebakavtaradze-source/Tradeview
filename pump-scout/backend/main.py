@@ -595,30 +595,64 @@ async def export_journal():
 
 @app.post("/api/journal/insights")
 async def journal_insights():
-    """Send journal data to Claude for pattern analysis (legacy endpoint)."""
+    """Send journal data to Claude for pattern analysis, enriched with research memory."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
     entries = await get_journal()
-    stats = await get_journal_stats()
-    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
-    prompt = (
-        f"Trade journal stats: {json.dumps(stats)}\n\n"
-        f"Recent trades (last 20): {json.dumps(entries[:20])}\n\n"
-        "Provide concise coaching insights:\n"
-        "1. WIN PATTERNS — what setups are working?\n"
-        "2. MISTAKE PATTERNS — what to avoid?\n"
-        "3. FOCUS — top 2 things to improve?\n"
-        "Keep it under 300 words, be direct and specific."
+    stats   = await get_journal_stats()
+
+    # ── Load research memory (gracefully — never blocks insights if unavailable) ─
+    research: dict = {"text": "", "sources": [], "has_data": False}
+    try:
+        from replay.ai_context import build_research_digest
+        research = await build_research_digest()
+    except Exception as _rc_err:
+        logger.warning(f"[journal_insights] research context unavailable: {_rc_err}")
+
+    # ── Build system prompt ───────────────────────────────────────────────────
+    system_base = (
+        "You are a trading coach analyzing a trader's journal for actionable patterns. "
+        "Be direct and specific. Reference actual ticker symbols and sequences from the journal."
     )
+    if research["has_data"]:
+        system_prompt = (
+            system_base + "\n\n"
+            + research["text"] + "\n\n"
+            "Use the RESEARCH MEMORY above as statistical ground truth when coaching. "
+            "If the trader's results differ from the research baselines, explain why. "
+            "If they traded sequences with poor historical performance, flag it explicitly."
+        )
+    else:
+        system_prompt = system_base
+
+    # ── Build user prompt ─────────────────────────────────────────────────────
+    recent = entries[:20]
+    prompt = (
+        f"Trade journal stats:\n{json.dumps(stats, indent=2)}\n\n"
+        f"Recent trades (last {len(recent)}):\n{json.dumps(recent, indent=2)}\n\n"
+        "Provide coaching insights structured as:\n"
+        "1. WIN PATTERNS — what setups and sequences are working? Cite specific trades.\n"
+        "2. LOSS PATTERNS — what to avoid? Is fake_trigger_risk or low base_quality correlated?\n"
+        "3. EDGE ALIGNMENT — how do your trades compare to the research baselines?\n"
+        "4. TOP 2 IMPROVEMENTS — specific, actionable.\n"
+        "Keep it under 400 words. Be direct."
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=45.0)
     try:
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=400,
-            system="You are a trading coach analyzing a trader's journal for actionable patterns.",
+            max_tokens=600,
+            system=system_prompt,
             messages=[{"role": "user", "content": prompt}],
         )
-        return {"insights": response.content[0].text}
+        return {
+            "insights":          response.content[0].text,
+            "research_context":  research["sources"],
+            "has_research":      research["has_data"],
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2871,6 +2905,11 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
             await _upd(raw_run_id, {"status": "complete",
                                     "finished_at": datetime.utcnow()})
+            try:
+                from replay.ai_context import invalidate_cache
+                invalidate_cache()
+            except Exception:
+                pass
         except Exception as exc:
             logger.error("raw_pattern_study run_id=%s failed: %s", raw_run_id, exc)
             await _upd(raw_run_id, {"status": "error",

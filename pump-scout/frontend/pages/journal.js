@@ -509,16 +509,54 @@ export default function Journal() {
             {/* AI Coaching Insights */}
             {insights && !insights.message && (
               <div style={{ display: 'grid', gap: 12, marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>🤖 AI COACHING</div>
-                <div className={styles.statCard} style={{ gridColumn: '1/-1' }}>
-                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                    {insights.best_signal && <span><b style={{ color: 'var(--green)' }}>Best signal:</b> {insights.best_signal}</span>}
-                    {insights.worst_signal && <span><b style={{ color: 'var(--red)' }}>Worst signal:</b> {insights.worst_signal}</span>}
-                    {insights.best_wyckoff && <span><b style={{ color: 'var(--gold)' }}>Best Wyckoff:</b> {insights.best_wyckoff}</span>}
-                    {insights.optimal_hold_days && <span><b>Hold time:</b> {insights.optimal_hold_days}</span>}
-                    {insights.hype_sweet_spot && <span><b>Hype sweet spot:</b> {insights.hype_sweet_spot}</span>}
-                  </div>
+                {/* Header row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>🤖 AI COACHING</div>
+                  {insights.has_research && insights.research_context?.length > 0 && (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {insights.research_context.map((src, i) => (
+                        <span key={i} style={{
+                          fontSize: 9, padding: '2px 7px', borderRadius: 3, fontWeight: 700,
+                          letterSpacing: '0.04em',
+                          background: src.type === 'replay'      ? 'rgba(0,229,255,0.08)'  :
+                                      src.type === 'raw_pattern'  ? 'rgba(0,255,136,0.07)'  :
+                                                                    'rgba(255,214,0,0.07)',
+                          border:     src.type === 'replay'      ? '1px solid rgba(0,229,255,0.22)' :
+                                      src.type === 'raw_pattern'  ? '1px solid rgba(0,255,136,0.20)' :
+                                                                    '1px solid rgba(255,214,0,0.22)',
+                          color:      src.type === 'replay'      ? '#00e5ff' :
+                                      src.type === 'raw_pattern'  ? '#00ff88' :
+                                                                    '#ffd600',
+                        }}>
+                          {src.type === 'replay'     ? `⚡ Replay #${src.run_id}` :
+                           src.type === 'raw_pattern' ? `🔬 Patterns #${src.run_id}` :
+                                                        `📊 Study #${src.run_id}`}
+                          {src.date ? ` ${src.date}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
+                {/* Main coaching text */}
+                {insights.insights && (
+                  <div className={styles.statCard} style={{ gridColumn: '1/-1' }}>
+                    <div style={{ fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: 'var(--text)' }}>
+                      {insights.insights}
+                    </div>
+                  </div>
+                )}
+
+                {/* Legacy structured fields — shown if present (backward compat) */}
+                {(insights.best_signal || insights.worst_signal || insights.optimal_hold_days) && (
+                  <div className={styles.statCard} style={{ gridColumn: '1/-1' }}>
+                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11 }}>
+                      {insights.best_signal && <span><b style={{ color: 'var(--green)' }}>Best signal:</b> {insights.best_signal}</span>}
+                      {insights.worst_signal && <span><b style={{ color: 'var(--red)' }}>Worst signal:</b> {insights.worst_signal}</span>}
+                      {insights.optimal_hold_days && <span><b>Hold time:</b> {insights.optimal_hold_days}</span>}
+                    </div>
+                  </div>
+                )}
                 {insights.top_3_improvements && (
                   <div className={styles.statCard} style={{ gridColumn: '1/-1' }}>
                     <div className={styles.statLabel} style={{ marginBottom: 8 }}>🎯 TOP IMPROVEMENTS</div>
