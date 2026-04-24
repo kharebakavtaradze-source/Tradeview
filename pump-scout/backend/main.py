@@ -45,6 +45,7 @@ from database import (
     get_market_regime_history,
     get_market_regime_latest,
     get_open_ai_positions,
+    update_ai_portfolio_baseline,
     get_portfolio_state,
     get_position_snapshots,
     get_scan_history,
@@ -827,6 +828,15 @@ async def ai_portfolio_reset(capital: float = 2000.0):
     from database import reset_ai_portfolio
     result = await reset_ai_portfolio(new_capital=capital)
     return result
+
+
+@app.put("/api/ai-portfolio/settings")
+async def ai_portfolio_settings(data: Dict[str, Any]):
+    """Update baseline capital display without resetting positions."""
+    baseline = data.get("baseline_value")
+    if baseline is None or not isinstance(baseline, (int, float)) or baseline <= 0:
+        raise HTTPException(status_code=400, detail="baseline_value must be a positive number")
+    return await update_ai_portfolio_baseline(float(baseline))
 
 
 # ─── Hype Monitor routes (specific routes BEFORE parameterized {symbol}) ───────
