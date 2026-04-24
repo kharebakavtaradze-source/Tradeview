@@ -166,6 +166,11 @@ async def run_single_day_replay(
             f"{len(candidates)} candidates, {len(outcomes)} outcomes, "
             f"{len(missed)} missed movers"
         )
+        try:
+            from replay.ai_context import invalidate_cache
+            invalidate_cache()
+        except Exception:
+            pass
 
     except Exception as exc:
         logger.error(f"[REPLAY] run_id={run_id} failed: {exc}", exc_info=True)
@@ -276,6 +281,11 @@ async def run_date_range_replay(
             f"{len(trading_days)} days, {total_candidates} candidates, "
             f"{total_outcomes} outcomes, {total_missed} missed movers"
         )
+        try:
+            from replay.ai_context import invalidate_cache
+            invalidate_cache()
+        except Exception:
+            pass
 
     except Exception as exc:
         logger.error(f"[REPLAY] run_id={run_id} range failed: {exc}", exc_info=True)
