@@ -769,8 +769,8 @@ async def build_research_bundle(run_id: int) -> dict:
     # ── Phase 10: Structure-phase buckets (new semantic layer) ───────────────
     _PHASE_ORDER = [
         "CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE", "EARLY_STRUCTURE",
-        "SETUP_PHASE", "IMPULSE_ONLY", "BROKEN",
-        "NO_STRUCTURE_IMPULSE", "TRUE_NONE", "DEGRADED",
+        "SETUP_PHASE", "IMPULSE_ONLY", "BROKEN_STRUCTURE",
+        "TRUE_NONE", "DEGRADED",
     ]
 
     def _structure_phase_tier(c: dict) -> str:
@@ -784,20 +784,23 @@ async def build_research_bundle(run_id: int) -> dict:
         key=lambda x: _PHASE_ORDER.index(x["bucket"]) if x["bucket"] in _PHASE_ORDER else 99
     )
 
+    _SCORE_BUCKET_ORDER = ["66_100", "46_65", "26_45", "0_25", "NO_SCORE"]
+
     def _structure_score_bucket(c: dict) -> str:
         np_data = c.get("new_pump") or (c.get("snapshot") or {}).get("new_pump") or {}
         s = np_data.get("structure_score")
-        if s is None: return "UNKNOWN"
-        if s >= 70:   return "HIGH"
-        if s >= 40:   return "MEDIUM"
-        return "LOW"
+        if s is None: return "NO_SCORE"
+        if s >= 66:  return "66_100"
+        if s >= 46:  return "46_65"
+        if s >= 26:  return "26_45"
+        return "0_25"
 
     perf_structure_score = _build_perf_buckets(
         candidates, outcome_map, _structure_score_bucket, "structure_score_bucket"
     )
     perf_structure_score.sort(
-        key=lambda x: ["HIGH", "MEDIUM", "LOW", "UNKNOWN"].index(x["bucket"])
-        if x["bucket"] in ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] else 99
+        key=lambda x: _SCORE_BUCKET_ORDER.index(x["bucket"])
+        if x["bucket"] in _SCORE_BUCKET_ORDER else 99
     )
 
     # ── Sections C, D: False positives + Missed movers ────────────────────────

@@ -1376,7 +1376,7 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
 
 # Base score by sequence — upweights progression sequences (R19 calibration)
 _STRUCTURE_SCORE_MAP = {
-    "CONFIRM_AFTER_G4":    90,
+    "CONFIRM_AFTER_G4":    80,  # reduced from 90 — tiny sample (n=2 R19)
     "FULL_L34_G4_B2":      90,
     "FULL_FRI34_G4_B2":    85,
     "TRIGGER_AFTER_L34":   75,  # R19: +5.81% 5d, upweighted
@@ -1400,9 +1400,8 @@ def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
       TRIGGERED_STRUCTURE  — G4 trigger with known setup sequence
       EARLY_STRUCTURE      — NP_WEAK + active setup (forming, not just "weak")
       SETUP_PHASE          — active setup, trigger pending
-      IMPULSE_ONLY         — strong impulse, no structural sequence
-      BROKEN               — BROKEN_SETUP state (R19: +8.11% 5d — positive watch)
-      NO_STRUCTURE_IMPULSE — NP_NONE + impulse engine dominant
+      IMPULSE_ONLY         — impulse engine path (any strength), no structure
+      BROKEN_STRUCTURE     — BROKEN_SETUP state (R19: +8.11% 5d — positive watch)
       TRUE_NONE            — NP_NONE + no structural or impulse signal
       DEGRADED             — NEUTRAL, FAILED_SETUP, OVEREXTENDED, ISOLATED_B2
     """
@@ -1444,7 +1443,7 @@ def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
     if state in ("NEUTRAL", "FAILED_SETUP", "OVEREXTENDED") or seq_lbl == "ISOLATED_B2":
         phase = "DEGRADED"
     elif state == "BROKEN_SETUP":
-        phase = "BROKEN"
+        phase = "BROKEN_STRUCTURE"
     elif seq_lbl in _CONFIRMED_SEQS or state == "CONFIRMED":
         phase = "CONFIRMED_STRUCTURE"
     elif seq_lbl in _TRIGGERED_SEQS or state == "TRIGGERED":
@@ -1455,10 +1454,9 @@ def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
         advisory.append("np_weak_with_setup_context")
     elif seq_lbl in _SETUP_SEQS:
         phase = "SETUP_PHASE"
-    elif engine_path == "impulse" and _strong_impulse:
+    elif engine_path == "impulse":
+        # Single canonical phase for all impulse-path candidates
         phase = "IMPULSE_ONLY"
-    elif np_label == "NEW_PUMP_NONE" and engine_path == "impulse":
-        phase = "NO_STRUCTURE_IMPULSE"
     else:
         phase = "TRUE_NONE"
 
