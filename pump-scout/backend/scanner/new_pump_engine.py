@@ -1206,22 +1206,24 @@ def compute_impulse_score(bars: list) -> dict:
 
 def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
             missing_piece, ce_state, ce_score, ce_risk,
-            impulse_label, impulse_score) -> tuple:
+            impulse_label, impulse_score,
+            np_label=None, age_l34=None, age_fri34=None) -> tuple:
     """
     Returns (decision, decision_reason, decision_flags).
 
-    Routing v3 — calibrated on Replay 18 (Apr 2026, 348 candidates).
+    Routing v3 — calibrated on Replay 18+19 (Apr 2026).
 
-    Key calibration facts driving this version:
-      • bq distribution 90% LOW → bq removed as hard routing gate (advisory only).
-        LOW bq not worse than MEDIUM in R18: LOW +3.46%, MEDIUM +3.07%.
-      • PRE_TRIGGER avg 5d +4.47% (193 cands) — broad watchlist entry.
-      • NEUTRAL avg 5d -4.34% — correctly avoided.
-      • ISOLATED_B2 avg 5d -4.09%, alpha 10d -14.94% — explicit hard-avoid.
-      • HIGH ftr avg 5d +16.66% — annotate only, do not block routing.
-      • OVERHEATED_EXPANSION avg 5d +6.24% — annotate only for triggered structure.
-      • IMPULSE_RISK avg 5d +7.08% — strong separate playbook.
-      • BROKEN_SETUP n=5 (+8.1%) — too small; conservative AVOID.
+    Key calibration facts:
+      • bq LOW not worse than MEDIUM — bq removed as hard routing gate (advisory only).
+      • PRE_TRIGGER avg 5d +3.85% (194 cands R19) — broad watchlist entry.
+      • NEUTRAL avg 5d -4.58% R19 — correctly avoided.
+      • ISOLATED_B2 avg 5d -3.60% R19 — explicit hard-avoid.
+      • HIGH ftr n=5 +24.57% 5d R19 — annotate only, do NOT demote routing.
+      • BROKEN_SETUP n=5 +8.11% 5d, 80% WR, -1.08% max DD R19 — promoted to WATCH.
+      • NEW_PUMP_WEAK n=61 +8.75% 5d R19 — top-performing NP label.
+      • SETUP_ONLY_FRI34 +6.37% vs SETUP_ONLY_L34 +3.10% R19 — FRI34 advantage flagged.
+      • COMPRESSED_BASE -1.68% 5d R19 — caution flag, not positive.
+      • MODERATE freshness (age 4-7 bars) +7.13% vs FRESH +1.47% R19 — flagged.
     """
     flags: list = []
     structure_ready = state in ("TRIGGERED", "CONFIRMED")
@@ -1239,10 +1241,10 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         flags.append("avoid_overextended")
         return "AVOID", "overextended — entry risk too high", flags
 
-    # BROKEN_SETUP: n=5 positive in R18 but sample too small to promote; conservative.
+    # R19: BROKEN_SETUP n=5 +8.11% 5d, 80% WR, -1.08% max DD — promoted to WATCH.
     if state == "BROKEN_SETUP":
-        flags.append("avoid_broken_setup_conservative")
-        return "AVOID", "broken setup — structure integrity lost", flags
+        flags.append("watch_broken_setup_recovery")
+        return "WATCH", "broken setup — prior structure, recovery watch", flags
 
     # ISOLATED_B2: worst sequence in R18 (-4.09% 5d, -14.94% alpha 10d).
     if seq_lbl == "ISOLATED_B2":
@@ -1255,7 +1257,7 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         return "AVOID", "no recognised sequence + no trigger", flags
 
     # ── Advisory-only flags (do not block routing) ────────────────────────────
-    # R18: HIGH ftr avg 5d +16.66% — flag for transparency, do not block.
+    # R18/19: HIGH ftr +24.57% 5d R19 — flag for transparency, do not block.
     if ftr == "HIGH":
         flags.append("borderline_high_ftr")
     # R18: OVERHEATED avg 5d +6.24% — annotate, do not block triggered structure.
@@ -1265,6 +1267,21 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
     # bq advisory (not a gate)
     if bq_score is not None and bq_score >= 35:
         flags.append("bq_advisory_ok")
+
+    # NP label advisory (R19: WEAK n=61 +8.75% 5d — top label)
+    if np_label == "NEW_PUMP_WEAK":
+        flags.append("np_weak_elevated")
+    elif np_label == "NEW_PUMP_NONE":
+        flags.append("np_none_caution")
+
+    # Freshness advisory (R19: MODERATE age 4-7 bars +7.13% >> FRESH +1.47%)
+    _setup_ages = [a for a in [age_l34, age_fri34] if a is not None]
+    if _setup_ages:
+        _min_age = min(_setup_ages)
+        if 3 < _min_age <= 7:
+            flags.append("np_moderate_freshness")
+        elif _min_age <= 3:
+            flags.append("np_fresh_early")
 
     # ── IMPULSE_RISK (separate playbook) ─────────────────────────────────────
     # R18: strong impulse bucket +7.08%, 69.2% win rate.  Keep separate.
@@ -1293,9 +1310,10 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
 
     if state == "TRIGGERED":
         # Pretty sequence + elevated ftr → FP guard → demote to WATCH
-        if seq_lbl in _PRETTY_SEQ and ftr in ("MEDIUM", "HIGH"):
+        # R19: HIGH ftr n=5 +24.57% 5d, +29.98% alpha — guard only for MEDIUM ftr.
+        if seq_lbl in _PRETTY_SEQ and ftr == "MEDIUM":
             flags.append("watch_pretty_seq_caution")
-            return "WATCH", f"TRIGGERED + {seq_lbl} with {ftr} ftr — FP caution", flags
+            return "WATCH", f"TRIGGERED + {seq_lbl} with MEDIUM ftr — FP caution", flags
         # All other TRIGGERED cases → BUY
         flags.append("buy_triggered_structure")
         if seq_lbl in _POSITIVE_SEQ:
@@ -1305,20 +1323,31 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         return "BUY_CANDIDATE", f"TRIGGERED seq={seq_lbl}", flags
 
     # ── WATCH ────────────────────────────────────────────────────────────────
-    # PRE_TRIGGER: 193 cands in R18, avg +4.47% 5d — broad entry, no bq gate.
+    # PRE_TRIGGER: 194 cands R19, avg +3.85% 5d — broad entry, no bq gate.
     if state == "PRE_TRIGGER":
         flags.append("watch_pretrigger_quality")
-        if seq_lbl in _POSITIVE_SEQ:
+        # R19: FRI34 +6.37% vs L34 +3.10% — flag FRI34 sequences as stronger
+        if seq_lbl == "SETUP_ONLY_FRI34":
+            flags.append("watch_fri34_setup_strength")
+        elif seq_lbl in _POSITIVE_SEQ:
             flags.append("watch_setup_only_progression")
-        if ce_state in ("COMPRESSED_BASE", "ACCUMULATION_READY", "EXPANSION_START"):
+        # R19: COMPRESSED_BASE -1.68% 5d — caution, not positive
+        if ce_state == "COMPRESSED_BASE":
+            flags.append("ce_compressed_base_caution")
+        elif ce_state in ("ACCUMULATION_READY", "EXPANSION_START"):
             flags.append(f"ce_{ce_state.lower()}")
         return "WATCH", f"PRE_TRIGGER seq={seq_lbl}", flags
 
     # Setup-only sequences that reach here (edge case: state not PRE_TRIGGER).
-    # R18: SETUP_ONLY_FRI34 +8.84% 5d, SETUP_ONLY_L34 +3.16% 5d.
+    # R19: SETUP_ONLY_FRI34 +6.37% 5d, SETUP_ONLY_L34 +3.10% 5d.
     if seq_lbl in ("SETUP_ONLY_L34", "SETUP_ONLY_FRI34"):
-        flags.append("watch_setup_only_progression")
-        if ce_state in ("COMPRESSED_BASE", "ACCUMULATION_READY", "EXPANSION_START"):
+        if seq_lbl == "SETUP_ONLY_FRI34":
+            flags.append("watch_fri34_setup_strength")
+        else:
+            flags.append("watch_setup_only_progression")
+        if ce_state == "COMPRESSED_BASE":
+            flags.append("ce_compressed_base_caution")
+        elif ce_state in ("ACCUMULATION_READY", "EXPANSION_START"):
             flags.append(f"ce_{ce_state.lower()}")
         return "WATCH", f"{seq_lbl} — watch for trigger", flags
 
@@ -1550,6 +1579,9 @@ def analyze(bars):
         ce_risk=exp["expansion_timing_risk"],
         impulse_label=impulse["impulse_label"],
         impulse_score=impulse["impulse_score"],
+        np_label=capped_label,
+        age_l34=age_l34,
+        age_fri34=age_fri34,
     )
 
     return dict(
