@@ -44,6 +44,9 @@ export default function AdminPage() {
   const [npScanStatus, setNpScanStatus] = useState(null);
   const [loading, setLoading] = useState({});
   const [error, setError] = useState({});
+  const [replayRunId, setReplayRunId] = useState('');
+  const [recalcResult, setRecalcResult] = useState(null);
+  const [rebuildResult, setRebuildResult] = useState(null);
   const pollRef = useRef(null);
   const npPollRef = useRef(null);
 
@@ -124,6 +127,20 @@ export default function AdminPage() {
             .catch(() => {});
         }, 1500);
       }
+    } catch (err) {
+      setError(e => ({ ...e, [key]: err.message }));
+    } finally {
+      setLoading(l => ({ ...l, [key]: false }));
+    }
+  }
+
+  async function callPost(key, url, setter) {
+    setLoading(l => ({ ...l, [key]: true }));
+    setError(e => ({ ...e, [key]: null }));
+    try {
+      const res = await fetch(url, { method: 'POST' });
+      const data = await res.json();
+      if (setter) setter(data);
     } catch (err) {
       setError(e => ({ ...e, [key]: err.message }));
     } finally {
@@ -486,6 +503,55 @@ export default function AdminPage() {
           )}
         </div>
 
+        {/* ── Replay Recalculation ── */}
+        <div style={card}>
+          <p style={label}>Replay Recalculation — Fast Refresh (No Full Rescan)</p>
+          <p style={{ margin: '0 0 14px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
+            Refresh derived outputs for an existing replay run without re-scanning the universe.<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>Recalculate Derived Fields</strong> — re-runs <code style={{ fontSize: 10 }}>_decide()</code> on every candidate using current logic, then rebuilds the research bundle. Rewrites <code style={{ fontSize: 10 }}>np_decision</code> / <code style={{ fontSize: 10 }}>np_decision_reason</code>.<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>Rebuild Research Bundle</strong> — rebuilds summary &amp; performance buckets only, no candidate edits.<br />
+            <span style={{ color: 'rgba(255,100,100,0.7)' }}>Full replay still required</span> for: state/quality/expansion engine changes, scanner gates, candidate generation.
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <label style={{ fontSize: 11, color: '#56567a', whiteSpace: 'nowrap' }}>Run ID</label>
+            <input
+              type="number"
+              value={replayRunId}
+              onChange={e => setReplayRunId(e.target.value)}
+              placeholder="e.g. 17"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #1a1a32', borderRadius: 4, padding: '5px 10px', color: '#eaeaf6', fontSize: 12, fontFamily: 'inherit', width: 90 }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => {
+                if (!replayRunId) return;
+                setRecalcResult(null);
+                callPost('recalc', `${API_URL}/api/replay/${replayRunId}/recalculate-derived-fields`, setRecalcResult);
+              }}
+              disabled={loading.recalc || !replayRunId}
+              style={{ background: 'rgba(0,212,245,0.1)', border: '1px solid rgba(0,212,245,0.3)', borderRadius: 4, padding: '7px 18px', color: '#00d4f5', cursor: replayRunId ? 'pointer' : 'not-allowed', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: replayRunId ? 1 : 0.5 }}
+            >
+              {loading.recalc ? '⏳ Recalculating…' : '⚡ Recalculate Derived Fields'}
+            </button>
+            <button
+              onClick={() => {
+                if (!replayRunId) return;
+                setRebuildResult(null);
+                callPost('rebuild', `${API_URL}/api/replay/${replayRunId}/rebuild-research-bundle`, setRebuildResult);
+              }}
+              disabled={loading.rebuild || !replayRunId}
+              style={{ background: 'rgba(68,255,100,0.08)', border: '1px solid rgba(68,255,100,0.25)', borderRadius: 4, padding: '7px 18px', color: '#44ff64', cursor: replayRunId ? 'pointer' : 'not-allowed', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: replayRunId ? 1 : 0.5 }}
+            >
+              {loading.rebuild ? '⏳ Rebuilding…' : '📊 Rebuild Research Bundle'}
+            </button>
+          </div>
+          {error.recalc  && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.recalc}</div>}
+          {error.rebuild && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.rebuild}</div>}
+          {recalcResult  && <pre style={pre}>{JSON.stringify(recalcResult,  null, 2)}</pre>}
+          {rebuildResult && <pre style={pre}>{JSON.stringify(rebuildResult, null, 2)}</pre>}
+        </div>
+
         {/* ── Quick Links ── */}
         <div style={card}>
           <p style={label}>Direct Backend Links</p>
@@ -500,6 +566,7 @@ export default function AdminPage() {
               ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
               ['/api/scan/intraday/latest', 'Latest intraday scan results'],
               ['/api/scan/latest', 'Latest scan (any type)'],
+              ['/api/replay/history', 'Replay run history'],
               ['/health', 'Health check'],
             ].map(([path, desc]) => (
               <div key={path} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
