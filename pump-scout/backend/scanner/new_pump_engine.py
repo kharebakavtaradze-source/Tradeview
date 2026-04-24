@@ -1264,15 +1264,20 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
     if ce_state == "OVERHEATED_EXPANSION":
         flags.append("borderline_overheated_but_structural" if structure_ready
                      else "overheated_expansion_note")
-    # bq advisory (not a gate)
+    # bq annotation (not a gate; R19: MEDIUM bq -0.30% 5d vs LOW +4.65% — not predictive)
     if bq_score is not None and bq_score >= 35:
-        flags.append("bq_advisory_ok")
+        flags.append("bq_medium_bucket")
 
     # NP label advisory (R19: WEAK n=61 +8.75% 5d — top label)
     if np_label == "NEW_PUMP_WEAK":
         flags.append("np_weak_elevated")
     elif np_label == "NEW_PUMP_NONE":
         flags.append("np_none_caution")
+
+    # Setup via advisory (R19: L34-only +6.63% 5d vs BOTH +2.28% — pure L34 stronger)
+    _l34_only = (age_l34 is not None and age_fri34 is None)
+    if _l34_only:
+        flags.append("np_l34_pure_strength")
 
     # Freshness advisory (R19: MODERATE age 4-7 bars +7.13% >> FRESH +1.47%)
     _setup_ages = [a for a in [age_l34, age_fri34] if a is not None]
@@ -1331,11 +1336,13 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
             flags.append("watch_fri34_setup_strength")
         elif seq_lbl in _POSITIVE_SEQ:
             flags.append("watch_setup_only_progression")
-        # R19: COMPRESSED_BASE -1.68% 5d — caution, not positive
+        # R19: COMPRESSED_BASE -1.68% 5d — caution; EXPANSION_START +0.92%/44.7% WR — weak
         if ce_state == "COMPRESSED_BASE":
             flags.append("ce_compressed_base_caution")
-        elif ce_state in ("ACCUMULATION_READY", "EXPANSION_START"):
-            flags.append(f"ce_{ce_state.lower()}")
+        elif ce_state == "EXPANSION_START":
+            flags.append("ce_expansion_start_weak")  # R19: +0.92% 5d, 44.7% WR
+        elif ce_state == "ACCUMULATION_READY":
+            flags.append("ce_accumulation_ready")
         return "WATCH", f"PRE_TRIGGER seq={seq_lbl}", flags
 
     # Setup-only sequences that reach here (edge case: state not PRE_TRIGGER).
@@ -1347,8 +1354,10 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
             flags.append("watch_setup_only_progression")
         if ce_state == "COMPRESSED_BASE":
             flags.append("ce_compressed_base_caution")
-        elif ce_state in ("ACCUMULATION_READY", "EXPANSION_START"):
-            flags.append(f"ce_{ce_state.lower()}")
+        elif ce_state == "EXPANSION_START":
+            flags.append("ce_expansion_start_weak")
+        elif ce_state == "ACCUMULATION_READY":
+            flags.append("ce_accumulation_ready")
         return "WATCH", f"{seq_lbl} — watch for trigger", flags
 
     # Isolated G4 edge case (non-impulse path): borderline positive, watch only.
