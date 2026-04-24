@@ -733,6 +733,39 @@ async def build_research_bundle(run_id: int) -> dict:
         key=lambda x: _FTR_ORDER.index(x["bucket"]) if x["bucket"] in _FTR_ORDER else 99
     )
 
+    # ── Phase 8: Post-Compression Expansion engine buckets ───────────────────
+    _CE_ORDER = ["ACCUMULATION_READY", "EXPANSION_START", "COMPRESSED_BASE",
+                 "OVERHEATED_EXPANSION", "NONE"]
+    perf_compression_expansion = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_compression_expansion_state") or "NONE",
+        "compression_expansion_state",
+    )
+    perf_compression_expansion.sort(
+        key=lambda x: _CE_ORDER.index(x["bucket"]) if x["bucket"] in _CE_ORDER else 99
+    )
+
+    _EXPTR_ORDER = ["LOW", "MEDIUM", "HIGH"]
+    perf_expansion_timing = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_expansion_timing_risk") or "LOW",
+        "expansion_timing_risk",
+    )
+    perf_expansion_timing.sort(
+        key=lambda x: _EXPTR_ORDER.index(x["bucket"]) if x["bucket"] in _EXPTR_ORDER else 99
+    )
+
+    # ── Phase 9: Final decision layer bucket ─────────────────────────────────
+    _DEC_ORDER = ["BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID"]
+    perf_decision = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: c.get("np_decision") or "AVOID",
+        "decision",
+    )
+    perf_decision.sort(
+        key=lambda x: _DEC_ORDER.index(x["bucket"]) if x["bucket"] in _DEC_ORDER else 99
+    )
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -764,6 +797,9 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_base_quality_bucket": perf_base_quality,
         "performance_by_sustain_profile":   perf_sustain_profile,
         "performance_by_fake_trigger_risk": perf_fake_trigger,
+        "performance_by_compression_expansion_state": perf_compression_expansion,
+        "performance_by_expansion_timing_risk":       perf_expansion_timing,
+        "performance_by_decision":                    perf_decision,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,

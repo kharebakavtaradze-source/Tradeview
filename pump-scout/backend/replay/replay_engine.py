@@ -506,6 +506,12 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 "np_sustain_proxy_score":  new_pump_result.get("sustain_proxy_score"),
                 "np_sustain_profile":      new_pump_result.get("sustain_profile"),
                 "np_fake_trigger_risk":    new_pump_result.get("fake_trigger_risk"),
+                "np_compression_expansion_state": new_pump_result.get("compression_expansion_state"),
+                "np_compression_expansion_score": new_pump_result.get("compression_expansion_score"),
+                "np_compression_expansion_label": new_pump_result.get("compression_expansion_label"),
+                "np_expansion_timing_risk":       new_pump_result.get("expansion_timing_risk"),
+                "np_decision":                    new_pump_result.get("decision"),
+                "np_decision_reason":             new_pump_result.get("decision_reason"),
                 "new_pump":                new_pump_result,
                 "snapshot":                clean_snapshot,
             }
