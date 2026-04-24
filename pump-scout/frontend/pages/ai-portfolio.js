@@ -282,15 +282,38 @@ export default function AIPortfolio() {
   }
 
   const [resetting, setResetting] = useState(false);
+  const [resetModal, setResetModal] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState('');
+  const [resetCapital, setResetCapital] = useState('2000');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [baselineInput, setBaselineInput] = useState('');
+
   async function resetPortfolio() {
-    if (!confirm('Reset portfolio to $2000? This closes all open positions.')) return;
+    if (resetConfirm !== 'RESET') return;
+    const capital = parseFloat(resetCapital) || 2000;
     setResetting(true);
     try {
-      await fetch(`${API_URL}/api/ai-portfolio/reset?capital=2000`, { method: 'POST' });
+      await fetch(`${API_URL}/api/ai-portfolio/reset?capital=${capital}`, { method: 'POST' });
+      setResetModal(false);
+      setResetConfirm('');
       await load();
     } finally {
       setResetting(false);
     }
+  }
+
+  async function saveBaseline() {
+    const val = parseFloat(baselineInput);
+    if (!val || val <= 0) return;
+    try {
+      await fetch(`${API_URL}/api/ai-portfolio/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseline_value: val }),
+      });
+      setSettingsOpen(false);
+      await load();
+    } catch { }
   }
 
   const allPositions = history.positions || [];
@@ -372,7 +395,7 @@ export default function AIPortfolio() {
             {running ? '⏳ Running…' : '▶ Run AI Now'}
           </button>
           <button
-            onClick={resetPortfolio}
+            onClick={() => { setResetModal(true); setResetConfirm(''); setResetCapital(String(baseline || 2000)); }}
             disabled={resetting}
             style={{
               fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 5,
@@ -382,7 +405,7 @@ export default function AIPortfolio() {
               opacity: resetting ? 0.5 : 1, transition: 'opacity 0.15s',
             }}
           >
-            {resetting ? '⏳ Resetting…' : '↺ Reset $2000'}
+            {resetting ? '⏳ Resetting…' : '↺ Reset Portfolio'}
           </button>
         </div>
 
@@ -431,7 +454,10 @@ export default function AIPortfolio() {
             </div>
             {/* Trade stats row */}
             <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 10, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-              <span>Capital: <b>${baseline.toLocaleString()}</b></span>
+              <span>Capital: <b>${baseline.toLocaleString()}</b>
+                <button onClick={() => { setSettingsOpen(v => !v); setBaselineInput(String(baseline || 2000)); }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, padding: '0 3px', lineHeight: 1 }} title="Change baseline capital">⚙</button>
+              </span>
               {aiWinRate !== null && <span>WR <b style={{ color: aiWinRate >= 50 ? 'var(--lime)' : 'var(--red)' }}>{aiWinRate}%</b> ({aiWins.length}W/{aiLosses.length}L)</span>}
               {aiAvgPnl !== null && <span>Avg <b style={{ color: parseFloat(aiAvgPnl) >= 0 ? 'var(--lime)' : 'var(--red)' }}>{parseFloat(aiAvgPnl) >= 0 ? '+' : ''}{aiAvgPnl}%</b></span>}
             </div>
@@ -456,6 +482,23 @@ export default function AIPortfolio() {
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {/* Inline baseline settings panel */}
+        {settingsOpen && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '8px 12px' }}>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>Baseline capital $</span>
+            <input
+              type="number"
+              value={baselineInput}
+              onChange={e => setBaselineInput(e.target.value)}
+              style={{ width: 90, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: 'var(--text)', fontSize: 13, padding: '3px 8px', fontFamily: 'inherit' }}
+              min="1"
+            />
+            <button onClick={saveBaseline} style={{ fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 5, border: '1px solid rgba(0,212,245,0.3)', background: 'rgba(0,212,245,0.08)', color: 'var(--cyan)', cursor: 'pointer' }}>Save</button>
+            <button onClick={() => setSettingsOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>✕</button>
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 4 }}>Updates P&L % reference only — does not close positions</span>
           </div>
         )}
 
@@ -740,6 +783,51 @@ export default function AIPortfolio() {
           )}
         </div>
       </div>
+
+      {/* Reset confirmation modal */}
+      {resetModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: 'var(--card)', border: '1px solid rgba(255,60,60,0.35)', borderRadius: 10, padding: 28, maxWidth: 400, width: '100%' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#ff6b6b', marginBottom: 10 }}>↺ Reset AI Portfolio</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 16 }}>
+              This will <strong style={{ color: 'var(--text)' }}>close all {positions.length} open position{positions.length !== 1 ? 's' : ''}</strong> at their last known price and reset the account to a fresh capital balance. This cannot be undone.
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 5 }}>New starting capital ($)</div>
+              <input
+                type="number"
+                value={resetCapital}
+                onChange={e => setResetCapital(e.target.value)}
+                style={{ width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: 'var(--text)', fontSize: 14, padding: '6px 10px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                min="1"
+              />
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+              Type <strong style={{ color: 'var(--text)', letterSpacing: '0.08em' }}>RESET</strong> to confirm:
+            </div>
+            <input
+              autoFocus
+              value={resetConfirm}
+              onChange={e => setResetConfirm(e.target.value)}
+              placeholder="RESET"
+              style={{ width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 5, color: 'var(--text)', fontSize: 14, padding: '6px 10px', fontFamily: 'inherit', marginBottom: 16, boxSizing: 'border-box', letterSpacing: '0.08em' }}
+              onKeyDown={e => { if (e.key === 'Enter' && resetConfirm === 'RESET') resetPortfolio(); }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setResetModal(false); setResetConfirm(''); }} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--text-muted)', padding: '7px 16px', borderRadius: 5, cursor: 'pointer', fontSize: 12 }}>
+                Cancel
+              </button>
+              <button
+                onClick={resetPortfolio}
+                disabled={resetConfirm !== 'RESET' || resetting}
+                style={{ background: resetConfirm === 'RESET' ? 'rgba(255,60,60,0.2)' : 'rgba(255,60,60,0.05)', border: `1px solid ${resetConfirm === 'RESET' ? 'rgba(255,60,60,0.5)' : 'rgba(255,60,60,0.15)'}`, color: resetConfirm === 'RESET' ? '#ff6b6b' : 'rgba(255,107,107,0.4)', padding: '7px 16px', borderRadius: 5, cursor: resetConfirm === 'RESET' ? 'pointer' : 'default', fontSize: 12, fontWeight: 700 }}
+              >
+                {resetting ? 'Resetting…' : '↺ Close All & Reset'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -1416,11 +1416,6 @@ async def update_portfolio_value_from_positions() -> None:
 
 
 async def reset_ai_portfolio(new_capital: float = 2000.0) -> dict:
-    """
-    Reset the AI portfolio to a clean state with new_capital.
-    Closes all open positions at their last known price and wipes the state row.
-    Returns the new state dict.
-    """
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
     async with get_session_factory()() as session:
         # Force-close all open positions at current_price or entry_price
@@ -1453,6 +1448,24 @@ async def reset_ai_portfolio(new_capital: float = 2000.0) -> dict:
         state.baseline_value = new_capital
         await session.commit()
     return {"status": "reset", "new_capital": new_capital}
+
+
+async def update_ai_portfolio_baseline(new_baseline: float) -> dict:
+    """Update baseline_value in the latest state row without touching positions."""
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPortfolioState).order_by(AIPortfolioState.id.desc()).limit(1)
+        )
+        state = result.scalar_one_or_none()
+        if not state:
+            state = AIPortfolioState(date=today_str, cash=new_baseline,
+                                     total_value=new_baseline, baseline_value=new_baseline)
+            session.add(state)
+        else:
+            state.baseline_value = new_baseline
+        await session.commit()
+        return {"baseline_value": new_baseline}
 
 
 async def partial_exit_ai_position(position_id: int, current_price: float, sell_pct: int = 50) -> float:
