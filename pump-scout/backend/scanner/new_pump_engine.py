@@ -1162,121 +1162,127 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
             impulse_label, impulse_score) -> tuple:
     """
     Returns (decision, decision_reason, decision_flags).
-    decision_flags is a list of short tokens describing what drove the call.
+
+    Routing v3 — calibrated on Replay 18 (Apr 2026, 348 candidates).
+
+    Key calibration facts driving this version:
+      • bq distribution 90% LOW → bq removed as hard routing gate (advisory only).
+        LOW bq not worse than MEDIUM in R18: LOW +3.46%, MEDIUM +3.07%.
+      • PRE_TRIGGER avg 5d +4.47% (193 cands) — broad watchlist entry.
+      • NEUTRAL avg 5d -4.34% — correctly avoided.
+      • ISOLATED_B2 avg 5d -4.09%, alpha 10d -14.94% — explicit hard-avoid.
+      • HIGH ftr avg 5d +16.66% — annotate only, do not block routing.
+      • OVERHEATED_EXPANSION avg 5d +6.24% — annotate only for triggered structure.
+      • IMPULSE_RISK avg 5d +7.08% — strong separate playbook.
+      • BROKEN_SETUP n=5 (+8.1%) — too small; conservative AVOID.
     """
     flags: list = []
     structure_ready = state in ("TRIGGERED", "CONFIRMED")
 
-    # ── AVOID gates (hard red flags, checked first) ─────────────────────────
-    # HIGH ftr: hard avoid unless structure is already triggered with solid base.
-    # Replay 17 shows TRIGGERED+bq≥55 still performs — demote to WATCH, not AVOID.
-    if ftr == "HIGH":
-        if structure_ready and bq_score >= 55:
-            flags.append("high_ftr_borderline")   # falls through — WATCH below
-        else:
-            flags.append("high_fake_trigger_risk")
-            return "AVOID", "fake-trigger risk HIGH despite sequence", flags
-
-    if state in ("FAILED_SETUP", "BROKEN_SETUP", "OVEREXTENDED"):
-        flags.append("avoid_broken_structure")
-        return "AVOID", f"structure state={state}", flags
-
+    # ── Hard AVOID: structural failures ──────────────────────────────────────
     if state == "NEUTRAL":
         flags.append("avoid_neutral")
-        return "AVOID", "neutral state — no structure present", flags
+        return "AVOID", "neutral — no structure present", flags
 
-    if bq_score < 25:
-        flags.append("very_low_base_quality")
-        return "AVOID", f"base quality very low ({bq_score})", flags
+    if state == "FAILED_SETUP":
+        flags.append("avoid_failed_setup")
+        return "AVOID", "failed setup — structure never formed", flags
 
-    # OVERHEATED: hard avoid unless strong structure is active on the structure path.
-    # High-expansion + triggered structure still positive on average.
+    if state == "OVEREXTENDED":
+        flags.append("avoid_overextended")
+        return "AVOID", "overextended — entry risk too high", flags
+
+    # BROKEN_SETUP: n=5 positive in R18 but sample too small to promote; conservative.
+    if state == "BROKEN_SETUP":
+        flags.append("avoid_broken_setup_conservative")
+        return "AVOID", "broken setup — structure integrity lost", flags
+
+    # ISOLATED_B2: worst sequence in R18 (-4.09% 5d, -14.94% alpha 10d).
+    if seq_lbl == "ISOLATED_B2":
+        flags.append("avoid_isolated_b2")
+        return "AVOID", "isolated B2 — consistently negative sequence", flags
+
+    # NONE sequence without triggered structure: R18 -2.49% 5d, -8.72% alpha 10d.
+    if seq_lbl == "NONE" and not structure_ready:
+        flags.append("avoid_none_sequence")
+        return "AVOID", "no recognised sequence + no trigger", flags
+
+    # ── Advisory-only flags (do not block routing) ────────────────────────────
+    # R18: HIGH ftr avg 5d +16.66% — flag for transparency, do not block.
+    if ftr == "HIGH":
+        flags.append("borderline_high_ftr")
+    # R18: OVERHEATED avg 5d +6.24% — annotate, do not block triggered structure.
     if ce_state == "OVERHEATED_EXPANSION":
-        if structure_ready and engine_path == "structure" and bq_score >= 50:
-            flags.append("overheated_but_structure_active")   # falls through — WATCH below
-        else:
-            flags.append("overheated_expansion")
-            return "AVOID", "post-compression engine flagged overheat", flags
+        flags.append("borderline_overheated_but_structural" if structure_ready
+                     else "overheated_expansion_note")
+    # bq advisory (not a gate)
+    if bq_score is not None and bq_score >= 35:
+        flags.append("bq_advisory_ok")
 
-    # ── IMPULSE_RISK (separate from structure path) ─────────────────────────
+    # ── IMPULSE_RISK (separate playbook) ─────────────────────────────────────
+    # R18: strong impulse bucket +7.08%, 69.2% win rate.  Keep separate.
     if engine_path == "impulse":
         if impulse_label == "IMPULSE_STRONG" or (impulse_score or 0) >= 50:
-            flags.append("impulse_only_risk")
-            return "IMPULSE_RISK", "impulse-only path, no structure support", flags
+            flags.append("impulse_separate_playbook")
+            return "IMPULSE_RISK", "impulse-only path, strong signal", flags
         flags.append("impulse_path_weak")
-        return "AVOID", "impulse path without enough impulse strength", flags
+        return "AVOID", "impulse path without structural support", flags
 
-    # ── BUY_CANDIDATE gates ─────────────────────────────────────────────────
-    # bq threshold lowered 45→40: TRIGGERED averages +4.91% even at moderate base.
-    bq_ok           = bq_score >= 40
-    sustain_ok      = sustain_profile in ("MEDIUM", "HIGH")
-    critical_miss   = missing_piece in ("no_trigger", "structure_not_present")
-    # Borderline cases that passed AVOID gates but must not become BUY
-    ftr_borderline      = "high_ftr_borderline" in flags
-    overheat_borderline = "overheated_but_structure_active" in flags
+    # ── BUY_CANDIDATE ────────────────────────────────────────────────────────
+    # Gated on state only — bq NOT a hard requirement (R18 calibration).
+    # Pretty-sequence guard (Raw Pattern 56):
+    #   CONFIRM_AFTER_G4 / FULL_L34_G4_B2 / FULL_FRI34_G4_B2 have elevated FP
+    #   risk.  Demote TRIGGERED + elevated ftr to WATCH; allow CONFIRMED through.
+    _PRETTY_SEQ = frozenset(("CONFIRM_AFTER_G4", "FULL_L34_G4_B2", "FULL_FRI34_G4_B2"))
+    _POSITIVE_SEQ = frozenset((
+        "TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34",
+        "SETUP_ONLY_FRI34", "SETUP_ONLY_L34",
+    ))
 
-    if (structure_ready and bq_ok and not critical_miss
-            and not ftr_borderline and not overheat_borderline):
-        # Demote TRIGGERED + MEDIUM ftr + weaker base → WATCH
-        if state == "TRIGGERED" and ftr == "MEDIUM" and bq_score < 50:
-            flags.append("triggered_but_medium_ftr")
-            return "WATCH", "triggered with medium fake-trigger risk", flags
-        # Demote TRIGGERED + LOW sustain + weaker base → WATCH
-        if state == "TRIGGERED" and sustain_profile == "LOW" and bq_score < 50:
-            flags.append("triggered_weak_sustain")
-            return "WATCH", "triggered but sustain LOW + base not strong", flags
-        flags.append("buy_confirmed_structure" if state == "CONFIRMED" else "buy_structure_ready")
-        if bq_score >= 60: flags.append("strong_base")
+    if state == "CONFIRMED":
+        # Full sequence validated — always BUY regardless of ftr / ce / bq.
+        flags.append("buy_confirmed_structure")
+        return "BUY_CANDIDATE", "CONFIRMED — full sequence validated", flags
+
+    if state == "TRIGGERED":
+        # Pretty sequence + elevated ftr → FP guard → demote to WATCH
+        if seq_lbl in _PRETTY_SEQ and ftr in ("MEDIUM", "HIGH"):
+            flags.append("watch_pretty_seq_caution")
+            return "WATCH", f"TRIGGERED + {seq_lbl} with {ftr} ftr — FP caution", flags
+        # All other TRIGGERED cases → BUY
+        flags.append("buy_triggered_structure")
+        if seq_lbl in _POSITIVE_SEQ:
+            flags.append("buy_positive_sequence")
         if ce_state in ("ACCUMULATION_READY", "EXPANSION_START"):
             flags.append(f"ce_{ce_state.lower()}")
-        return "BUY_CANDIDATE", f"{state} + base_quality={bq_score}", flags
+        return "BUY_CANDIDATE", f"TRIGGERED seq={seq_lbl}", flags
 
-    # ── WATCH gates (good early setups / pre-trigger / early expansion) ─────
-    # TRIGGERED/CONFIRMED that didn't pass BUY gates → WATCH, never AVOID
-    if structure_ready:
-        if ftr_borderline or overheat_borderline:
-            flags.append("borderline_triggered_watch")
-            return "WATCH", f"{state} borderline (ftr={ftr}/ce={ce_state})", flags
-        if not bq_ok:
-            flags.append("triggered_weak_base")
-            return "WATCH", f"{state} but base quality weak ({bq_score})", flags
-        if not sustain_ok:
-            flags.append("triggered_weak_sustain")
-            return "WATCH", f"{state} but sustain {sustain_profile}", flags
-        flags.append("triggered_missing_piece")
-        return "WATCH", f"{state} but missing={missing_piece}", flags
-
-    # PRE_TRIGGER threshold lowered 45→35: avg +4.69% makes it worth watching earlier.
-    if state == "PRE_TRIGGER" and bq_score >= 35:
+    # ── WATCH ────────────────────────────────────────────────────────────────
+    # PRE_TRIGGER: 193 cands in R18, avg +4.47% 5d — broad entry, no bq gate.
+    if state == "PRE_TRIGGER":
         flags.append("watch_pretrigger_quality")
+        if seq_lbl in _POSITIVE_SEQ:
+            flags.append("watch_setup_only_progression")
         if ce_state in ("COMPRESSED_BASE", "ACCUMULATION_READY", "EXPANSION_START"):
             flags.append(f"ce_{ce_state.lower()}")
-        return "WATCH", f"PRE_TRIGGER with base_quality={bq_score}", flags
+        return "WATCH", f"PRE_TRIGGER seq={seq_lbl}", flags
 
-    # Setup-only sequences: L34 threshold lowered 55→40, FRI34 lowered to 45
-    if seq_lbl == "SETUP_ONLY_L34" and bq_score >= 40:
-        flags.append("setup_only_strong_base")
-        return "WATCH", f"{seq_lbl} with base_quality={bq_score}", flags
-    if seq_lbl == "SETUP_ONLY_FRI34" and bq_score >= 45:
-        flags.append("setup_only_strong_base")
-        return "WATCH", f"{seq_lbl} with base_quality={bq_score}", flags
+    # Setup-only sequences that reach here (edge case: state not PRE_TRIGGER).
+    # R18: SETUP_ONLY_FRI34 +8.84% 5d, SETUP_ONLY_L34 +3.16% 5d.
+    if seq_lbl in ("SETUP_ONLY_L34", "SETUP_ONLY_FRI34"):
+        flags.append("watch_setup_only_progression")
+        if ce_state in ("COMPRESSED_BASE", "ACCUMULATION_READY", "EXPANSION_START"):
+            flags.append(f"ce_{ce_state.lower()}")
+        return "WATCH", f"{seq_lbl} — watch for trigger", flags
 
-    # Expansion engine ready: ce_score threshold lowered 45→35
-    if ce_state in ("ACCUMULATION_READY", "EXPANSION_START") and ce_score >= 35 and bq_score >= 40:
-        flags.append("watch_postcompression_ready")
-        flags.append(f"ce_{ce_state.lower()}")
-        return "WATCH", f"compression-expansion={ce_state}", flags
+    # Isolated G4 edge case (non-impulse path): borderline positive, watch only.
+    if seq_lbl == "ISOLATED_G4":
+        flags.append("watch_isolated_trigger_only")
+        return "WATCH", "ISOLATED_G4 — trigger without setup", flags
 
-    if ce_state == "COMPRESSED_BASE" and ce_score >= 40 and bq_score >= 40:
-        flags.append("compressed_base_good")
-        return "WATCH", "compressed base forming with good quality", flags
-
-    # ── Default AVOID ───────────────────────────────────────────────────────
-    if bq_score < 40:
-        flags.append("weak_base_no_structure")
-    else:
-        flags.append("avoid_no_setup")
-    return "AVOID", "no compelling structural or expansion setup", flags
+    # ── Default AVOID ─────────────────────────────────────────────────────────
+    flags.append("avoid_no_setup")
+    return "AVOID", "no structural progression or recognised sequence", flags
 
 
 # ---------------------------------------------------------------------------
