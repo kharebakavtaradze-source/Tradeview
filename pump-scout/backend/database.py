@@ -644,6 +644,10 @@ async def _run_migrations(conn):
             ("np_sustain_proxy_score",  "INTEGER"),
             ("np_sustain_profile",      "VARCHAR(10)"),
             ("np_fake_trigger_risk",    "VARCHAR(10)"),
+            ("np_compression_expansion_state", "VARCHAR(30)"),
+            ("np_compression_expansion_score", "INTEGER"),
+            ("np_compression_expansion_label", "VARCHAR(15)"),
+            ("np_expansion_timing_risk",       "VARCHAR(10)"),
         ):
             try:
                 await conn.execute(text(
@@ -2628,6 +2632,10 @@ class ReplaySignalCandidate(Base):
     np_sustain_proxy_score = Column(Integer,    nullable=True)  # 0–100
     np_sustain_profile     = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
     np_fake_trigger_risk   = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
+    np_compression_expansion_state = Column(String(30), nullable=True)  # NONE/COMPRESSED_BASE/...
+    np_compression_expansion_score = Column(Integer,    nullable=True)  # 0–100
+    np_compression_expansion_label = Column(String(15), nullable=True)  # NONE/WEAK/MODERATE/STRONG/RISKY
+    np_expansion_timing_risk       = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -2833,6 +2841,10 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 np_sustain_proxy_score = c.get("np_sustain_proxy_score"),
                 np_sustain_profile     = c.get("np_sustain_profile"),
                 np_fake_trigger_risk   = c.get("np_fake_trigger_risk"),
+                np_compression_expansion_state = c.get("np_compression_expansion_state"),
+                np_compression_expansion_score = c.get("np_compression_expansion_score"),
+                np_compression_expansion_label = c.get("np_compression_expansion_label"),
+                np_expansion_timing_risk       = c.get("np_expansion_timing_risk"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -2997,6 +3009,10 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "np_sustain_proxy_score":  r.np_sustain_proxy_score,
         "np_sustain_profile":      r.np_sustain_profile,
         "np_fake_trigger_risk":    r.np_fake_trigger_risk,
+        "np_compression_expansion_state": r.np_compression_expansion_state,
+        "np_compression_expansion_score": r.np_compression_expansion_score,
+        "np_compression_expansion_label": r.np_compression_expansion_label,
+        "np_expansion_timing_risk":       r.np_expansion_timing_risk,
         "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":              r.created_at.isoformat() if r.created_at else None,
     }

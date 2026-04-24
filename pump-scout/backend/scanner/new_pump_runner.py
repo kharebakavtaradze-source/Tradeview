@@ -236,6 +236,10 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 "sustain_proxy_score": np.get("sustain_proxy_score"),
                 "sustain_profile":     np.get("sustain_profile"),
                 "fake_trigger_risk":   np.get("fake_trigger_risk"),
+                "compression_expansion_state": np.get("compression_expansion_state"),
+                "compression_expansion_score": np.get("compression_expansion_score"),
+                "compression_expansion_label": np.get("compression_expansion_label"),
+                "expansion_timing_risk":       np.get("expansion_timing_risk"),
                 "signal_date": signal_date,
                 "next_day":    next_day,
             })

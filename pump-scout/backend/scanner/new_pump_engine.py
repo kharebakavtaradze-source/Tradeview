@@ -970,6 +970,11 @@ def _empty_analysis():
         sustain_profile="LOW",
         fake_trigger_risk="LOW",
         quality_flags={},
+        compression_expansion_state="NONE",
+        compression_expansion_score=0,
+        compression_expansion_label="NONE",
+        expansion_timing_risk="LOW",
+        expansion_quality_flags={},
     )
 
 
@@ -1304,6 +1309,26 @@ def analyze(bars):
     missing_piece, main_risk = _explain(seq_lbl, state, age_g4, age_l34, age_fri34, age_b2)
     impulse = compute_impulse_score(bars)
 
+    # Post-Compression Expansion sub-engine — independent output, never mixed
+    # into new_pump_score or impulse_score.
+    try:
+        from scanner.expansion_engine import analyze_expansion
+        exp = analyze_expansion(
+            bars,
+            base_quality_score=bq_score,
+            avg_ema_spread=avg_ema_spread_10,
+            volume_z=volume_z,
+            ema_extended=ema_extended,
+        )
+    except Exception:
+        exp = dict(
+            compression_expansion_state="NONE",
+            compression_expansion_score=0,
+            compression_expansion_label="NONE",
+            expansion_timing_risk="LOW",
+            expansion_quality_flags={},
+        )
+
     # Assemble quality_flags + apply label cap
     quality_flags = dict(base_flags)
     if weak_pre_trigger_base:
@@ -1340,6 +1365,11 @@ def analyze(bars):
         sustain_profile=sp_profile,
         fake_trigger_risk=ftr,
         quality_flags=quality_flags,
+        compression_expansion_state=exp["compression_expansion_state"],
+        compression_expansion_score=exp["compression_expansion_score"],
+        compression_expansion_label=exp["compression_expansion_label"],
+        expansion_timing_risk=exp["expansion_timing_risk"],
+        expansion_quality_flags=exp["expansion_quality_flags"],
     )
 
 
