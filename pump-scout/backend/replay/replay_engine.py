@@ -510,6 +510,8 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 "np_compression_expansion_score": new_pump_result.get("compression_expansion_score"),
                 "np_compression_expansion_label": new_pump_result.get("compression_expansion_label"),
                 "np_expansion_timing_risk":       new_pump_result.get("expansion_timing_risk"),
+                "np_decision":                    new_pump_result.get("decision"),
+                "np_decision_reason":             new_pump_result.get("decision_reason"),
                 "new_pump":                new_pump_result,
                 "snapshot":                clean_snapshot,
             }

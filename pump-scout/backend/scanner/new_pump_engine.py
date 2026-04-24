@@ -975,6 +975,9 @@ def _empty_analysis():
         compression_expansion_label="NONE",
         expansion_timing_risk="LOW",
         expansion_quality_flags={},
+        decision="AVOID",
+        decision_reason="no data",
+        decision_flags=[],
     )
 
 
@@ -1136,6 +1139,121 @@ def compute_impulse_score(bars: list) -> dict:
     else:                  label = None
 
     return {"impulse_score": score, "impulse_label": label}
+
+
+# ---------------------------------------------------------------------------
+# Decision Layer
+# ---------------------------------------------------------------------------
+# Sits on top of structure + base-quality + expansion + impulse engines and
+# emits ONE final trading decision per candidate.
+#
+# Values:
+#   BUY_CANDIDATE — confirmed/triggered structure + solid base + not overheated
+#   WATCH         — good base + early setup / pre-trigger / accumulation
+#   IMPULSE_RISK  — explosive move on the impulse path, not a structure buy
+#   AVOID         — degraded structure, high fake-trigger risk, overheated, or
+#                   very weak base
+#
+# Uses only live-safe fields already computed by the engines above — no
+# outcome / future leakage.
+
+def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
+            missing_piece, ce_state, ce_score, ce_risk,
+            impulse_label, impulse_score) -> tuple:
+    """
+    Returns (decision, decision_reason, decision_flags).
+    decision_flags is a list of short tokens describing what drove the call.
+    """
+    flags: list = []
+
+    # ── AVOID gates (hard red flags, checked first) ─────────────────────────
+    if ftr == "HIGH":
+        flags.append("high_fake_trigger_risk")
+        return "AVOID", "fake-trigger risk HIGH despite sequence", flags
+
+    if state in ("FAILED_SETUP", "BROKEN_SETUP", "OVEREXTENDED"):
+        flags.append("degraded_structure")
+        return "AVOID", f"structure state={state}", flags
+
+    if bq_score < 25:
+        flags.append("very_low_base_quality")
+        return "AVOID", f"base quality very low ({bq_score})", flags
+
+    if ce_state == "OVERHEATED_EXPANSION":
+        flags.append("overheated_expansion")
+        return "AVOID", "post-compression engine flagged overheat", flags
+
+    # ── IMPULSE_RISK (separate from structure path) ─────────────────────────
+    if engine_path == "impulse":
+        if impulse_label == "IMPULSE_STRONG" or (impulse_score or 0) >= 50:
+            flags.append("impulse_path_strong")
+            return "IMPULSE_RISK", "impulse-only path, no structure support", flags
+        flags.append("impulse_path_weak")
+        return "AVOID", "impulse path without enough impulse strength", flags
+
+    # ── BUY_CANDIDATE gates ─────────────────────────────────────────────────
+    structure_ready = state in ("TRIGGERED", "CONFIRMED")
+    bq_ok           = bq_score >= 45
+    ftr_ok          = ftr != "HIGH"             # already filtered above, keep explicit
+    sustain_ok      = sustain_profile in ("MEDIUM", "HIGH")
+    ce_safe         = ce_state != "OVERHEATED_EXPANSION"  # already filtered
+    critical_miss   = missing_piece in ("no_trigger", "structure_not_present")
+
+    if (structure_ready and bq_ok and ftr_ok and ce_safe
+            and not critical_miss):
+        # Demote TRIGGERED + MEDIUM ftr + borderline base to WATCH (ELA-like
+        # trigger with weak quality must not become BUY).
+        if state == "TRIGGERED" and ftr == "MEDIUM" and bq_score < 55:
+            flags.append("triggered_but_medium_ftr")
+            return "WATCH", "triggered with medium fake-trigger risk", flags
+        # Demote TRIGGERED with LOW sustain when structure not yet confirmed.
+        if state == "TRIGGERED" and sustain_profile == "LOW" and bq_score < 55:
+            flags.append("triggered_weak_sustain")
+            return "WATCH", "triggered but sustain LOW + base not strong", flags
+        flags.append("structure_ready")
+        if bq_score >= 60: flags.append("strong_base")
+        if ce_state in ("ACCUMULATION_READY", "EXPANSION_START"):
+            flags.append(f"ce_{ce_state.lower()}")
+        return "BUY_CANDIDATE", f"{state} + base_quality={bq_score}", flags
+
+    # ── WATCH gates (good early setups / pre-trigger / early expansion) ─────
+    # TRIGGERED/CONFIRMED that didn't pass BUY gates → WATCH (not AVOID)
+    if structure_ready:
+        if not bq_ok:
+            flags.append("triggered_weak_base")
+            return "WATCH", f"{state} but base quality weak ({bq_score})", flags
+        if not sustain_ok:
+            flags.append("triggered_weak_sustain")
+            return "WATCH", f"{state} but sustain {sustain_profile}", flags
+        # critical_miss on structure
+        flags.append("triggered_missing_piece")
+        return "WATCH", f"{state} but missing={missing_piece}", flags
+
+    if state == "PRE_TRIGGER" and bq_ok:
+        flags.append("pre_trigger_good_base")
+        if ce_state in ("COMPRESSED_BASE", "ACCUMULATION_READY", "EXPANSION_START"):
+            flags.append(f"ce_{ce_state.lower()}")
+        return "WATCH", f"PRE_TRIGGER with base_quality={bq_score}", flags
+
+    # Setup-only sequences with strong base (MOBX / CAPR / UGRO-like)
+    if seq_lbl in ("SETUP_ONLY_L34", "SETUP_ONLY_FRI34") and bq_score >= 55:
+        flags.append("setup_only_strong_base")
+        return "WATCH", f"{seq_lbl} with strong base", flags
+
+    # Expansion engine sees something actionable before structure trigger
+    if ce_state in ("ACCUMULATION_READY", "EXPANSION_START") and ce_score >= 45 and bq_score >= 40:
+        flags.append("expansion_engine_ready")
+        flags.append(f"ce_{ce_state.lower()}")
+        return "WATCH", f"compression-expansion={ce_state}", flags
+
+    if ce_state == "COMPRESSED_BASE" and ce_score >= 40 and bq_score >= 45:
+        flags.append("compressed_base_good")
+        return "WATCH", "compressed base forming with good quality", flags
+
+    # ── Default AVOID ───────────────────────────────────────────────────────
+    if bq_score < 40:
+        flags.append("weak_base_no_structure")
+    return "AVOID", "no compelling structural or expansion setup", flags
 
 
 # ---------------------------------------------------------------------------
@@ -1342,6 +1460,22 @@ def analyze(bars):
     raw_label    = _final_label(total)
     capped_label = _cap_label(raw_label, weak_pre_trigger_base, ftr, bq_score)
 
+    # Final decision layer (after all other engines have produced output)
+    decision, decision_reason, decision_flags = _decide(
+        state=state,
+        engine_path=engine_path,
+        seq_lbl=seq_lbl,
+        bq_score=bq_score,
+        sustain_profile=sp_profile,
+        ftr=ftr,
+        missing_piece=missing_piece,
+        ce_state=exp["compression_expansion_state"],
+        ce_score=exp["compression_expansion_score"],
+        ce_risk=exp["expansion_timing_risk"],
+        impulse_label=impulse["impulse_label"],
+        impulse_score=impulse["impulse_score"],
+    )
+
     return dict(
         has_l34=has_l34, has_fri34=has_fri34, has_g4=has_g4, has_b2=has_b2,
         age_l34=age_l34, age_fri34=age_fri34, age_g4=age_g4, age_b2=age_b2,
@@ -1370,6 +1504,9 @@ def analyze(bars):
         compression_expansion_label=exp["compression_expansion_label"],
         expansion_timing_risk=exp["expansion_timing_risk"],
         expansion_quality_flags=exp["expansion_quality_flags"],
+        decision=decision,
+        decision_reason=decision_reason,
+        decision_flags=decision_flags,
     )
 
 

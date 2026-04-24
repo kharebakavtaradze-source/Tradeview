@@ -240,6 +240,9 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 "compression_expansion_score": np.get("compression_expansion_score"),
                 "compression_expansion_label": np.get("compression_expansion_label"),
                 "expansion_timing_risk":       np.get("expansion_timing_risk"),
+                "decision":                    np.get("decision"),
+                "decision_reason":             np.get("decision_reason"),
+                "decision_flags":              np.get("decision_flags"),
                 "signal_date": signal_date,
                 "next_day":    next_day,
             })

@@ -648,6 +648,8 @@ async def _run_migrations(conn):
             ("np_compression_expansion_score", "INTEGER"),
             ("np_compression_expansion_label", "VARCHAR(15)"),
             ("np_expansion_timing_risk",       "VARCHAR(10)"),
+            ("np_decision",                    "VARCHAR(20)"),
+            ("np_decision_reason",             "VARCHAR(200)"),
         ):
             try:
                 await conn.execute(text(
@@ -2636,6 +2638,8 @@ class ReplaySignalCandidate(Base):
     np_compression_expansion_score = Column(Integer,    nullable=True)  # 0–100
     np_compression_expansion_label = Column(String(15), nullable=True)  # NONE/WEAK/MODERATE/STRONG/RISKY
     np_expansion_timing_risk       = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
+    np_decision                    = Column(String(20), nullable=True)  # BUY_CANDIDATE/WATCH/IMPULSE_RISK/AVOID
+    np_decision_reason             = Column(String(200), nullable=True) # human-readable
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -2845,6 +2849,8 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 np_compression_expansion_score = c.get("np_compression_expansion_score"),
                 np_compression_expansion_label = c.get("np_compression_expansion_label"),
                 np_expansion_timing_risk       = c.get("np_expansion_timing_risk"),
+                np_decision                    = c.get("np_decision"),
+                np_decision_reason             = (c.get("np_decision_reason") or "")[:200] if c.get("np_decision_reason") else None,
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -3013,6 +3019,8 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "np_compression_expansion_score": r.np_compression_expansion_score,
         "np_compression_expansion_label": r.np_compression_expansion_label,
         "np_expansion_timing_risk":       r.np_expansion_timing_risk,
+        "np_decision":                    r.np_decision,
+        "np_decision_reason":             r.np_decision_reason,
         "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":              r.created_at.isoformat() if r.created_at else None,
     }
