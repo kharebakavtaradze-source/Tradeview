@@ -94,6 +94,9 @@ def _gather_decision_inputs(candidate: dict) -> Optional[dict]:
     ce_risk      = candidate.get("np_expansion_timing_risk") or snap_np.get("expansion_timing_risk") or "LOW"
     impulse_label = snap_np.get("impulse_label")
     impulse_score = snap_np.get("impulse_score") or 0
+    np_label      = candidate.get("new_pump_label") or snap_np.get("new_pump_label")
+    age_l34       = candidate.get("np_age_l34")   or snap_np.get("age_l34")
+    age_fri34     = candidate.get("np_age_fri34") or snap_np.get("age_fri34")
 
     # State is the single hard prerequisite — without it the decision layer
     # cannot classify.  Older runs that predate the state classifier are
@@ -114,6 +117,9 @@ def _gather_decision_inputs(candidate: dict) -> Optional[dict]:
         "ce_risk":         ce_risk,
         "impulse_label":   impulse_label,
         "impulse_score":   impulse_score,
+        "np_label":        np_label,
+        "age_l34":         age_l34,
+        "age_fri34":       age_fri34,
     }
 
 
