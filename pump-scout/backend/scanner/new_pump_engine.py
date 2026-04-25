@@ -797,7 +797,8 @@ def _quality_score_modifier(base_quality_score: int, state: str) -> int:
 def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
                     ema20, ema50, ema200, close, volume_z, body_ratio, dv_ratio,
                     bull_stack_len=0, days_above_ema50=0, ema50_reclaim_count=0,
-                    avg_ema_spread=None):
+                    avg_ema_spread=None,
+                    bull_eng_count_20=0, extreme_anom_count_20=0, b2_count_20=0):
     mod = 0
     ema20_ok  = ema20  is not None
     ema50_ok  = ema50  is not None
@@ -805,13 +806,15 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
 
     # --- Positive modifiers ---
 
-    # 1. Bull stack presence + duration (up to +12)
-    # Research: bull_stack_days_pre median 14 for 4x_pump vs 8 for false_positive.
-    # Duration bonus separates sustained stacks from brief crossovers.
+    # 1. Bull stack presence + duration (up to +13)
+    # R59: bull_stack_days_pre INCREASE — 4x_pump median=14 days vs FP median=8 days.
+    # Added 14-day tier (+5) to match 4x_pump territory; previous top was >= 10 (+4).
     if ema20_ok and ema50_ok and ema200_ok and ema20 > ema50 > ema200:
         mod += 8
-        if bull_stack_len >= 10:
-            mod += 4   # 4x_pump territory (median=14 days)
+        if bull_stack_len >= 14:   # R59: 4x_pump median territory
+            mod += 5
+        elif bull_stack_len >= 10:
+            mod += 4
         elif bull_stack_len >= 5:
             mod += 2
     elif ema20_ok and ema50_ok and ema20 > ema50:
@@ -854,6 +857,14 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
     if body_ratio is not None and 1.2 <= body_ratio <= 2.5:
         mod += 1   # token tie-breaker only; was +4
 
+    # 5a. Bullish engulfing count — R59: BOOST 2.0× (4x_pump has 2× more engulfing bars pre-pump)
+    if bull_eng_count_20 >= 3:
+        mod += 5
+    elif bull_eng_count_20 >= 2:
+        mod += 3
+    elif bull_eng_count_20 >= 1:
+        mod += 1
+
     # --- Negative modifiers ---
 
     # 6. Ultra-extreme anomaly spike (up to -8)
@@ -864,6 +875,16 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
             mod -= 5
         elif volume_z > 3.0:
             mod -= 3
+
+    # 6a. Repeated extreme-anomaly penalty — R59: extreme_anomaly_day_count_pre PENALIZE (FP higher).
+    # Counts bars in last 20 (excluding today) where volume exceeded 3.5σ.
+    # Today's spike already penalised in #6; this targets stale anomaly footprints.
+    if extreme_anom_count_20 >= 3:
+        mod -= 4
+    elif extreme_anom_count_20 >= 2:
+        mod -= 2
+    elif extreme_anom_count_20 == 1:
+        mod -= 1
 
     # 7. EMA ribbon spread — recalibrated from Run #50 research
     # 4x_pump avg_ema_spread_pre median=35.7%, false_positive=59.3%
@@ -920,6 +941,13 @@ def _modifier_score(age_l34, age_fri34, age_g4, age_b2,
             mod -= 6
         elif not has_g4_context:
             mod -= 3
+
+    # 10a. B2 cycling penalty — R59: b2_count_pre PENALIZE (FP 2× more cycling B2 bars).
+    # Multiple recent B2s without an active G4 trigger = choppy false-positive footprint.
+    if b2_count_20 >= 3 and (age_g4 is None or age_g4 > 5):
+        mod -= 3
+    elif b2_count_20 >= 2 and age_g4 is None:
+        mod -= 1
 
     return mod
 
@@ -1211,7 +1239,7 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
     """
     Returns (decision, decision_reason, decision_flags).
 
-    Routing v3 — calibrated on Replay 18+19 (Apr 2026).
+    Routing v3 — calibrated on Replay 18+19+20 + Pattern Study R59 (Apr 2026).
 
     Key calibration facts:
       • bq LOW not worse than MEDIUM — bq removed as hard routing gate (advisory only).
@@ -1219,11 +1247,16 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
       • NEUTRAL avg 5d -4.58% R19 — correctly avoided.
       • ISOLATED_B2 avg 5d -3.60% R19 — explicit hard-avoid.
       • HIGH ftr n=5 +24.57% 5d R19 — annotate only, do NOT demote routing.
-      • BROKEN_SETUP n=5 +8.11% 5d, 80% WR, -1.08% max DD R19 — promoted to WATCH.
-      • NEW_PUMP_WEAK n=61 +8.75% 5d R19 — top-performing NP label.
-      • SETUP_ONLY_FRI34 +6.37% vs SETUP_ONLY_L34 +3.10% R19 — FRI34 advantage flagged.
-      • COMPRESSED_BASE -1.68% 5d R19 — caution flag, not positive.
-      • MODERATE freshness (age 4-7 bars) +7.13% vs FRESH +1.47% R19 — flagged.
+      • BROKEN_SETUP n=13 -4.49% 5d, 30.8% WR R20 — reverted to AVOID (R19 n=5 was outlier).
+      • NEW_PUMP_WEAK n=144 +3.28% 5d, +8.9% 10d R20 — top-performing NP label.
+      • SETUP_ONLY_FRI34 n=128 +4.15% 5d, 68.0% WR R20 — best PRE_TRIGGER, score raised.
+      • COMPRESSED_BASE -1.82% 5d R20 — caution flag confirmed.
+      • MODERATE freshness (age 4-7 bars) +3.17% 5d vs FRESH +1.09% R20 — flagged.
+      v3.4 — R59 Pattern Study (n=209, run_id=59, 2025-12-02..2026-04-24):
+      • bullish_engulfing_count_pre BOOST 2.0× — added +1/+3/+5 pts to modifier (#5a).
+      • extreme_anomaly_day_count_pre PENALIZE — added -1/-2/-4 pts for stale spikes (#6a).
+      • b2_count_pre PENALIZE (FP 2×) — added cycling penalty when no active G4 (#10a).
+      • bull_stack_days_pre INCREASE (4x median=14d) — extended threshold to 14+ → +5 (#1).
     """
     flags: list = []
     structure_ready = state in ("TRIGGERED", "CONFIRMED")
@@ -1241,10 +1274,10 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         flags.append("avoid_overextended")
         return "AVOID", "overextended — entry risk too high", flags
 
-    # R19: BROKEN_SETUP n=5 +8.11% 5d, 80% WR, -1.08% max DD — promoted to WATCH.
+    # R20: BROKEN_SETUP n=13 -4.49% 5d, 30.8% WR — reverted to AVOID (R19 n=5 was outlier).
     if state == "BROKEN_SETUP":
-        flags.append("watch_broken_setup_recovery")
-        return "WATCH", "broken setup — prior structure, recovery watch", flags
+        flags.append("avoid_broken_setup")
+        return "AVOID", "broken setup — structure invalidated", flags
 
     # ISOLATED_B2: worst sequence in R18 (-4.09% 5d, -14.94% alpha 10d).
     if seq_lbl == "ISOLATED_B2":
@@ -1376,16 +1409,16 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
 
 # Base score by sequence — upweights progression sequences (R19 calibration)
 _STRUCTURE_SCORE_MAP = {
-    "CONFIRM_AFTER_G4":    80,  # reduced from 90 — tiny sample (n=2 R19)
+    "CONFIRM_AFTER_G4":    85,  # R20: n=9 +10.29% 5d, 77.8% WR — raised from 80
     "FULL_L34_G4_B2":      90,
     "FULL_FRI34_G4_B2":    85,
-    "TRIGGER_AFTER_L34":   75,  # R19: +5.81% 5d, upweighted
+    "TRIGGER_AFTER_L34":   75,  # R20: n=19 +4.61% 5d, 63.2% WR
     "TRIGGER_AFTER_FRI34": 60,
-    "SETUP_ONLY_FRI34":    55,  # R19: +6.37% 5d, upweighted vs L34
+    "SETUP_ONLY_FRI34":    62,  # R20: n=128 +4.15% 5d, 68.0% WR — raised from 55
     "SETUP_ONLY_L34":      38,  # boosted by freshness modifier below
     "ISOLATED_G4":         22,
-    "ISOLATED_B2":          8,  # downweighted: R19 -3.60% 5d
-    "NONE":                 5,  # downweighted: no structural sequence
+    "ISOLATED_B2":          8,  # downweighted: R20 DEGRADED phase
+    "NONE":                 5,  # downweighted: R20 n=44 -3.48% 5d
 }
 
 
@@ -1401,7 +1434,7 @@ def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
       EARLY_STRUCTURE      — NP_WEAK + active setup (forming, not just "weak")
       SETUP_PHASE          — active setup, trigger pending
       IMPULSE_ONLY         — impulse engine path (any strength), no structure
-      BROKEN_STRUCTURE     — BROKEN_SETUP state (R19: +8.11% 5d — positive watch)
+      BROKEN_STRUCTURE     — BROKEN_SETUP state (R20: -1.15% 5d, 33.3% WR — negative)
       TRUE_NONE            — NP_NONE + no structural or impulse signal
       DEGRADED             — NEUTRAL, FAILED_SETUP, OVEREXTENDED, ISOLATED_B2
     """
@@ -1410,12 +1443,18 @@ def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
     # ── Base score from sequence ──────────────────────────────────────────────
     score = _STRUCTURE_SCORE_MAP.get(seq_lbl, 15)
 
-    # SETUP_ONLY_L34: moderate age 4-7 bars earns bonus (R19: MODERATE +7.13% 5d)
+    # SETUP_ONLY_L34: moderate age 4-7 bars earns bonus (R20: MODERATE +3.17% vs FRESH +1.09%)
     if seq_lbl == "SETUP_ONLY_L34" and age_l34 is not None:
         if 3 < age_l34 <= 7:
             score += 10
             advisory.append("moderate_setup_age_strength")
         # FRESH (≤3) and STALE (>7): no bonus — do not auto-penalise
+
+    # SETUP_ONLY_FRI34: same moderate-age bonus (FRI34 setup age uses fri34)
+    if seq_lbl == "SETUP_ONLY_FRI34" and age_fri34 is not None:
+        if 3 < age_fri34 <= 7:
+            score += 8
+            advisory.append("fri34_moderate_setup_age")
 
     # NP label modifier — no penalty for absent FRI34
     if np_label == "NEW_PUMP_STRONG":
@@ -1563,6 +1602,22 @@ def analyze(bars):
     ]
     avg_ema_spread_10 = sum(ema_spreads) / len(ema_spreads) if ema_spreads else None
 
+    # R59: bullish engulfing count in last 20 bars — BOOST 2.0× vs false_positive
+    bull_eng_count_20 = 0
+    for _i in range(max(1, last - 19), last + 1):
+        _pb = bars[_i - 1]; _cb = bars[_i]
+        if (_cb["close"] > _cb["open"] and _pb["close"] < _pb["open"]
+                and min(_cb["open"], _cb["close"]) <= min(_pb["open"], _pb["close"])
+                and max(_cb["open"], _cb["close"]) >= max(_pb["open"], _pb["close"])):
+            bull_eng_count_20 += 1
+
+    # R59: extreme-anomaly day count in last 20 bars excluding today — PENALIZE (FP higher)
+    extreme_anom_count_20 = 0
+    if vol_mid is not None and vol_std is not None and vol_std > 0:
+        for _j in range(max(0, last - 19), last):  # exclude today
+            if (volumes[_j] - vol_mid) / vol_std > 3.5:
+                extreme_anom_count_20 += 1
+
     # Ages (None = signal never fired)
     def _age(bar_list):
         return (last - max(bar_list)) if bar_list else None
@@ -1580,6 +1635,9 @@ def analyze(bars):
     # Repeated counts over setup-age window (aligned with _MAX_SETUP_AGE)
     count_l34_w   = sum(1 for b in tracking["l34_bars"]   if last - b < _MAX_SETUP_AGE)
     count_fri34_w = sum(1 for b in tracking["fri34_bars"] if last - b < _MAX_SETUP_AGE)
+
+    # R59: B2 event count in last 20 bars — b2_count_pre PENALIZE (FP 2× more cycling B2 bars)
+    b2_count_20 = sum(1 for b in tracking["b2_bars"] if last - b < 20)
 
     # Sequence label + state computed early so base_quality can condition scoring
     seq_lbl      = _sequence_label(age_l34, age_fri34, age_g4, age_b2)
@@ -1613,6 +1671,9 @@ def analyze(bars):
         days_above_ema50=days_above_ema50,
         ema50_reclaim_count=ema50_reclaim_count,
         avg_ema_spread=avg_ema_spread_10,
+        bull_eng_count_20=bull_eng_count_20,
+        extreme_anom_count_20=extreme_anom_count_20,
+        b2_count_20=b2_count_20,
     )
     prog_adj = _progression_adjustment(seq_lbl, bq_score)
 
