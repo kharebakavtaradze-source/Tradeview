@@ -131,6 +131,14 @@ def compute_anatomy(bars):
         if fri34: bar_codes.add("FRI34"); fri34_fires.append(i)
         if g4:    bar_codes.add("G4");    g4_fires.append(i)
         if b2:    bar_codes.add("B2");    b2_fires.append(i)
+        # Mirror _build_signal_history: T/Z signal codes must be in history so
+        # subsequent bars' _sig_B2 can find prior-bar T3/T11/Z2G/Z6/_B2_BRANCH*.
+        # Without this, B2 never fires in the bar-level pass even when the engine
+        # final result reports it — causing inconsistent badges vs per-bar table.
+        for name, fired in t.items():
+            if fired: bar_codes.add(name)
+        for name, fired in z.items():
+            if fired: bar_codes.add(name)
         history[i] = frozenset(bar_codes)
 
         # L34 near-miss
