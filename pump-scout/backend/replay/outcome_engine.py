@@ -396,5 +396,16 @@ def _diagnose_why_missed(
         return "filtered_by_volume_gate"
     if not (min_price <= close <= max_price):
         return "filtered_by_price_gate"
-    # Was in universe but not scored FIRE/ARM/BASE
-    return "no_structural_signal"
+    # Was in universe but not scored FIRE/ARM/BASE.
+    # Sub-classify using scan-day bar anatomy (open/close only — no history fetch).
+    o = bar.get("open") or 0
+    c = bar.get("close") or 0
+    if o > 0:
+        ratio = c / o
+        if ratio >= 1.25:
+            return "NSS_PARABOLIC"       # already running ≥25% on scan day — engine one cycle late
+        if ratio <= 0.93:
+            return "NSS_SPRING_REVERSAL" # bearish bar (Wyckoff spring) — L34 bull-candle gate misses it
+        if abs(c - o) / o < 0.015:
+            return "NSS_QUIET_BASE"      # near-flat, extreme compression — nothing fires
+    return "NSS_BREAKOUT_ORPHAN"         # moderate bar, no L34/G4/B2 condition met
