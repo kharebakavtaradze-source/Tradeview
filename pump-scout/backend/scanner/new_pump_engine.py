@@ -1219,11 +1219,11 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
       • NEUTRAL avg 5d -4.58% R19 — correctly avoided.
       • ISOLATED_B2 avg 5d -3.60% R19 — explicit hard-avoid.
       • HIGH ftr n=5 +24.57% 5d R19 — annotate only, do NOT demote routing.
-      • BROKEN_SETUP n=5 +8.11% 5d, 80% WR, -1.08% max DD R19 — promoted to WATCH.
-      • NEW_PUMP_WEAK n=61 +8.75% 5d R19 — top-performing NP label.
-      • SETUP_ONLY_FRI34 +6.37% vs SETUP_ONLY_L34 +3.10% R19 — FRI34 advantage flagged.
-      • COMPRESSED_BASE -1.68% 5d R19 — caution flag, not positive.
-      • MODERATE freshness (age 4-7 bars) +7.13% vs FRESH +1.47% R19 — flagged.
+      • BROKEN_SETUP n=13 -4.49% 5d, 30.8% WR R20 — reverted to AVOID (R19 n=5 was outlier).
+      • NEW_PUMP_WEAK n=144 +3.28% 5d, +8.9% 10d R20 — top-performing NP label.
+      • SETUP_ONLY_FRI34 n=128 +4.15% 5d, 68.0% WR R20 — best PRE_TRIGGER, score raised.
+      • COMPRESSED_BASE -1.82% 5d R20 — caution flag confirmed.
+      • MODERATE freshness (age 4-7 bars) +3.17% 5d vs FRESH +1.09% R20 — flagged.
     """
     flags: list = []
     structure_ready = state in ("TRIGGERED", "CONFIRMED")
@@ -1241,10 +1241,10 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         flags.append("avoid_overextended")
         return "AVOID", "overextended — entry risk too high", flags
 
-    # R19: BROKEN_SETUP n=5 +8.11% 5d, 80% WR, -1.08% max DD — promoted to WATCH.
+    # R20: BROKEN_SETUP n=13 -4.49% 5d, 30.8% WR — reverted to AVOID (R19 n=5 was outlier).
     if state == "BROKEN_SETUP":
-        flags.append("watch_broken_setup_recovery")
-        return "WATCH", "broken setup — prior structure, recovery watch", flags
+        flags.append("avoid_broken_setup")
+        return "AVOID", "broken setup — structure invalidated", flags
 
     # ISOLATED_B2: worst sequence in R18 (-4.09% 5d, -14.94% alpha 10d).
     if seq_lbl == "ISOLATED_B2":
@@ -1376,16 +1376,16 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
 
 # Base score by sequence — upweights progression sequences (R19 calibration)
 _STRUCTURE_SCORE_MAP = {
-    "CONFIRM_AFTER_G4":    80,  # reduced from 90 — tiny sample (n=2 R19)
+    "CONFIRM_AFTER_G4":    85,  # R20: n=9 +10.29% 5d, 77.8% WR — raised from 80
     "FULL_L34_G4_B2":      90,
     "FULL_FRI34_G4_B2":    85,
-    "TRIGGER_AFTER_L34":   75,  # R19: +5.81% 5d, upweighted
+    "TRIGGER_AFTER_L34":   75,  # R20: n=19 +4.61% 5d, 63.2% WR
     "TRIGGER_AFTER_FRI34": 60,
-    "SETUP_ONLY_FRI34":    55,  # R19: +6.37% 5d, upweighted vs L34
+    "SETUP_ONLY_FRI34":    62,  # R20: n=128 +4.15% 5d, 68.0% WR — raised from 55
     "SETUP_ONLY_L34":      38,  # boosted by freshness modifier below
     "ISOLATED_G4":         22,
-    "ISOLATED_B2":          8,  # downweighted: R19 -3.60% 5d
-    "NONE":                 5,  # downweighted: no structural sequence
+    "ISOLATED_B2":          8,  # downweighted: R20 DEGRADED phase
+    "NONE":                 5,  # downweighted: R20 n=44 -3.48% 5d
 }
 
 
@@ -1401,7 +1401,7 @@ def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
       EARLY_STRUCTURE      — NP_WEAK + active setup (forming, not just "weak")
       SETUP_PHASE          — active setup, trigger pending
       IMPULSE_ONLY         — impulse engine path (any strength), no structure
-      BROKEN_STRUCTURE     — BROKEN_SETUP state (R19: +8.11% 5d — positive watch)
+      BROKEN_STRUCTURE     — BROKEN_SETUP state (R20: -1.15% 5d, 33.3% WR — negative)
       TRUE_NONE            — NP_NONE + no structural or impulse signal
       DEGRADED             — NEUTRAL, FAILED_SETUP, OVEREXTENDED, ISOLATED_B2
     """
@@ -1410,12 +1410,18 @@ def _compute_structure_phase(seq_lbl, state, engine_path, np_label,
     # ── Base score from sequence ──────────────────────────────────────────────
     score = _STRUCTURE_SCORE_MAP.get(seq_lbl, 15)
 
-    # SETUP_ONLY_L34: moderate age 4-7 bars earns bonus (R19: MODERATE +7.13% 5d)
+    # SETUP_ONLY_L34: moderate age 4-7 bars earns bonus (R20: MODERATE +3.17% vs FRESH +1.09%)
     if seq_lbl == "SETUP_ONLY_L34" and age_l34 is not None:
         if 3 < age_l34 <= 7:
             score += 10
             advisory.append("moderate_setup_age_strength")
         # FRESH (≤3) and STALE (>7): no bonus — do not auto-penalise
+
+    # SETUP_ONLY_FRI34: same moderate-age bonus (FRI34 setup age uses fri34)
+    if seq_lbl == "SETUP_ONLY_FRI34" and age_fri34 is not None:
+        if 3 < age_fri34 <= 7:
+            score += 8
+            advisory.append("fri34_moderate_setup_age")
 
     # NP label modifier — no penalty for absent FRI34
     if np_label == "NEW_PUMP_STRONG":
