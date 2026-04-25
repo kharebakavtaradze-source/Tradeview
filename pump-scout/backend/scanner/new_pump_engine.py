@@ -1056,6 +1056,8 @@ def _empty_analysis():
         decision="AVOID",
         decision_reason="no data",
         decision_flags=[],
+        decision_authority="structure_phase_score",
+        legacy_label_role="diagnostic_only",
     )
 
 
@@ -1235,10 +1237,23 @@ def compute_impulse_score(bars: list) -> dict:
 # Uses only live-safe fields already computed by the engines above — no
 # outcome / future leakage.
 
+# v3.6: sequences permitted to generate BUY_CANDIDATE decisions.
+# Excludes TRIGGER_AFTER_FRI34 (R21 n=5 -2.19%), ISOLATED_G4 (R21 n=267 -1.63%),
+# ISOLATED_B2, SETUP_ONLY_L34 (weak vs FRI34), NONE (no signal).
+_BUY_SEQUENCE_WHITELIST = frozenset({
+    "TRIGGER_AFTER_L34",
+    "CONFIRM_AFTER_G4",
+    "FULL_L34_G4_B2",
+    "FULL_FRI34_G4_B2",
+    "SETUP_ONLY_FRI34",
+})
+
+
 def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
             missing_piece, ce_state, ce_score, ce_risk,
             impulse_label, impulse_score,
-            np_label=None, age_l34=None, age_fri34=None) -> tuple:
+            np_label=None, age_l34=None, age_fri34=None,
+            structure_phase=None, structure_score=None) -> tuple:
     """
     Returns (decision, decision_reason, decision_flags).
 
@@ -1264,11 +1279,19 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
       • FIRE threshold 62→68: R21 FIRE n=4 -0.38% vs NONE +0.51% — no edge, tighten gate.
       • STRONG threshold 46→55: R21 STRONG -1.97% 5d, structure_score 46_65 -0.70% n=212.
       • ISOLATED_G4 WATCH→AVOID: R21 n=267 -1.63% 5d — trigger without setup is negative.
+      v3.6 — Decision authority cleanup (Apr 2026):
+      • structure_phase + structure_score computed BEFORE _decide() — primary authority.
+      • Legacy np_label demoted: FIRE/STRONG alone cannot create BUY_CANDIDATE.
+      • BUY gate: structure_score >= 66 + CONFIRMED/TRIGGERED phase + whitelisted sequence.
+      • Mid-score cap: structure_score 46-65 → max WATCH (R21: 46_65 bucket -0.70% 5d).
+      • CONFIRMED/TRIGGERED + non-whitelisted sequence → WATCH (not BUY).
+      • EARLY/SETUP phase + weak score (<46) → AVOID.
     """
     flags: list = []
-    structure_ready = state in ("TRIGGERED", "CONFIRMED")
+    _ss = structure_score or 0
+    _sp = structure_phase or "TRUE_NONE"
 
-    # ── Hard AVOID: structural failures ──────────────────────────────────────
+    # ── Hard AVOID: state-based structural failures (unchanged from v3.x) ─────
     if state == "NEUTRAL":
         flags.append("avoid_neutral")
         return "AVOID", "neutral — no structure present", flags
@@ -1281,55 +1304,28 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         flags.append("avoid_overextended")
         return "AVOID", "overextended — entry risk too high", flags
 
-    # R20: BROKEN_SETUP n=13 -4.49% 5d, 30.8% WR — reverted to AVOID (R19 n=5 was outlier).
+    # R20: BROKEN_SETUP n=13 -4.49% 5d, 30.8% WR — reverted to AVOID.
     if state == "BROKEN_SETUP":
         flags.append("avoid_broken_setup")
         return "AVOID", "broken setup — structure invalidated", flags
 
-    # ISOLATED_B2: worst sequence in R18 (-4.09% 5d, -14.94% alpha 10d).
+    # ISOLATED_B2: worst sequence R18 (-4.09% 5d, -14.94% alpha 10d).
     if seq_lbl == "ISOLATED_B2":
         flags.append("avoid_isolated_b2")
         return "AVOID", "isolated B2 — consistently negative sequence", flags
 
     # NONE sequence without triggered structure: R18 -2.49% 5d, -8.72% alpha 10d.
-    if seq_lbl == "NONE" and not structure_ready:
+    if seq_lbl == "NONE" and state not in ("TRIGGERED", "CONFIRMED"):
         flags.append("avoid_none_sequence")
         return "AVOID", "no recognised sequence + no trigger", flags
 
-    # ── Advisory-only flags (do not block routing) ────────────────────────────
-    # R18/19: HIGH ftr +24.57% 5d R19 — flag for transparency, do not block.
-    if ftr == "HIGH":
-        flags.append("borderline_high_ftr")
-    # R18: OVERHEATED avg 5d +6.24% — annotate, do not block triggered structure.
-    if ce_state == "OVERHEATED_EXPANSION":
-        flags.append("borderline_overheated_but_structural" if structure_ready
-                     else "overheated_expansion_note")
-    # bq annotation (not a gate; R19: MEDIUM bq -0.30% 5d vs LOW +4.65% — not predictive)
-    if bq_score is not None and bq_score >= 35:
-        flags.append("bq_medium_bucket")
+    # R21: ISOLATED_G4 n=267 -1.63% 5d.
+    if seq_lbl == "ISOLATED_G4":
+        flags.append("avoid_isolated_g4")
+        return "AVOID", "ISOLATED_G4 — trigger without setup, negative expectation", flags
 
-    # NP label advisory (R19: WEAK n=61 +8.75% 5d — top label)
-    if np_label == "NEW_PUMP_WEAK":
-        flags.append("np_weak_elevated")
-    elif np_label == "NEW_PUMP_NONE":
-        flags.append("np_none_caution")
-
-    # Setup via advisory (R19: L34-only +6.63% 5d vs BOTH +2.28% — pure L34 stronger)
-    _l34_only = (age_l34 is not None and age_fri34 is None)
-    if _l34_only:
-        flags.append("np_l34_pure_strength")
-
-    # Freshness advisory (R19: MODERATE age 4-7 bars +7.13% >> FRESH +1.47%)
-    _setup_ages = [a for a in [age_l34, age_fri34] if a is not None]
-    if _setup_ages:
-        _min_age = min(_setup_ages)
-        if 3 < _min_age <= 7:
-            flags.append("np_moderate_freshness")
-        elif _min_age <= 3:
-            flags.append("np_fresh_early")
-
-    # ── IMPULSE_RISK (separate playbook) ─────────────────────────────────────
-    # R18: strong impulse bucket +7.08%, 69.2% win rate.  Keep separate.
+    # ── Impulse path (separate playbook — unchanged) ──────────────────────────
+    # R18: strong impulse +7.08%, 69.2% WR. Keep independent of structure routing.
     if engine_path == "impulse":
         if impulse_label == "IMPULSE_STRONG" or (impulse_score or 0) >= 50:
             flags.append("impulse_separate_playbook")
@@ -1337,77 +1333,98 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         flags.append("impulse_path_weak")
         return "AVOID", "impulse path without structural support", flags
 
-    # ── BUY_CANDIDATE ────────────────────────────────────────────────────────
-    # Gated on state only — bq NOT a hard requirement (R18 calibration).
-    # Pretty-sequence guard (Raw Pattern 56):
-    #   CONFIRM_AFTER_G4 / FULL_L34_G4_B2 / FULL_FRI34_G4_B2 have elevated FP
-    #   risk.  Demote TRIGGERED + elevated ftr to WATCH; allow CONFIRMED through.
-    _PRETTY_SEQ = frozenset(("CONFIRM_AFTER_G4", "FULL_L34_G4_B2", "FULL_FRI34_G4_B2"))
-    _POSITIVE_SEQ = frozenset((
-        "TRIGGER_AFTER_L34", "TRIGGER_AFTER_FRI34",
-        "SETUP_ONLY_FRI34", "SETUP_ONLY_L34",
-    ))
+    # ── Legacy label demotion annotations ─────────────────────────────────────
+    # Labels remain in output for display/backward compat but do NOT drive routing.
+    if np_label in ("NEW_PUMP_FIRE", "NEW_PUMP_STRONG"):
+        flags.append("legacy_label_demoted")
+        flags.append("legacy_label_not_decision_authority")
+    if np_label == "NEW_PUMP_WEAK":
+        flags.append("np_weak_elevated")
+        if _sp in ("EARLY_STRUCTURE", "SETUP_PHASE"):
+            flags.append("weak_label_early_structure")
+    elif np_label == "NEW_PUMP_NONE":
+        flags.append("np_none_caution")
 
-    if state == "CONFIRMED":
-        # Full sequence validated — always BUY regardless of ftr / ce / bq.
-        flags.append("buy_confirmed_structure")
-        return "BUY_CANDIDATE", "CONFIRMED — full sequence validated", flags
+    # ── Advisory context flags (informational only) ───────────────────────────
+    if ftr == "HIGH":
+        flags.append("borderline_high_ftr")
+    if ce_state == "OVERHEATED_EXPANSION":
+        flags.append("borderline_overheated_but_structural"
+                     if _sp in ("CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE")
+                     else "overheated_expansion_note")
+    if bq_score is not None and bq_score >= 35:
+        flags.append("bq_medium_bucket")
+    _l34_only = (age_l34 is not None and age_fri34 is None)
+    if _l34_only:
+        flags.append("np_l34_pure_strength")
+    _setup_ages = [a for a in [age_l34, age_fri34] if a is not None]
+    if _setup_ages:
+        _min_age = min(_setup_ages)
+        if 3 < _min_age <= 7:
+            flags.append("np_moderate_freshness")
+        elif _min_age <= 3:
+            flags.append("np_fresh_early")
+    if ce_state == "COMPRESSED_BASE":
+        flags.append("ce_compressed_base_caution")
+    elif ce_state == "EXPANSION_START":
+        flags.append("ce_expansion_start_weak")
+    elif ce_state in ("ACCUMULATION_READY",):
+        flags.append("ce_accumulation_ready")
 
-    if state == "TRIGGERED":
-        # Pretty sequence + elevated ftr → FP guard → demote to WATCH
-        # R19: HIGH ftr n=5 +24.57% 5d, +29.98% alpha — guard only for MEDIUM ftr.
-        if seq_lbl in _PRETTY_SEQ and ftr == "MEDIUM":
-            flags.append("watch_pretty_seq_caution")
-            return "WATCH", f"TRIGGERED + {seq_lbl} with MEDIUM ftr — FP caution", flags
-        # All other TRIGGERED cases → BUY
-        flags.append("buy_triggered_structure")
-        if seq_lbl in _POSITIVE_SEQ:
-            flags.append("buy_positive_sequence")
-        if ce_state in ("ACCUMULATION_READY", "EXPANSION_START"):
-            flags.append(f"ce_{ce_state.lower()}")
-        return "BUY_CANDIDATE", f"TRIGGERED seq={seq_lbl}", flags
+    # ── Phase hard-reject (belt-and-suspenders after state checks) ────────────
+    if _sp in ("DEGRADED", "BROKEN_STRUCTURE", "TRUE_NONE"):
+        flags.append("degraded_or_broken_structure")
+        return "AVOID", f"phase={_sp} — structure not viable", flags
 
-    # ── WATCH ────────────────────────────────────────────────────────────────
-    # PRE_TRIGGER: 194 cands R19, avg +3.85% 5d — broad entry, no bq gate.
-    if state == "PRE_TRIGGER":
-        flags.append("watch_pretrigger_quality")
-        # R19: FRI34 +6.37% vs L34 +3.10% — flag FRI34 sequences as stronger
+    # ── Structure-score tiers (universal gates) ───────────────────────────────
+    _high_ss = _ss >= 66
+    _mid_ss  = 46 <= _ss <= 65
+
+    if _high_ss:
+        flags.append("high_structure_score")
+    if _mid_ss:
+        flags.append("mid_structure_score_caution")
+
+    # ── A. High-confidence BUY ─────────────────────────────────────────────────
+    # Requires: ss >= 66 + CONFIRMED/TRIGGERED phase + whitelisted sequence.
+    # R21: structure_score 66_100 was strongly positive; whitelist removes negative seqs.
+    if (_high_ss
+            and _sp in ("CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE")
+            and seq_lbl in _BUY_SEQUENCE_WHITELIST):
+        flags.append("structure_score_66_buy")
+        return (
+            "BUY_CANDIDATE",
+            f"phase={_sp} ss={_ss} seq={seq_lbl}",
+            flags,
+        )
+
+    # ── B. CONFIRMED/TRIGGERED mid score → WATCH (not BUY) ────────────────────
+    # R21: structure_score 46_65 bucket -0.70% 5d — cap at WATCH.
+    if _sp in ("CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE") and _mid_ss:
+        return "WATCH", f"phase={_sp} ss={_ss} — mid score caution", flags
+
+    # ── C. CONFIRMED/TRIGGERED high score but non-whitelisted → WATCH ─────────
+    if _sp in ("CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE") and _high_ss:
+        flags.append("triggered_not_whitelisted_watch")
+        return "WATCH", f"phase={_sp} ss={_ss} seq={seq_lbl} — not whitelisted for BUY", flags
+
+    # ── D. Early / setup structure ─────────────────────────────────────────────
+    if _sp in ("EARLY_STRUCTURE", "SETUP_PHASE"):
         if seq_lbl == "SETUP_ONLY_FRI34":
             flags.append("watch_fri34_setup_strength")
-        elif seq_lbl in _POSITIVE_SEQ:
+        elif seq_lbl == "SETUP_ONLY_L34":
             flags.append("watch_setup_only_progression")
-        # R19: COMPRESSED_BASE -1.68% 5d — caution; EXPANSION_START +0.92%/44.7% WR — weak
-        if ce_state == "COMPRESSED_BASE":
-            flags.append("ce_compressed_base_caution")
-        elif ce_state == "EXPANSION_START":
-            flags.append("ce_expansion_start_weak")  # R19: +0.92% 5d, 44.7% WR
-        elif ce_state == "ACCUMULATION_READY":
-            flags.append("ce_accumulation_ready")
-        return "WATCH", f"PRE_TRIGGER seq={seq_lbl}", flags
+        if _high_ss:
+            flags.append("early_structure_high_score_watch")
+            return "WATCH", f"phase={_sp} ss={_ss} — waiting for trigger/confirm", flags
+        if _mid_ss:
+            return "WATCH", f"phase={_sp} ss={_ss}", flags
+        flags.append("weak_structure_score_avoid")
+        return "AVOID", f"phase={_sp} ss={_ss} — weak structure score", flags
 
-    # Setup-only sequences that reach here (edge case: state not PRE_TRIGGER).
-    # R19: SETUP_ONLY_FRI34 +6.37% 5d, SETUP_ONLY_L34 +3.10% 5d.
-    if seq_lbl in ("SETUP_ONLY_L34", "SETUP_ONLY_FRI34"):
-        if seq_lbl == "SETUP_ONLY_FRI34":
-            flags.append("watch_fri34_setup_strength")
-        else:
-            flags.append("watch_setup_only_progression")
-        if ce_state == "COMPRESSED_BASE":
-            flags.append("ce_compressed_base_caution")
-        elif ce_state == "EXPANSION_START":
-            flags.append("ce_expansion_start_weak")
-        elif ce_state == "ACCUMULATION_READY":
-            flags.append("ce_accumulation_ready")
-        return "WATCH", f"{seq_lbl} — watch for trigger", flags
-
-    # R21: ISOLATED_G4 n=267 -1.63% 5d — demoted from WATCH to AVOID.
-    if seq_lbl == "ISOLATED_G4":
-        flags.append("avoid_isolated_g4")
-        return "AVOID", "ISOLATED_G4 — trigger without setup, negative expectation", flags
-
-    # ── Default AVOID ─────────────────────────────────────────────────────────
-    flags.append("avoid_no_setup")
-    return "AVOID", "no structural progression or recognised sequence", flags
+    # ── E. Fallback ────────────────────────────────────────────────────────────
+    flags.append("decision_fallback_used")
+    return "AVOID", f"no structure rule matched (phase={_sp} ss={_ss})", flags
 
 
 # ---------------------------------------------------------------------------
@@ -1735,7 +1752,19 @@ def analyze(bars):
     raw_label    = _final_label(total)
     capped_label = _cap_label(raw_label, weak_pre_trigger_base, ftr, bq_score)
 
-    # Final decision layer (after all other engines have produced output)
+    # v3.6: structure phase computed BEFORE _decide() — primary decision authority.
+    structure_phase, structure_score, structure_advisory = _compute_structure_phase(
+        seq_lbl=seq_lbl,
+        state=state,
+        engine_path=engine_path,
+        np_label=capped_label,
+        age_l34=age_l34,
+        age_fri34=age_fri34,
+        impulse_label=impulse["impulse_label"],
+        impulse_score=impulse["impulse_score"],
+    )
+
+    # Final decision layer — now receives structure_phase + structure_score.
     decision, decision_reason, decision_flags = _decide(
         state=state,
         engine_path=engine_path,
@@ -1752,18 +1781,8 @@ def analyze(bars):
         np_label=capped_label,
         age_l34=age_l34,
         age_fri34=age_fri34,
-    )
-
-    # Structure-phase layer (additive — does not touch existing outputs)
-    structure_phase, structure_score, structure_advisory = _compute_structure_phase(
-        seq_lbl=seq_lbl,
-        state=state,
-        engine_path=engine_path,
-        np_label=capped_label,
-        age_l34=age_l34,
-        age_fri34=age_fri34,
-        impulse_label=impulse["impulse_label"],
-        impulse_score=impulse["impulse_score"],
+        structure_phase=structure_phase,
+        structure_score=structure_score,
     )
 
     return dict(
@@ -1800,6 +1819,8 @@ def analyze(bars):
         structure_phase=structure_phase,
         structure_score=structure_score,
         structure_advisory=structure_advisory,
+        decision_authority="structure_phase_score",
+        legacy_label_role="diagnostic_only",
     )
 
 
