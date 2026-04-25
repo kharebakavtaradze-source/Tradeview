@@ -241,7 +241,13 @@ def _build_false_positives(candidates: list[dict], outcome_map: dict,
 def _build_missed_section(missed: list[dict], limit: int = 20) -> list[dict]:
     """Section D — Top missed movers enriched with classification flags."""
     _STRICT_CODES  = {"filtered_by_volume_gate", "filtered_by_price_gate"}
-    _SIGNAL_CODES  = {"no_structural_signal"}
+    _SIGNAL_CODES  = {
+        "no_structural_signal",   # legacy label (pre-sub-classification runs)
+        "NSS_PARABOLIC",
+        "NSS_SPRING_REVERSAL",
+        "NSS_QUIET_BASE",
+        "NSS_BREAKOUT_ORPHAN",
+    }
     _UNIVERSE_CODES = {"not_in_universe", "filtered_as_non_equity"}
 
     result = []
@@ -379,6 +385,26 @@ def _build_pattern_review(summary: dict,
                     f"{count} strong mover(s) had no New Pump structural signal — "
                     "check if L34/FRI34/G4/B2 thresholds are too strict"
                 )
+            elif reason == "NSS_PARABOLIC":
+                likely_noisy.append(
+                    f"{count} missed mover(s) already running ≥25% on scan day (NSS_PARABOLIC) — "
+                    "engine one cycle late; no action possible without earlier detection"
+                )
+            elif reason == "NSS_SPRING_REVERSAL":
+                likely_noisy.append(
+                    f"{count} missed mover(s) had bearish scan-day bar then reversed (NSS_SPRING_REVERSAL) — "
+                    "Wyckoff spring pattern; L34 bull-candle gate currently blocks this entry"
+                )
+            elif reason == "NSS_QUIET_BASE":
+                likely_noisy.append(
+                    f"{count} missed mover(s) in extreme compression on scan day (NSS_QUIET_BASE) — "
+                    "near-flat bar produces no signal; consider a quiet-base detector"
+                )
+            elif reason == "NSS_BREAKOUT_ORPHAN":
+                likely_noisy.append(
+                    f"{count} missed mover(s) had moderate bar but no NP condition met (NSS_BREAKOUT_ORPHAN) — "
+                    "check if L34/FRI34/G4/B2 definitions cover this bar type"
+                )
 
     # ── NP setup type analysis ────────────────────────────────────────────────
     np_setup_insights: list[str] = []
@@ -484,14 +510,35 @@ def _build_experiments(summary: dict,
         })
 
     # ── No-structural-signal misses ───────────────────────────────────────────
-    signal_missed = sum(1 for m in missed if m.get("why_missed") == "no_structural_signal")
+    _NSS_CODES = {
+        "no_structural_signal", "NSS_PARABOLIC", "NSS_SPRING_REVERSAL",
+        "NSS_QUIET_BASE", "NSS_BREAKOUT_ORPHAN",
+    }
+    signal_missed = sum(1 for m in missed if m.get("why_missed") in _NSS_CODES)
+    nss_breakdown = Counter(
+        m.get("why_missed") for m in missed if m.get("why_missed") in _NSS_CODES
+    )
+    _NSS_LABELS = {
+        "no_structural_signal": "no signal (legacy)",
+        "NSS_PARABOLIC":        "already running (PARABOLIC)",
+        "NSS_SPRING_REVERSAL":  "bearish reversal (SPRING_REVERSAL)",
+        "NSS_QUIET_BASE":       "extreme compression (QUIET_BASE)",
+        "NSS_BREAKOUT_ORPHAN":  "no NP condition met (BREAKOUT_ORPHAN)",
+    }
     if signal_missed >= 3:
+        breakdown_str = ", ".join(
+            f"{_NSS_LABELS.get(k, k)}: {v}"
+            for k, v in nss_breakdown.most_common()
+        )
+        actionable = nss_breakdown.get("NSS_SPRING_REVERSAL", 0) + nss_breakdown.get("NSS_QUIET_BASE", 0) + nss_breakdown.get("NSS_BREAKOUT_ORPHAN", 0)
         experiments.append({
             "title":           "Investigate no-New-Pump-signal missed movers",
             "description":     f"{signal_missed} strong movers were in the universe but had no "
-                               "L34/FRI34/G4/B2 signal. Review their bar-level anatomy to see "
-                               "if a new signal pattern is being missed.",
-            "evidence":        f"{signal_missed} missed movers had why_missed='no_structural_signal'",
+                               f"L34/FRI34/G4/B2 signal. Breakdown: {breakdown_str}. "
+                               + (f"{actionable} may be addressable with signal extensions (SPRING/QUIET/ORPHAN). "
+                                  if actionable else "")
+                               + "Review bar-level anatomy to see if a new signal pattern is being missed.",
+            "evidence":        f"{signal_missed} missed movers with no structural signal: {breakdown_str}",
             "confidence":      "MEDIUM",
             "experiment_type": "scoring_review",
         })
