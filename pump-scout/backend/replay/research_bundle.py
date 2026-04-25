@@ -895,6 +895,72 @@ async def build_research_bundle(run_id: int) -> dict:
         if x["bucket"] in _SCORE_BUCKET_ORDER else 99
     )
 
+    # ── Phase 11: v3.6 decision-authority analytics ───────────────────────────
+
+    # Cross-tab: decision × structure_score_bucket
+    def _decision_ss_bucket(c: dict) -> str:
+        dec = c.get("np_decision") or "AVOID"
+        ss_bkt = _structure_score_bucket(c)
+        return f"{dec}|{ss_bkt}"
+
+    perf_decision_ss = _build_perf_buckets(
+        candidates, outcome_map, _decision_ss_bucket, "decision_x_structure_score_bucket"
+    )
+    _DEC_ORDER2 = ["BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID"]
+    perf_decision_ss.sort(key=lambda x: (
+        _DEC_ORDER2.index(x["bucket"].split("|")[0])
+        if x["bucket"].split("|")[0] in _DEC_ORDER2 else 99,
+        _SCORE_BUCKET_ORDER.index(x["bucket"].split("|")[1])
+        if len(x["bucket"].split("|")) > 1 and x["bucket"].split("|")[1] in _SCORE_BUCKET_ORDER else 99,
+    ))
+
+    # BUY_CANDIDATE composition breakdown
+    buy_cands = [c for c in candidates if (c.get("np_decision") or "AVOID") == "BUY_CANDIDATE"]
+    buy_composition = {
+        "count": len(buy_cands),
+        "by_structure_phase":        dict(Counter(_structure_phase_tier(c) for c in buy_cands)),
+        "by_sequence":               dict(Counter(
+            (c.get("new_pump_sequence_label") or
+             (c.get("new_pump") or {}).get("new_pump_sequence_label") or "NONE")
+            for c in buy_cands
+        )),
+        "by_structure_score_bucket": dict(Counter(_structure_score_bucket(c) for c in buy_cands)),
+        "by_legacy_label":           dict(Counter(
+            (c.get("new_pump_label") or
+             (c.get("new_pump") or {}).get("new_pump_label") or "NEW_PUMP_NONE")
+            for c in buy_cands
+        )),
+    }
+
+    # False-positive breakdown by structure_score_bucket and sequence
+    # FP defined as: return_5d < -5% (consistent with _build_false_positives threshold).
+    fp_cand_ids: set = set()
+    for cid, horizons in outcome_map.items():
+        o5 = horizons.get("5d", {})
+        if (o5.get("return_pct") or 0) < -5.0:
+            fp_cand_ids.add(cid)
+    fp_cands = [c for c in candidates if c["id"] in fp_cand_ids]
+
+    fp_by_ss: Counter = Counter(_structure_score_bucket(c) for c in fp_cands)
+    fp_by_seq: Counter = Counter(
+        (c.get("new_pump_sequence_label") or
+         (c.get("new_pump") or {}).get("new_pump_sequence_label") or "NONE")
+        for c in fp_cands
+    )
+    false_positive_analytics = {
+        "total_fp_count": len(fp_cands),
+        "by_structure_score_bucket": {
+            bkt: {"count": fp_by_ss[bkt],
+                  "pct_of_all_fp": _pct(fp_by_ss[bkt], len(fp_cands))}
+            for bkt in _SCORE_BUCKET_ORDER if fp_by_ss[bkt] > 0
+        },
+        "by_sequence": {
+            seq: {"count": cnt,
+                  "pct_of_all_fp": _pct(cnt, len(fp_cands))}
+            for seq, cnt in fp_by_seq.most_common(10)
+        },
+    }
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -945,9 +1011,12 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_fake_trigger_risk": perf_fake_trigger,
         "performance_by_compression_expansion_state": perf_compression_expansion,
         "performance_by_expansion_timing_risk":       perf_expansion_timing,
-        "performance_by_decision":                    perf_decision,
-        "performance_by_structure_phase":             perf_structure_phase,
-        "performance_by_structure_score_bucket":      perf_structure_score,
+        "performance_by_decision":                         perf_decision,
+        "performance_by_structure_phase":                  perf_structure_phase,
+        "performance_by_structure_score_bucket":           perf_structure_score,
+        "performance_by_decision_structure_score_bucket":  perf_decision_ss,
+        "buy_candidate_composition":                       buy_composition,
+        "false_positive_analytics":                        false_positive_analytics,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,
@@ -1128,6 +1197,65 @@ def render_research_bundle_markdown(bundle: dict) -> str:
             for line in dar["insights"]:
                 add(f"- {line}")
         add("")
+
+    # ── v3.6 Decision Authority Analytics ────────────────────────────────────
+    fp_ana = bundle.get("false_positive_analytics") or {}
+    buy_comp = bundle.get("buy_candidate_composition") or {}
+    perf_dec_ss = bundle.get("performance_by_decision_structure_score_bucket") or []
+
+    if perf_dec_ss:
+        add("## Decision × Structure Score Bucket (v3.6)")
+        add("")
+        rows = []
+        for b in perf_dec_ss:
+            rows.append([
+                b["bucket"],
+                b.get("n", 0),
+                _fmt(b.get("avg_return_5d"), sign=True, suffix="%"),
+                _fmt(b.get("avg_return_10d"), sign=True, suffix="%"),
+                _fmt(b.get("win_rate_5d"), suffix="%"),
+            ])
+        add(_mdtable(["Decision|SS Bucket", "N", "Avg 5d", "Avg 10d", "WR 5d"], rows))
+        add("")
+
+    if buy_comp.get("count", 0) > 0:
+        add("## BUY_CANDIDATE Composition (v3.6)")
+        add(f"Total BUY_CANDIDATE: **{buy_comp['count']}**")
+        add("")
+        for section, title in [
+            ("by_structure_score_bucket", "By structure_score bucket"),
+            ("by_structure_phase", "By phase"),
+            ("by_sequence", "By sequence"),
+            ("by_legacy_label", "By legacy label"),
+        ]:
+            data = buy_comp.get(section, {})
+            if data:
+                total_buy = buy_comp["count"]
+                rows = sorted(data.items(), key=lambda x: x[1], reverse=True)
+                add(f"**{title}:**")
+                add("  ".join(f"{k}: {v} ({_pct(v, total_buy)}%)" for k, v in rows))
+                add("")
+
+    if fp_ana.get("total_fp_count", 0) > 0:
+        add("## False Positive Analytics (v3.6)")
+        add(f"Total FP candidates (5d < -5%): **{fp_ana['total_fp_count']}**")
+        add("")
+        ss_data = fp_ana.get("by_structure_score_bucket", {})
+        if ss_data:
+            add("**By structure_score bucket:**")
+            add("  ".join(
+                f"{bkt}: {v['count']} ({v['pct_of_all_fp']}%)"
+                for bkt, v in ss_data.items()
+            ))
+            add("")
+        seq_data = fp_ana.get("by_sequence", {})
+        if seq_data:
+            add("**By sequence:**")
+            add("  ".join(
+                f"{seq}: {v['count']} ({v['pct_of_all_fp']}%)"
+                for seq, v in seq_data.items()
+            ))
+            add("")
 
     # ── Section C: Top False Positives ────────────────────────────────────────
     add("## Top False Positives")
