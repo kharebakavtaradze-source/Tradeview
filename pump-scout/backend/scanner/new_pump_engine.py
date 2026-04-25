@@ -1013,8 +1013,11 @@ def _final_label(score):
     # — lowered across the board to rescue good cases from NONE (+2.6% avg leaked there)
     # — FIRE loosened slightly (single-case sample, old threshold was unreachable)
     # — STRONG kept meaningful (avg +2.4% in replay, best reliable label)
-    if score >= 62:  return "NEW_PUMP_FIRE"       # was 70
-    if score >= 46:  return "NEW_PUMP_STRONG"     # was 55
+    # v3.5 (R21, n=906, Apr 2026):
+    # — FIRE raised 62→68: R21 FIRE n=4 -0.38% vs NONE +0.51% — no edge, tighten gate
+    # — STRONG raised 46→55: R21 STRONG -1.97%, structure_score 46_65 bucket -0.70% n=212
+    if score >= 68:  return "NEW_PUMP_FIRE"       # was 62
+    if score >= 55:  return "NEW_PUMP_STRONG"     # was 46
     if score >= 34:  return "NEW_PUMP_SETUP"      # was 40
     if score >= 22:  return "NEW_PUMP_TRIGGER_ONLY"  # was 25
     if score >=  8:  return "NEW_PUMP_WEAK"       # was 10
@@ -1257,6 +1260,10 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
       • extreme_anomaly_day_count_pre PENALIZE — added -1/-2/-4 pts for stale spikes (#6a).
       • b2_count_pre PENALIZE (FP 2×) — added cycling penalty when no active G4 (#10a).
       • bull_stack_days_pre INCREASE (4x median=14d) — extended threshold to 14+ → +5 (#1).
+      v3.5 — Replay R21 (n=906, run_id=21, 2026-03-01..2026-04-24):
+      • FIRE threshold 62→68: R21 FIRE n=4 -0.38% vs NONE +0.51% — no edge, tighten gate.
+      • STRONG threshold 46→55: R21 STRONG -1.97% 5d, structure_score 46_65 -0.70% n=212.
+      • ISOLATED_G4 WATCH→AVOID: R21 n=267 -1.63% 5d — trigger without setup is negative.
     """
     flags: list = []
     structure_ready = state in ("TRIGGERED", "CONFIRMED")
@@ -1393,10 +1400,10 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
             flags.append("ce_accumulation_ready")
         return "WATCH", f"{seq_lbl} — watch for trigger", flags
 
-    # Isolated G4 edge case (non-impulse path): borderline positive, watch only.
+    # R21: ISOLATED_G4 n=267 -1.63% 5d — demoted from WATCH to AVOID.
     if seq_lbl == "ISOLATED_G4":
-        flags.append("watch_isolated_trigger_only")
-        return "WATCH", "ISOLATED_G4 — trigger without setup", flags
+        flags.append("avoid_isolated_g4")
+        return "AVOID", "ISOLATED_G4 — trigger without setup, negative expectation", flags
 
     # ── Default AVOID ─────────────────────────────────────────────────────────
     flags.append("avoid_no_setup")
