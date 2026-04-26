@@ -478,6 +478,93 @@ function S11_StructurePhase({ np }) {
   );
 }
 
+// ── D / WLNBB confluence section ─────────────────────────────────────────────
+
+const _CONF_COLOR = {
+  D4_BEUP: '#00e676', D6_BEUP: '#00e676', D3_BEUP: '#69f0ae',
+  D4_L34:  '#00b0ff', D6_L34:  '#00b0ff', D3_L34:  '#40c4ff',
+  D4_L43:  '#ff9800', D6_L43:  '#ff9800', D3_L43:  '#ffcc02',
+  SECONDARY_D_CONFLUENCE: '#b39ddb',
+  NONE: '#555',
+};
+
+const _D_COLOR = { D1: '#ff9900', D3: '#38c5e5', D4: '#0095ff', D6: '#ff3333', D9: '#eb00b8', D11: '#aaaaaa' };
+const _W_COLOR = { L34: '#00e5ff', L43: '#ffd600', BE_UP: '#00e676' };
+
+function S12_DWlnbb({ d_wlnbb: dw }) {
+  if (!dw) return null;
+  const active_d    = dw.active_d_signals    || [];
+  const active_w    = dw.active_wlnbb_signals || [];
+  const conf_type   = dw.d_confluence_type || 'NONE';
+  const hasAnything = active_d.length > 0 || active_w.length > 0;
+  if (!hasAnything && conf_type === 'NONE') return null;
+
+  const confColor = _CONF_COLOR[conf_type] || '#888';
+  const core_flags = [
+    dw.core_d_l34  && 'core_d_l34',
+    dw.core_d_l43  && 'core_d_l43',
+    dw.core_d_beup && 'core_d_beup',
+    dw.secondary_d_confluence && !dw.d_core_any && 'secondary_d_confl',
+  ].filter(Boolean);
+
+  return (
+    <SecCard title="D / WLNBB Confluence">
+      {/* Confluence type badge */}
+      {conf_type !== 'NONE' && (
+        <div style={{ marginBottom: 8 }}>
+          <span style={{
+            padding: '3px 10px', borderRadius: 4, fontSize: 11, fontWeight: 800,
+            color: confColor, background: confColor + '22',
+            border: `1px solid ${confColor}44`, letterSpacing: '0.06em',
+          }}>{conf_type.replace(/_/g, ' ')}</span>
+        </div>
+      )}
+
+      {/* Active D signals */}
+      {active_d.length > 0 && (
+        <div style={{ marginBottom: 6 }}>
+          <span style={{ fontSize: 10, color: '#666', marginRight: 6 }}>D:</span>
+          {active_d.map(sig => (
+            <span key={sig} style={{
+              fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 3, marginRight: 4,
+              color: _D_COLOR[sig] || '#ccc', background: (_D_COLOR[sig] || '#ccc') + '22',
+            }}>{sig}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Active WLNBB signals */}
+      {active_w.length > 0 && (
+        <div style={{ marginBottom: 6 }}>
+          <span style={{ fontSize: 10, color: '#666', marginRight: 6 }}>WLNBB:</span>
+          {active_w.map(sig => (
+            <span key={sig} style={{
+              fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 3, marginRight: 4,
+              color: _W_COLOR[sig] || '#ccc', background: (_W_COLOR[sig] || '#ccc') + '22',
+            }}>{sig.replace(/_/g, ' ')}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Core flags */}
+      {core_flags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+          {core_flags.map(f => (
+            <span key={f} style={{
+              fontSize: 10, padding: '1px 6px', borderRadius: 3,
+              background: '#ffffff0c', color: '#aaa',
+            }}>{f.replace(/_/g, ' ')}</span>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 9, color: '#444', marginTop: 4, fontStyle: 'italic' }}>
+        Research only — not used in scoring
+      </div>
+    </SecCard>
+  );
+}
+
 // ── Main drawer ───────────────────────────────────────────────────────────────
 
 export default function NpDrawer({ sym, dataCache, loading, error, onClose }) {
@@ -515,6 +602,7 @@ export default function NpDrawer({ sym, dataCache, loading, error, onClose }) {
               <S7_Market market_context={payload.market_context} />
               <S8_AI ai_analysis={payload.ai_analysis} />
               <S9_RedFlags red_flags={payload.red_flags} />
+              <S12_DWlnbb d_wlnbb={payload.d_wlnbb} />
               <S10_Verdict final_verdict={payload.final_verdict} />
             </>
           )}
