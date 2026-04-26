@@ -342,6 +342,54 @@ def _build_news_section(raw: dict) -> dict:
     }
 
 
+def _build_d_wlnbb_section(bars: list[dict], np_result: dict) -> dict:
+    """
+    Build D / WLNBB confluence section for the drawer.
+    Research-only — not used in scoring/routing.
+    """
+    has_runner_fields = np_result.get("d_confluence_type") is not None
+
+    if has_runner_fields:
+        return {
+            "d1":  np_result.get("d1",  False),
+            "d3":  np_result.get("d3",  False),
+            "d4":  np_result.get("d4",  False),
+            "d6":  np_result.get("d6",  False),
+            "d9":  np_result.get("d9",  False),
+            "d11": np_result.get("d11", False),
+            "d_core_any":      np_result.get("d_core_any",      False),
+            "d_secondary_any": np_result.get("d_secondary_any", False),
+            "active_d_signals": np_result.get("active_d_signals", []),
+            "l34_wlnbb":      np_result.get("l34_wlnbb",      False),
+            "l43_wlnbb":      np_result.get("l43_wlnbb",      False),
+            "be_up_wlnbb":    np_result.get("be_up_wlnbb",    False),
+            "break_up_wlnbb": np_result.get("break_up_wlnbb", False),
+            "bx_up_wlnbb":    np_result.get("bx_up_wlnbb",    False),
+            "active_wlnbb_signals": np_result.get("active_wlnbb_signals", []),
+            "d3_l34":  np_result.get("d3_l34",  False), "d4_l34":  np_result.get("d4_l34",  False), "d6_l34":  np_result.get("d6_l34",  False),
+            "d3_l43":  np_result.get("d3_l43",  False), "d4_l43":  np_result.get("d4_l43",  False), "d6_l43":  np_result.get("d6_l43",  False),
+            "d3_beup": np_result.get("d3_beup", False), "d4_beup": np_result.get("d4_beup", False), "d6_beup": np_result.get("d6_beup", False),
+            "core_d_l34":  np_result.get("core_d_l34",  False),
+            "core_d_l43":  np_result.get("core_d_l43",  False),
+            "core_d_beup": np_result.get("core_d_beup", False),
+            "secondary_d_confluence": np_result.get("secondary_d_confluence", False),
+            "d_confluence_type":      np_result.get("d_confluence_type", "NONE"),
+            "source": "scan_cache",
+        }
+
+    if not bars or len(bars) < 30:
+        return {"d_confluence_type": "NONE", "active_d_signals": [], "active_wlnbb_signals": [], "source": "unavailable"}
+
+    try:
+        from scanner.manual_d_wlnbb_features import compute_d_wlnbb_confluence
+        result = compute_d_wlnbb_confluence(bars)
+        result["source"] = "fresh_compute"
+        return result
+    except Exception as e:
+        logger.warning(f"[NpDrawer] d_wlnbb fresh compute failed: {e}")
+        return {"d_confluence_type": "NONE", "active_d_signals": [], "active_wlnbb_signals": [], "source": "error"}
+
+
 def _build_technical_context(bars: list[dict], np: dict) -> dict:
     if not bars or len(bars) < 20:
         return {}
@@ -547,6 +595,7 @@ async def build_drawer_payload(symbol: str) -> dict:
 
     red_flags     = _build_red_flags(np_result, news_raw or {}, identity)
     final_verdict = _build_final_verdict(np_result, red_flags, news_section)
+    d_wlnbb       = _build_d_wlnbb_section(bars, np_result)
 
     payload = {
         "ok":               True,
@@ -561,6 +610,7 @@ async def build_drawer_payload(symbol: str) -> dict:
         "ai_analysis":      None,
         "red_flags":        red_flags,
         "final_verdict":    final_verdict,
+        "d_wlnbb":          d_wlnbb,
     }
 
     _store(symbol, payload)
