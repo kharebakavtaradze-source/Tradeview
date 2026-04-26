@@ -962,15 +962,68 @@ async def build_research_bundle(run_id: int) -> dict:
     }
 
     # ── Phase 12: Manual D + WLNBB confluence research analytics ────────────────
-    # Uses candidate snapshot fields stored by new_pump_runner.
-    # Falls back silently when fields absent (pre-feature candidates).
+    # D/WLNBB fields are written to candidate_snapshot_json in replay_engine.py
+    # as top-level keys (merged via **_dw into snapshot). For in-memory candidates
+    # they are also top-level. _cget checks both paths.
 
     def _cget(c, key, default=False):
-        """Get field from candidate, checking top-level and snapshot."""
+        """
+        Get field from candidate checking in priority order:
+          1. top-level candidate dict (in-memory path)
+          2. c["new_pump"] dict (legacy path for np-derived fields)
+          3. c["snapshot"] dict (persisted path — candidate_snapshot_json)
+        """
         v = c.get(key)
         if v is None:
             v = (c.get("new_pump") or {}).get(key)
+        if v is None:
+            v = (c.get("snapshot") or {}).get(key)
         return v if v is not None else default
+
+    # Coverage: how many candidates have D/WLNBB fields populated at all
+    d_wlnbb_coverage_count = sum(
+        1 for c in candidates
+        if (c.get("snapshot") or {}).get("d_confluence_type") is not None
+        or c.get("d_confluence_type") is not None
+    )
+    d_signal_nonzero_count = sum(
+        1 for c in candidates
+        if _cget(c, "d_core_any") or _cget(c, "d_secondary_any")
+    )
+    wlnbb_signal_nonzero_count = sum(
+        1 for c in candidates
+        if _cget(c, "l34_wlnbb") or _cget(c, "l43_wlnbb") or _cget(c, "be_up_wlnbb")
+    )
+    d_wlnbb_coverage_pct = _pct(d_wlnbb_coverage_count, len(candidates)) if candidates else 0.0
+
+    d_wlnbb_warning: Optional[str] = None
+    if d_wlnbb_coverage_count == 0:
+        d_wlnbb_warning = (
+            "D/WLNBB fields absent — this run pre-dates the feature. "
+            "Re-run replay to populate D/WLNBB analytics."
+        )
+    elif d_signal_nonzero_count == 0 and wlnbb_signal_nonzero_count == 0:
+        d_wlnbb_warning = (
+            "D/WLNBB computed but no signals fired in this run. "
+            "Check candle quality or RSI filter thresholds."
+        )
+
+    # Debug examples: first 10 candidates with any D/WLNBB signal true
+    d_wlnbb_examples = [
+        {
+            "symbol":              c.get("symbol"),
+            "scan_date":           c.get("scan_date"),
+            "d_confluence_type":   _cget(c, "d_confluence_type", "NONE"),
+            "active_d_signals":    _cget(c, "active_d_signals",  []),
+            "active_wlnbb_signals":_cget(c, "active_wlnbb_signals", []),
+            "d_core_any":          bool(_cget(c, "d_core_any")),
+            "l34_wlnbb":           bool(_cget(c, "l34_wlnbb")),
+            "be_up_wlnbb":         bool(_cget(c, "be_up_wlnbb")),
+        }
+        for c in candidates
+        if _cget(c, "d_core_any") or _cget(c, "d_secondary_any")
+        or _cget(c, "l34_wlnbb") or _cget(c, "l43_wlnbb") or _cget(c, "be_up_wlnbb")
+    ][:10]
 
     perf_d_signal = _build_perf_buckets(
         candidates, outcome_map,
@@ -1101,6 +1154,12 @@ async def build_research_bundle(run_id: int) -> dict:
         "buy_candidate_composition":                       buy_composition,
         "false_positive_analytics":                        false_positive_analytics,
         # ── Manual D + WLNBB confluence research ─────────────────────────────
+        "d_wlnbb_coverage_count":           d_wlnbb_coverage_count,
+        "d_wlnbb_coverage_pct":             d_wlnbb_coverage_pct,
+        "d_signal_nonzero_count":           d_signal_nonzero_count,
+        "wlnbb_signal_nonzero_count":       wlnbb_signal_nonzero_count,
+        "d_wlnbb_warning":                  d_wlnbb_warning,
+        "d_wlnbb_examples":                 d_wlnbb_examples,
         "performance_by_d_signal":          perf_d_signal,
         "performance_by_wlnbb_signal":      perf_wlnbb_signal,
         "performance_by_d_confluence_type": perf_d_confluence_type,
