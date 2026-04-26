@@ -142,18 +142,29 @@ def _build_red_flags(np: dict, news: dict, identity: dict) -> list[str]:
     age_g4    = np.get("age_g4")
     age_b2    = np.get("age_b2")
     seq       = np.get("new_pump_sequence_label", "NONE")
+    state     = np.get("state", "")
 
     best_setup = min((a for a in (age_l34, age_fri34) if a is not None), default=None)
     if best_setup is None:
         flags.append("no_setup_signal")
     elif best_setup > 8:
+        # Stale setup age — show as caution, but do NOT treat as late confirm
         flags.append("stale_setup")
 
     if seq in ("ISOLATED_G4", "ISOLATED_B2"):
         flags.append("isolated_signal")
 
-    if seq in ("FULL_FRI34_G4_B2", "FULL_L34_G4_B2", "CONFIRM_AFTER_G4"):
-        flags.append("late_confirm_sequence")  # replay shows these underperform
+    # Late Confirm: only flag when B2 is absent/stale OR state is not CONFIRMED.
+    # FULL sequences with fresh B2 (age_b2 <= 2) + CONFIRMED state are NOT late —
+    # v3.6 BUY whitelist explicitly includes FULL_FRI34_G4_B2 and FULL_L34_G4_B2.
+    if seq in ("FULL_FRI34_G4_B2", "FULL_L34_G4_B2"):
+        if state == "CONFIRMED" and age_b2 is not None and age_b2 <= 2:
+            pass  # fresh confirmed — not late
+        elif age_b2 is not None and age_b2 > 2:
+            flags.append("late_confirm_sequence")
+        # else: no B2 age data or non-confirmed — treat as neutral, not late
+    elif seq == "CONFIRM_AFTER_G4":
+        flags.append("late_confirm_sequence")
 
     avg_vol = identity.get("avg_volume_20d") or 0
     if avg_vol and avg_vol < 200_000:
@@ -182,24 +193,61 @@ def _build_red_flags(np: dict, news: dict, identity: dict) -> list[str]:
 
 
 def _build_final_verdict(np: dict, flags: list[str], news: dict) -> dict:
-    seq   = np.get("new_pump_sequence_label", "NONE")
-    score = np.get("new_pump_score", 0) or 0
-    label = np.get("new_pump_label", "NEW_PUMP_NONE")
+    seq      = np.get("new_pump_sequence_label", "NONE")
+    score    = np.get("new_pump_score", 0) or 0
+    label    = np.get("new_pump_label", "NEW_PUMP_NONE")
+    decision = np.get("decision")                   # v3.6 engine decision (authoritative)
+    d_reason = np.get("decision_reason") or ""
+    ss       = np.get("structure_score") or 0
 
-    dangerous_flags = {"dilution_risk", "reverse_split_risk", "late_confirm_sequence"}
-    has_danger = bool(set(flags) & dangerous_flags)
-    has_catalyst = news.get("has_real_news") or bool(news.get("catalyst_summary"))
+    # Hard invalidation — ONLY dilution / reverse split override BUY_CANDIDATE.
+    # late_confirm, no_catalyst, mixed_catalyst are informational cautions, not hard blocks.
+    hard_flags = {"dilution_risk", "reverse_split_risk"}
+    has_hard_danger = bool(set(flags) & hard_flags)
 
-    if has_danger:
+    if has_hard_danger:
         return {
+            "technical_decision": decision or "AVOID",
             "verdict": "avoid",
-            "short_reason": "Dilution risk, reverse split, or late confirm signal detected",
+            "short_reason": "Dilution or reverse-split risk detected — hard invalidation",
             "key_confirmation_note": None,
-            "invalidation_note": "Dilution or reverse split would confirm avoid",
+            "invalidation_note": "Dilution or reverse split confirmed — hard invalidation",
         }
+
+    # ── v3.6 engine decision is the primary authority ────────────────────────
+    if decision == "BUY_CANDIDATE":
+        return {
+            "technical_decision": "BUY_CANDIDATE",
+            "verdict": "strong_setup",
+            "short_reason": d_reason or f"BUY_CANDIDATE — structure confirmed (score {ss})",
+            "key_confirmation_note": "Structure phase confirmed by v3.6 engine",
+            "invalidation_note": "Close below setup low or volume dry-up invalidates",
+        }
+
+    if decision == "WATCH":
+        return {
+            "technical_decision": "WATCH",
+            "verdict": "watch",
+            "short_reason": d_reason or f"WATCH — {seq}",
+            "key_confirmation_note": None,
+            "invalidation_note": None,
+        }
+
+    if decision in ("AVOID", "IMPULSE_RISK"):
+        return {
+            "technical_decision": decision,
+            "verdict": "avoid",
+            "short_reason": d_reason or f"{decision} — {seq}",
+            "key_confirmation_note": None,
+            "invalidation_note": None,
+        }
+
+    # ── Legacy fallback (no decision field — pre-v3.6 cache entry) ───────────
+    has_catalyst = news.get("has_real_news") or bool(news.get("catalyst_summary"))
 
     if label in ("NEW_PUMP_FIRE", "NEW_PUMP_STRONG") and seq.startswith("TRIGGER_AFTER"):
         return {
+            "technical_decision": None,
             "verdict": "strong_setup",
             "short_reason": f"Strong score ({score:.0f}) with clean trigger sequence",
             "key_confirmation_note": "Watch for B2 confirmation in next 1–3 bars",
@@ -208,6 +256,7 @@ def _build_final_verdict(np: dict, flags: list[str], news: dict) -> dict:
 
     if label in ("NEW_PUMP_STRONG", "NEW_PUMP_SETUP") and has_catalyst:
         return {
+            "technical_decision": None,
             "verdict": "interesting",
             "short_reason": f"{seq} + catalyst present",
             "key_confirmation_note": "Catalyst + structure aligned",
@@ -216,21 +265,15 @@ def _build_final_verdict(np: dict, flags: list[str], news: dict) -> dict:
 
     if label in ("NEW_PUMP_TRIGGER_ONLY", "NEW_PUMP_SETUP") and "stale_setup" not in flags:
         return {
+            "technical_decision": None,
             "verdict": "watch",
-            "short_reason": f"Early structure visible — not confirmed",
+            "short_reason": "Early structure visible — not confirmed",
             "key_confirmation_note": "Watch for G4 or B2 follow-through",
             "invalidation_note": "No follow-through in 3–5 bars = invalidated",
         }
 
-    if seq in ("FULL_FRI34_G4_B2", "FULL_L34_G4_B2", "CONFIRM_AFTER_G4"):
-        return {
-            "verdict": "too_late",
-            "short_reason": "Full sequence already confirmed — replay avg negative",
-            "key_confirmation_note": None,
-            "invalidation_note": "Enter only on fresh pullback reset",
-        }
-
     return {
+        "technical_decision": None,
         "verdict": "watch",
         "short_reason": f"Score {score:.0f}, sequence {seq}",
         "key_confirmation_note": None,
@@ -474,6 +517,14 @@ async def build_drawer_payload(symbol: str) -> dict:
         "new_pump_confirm_score":  np_result.get("new_pump_confirm_score"),
         "new_pump_modifier_score": np_result.get("new_pump_modifier_score"),
         "explanation":             _build_np_explanation(np_result),
+        # v3.6 decision authority fields
+        "decision":                np_result.get("decision"),
+        "decision_reason":         np_result.get("decision_reason"),
+        "decision_flags":          np_result.get("decision_flags"),
+        "structure_phase":         np_result.get("structure_phase"),
+        "structure_score":         np_result.get("structure_score"),
+        "structure_advisory":      np_result.get("structure_advisory"),
+        "state":                   np_result.get("state"),
     }
 
     signal_timeline  = _build_signal_timeline(np_result)
