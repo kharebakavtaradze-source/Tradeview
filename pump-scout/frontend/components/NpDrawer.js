@@ -481,11 +481,22 @@ function S11_StructurePhase({ np }) {
 // ── D / WLNBB confluence section ─────────────────────────────────────────────
 
 const _CONF_COLOR = {
-  D4_BEUP: '#00e676', D6_BEUP: '#00e676', D3_BEUP: '#69f0ae',
-  D4_L34:  '#00b0ff', D6_L34:  '#00b0ff', D3_L34:  '#40c4ff',
-  D4_L43:  '#ff9800', D6_L43:  '#ff9800', D3_L43:  '#ffcc02',
-  SECONDARY_D_CONFLUENCE: '#b39ddb',
-  NONE: '#555',
+  // Window D-then-BE Up (highest tier — bright green)
+  D4_THEN_BEUP_5B: '#00e676', D6_THEN_BEUP_5B: '#00e676', D3_THEN_BEUP_5B: '#69f0ae',
+  // Same-bar BE Up
+  D4_BEUP: '#00c853', D6_BEUP: '#00c853', D3_BEUP: '#69f0ae',
+  // Window L34→D (blue family)
+  L34_THEN_D4_3B: '#00b0ff', L34_THEN_D6_3B: '#00b0ff', L34_THEN_D3_3B: '#40c4ff',
+  // Same-bar L34
+  D4_L34: '#0288d1', D6_L34: '#0288d1', D3_L34: '#40c4ff',
+  // Window L43→D (orange family)
+  L43_THEN_D4_3B: '#ff9800', L43_THEN_D6_3B: '#ff9800', L43_THEN_D3_3B: '#ffcc02',
+  // Same-bar L43
+  D4_L43: '#e65100', D6_L43: '#e65100', D3_L43: '#ffcc02',
+  // Secondary
+  SECONDARY_D_WINDOW: '#ce93d8', SECONDARY_D_CONFLUENCE: '#b39ddb',
+  // D only / none
+  D_ONLY: '#607d8b', NONE: '#555',
 };
 
 const _D_COLOR = { D1: '#ff9900', D3: '#38c5e5', D4: '#0095ff', D6: '#ff3333', D9: '#eb00b8', D11: '#aaaaaa' };
@@ -495,11 +506,16 @@ function S12_DWlnbb({ d_wlnbb: dw }) {
   if (!dw) return null;
   const active_d    = dw.active_d_signals    || [];
   const active_w    = dw.active_wlnbb_signals || [];
-  const conf_type   = dw.d_confluence_type || 'NONE';
+  // Prefer v2 type; fall back to v1 for backward compat
+  const conf_type_v2 = dw.d_confluence_type_v2 || dw.d_confluence_type || 'NONE';
+  const conf_type_v1 = dw.d_confluence_type || 'NONE';
+  const window_expl  = dw.window_explanation || '';
+  const family       = dw.d_confluence_family || 'NONE';
   const hasAnything = active_d.length > 0 || active_w.length > 0;
-  if (!hasAnything && conf_type === 'NONE') return null;
+  if (!hasAnything && conf_type_v2 === 'NONE') return null;
 
-  const confColor = _CONF_COLOR[conf_type] || '#888';
+  const confColor  = _CONF_COLOR[conf_type_v2] || '#888';
+  const isWindow   = family === 'D_THEN_BEUP' || family === 'L34_THEN_D' || family === 'L43_THEN_D';
   const core_flags = [
     dw.core_d_l34  && 'core_d_l34',
     dw.core_d_l43  && 'core_d_l43',
@@ -509,14 +525,27 @@ function S12_DWlnbb({ d_wlnbb: dw }) {
 
   return (
     <SecCard title="D / WLNBB Confluence">
-      {/* Confluence type badge */}
-      {conf_type !== 'NONE' && (
-        <div style={{ marginBottom: 8 }}>
+      {/* v2 confluence type badge */}
+      {conf_type_v2 !== 'NONE' && (
+        <div style={{ marginBottom: window_expl ? 4 : 8 }}>
           <span style={{
             padding: '3px 10px', borderRadius: 4, fontSize: 11, fontWeight: 800,
             color: confColor, background: confColor + '22',
             border: `1px solid ${confColor}44`, letterSpacing: '0.06em',
-          }}>{conf_type.replace(/_/g, ' ')}</span>
+          }}>{conf_type_v2.replace(/_/g, ' ')}</span>
+          {isWindow && (
+            <span style={{
+              marginLeft: 6, fontSize: 9, padding: '1px 5px', borderRadius: 3,
+              background: '#ffffff14', color: '#aaa', verticalAlign: 'middle',
+            }}>WINDOW</span>
+          )}
+        </div>
+      )}
+
+      {/* Window explanation text */}
+      {window_expl && (
+        <div style={{ fontSize: 10, color: '#888', marginBottom: 8, fontStyle: 'italic' }}>
+          {window_expl}
         </div>
       )}
 

@@ -1196,6 +1196,51 @@ async def sector_strength_by_sector(sector: str):
     return {**data, "tickers_detail": tickers_detail}
 
 
+# ─── Sectors v2 routes ────────────────────────────────────────────────────────
+
+@app.get("/api/sectors/overview")
+async def sectors_overview():
+    """Multi-timeframe sector performance, EMA trend, RS, RRG coords, and risk mode. 30-min cache."""
+    from sectors.sector_engine import get_sector_snapshot
+    return await get_sector_snapshot()
+
+
+@app.get("/api/sectors/rrg")
+async def sectors_rrg():
+    """Normalized RRG coordinates and weekly trail for each SPDR sector ETF. 30-min cache."""
+    from sectors.sector_engine import get_rrg_data
+    return await get_rrg_data()
+
+
+@app.get("/api/sectors/heatmap")
+async def sectors_heatmap():
+    """Sector heatmap data — same as overview but returns only the sectors sub-dict."""
+    from sectors.sector_engine import get_sector_snapshot
+    snap = await get_sector_snapshot()
+    return {
+        "as_of":     snap.get("as_of"),
+        "risk_mode": snap.get("risk_mode"),
+        "sectors":   snap.get("sectors", {}),
+    }
+
+
+@app.get("/api/sectors/top-movers")
+async def sectors_top_movers():
+    """Top scan movers for each sector ETF (based on holdings membership)."""
+    from sectors.sector_engine import get_all_top_movers
+    return await get_all_top_movers()
+
+
+@app.get("/api/sectors/{etf}")
+async def sector_detail(etf: str):
+    """Full detail for one sector ETF: returns, trend, RS, top holdings, top movers."""
+    from sectors.sector_engine import get_sector_detail, SECTOR_ETFS
+    etf = etf.upper()
+    if etf not in SECTOR_ETFS:
+        raise HTTPException(status_code=404, detail=f"Unknown sector ETF: {etf}")
+    return await get_sector_detail(etf)
+
+
 # ─── Admin / Maintenance routes ───────────────────────────────────────────────
 
 @app.get("/api/admin/run-new-pump-scan")
