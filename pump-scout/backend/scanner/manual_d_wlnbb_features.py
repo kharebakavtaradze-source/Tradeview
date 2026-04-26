@@ -482,119 +482,369 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     """
     Compute Manual D + WLNBB confluence features for the LAST bar of candles.
 
-    Returns a flat dict of all research fields for the most recent bar.
-    Safe for scanner use: calls compute_manual_d_features and compute_wlnbb_features
-    which already enforce no future leakage.
+    Includes:
+      - Phase 3: same-bar confluences (original + _same suffix + secondary)
+      - Phase 4: L34/L43 → D window (1-3 bars before current)
+      - Phase 5: D → BE Up window (1-5 bars before current)
+      - Phase 6: d_confluence_type_v2 (22-level) + family/timing/core_signal/
+                 wlnbb_signal/window_explanation metadata
+
+    Research-only: no future leakage.
     """
     if not candles:
         return _empty_confluence()
 
-    d_series    = compute_manual_d_features(candles)
+    d_series     = compute_manual_d_features(candles)
     wlnbb_series = compute_wlnbb_features(candles)
 
-    last_d    = d_series[-1]
-    last_wlnbb = wlnbb_series[-1]
+    i  = len(candles) - 1
+    ld = d_series[i]
+    lw = wlnbb_series[i]
 
-    d1  = last_d["d1"]
-    d3  = last_d["d3"]
-    d4  = last_d["d4"]
-    d6  = last_d["d6"]
-    d9  = last_d["d9"]
-    d11 = last_d["d11"]
-
-    l34  = last_wlnbb["l34_wlnbb"]
-    l43  = last_wlnbb["l43_wlnbb"]
-    beup = last_wlnbb["be_up_wlnbb"]
-
+    # ── Current-bar D signals ─────────────────────────────────────────────────
+    d1  = ld["d1"];  d3  = ld["d3"];  d4  = ld["d4"]
+    d6  = ld["d6"];  d9  = ld["d9"];  d11 = ld["d11"]
     d_core_any      = d3 or d4 or d6
     d_secondary_any = d1 or d9 or d11
 
-    # Same-bar confluences
+    # ── Current-bar WLNBB signals ─────────────────────────────────────────────
+    l34  = lw["l34_wlnbb"]
+    l43  = lw["l43_wlnbb"]
+    beup = lw["be_up_wlnbb"]
+
+    # ── Lookback helpers (prev 1..n bars into pre-computed series) ────────────
+    def _d_in_prev(key: str, n: int) -> bool:
+        for k in range(1, n + 1):
+            j = i - k
+            if j >= 0 and d_series[j].get(key):
+                return True
+        return False
+
+    def _w_in_prev(key: str, n: int) -> bool:
+        for k in range(1, n + 1):
+            j = i - k
+            if j >= 0 and wlnbb_series[j].get(key):
+                return True
+        return False
+
+    def _d_offset(key: str, n: int) -> Optional[int]:
+        for k in range(1, n + 1):
+            j = i - k
+            if j >= 0 and d_series[j].get(key):
+                return k
+        return None
+
+    def _w_offset(key: str, n: int) -> Optional[int]:
+        for k in range(1, n + 1):
+            j = i - k
+            if j >= 0 and wlnbb_series[j].get(key):
+                return k
+        return None
+
+    # ── Phase 3: Same-bar confluences ─────────────────────────────────────────
+    # Core D × WLNBB (original fields, backward-compat)
     d3_l34  = d3 and l34;   d4_l34  = d4 and l34;   d6_l34  = d6 and l34
     d3_l43  = d3 and l43;   d4_l43  = d4 and l43;   d6_l43  = d6 and l43
     d3_beup = d3 and beup;  d4_beup = d4 and beup;  d6_beup = d6 and beup
 
+    # _same suffix aliases for core (equal to originals; named to contrast window fields)
+    d3_l34_same = d3_l34;  d4_l34_same = d4_l34;  d6_l34_same = d6_l34
+    d3_l43_same = d3_l43;  d4_l43_same = d4_l43;  d6_l43_same = d6_l43
+    d3_beup_same = d3_beup; d4_beup_same = d4_beup; d6_beup_same = d6_beup
+
+    # Secondary D × WLNBB same-bar
+    d1_l34_same  = d1 and l34;  d9_l34_same  = d9 and l34;  d11_l34_same  = d11 and l34
+    d1_l43_same  = d1 and l43;  d9_l43_same  = d9 and l43;  d11_l43_same  = d11 and l43
+    d1_beup_same = d1 and beup; d9_beup_same = d9 and beup; d11_beup_same = d11 and beup
+
+    # Aggregate booleans
     core_d_l34  = d_core_any and l34
     core_d_l43  = d_core_any and l43
     core_d_beup = d_core_any and beup
     secondary_d_confluence = d_secondary_any and (l34 or l43 or beup)
 
-    # d_confluence_type — priority: BEUP > L34 > L43, D4 > D6 > D3 > secondary
-    if d4_beup:
-        d_confluence_type = "D4_BEUP"
-    elif d6_beup:
-        d_confluence_type = "D6_BEUP"
-    elif d3_beup:
-        d_confluence_type = "D3_BEUP"
-    elif d4_l34:
-        d_confluence_type = "D4_L34"
-    elif d6_l34:
-        d_confluence_type = "D6_L34"
-    elif d3_l34:
-        d_confluence_type = "D3_L34"
-    elif d4_l43:
-        d_confluence_type = "D4_L43"
-    elif d6_l43:
-        d_confluence_type = "D6_L43"
-    elif d3_l43:
-        d_confluence_type = "D3_L43"
-    elif secondary_d_confluence:
-        d_confluence_type = "SECONDARY_D_CONFLUENCE"
-    else:
-        d_confluence_type = "NONE"
+    # _same aggregate aliases
+    core_d_same      = d_core_any
+    secondary_d_same = d_secondary_any
+    core_d_l34_same  = core_d_l34
+    core_d_l43_same  = core_d_l43
+    core_d_beup_same = core_d_beup
 
-    active_d: list[str] = []
-    for sig, val in [("D1",d1),("D3",d3),("D4",d4),("D6",d6),("D9",d9),("D11",d11)]:
-        if val:
-            active_d.append(sig)
+    # ── Phase 4: L34/L43 → D window (L34/L43 fired 1-3 bars before D now) ─────
+    _l34_prev3 = _w_in_prev("l34_wlnbb", 3)
+    _l43_prev3 = _w_in_prev("l43_wlnbb", 3)
 
+    l34_then_d3_3b     = d3  and _l34_prev3
+    l34_then_d4_3b     = d4  and _l34_prev3
+    l34_then_d6_3b     = d6  and _l34_prev3
+    l34_then_d1_3b     = d1  and _l34_prev3
+    l34_then_d9_3b     = d9  and _l34_prev3
+    l34_then_d11_3b    = d11 and _l34_prev3
+    l34_then_core_d_3b = d_core_any and _l34_prev3
+
+    l43_then_d3_3b     = d3  and _l43_prev3
+    l43_then_d4_3b     = d4  and _l43_prev3
+    l43_then_d6_3b     = d6  and _l43_prev3
+    l43_then_d1_3b     = d1  and _l43_prev3
+    l43_then_d9_3b     = d9  and _l43_prev3
+    l43_then_d11_3b    = d11 and _l43_prev3
+    l43_then_core_d_3b = d_core_any and _l43_prev3
+
+    # ── Phase 5: D → BE Up window (D fired 1-5 bars before BE Up now) ─────────
+    d3_then_beup_5b          = beup and _d_in_prev("d3",  5)
+    d4_then_beup_5b          = beup and _d_in_prev("d4",  5)
+    d6_then_beup_5b          = beup and _d_in_prev("d6",  5)
+    d1_then_beup_5b          = beup and _d_in_prev("d1",  5)
+    d9_then_beup_5b          = beup and _d_in_prev("d9",  5)
+    d11_then_beup_5b         = beup and _d_in_prev("d11", 5)
+    core_d_then_beup_5b      = beup and (
+        _d_in_prev("d3", 5) or _d_in_prev("d4", 5) or _d_in_prev("d6", 5)
+    )
+    secondary_d_then_beup_5b = beup and (
+        _d_in_prev("d1", 5) or _d_in_prev("d9", 5) or _d_in_prev("d11", 5)
+    )
+    secondary_d_window = (
+        (d1_then_beup_5b or d9_then_beup_5b or d11_then_beup_5b) or
+        (l34_then_d1_3b  or l34_then_d9_3b  or l34_then_d11_3b) or
+        (l43_then_d1_3b  or l43_then_d9_3b  or l43_then_d11_3b)
+    )
+
+    # ── Phase 6: d_confluence_type_v2 (22-level priority) ────────────────────
+    # Order: D_THEN_BEUP_5B > SAME_BAR_BEUP > L34_THEN_D_3B > SAME_BAR_L34 >
+    #        L43_THEN_D_3B > SAME_BAR_L43 > SECONDARY_WINDOW > SECONDARY_SAME >
+    #        D_ONLY > NONE
+    if   d4_then_beup_5b:        type_v2 = "D4_THEN_BEUP_5B"
+    elif d6_then_beup_5b:        type_v2 = "D6_THEN_BEUP_5B"
+    elif d3_then_beup_5b:        type_v2 = "D3_THEN_BEUP_5B"
+    elif d4_beup:                type_v2 = "D4_BEUP"
+    elif d6_beup:                type_v2 = "D6_BEUP"
+    elif d3_beup:                type_v2 = "D3_BEUP"
+    elif l34_then_d4_3b:         type_v2 = "L34_THEN_D4_3B"
+    elif l34_then_d6_3b:         type_v2 = "L34_THEN_D6_3B"
+    elif l34_then_d3_3b:         type_v2 = "L34_THEN_D3_3B"
+    elif d4_l34:                 type_v2 = "D4_L34"
+    elif d6_l34:                 type_v2 = "D6_L34"
+    elif d3_l34:                 type_v2 = "D3_L34"
+    elif l43_then_d4_3b:         type_v2 = "L43_THEN_D4_3B"
+    elif l43_then_d6_3b:         type_v2 = "L43_THEN_D6_3B"
+    elif l43_then_d3_3b:         type_v2 = "L43_THEN_D3_3B"
+    elif d4_l43:                 type_v2 = "D4_L43"
+    elif d6_l43:                 type_v2 = "D6_L43"
+    elif d3_l43:                 type_v2 = "D3_L43"
+    elif secondary_d_window:     type_v2 = "SECONDARY_D_WINDOW"
+    elif secondary_d_confluence: type_v2 = "SECONDARY_D_CONFLUENCE"
+    elif d_core_any or d_secondary_any: type_v2 = "D_ONLY"
+    else:                        type_v2 = "NONE"
+
+    # Family
+    _FAMILY_MAP = {
+        "D4_THEN_BEUP_5B": "D_THEN_BEUP",   "D6_THEN_BEUP_5B": "D_THEN_BEUP",   "D3_THEN_BEUP_5B": "D_THEN_BEUP",
+        "D4_BEUP":         "SAME_BAR_BEUP",  "D6_BEUP":         "SAME_BAR_BEUP",  "D3_BEUP":         "SAME_BAR_BEUP",
+        "L34_THEN_D4_3B":  "L34_THEN_D",     "L34_THEN_D6_3B":  "L34_THEN_D",     "L34_THEN_D3_3B":  "L34_THEN_D",
+        "D4_L34":          "SAME_BAR_L34",   "D6_L34":          "SAME_BAR_L34",   "D3_L34":          "SAME_BAR_L34",
+        "L43_THEN_D4_3B":  "L43_THEN_D",     "L43_THEN_D6_3B":  "L43_THEN_D",     "L43_THEN_D3_3B":  "L43_THEN_D",
+        "D4_L43":          "SAME_BAR_L43",   "D6_L43":          "SAME_BAR_L43",   "D3_L43":          "SAME_BAR_L43",
+        "SECONDARY_D_WINDOW":     "SECONDARY",
+        "SECONDARY_D_CONFLUENCE": "SECONDARY",
+        "D_ONLY": "D_ONLY", "NONE": "NONE",
+    }
+    family = _FAMILY_MAP.get(type_v2, "NONE")
+
+    # Timing
+    _TIMING_MAP = {
+        "D4_THEN_BEUP_5B": "D_THEN_BEUP_5B", "D6_THEN_BEUP_5B": "D_THEN_BEUP_5B", "D3_THEN_BEUP_5B": "D_THEN_BEUP_5B",
+        "D4_BEUP":         "SAME_BAR",        "D6_BEUP":         "SAME_BAR",        "D3_BEUP":         "SAME_BAR",
+        "L34_THEN_D4_3B":  "BASE_THEN_D_3B",  "L34_THEN_D6_3B":  "BASE_THEN_D_3B",  "L34_THEN_D3_3B":  "BASE_THEN_D_3B",
+        "D4_L34":          "SAME_BAR",        "D6_L34":          "SAME_BAR",        "D3_L34":          "SAME_BAR",
+        "L43_THEN_D4_3B":  "BASE_THEN_D_3B",  "L43_THEN_D6_3B":  "BASE_THEN_D_3B",  "L43_THEN_D3_3B":  "BASE_THEN_D_3B",
+        "D4_L43":          "SAME_BAR",        "D6_L43":          "SAME_BAR",        "D3_L43":          "SAME_BAR",
+        "SECONDARY_D_WINDOW":     "BASE_THEN_D_3B",
+        "SECONDARY_D_CONFLUENCE": "SAME_BAR",
+        "D_ONLY": "NONE", "NONE": "NONE",
+    }
+    timing = _TIMING_MAP.get(type_v2, "NONE")
+
+    # Core signal
+    _CORE_SIG_MAP = {
+        "D4_THEN_BEUP_5B": "D4", "D4_BEUP": "D4", "L34_THEN_D4_3B": "D4", "D4_L34": "D4", "L43_THEN_D4_3B": "D4", "D4_L43": "D4",
+        "D6_THEN_BEUP_5B": "D6", "D6_BEUP": "D6", "L34_THEN_D6_3B": "D6", "D6_L34": "D6", "L43_THEN_D6_3B": "D6", "D6_L43": "D6",
+        "D3_THEN_BEUP_5B": "D3", "D3_BEUP": "D3", "L34_THEN_D3_3B": "D3", "D3_L34": "D3", "L43_THEN_D3_3B": "D3", "D3_L43": "D3",
+    }
+    core_sig = _CORE_SIG_MAP.get(type_v2)
+    if core_sig is None:
+        if d1: core_sig = "D1"
+        elif d9: core_sig = "D9"
+        elif d11: core_sig = "D11"
+        else: core_sig = "NONE"
+
+    # WLNBB signal
+    _WLNBB_SIG_MAP = {
+        "D4_THEN_BEUP_5B": "BE_UP", "D6_THEN_BEUP_5B": "BE_UP", "D3_THEN_BEUP_5B": "BE_UP",
+        "D4_BEUP": "BE_UP", "D6_BEUP": "BE_UP", "D3_BEUP": "BE_UP",
+        "L34_THEN_D4_3B": "L34", "L34_THEN_D6_3B": "L34", "L34_THEN_D3_3B": "L34",
+        "D4_L34": "L34", "D6_L34": "L34", "D3_L34": "L34",
+        "L43_THEN_D4_3B": "L43", "L43_THEN_D6_3B": "L43", "L43_THEN_D3_3B": "L43",
+        "D4_L43": "L43", "D6_L43": "L43", "D3_L43": "L43",
+    }
+    wlnbb_sig = _WLNBB_SIG_MAP.get(type_v2)
+    if wlnbb_sig is None:
+        if type_v2 == "SECONDARY_D_WINDOW":
+            if d1_then_beup_5b or d9_then_beup_5b or d11_then_beup_5b:  wlnbb_sig = "BE_UP"
+            elif l34_then_d1_3b or l34_then_d9_3b or l34_then_d11_3b:   wlnbb_sig = "L34"
+            elif l43_then_d1_3b or l43_then_d9_3b or l43_then_d11_3b:   wlnbb_sig = "L43"
+            else:                                                          wlnbb_sig = "NONE"
+        elif type_v2 == "SECONDARY_D_CONFLUENCE":
+            if beup:   wlnbb_sig = "BE_UP"
+            elif l34:  wlnbb_sig = "L34"
+            elif l43:  wlnbb_sig = "L43"
+            else:      wlnbb_sig = "NONE"
+        else:
+            wlnbb_sig = "NONE"
+
+    # Window explanation (human-readable)
+    if   type_v2 == "D4_THEN_BEUP_5B":
+        off = _d_offset("d4", 5); expl = f"D4 fired {off}b before BE Up" if off else "D4 then BE Up (window)"
+    elif type_v2 == "D6_THEN_BEUP_5B":
+        off = _d_offset("d6", 5); expl = f"D6 fired {off}b before BE Up" if off else "D6 then BE Up (window)"
+    elif type_v2 == "D3_THEN_BEUP_5B":
+        off = _d_offset("d3", 5); expl = f"D3 fired {off}b before BE Up" if off else "D3 then BE Up (window)"
+    elif type_v2 == "D4_BEUP":          expl = "D4 + BE Up same bar"
+    elif type_v2 == "D6_BEUP":          expl = "D6 + BE Up same bar"
+    elif type_v2 == "D3_BEUP":          expl = "D3 + BE Up same bar"
+    elif type_v2 == "L34_THEN_D4_3B":
+        off = _w_offset("l34_wlnbb", 3); expl = f"L34 fired {off}b before D4" if off else "L34 then D4 (window)"
+    elif type_v2 == "L34_THEN_D6_3B":
+        off = _w_offset("l34_wlnbb", 3); expl = f"L34 fired {off}b before D6" if off else "L34 then D6 (window)"
+    elif type_v2 == "L34_THEN_D3_3B":
+        off = _w_offset("l34_wlnbb", 3); expl = f"L34 fired {off}b before D3" if off else "L34 then D3 (window)"
+    elif type_v2 == "D4_L34":           expl = "D4 + L34 same bar"
+    elif type_v2 == "D6_L34":           expl = "D6 + L34 same bar"
+    elif type_v2 == "D3_L34":           expl = "D3 + L34 same bar"
+    elif type_v2 == "L43_THEN_D4_3B":
+        off = _w_offset("l43_wlnbb", 3); expl = f"L43 fired {off}b before D4" if off else "L43 then D4 (window)"
+    elif type_v2 == "L43_THEN_D6_3B":
+        off = _w_offset("l43_wlnbb", 3); expl = f"L43 fired {off}b before D6" if off else "L43 then D6 (window)"
+    elif type_v2 == "L43_THEN_D3_3B":
+        off = _w_offset("l43_wlnbb", 3); expl = f"L43 fired {off}b before D3" if off else "L43 then D3 (window)"
+    elif type_v2 == "D4_L43":           expl = "D4 + L43 same bar"
+    elif type_v2 == "D6_L43":           expl = "D6 + L43 same bar"
+    elif type_v2 == "D3_L43":           expl = "D3 + L43 same bar"
+    elif type_v2 == "SECONDARY_D_WINDOW":     expl = "Secondary D in window confluence"
+    elif type_v2 == "SECONDARY_D_CONFLUENCE": expl = "Secondary D + WLNBB same bar"
+    elif type_v2 == "D_ONLY":                 expl = "D signal present, no WLNBB"
+    else:                                      expl = ""
+
+    # ── Legacy d_confluence_type (v1, same-bar only, kept for backward compat) ─
+    if   d4_beup:                d_confluence_type = "D4_BEUP"
+    elif d6_beup:                d_confluence_type = "D6_BEUP"
+    elif d3_beup:                d_confluence_type = "D3_BEUP"
+    elif d4_l34:                 d_confluence_type = "D4_L34"
+    elif d6_l34:                 d_confluence_type = "D6_L34"
+    elif d3_l34:                 d_confluence_type = "D3_L34"
+    elif d4_l43:                 d_confluence_type = "D4_L43"
+    elif d6_l43:                 d_confluence_type = "D6_L43"
+    elif d3_l43:                 d_confluence_type = "D3_L43"
+    elif secondary_d_confluence: d_confluence_type = "SECONDARY_D_CONFLUENCE"
+    else:                        d_confluence_type = "NONE"
+
+    active_d: list[str] = [s for s, v in [("D1",d1),("D3",d3),("D4",d4),("D6",d6),("D9",d9),("D11",d11)] if v]
     active_wlnbb: list[str] = []
     if l34:  active_wlnbb.append("L34")
     if l43:  active_wlnbb.append("L43")
     if beup: active_wlnbb.append("BE_UP")
 
     return {
-        # D signals
-        "d1":  d1,  "d3":  d3,  "d4":  d4,
-        "d6":  d6,  "d9":  d9,  "d11": d11,
-        "d_core_any":      d_core_any,
-        "d_secondary_any": d_secondary_any,
+        # ── D signals ─────────────────────────────────────────────────────────
+        "d1": d1, "d3": d3, "d4": d4, "d6": d6, "d9": d9, "d11": d11,
+        "d_core_any": d_core_any, "d_secondary_any": d_secondary_any,
         "active_d_signals": active_d,
-        # WLNBB signals
-        "l34_wlnbb":      l34,
-        "l43_wlnbb":      l43,
-        "be_up_wlnbb":    beup,
-        "break_up_wlnbb": last_wlnbb["break_up_wlnbb"],
-        "bx_up_wlnbb":    last_wlnbb["bx_up_wlnbb"],
+        # ── WLNBB signals ─────────────────────────────────────────────────────
+        "l34_wlnbb": l34, "l43_wlnbb": l43, "be_up_wlnbb": beup,
+        "break_up_wlnbb": lw["break_up_wlnbb"], "bx_up_wlnbb": lw["bx_up_wlnbb"],
         "active_wlnbb_signals": active_wlnbb,
-        # Same-bar confluence booleans
-        "d3_l34":  d3_l34,  "d4_l34":  d4_l34,  "d6_l34":  d6_l34,
-        "d3_l43":  d3_l43,  "d4_l43":  d4_l43,  "d6_l43":  d6_l43,
+        # ── Phase 3: Same-bar confluences (original, backward-compat) ─────────
+        "d3_l34": d3_l34, "d4_l34": d4_l34, "d6_l34": d6_l34,
+        "d3_l43": d3_l43, "d4_l43": d4_l43, "d6_l43": d6_l43,
         "d3_beup": d3_beup, "d4_beup": d4_beup, "d6_beup": d6_beup,
-        # Aggregate booleans
-        "core_d_l34":           core_d_l34,
-        "core_d_l43":           core_d_l43,
-        "core_d_beup":          core_d_beup,
+        "core_d_l34": core_d_l34, "core_d_l43": core_d_l43, "core_d_beup": core_d_beup,
         "secondary_d_confluence": secondary_d_confluence,
-        # Categorical
+        # ── Phase 3: Same-bar confluences (_same suffix) ───────────────────────
+        "d3_l34_same": d3_l34_same, "d4_l34_same": d4_l34_same, "d6_l34_same": d6_l34_same,
+        "d3_l43_same": d3_l43_same, "d4_l43_same": d4_l43_same, "d6_l43_same": d6_l43_same,
+        "d3_beup_same": d3_beup_same, "d4_beup_same": d4_beup_same, "d6_beup_same": d6_beup_same,
+        "d1_l34_same": d1_l34_same, "d9_l34_same": d9_l34_same, "d11_l34_same": d11_l34_same,
+        "d1_l43_same": d1_l43_same, "d9_l43_same": d9_l43_same, "d11_l43_same": d11_l43_same,
+        "d1_beup_same": d1_beup_same, "d9_beup_same": d9_beup_same, "d11_beup_same": d11_beup_same,
+        "core_d_same": core_d_same, "secondary_d_same": secondary_d_same,
+        "core_d_l34_same": core_d_l34_same, "core_d_l43_same": core_d_l43_same, "core_d_beup_same": core_d_beup_same,
+        # ── Phase 4: L34/L43 → D window (1-3 bars) ───────────────────────────
+        "l34_then_d3_3b": l34_then_d3_3b, "l34_then_d4_3b": l34_then_d4_3b, "l34_then_d6_3b": l34_then_d6_3b,
+        "l34_then_d1_3b": l34_then_d1_3b, "l34_then_d9_3b": l34_then_d9_3b, "l34_then_d11_3b": l34_then_d11_3b,
+        "l34_then_core_d_3b": l34_then_core_d_3b,
+        "l43_then_d3_3b": l43_then_d3_3b, "l43_then_d4_3b": l43_then_d4_3b, "l43_then_d6_3b": l43_then_d6_3b,
+        "l43_then_d1_3b": l43_then_d1_3b, "l43_then_d9_3b": l43_then_d9_3b, "l43_then_d11_3b": l43_then_d11_3b,
+        "l43_then_core_d_3b": l43_then_core_d_3b,
+        # ── Phase 5: D → BE Up window (1-5 bars) ─────────────────────────────
+        "d3_then_beup_5b": d3_then_beup_5b, "d4_then_beup_5b": d4_then_beup_5b, "d6_then_beup_5b": d6_then_beup_5b,
+        "d1_then_beup_5b": d1_then_beup_5b, "d9_then_beup_5b": d9_then_beup_5b, "d11_then_beup_5b": d11_then_beup_5b,
+        "core_d_then_beup_5b": core_d_then_beup_5b,
+        "secondary_d_then_beup_5b": secondary_d_then_beup_5b,
+        "secondary_d_window": secondary_d_window,
+        # ── Phase 6: d_confluence_type_v2 + metadata ──────────────────────────
+        "d_confluence_type_v2":      type_v2,
+        "d_confluence_family":       family,
+        "d_confluence_timing":       timing,
+        "d_confluence_core_signal":  core_sig,
+        "d_confluence_wlnbb_signal": wlnbb_sig,
+        "window_explanation":        expl,
+        # ── Legacy v1 (kept for backward compat) ──────────────────────────────
         "d_confluence_type": d_confluence_type,
     }
 
 
 def _empty_confluence() -> dict:
     return {
-        "d1": False, "d3": False, "d4": False,
-        "d6": False, "d9": False, "d11": False,
-        "d_core_any": False, "d_secondary_any": False,
-        "active_d_signals": [],
+        # D signals
+        "d1": False, "d3": False, "d4": False, "d6": False, "d9": False, "d11": False,
+        "d_core_any": False, "d_secondary_any": False, "active_d_signals": [],
+        # WLNBB signals
         "l34_wlnbb": False, "l43_wlnbb": False, "be_up_wlnbb": False,
-        "break_up_wlnbb": False, "bx_up_wlnbb": False,
-        "active_wlnbb_signals": [],
+        "break_up_wlnbb": False, "bx_up_wlnbb": False, "active_wlnbb_signals": [],
+        # Phase 3: same-bar (original)
         "d3_l34": False, "d4_l34": False, "d6_l34": False,
         "d3_l43": False, "d4_l43": False, "d6_l43": False,
         "d3_beup": False, "d4_beup": False, "d6_beup": False,
         "core_d_l34": False, "core_d_l43": False, "core_d_beup": False,
         "secondary_d_confluence": False,
+        # Phase 3: same-bar (_same suffix)
+        "d3_l34_same": False, "d4_l34_same": False, "d6_l34_same": False,
+        "d3_l43_same": False, "d4_l43_same": False, "d6_l43_same": False,
+        "d3_beup_same": False, "d4_beup_same": False, "d6_beup_same": False,
+        "d1_l34_same": False, "d9_l34_same": False, "d11_l34_same": False,
+        "d1_l43_same": False, "d9_l43_same": False, "d11_l43_same": False,
+        "d1_beup_same": False, "d9_beup_same": False, "d11_beup_same": False,
+        "core_d_same": False, "secondary_d_same": False,
+        "core_d_l34_same": False, "core_d_l43_same": False, "core_d_beup_same": False,
+        # Phase 4: L34/L43 → D window
+        "l34_then_d3_3b": False, "l34_then_d4_3b": False, "l34_then_d6_3b": False,
+        "l34_then_d1_3b": False, "l34_then_d9_3b": False, "l34_then_d11_3b": False,
+        "l34_then_core_d_3b": False,
+        "l43_then_d3_3b": False, "l43_then_d4_3b": False, "l43_then_d6_3b": False,
+        "l43_then_d1_3b": False, "l43_then_d9_3b": False, "l43_then_d11_3b": False,
+        "l43_then_core_d_3b": False,
+        # Phase 5: D → BE Up window
+        "d3_then_beup_5b": False, "d4_then_beup_5b": False, "d6_then_beup_5b": False,
+        "d1_then_beup_5b": False, "d9_then_beup_5b": False, "d11_then_beup_5b": False,
+        "core_d_then_beup_5b": False, "secondary_d_then_beup_5b": False,
+        "secondary_d_window": False,
+        # Phase 6: type_v2 + metadata
+        "d_confluence_type_v2":      "NONE",
+        "d_confluence_family":       "NONE",
+        "d_confluence_timing":       "NONE",
+        "d_confluence_core_signal":  "NONE",
+        "d_confluence_wlnbb_signal": "NONE",
+        "window_explanation":        "",
+        # Legacy v1
         "d_confluence_type": "NONE",
     }
 
@@ -604,10 +854,23 @@ def _empty_confluence() -> dict:
 _D_COUNT_FIELDS = [
     "d1", "d3", "d4", "d6", "d9", "d11",
     "d_core_any", "d_secondary_any",
+    # same-bar (original)
     "d3_l34", "d4_l34", "d6_l34",
     "d3_l43", "d4_l43", "d6_l43",
     "d3_beup", "d4_beup", "d6_beup",
     "core_d_l34", "core_d_l43", "core_d_beup",
+    # same-bar (_same suffix)
+    "d3_l34_same", "d4_l34_same", "d6_l34_same",
+    "d3_l43_same", "d4_l43_same", "d6_l43_same",
+    "d3_beup_same", "d4_beup_same", "d6_beup_same",
+    "core_d_l34_same", "core_d_l43_same", "core_d_beup_same",
+    # window L34/L43 → D (3 bars)
+    "l34_then_d3_3b", "l34_then_d4_3b", "l34_then_d6_3b",
+    "l43_then_d3_3b", "l43_then_d4_3b", "l43_then_d6_3b",
+    "l34_then_core_d_3b", "l43_then_core_d_3b",
+    # window D → BE Up (5 bars)
+    "d3_then_beup_5b", "d4_then_beup_5b", "d6_then_beup_5b",
+    "core_d_then_beup_5b",
 ]
 
 
@@ -618,9 +881,10 @@ def compute_d_wlnbb_pre_counts(
 ) -> dict:
     """
     Count D / WLNBB confluence events in the `lookback` bars BEFORE signal_bar_idx.
-    Used by pump study and replay pre-window analysis.
+    Uses full candle history up to signal_bar_idx so window fields (l34_then_d4_3b
+    etc.) have correct cross-bar lookback.
 
-    signal_bar_idx: 0-based index of the signal bar (exclusive upper bound for window).
+    signal_bar_idx: 0-based index of the signal bar (exclusive upper bound).
     lookback: number of bars before signal to examine.
     Returns dict of {field}_count_pre keys.
     """
@@ -630,29 +894,68 @@ def compute_d_wlnbb_pre_counts(
     if start >= end or not candles:
         return {f"{f}_count_pre": 0 for f in _D_COUNT_FIELDS}
 
-    window_candles = candles[start: end]
-    d_series      = compute_manual_d_features(window_candles)
-    wlnbb_series  = compute_wlnbb_features(window_candles)
+    full_candles = candles[:signal_bar_idx]
+    if not full_candles:
+        return {f"{f}_count_pre": 0 for f in _D_COUNT_FIELDS}
+
+    d_series     = compute_manual_d_features(full_candles)
+    wlnbb_series = compute_wlnbb_features(full_candles)
 
     counts: dict[str, int] = {f: 0 for f in _D_COUNT_FIELDS}
-    for d, w in zip(d_series, wlnbb_series):
-        l34  = w["l34_wlnbb"]
-        l43  = w["l43_wlnbb"]
-        beup = w["be_up_wlnbb"]
-        combined = {
-            "d1": d["d1"], "d3": d["d3"], "d4": d["d4"],
-            "d6": d["d6"], "d9": d["d9"], "d11": d["d11"],
-            "d_core_any":      d["d3"] or d["d4"] or d["d6"],
-            "d_secondary_any": d["d1"] or d["d9"] or d["d11"],
-            "d3_l34": d["d3"] and l34,  "d4_l34": d["d4"] and l34,  "d6_l34": d["d6"] and l34,
-            "d3_l43": d["d3"] and l43,  "d4_l43": d["d4"] and l43,  "d6_l43": d["d6"] and l43,
-            "d3_beup": d["d3"] and beup,"d4_beup": d["d4"] and beup,"d6_beup": d["d6"] and beup,
-            "core_d_l34":  (d["d3"] or d["d4"] or d["d6"]) and l34,
-            "core_d_l43":  (d["d3"] or d["d4"] or d["d6"]) and l43,
-            "core_d_beup": (d["d3"] or d["d4"] or d["d6"]) and beup,
+
+    for bar_i in range(start, min(end, len(full_candles))):
+        d    = d_series[bar_i]
+        w    = wlnbb_series[bar_i]
+        l34_ = w["l34_wlnbb"];  l43_ = w["l43_wlnbb"];  beup_ = w["be_up_wlnbb"]
+        d3_  = d["d3"];  d4_  = d["d4"];  d6_  = d["d6"]
+        d1_  = d["d1"];  d9_  = d["d9"];  d11_ = d["d11"]
+        dcore_ = d3_ or d4_ or d6_
+
+        def _dp(key: str, n: int) -> bool:
+            for k in range(1, n + 1):
+                j = bar_i - k
+                if j >= 0 and d_series[j].get(key):
+                    return True
+            return False
+
+        def _wp(key: str, n: int) -> bool:
+            for k in range(1, n + 1):
+                j = bar_i - k
+                if j >= 0 and wlnbb_series[j].get(key):
+                    return True
+            return False
+
+        bar_fields: dict = {
+            "d1": d1_, "d3": d3_, "d4": d4_, "d6": d6_, "d9": d9_, "d11": d11_,
+            "d_core_any": dcore_, "d_secondary_any": d1_ or d9_ or d11_,
+            # same-bar (original)
+            "d3_l34": d3_ and l34_, "d4_l34": d4_ and l34_, "d6_l34": d6_ and l34_,
+            "d3_l43": d3_ and l43_, "d4_l43": d4_ and l43_, "d6_l43": d6_ and l43_,
+            "d3_beup": d3_ and beup_, "d4_beup": d4_ and beup_, "d6_beup": d6_ and beup_,
+            "core_d_l34": dcore_ and l34_, "core_d_l43": dcore_ and l43_, "core_d_beup": dcore_ and beup_,
+            # same-bar (_same — equal to originals)
+            "d3_l34_same": d3_ and l34_, "d4_l34_same": d4_ and l34_, "d6_l34_same": d6_ and l34_,
+            "d3_l43_same": d3_ and l43_, "d4_l43_same": d4_ and l43_, "d6_l43_same": d6_ and l43_,
+            "d3_beup_same": d3_ and beup_, "d4_beup_same": d4_ and beup_, "d6_beup_same": d6_ and beup_,
+            "core_d_l34_same": dcore_ and l34_, "core_d_l43_same": dcore_ and l43_, "core_d_beup_same": dcore_ and beup_,
+            # window L34/L43 → D
+            "l34_then_d3_3b": d3_ and _wp("l34_wlnbb", 3),
+            "l34_then_d4_3b": d4_ and _wp("l34_wlnbb", 3),
+            "l34_then_d6_3b": d6_ and _wp("l34_wlnbb", 3),
+            "l43_then_d3_3b": d3_ and _wp("l43_wlnbb", 3),
+            "l43_then_d4_3b": d4_ and _wp("l43_wlnbb", 3),
+            "l43_then_d6_3b": d6_ and _wp("l43_wlnbb", 3),
+            "l34_then_core_d_3b": dcore_ and _wp("l34_wlnbb", 3),
+            "l43_then_core_d_3b": dcore_ and _wp("l43_wlnbb", 3),
+            # window D → BE Up
+            "d3_then_beup_5b": beup_ and _dp("d3", 5),
+            "d4_then_beup_5b": beup_ and _dp("d4", 5),
+            "d6_then_beup_5b": beup_ and _dp("d6", 5),
+            "core_d_then_beup_5b": beup_ and (_dp("d3", 5) or _dp("d4", 5) or _dp("d6", 5)),
         }
+
         for f in _D_COUNT_FIELDS:
-            if combined.get(f):
+            if bar_fields.get(f):
                 counts[f] += 1
 
     return {f"{f}_count_pre": counts[f] for f in _D_COUNT_FIELDS}

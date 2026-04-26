@@ -435,6 +435,7 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
 
             # New Pump Engine — setup/trigger/confirmation structured analysis
             new_pump_result = {}
+            _np_bars = []
             try:
                 from scanner.new_pump_engine import analyze as _np_analyze
                 _np_bars = [
@@ -445,6 +446,15 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 new_pump_result = _np_analyze(_np_bars)
             except Exception:
                 pass
+
+            # Manual D + WLNBB confluence research (non-fatal)
+            _dw: dict = {}
+            try:
+                from scanner.manual_d_wlnbb_features import compute_d_wlnbb_confluence
+                if _np_bars:
+                    _dw = compute_d_wlnbb_confluence(_np_bars)
+            except Exception as _dw_exc:
+                logger.debug(f"[REPLAY] {sym} d_wlnbb failed: {_dw_exc}")
 
             # Derive NP signal detail fields from new_pump_result
             np_has_l34   = bool(new_pump_result.get("has_l34",   False))
@@ -475,7 +485,8 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                     pass
 
             snapshot = {**indicators, **scored, "wyckoff": wyckoff,
-                        "new_pump": new_pump_result}
+                        "new_pump": new_pump_result,
+                        **_dw}   # D/WLNBB fields persisted in candidate_snapshot_json
             # Remove non-serialisable items from snapshot (keep it JSON-safe)
             clean_snapshot = {
                 k: v for k, v in snapshot.items()
@@ -514,6 +525,9 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 "np_decision_reason":             new_pump_result.get("decision_reason"),
                 "new_pump":                new_pump_result,
                 "snapshot":                clean_snapshot,
+                # D/WLNBB research fields — top-level for in-memory use;
+                # also stored in snapshot (candidate_snapshot_json) for persistence.
+                **_dw,
             }
         except Exception as exc:
             logger.debug(f"[REPLAY] {sym} on {as_of_date} skipped: {exc}")

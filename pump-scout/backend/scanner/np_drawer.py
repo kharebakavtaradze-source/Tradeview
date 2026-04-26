@@ -350,32 +350,11 @@ def _build_d_wlnbb_section(bars: list[dict], np_result: dict) -> dict:
     has_runner_fields = np_result.get("d_confluence_type") is not None
 
     if has_runner_fields:
-        return {
-            "d1":  np_result.get("d1",  False),
-            "d3":  np_result.get("d3",  False),
-            "d4":  np_result.get("d4",  False),
-            "d6":  np_result.get("d6",  False),
-            "d9":  np_result.get("d9",  False),
-            "d11": np_result.get("d11", False),
-            "d_core_any":      np_result.get("d_core_any",      False),
-            "d_secondary_any": np_result.get("d_secondary_any", False),
-            "active_d_signals": np_result.get("active_d_signals", []),
-            "l34_wlnbb":      np_result.get("l34_wlnbb",      False),
-            "l43_wlnbb":      np_result.get("l43_wlnbb",      False),
-            "be_up_wlnbb":    np_result.get("be_up_wlnbb",    False),
-            "break_up_wlnbb": np_result.get("break_up_wlnbb", False),
-            "bx_up_wlnbb":    np_result.get("bx_up_wlnbb",    False),
-            "active_wlnbb_signals": np_result.get("active_wlnbb_signals", []),
-            "d3_l34":  np_result.get("d3_l34",  False), "d4_l34":  np_result.get("d4_l34",  False), "d6_l34":  np_result.get("d6_l34",  False),
-            "d3_l43":  np_result.get("d3_l43",  False), "d4_l43":  np_result.get("d4_l43",  False), "d6_l43":  np_result.get("d6_l43",  False),
-            "d3_beup": np_result.get("d3_beup", False), "d4_beup": np_result.get("d4_beup", False), "d6_beup": np_result.get("d6_beup", False),
-            "core_d_l34":  np_result.get("core_d_l34",  False),
-            "core_d_l43":  np_result.get("core_d_l43",  False),
-            "core_d_beup": np_result.get("core_d_beup", False),
-            "secondary_d_confluence": np_result.get("secondary_d_confluence", False),
-            "d_confluence_type":      np_result.get("d_confluence_type", "NONE"),
-            "source": "scan_cache",
-        }
+        from scanner.manual_d_wlnbb_features import _empty_confluence as _ec
+        _defaults = _ec()
+        result = {k: np_result.get(k, v) for k, v in _defaults.items()}
+        result["source"] = "scan_cache"
+        return result
 
     if not bars or len(bars) < 30:
         return {"d_confluence_type": "NONE", "active_d_signals": [], "active_wlnbb_signals": [], "source": "unavailable"}
