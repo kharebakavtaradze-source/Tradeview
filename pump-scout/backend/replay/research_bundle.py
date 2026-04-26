@@ -961,6 +961,89 @@ async def build_research_bundle(run_id: int) -> dict:
         },
     }
 
+    # ── Phase 12: Manual D + WLNBB confluence research analytics ────────────────
+    # Uses candidate snapshot fields stored by new_pump_runner.
+    # Falls back silently when fields absent (pre-feature candidates).
+
+    def _cget(c, key, default=False):
+        """Get field from candidate, checking top-level and snapshot."""
+        v = c.get(key)
+        if v is None:
+            v = (c.get("new_pump") or {}).get(key)
+        return v if v is not None else default
+
+    perf_d_signal = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: (
+            "D4"           if _cget(c, "d4")            else
+            "D6"           if _cget(c, "d6")            else
+            "D3"           if _cget(c, "d3")            else
+            "CORE_D_ANY"   if _cget(c, "d_core_any")    else
+            "D1"           if _cget(c, "d1")            else
+            "D9"           if _cget(c, "d9")            else
+            "D11"          if _cget(c, "d11")           else
+            "SECONDARY_D_ANY" if _cget(c, "d_secondary_any") else
+            "NO_D"
+        ),
+        "d_signal",
+    )
+
+    _W_SIG_ORDER = ["L34_WLNBB", "BE_UP_WLNBB", "L43_WLNBB", "NO_WLNBB"]
+    perf_wlnbb_signal = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: (
+            "L34_WLNBB"    if _cget(c, "l34_wlnbb")  else
+            "BE_UP_WLNBB"  if _cget(c, "be_up_wlnbb") else
+            "L43_WLNBB"    if _cget(c, "l43_wlnbb")  else
+            "NO_WLNBB"
+        ),
+        "wlnbb_signal",
+    )
+    perf_wlnbb_signal.sort(
+        key=lambda x: _W_SIG_ORDER.index(x["bucket"]) if x["bucket"] in _W_SIG_ORDER else 99
+    )
+
+    _DCONF_ORDER = [
+        "D4_BEUP", "D6_BEUP", "D3_BEUP",
+        "D4_L34",  "D6_L34",  "D3_L34",
+        "D4_L43",  "D6_L43",  "D3_L43",
+        "SECONDARY_D_CONFLUENCE", "NONE",
+    ]
+    perf_d_confluence_type = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: _cget(c, "d_confluence_type", "NONE") or "NONE",
+        "d_confluence_type",
+    )
+    perf_d_confluence_type.sort(
+        key=lambda x: _DCONF_ORDER.index(x["bucket"]) if x["bucket"] in _DCONF_ORDER else 99
+    )
+
+    perf_core_d_l34 = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: "CORE_D_L34" if _cget(c, "core_d_l34") else "NO_CORE_D_L34",
+        "core_d_l34",
+    )
+    perf_core_d_l43 = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: "CORE_D_L43" if _cget(c, "core_d_l43") else "NO_CORE_D_L43",
+        "core_d_l43",
+    )
+    perf_core_d_beup = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: "CORE_D_BEUP" if _cget(c, "core_d_beup") else "NO_CORE_D_BEUP",
+        "core_d_beup",
+    )
+
+    # false_positive_by_d_confluence_type
+    fp_by_d_conf: Counter = Counter(
+        _cget(c, "d_confluence_type", "NONE") or "NONE"
+        for c in fp_cands
+    )
+    fp_by_d_confluence_type = {
+        bkt: {"count": fp_by_d_conf[bkt], "pct_of_all_fp": _pct(fp_by_d_conf[bkt], len(fp_cands))}
+        for bkt in _DCONF_ORDER if fp_by_d_conf[bkt] > 0
+    }
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -1017,6 +1100,14 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_decision_structure_score_bucket":  perf_decision_ss,
         "buy_candidate_composition":                       buy_composition,
         "false_positive_analytics":                        false_positive_analytics,
+        # ── Manual D + WLNBB confluence research ─────────────────────────────
+        "performance_by_d_signal":          perf_d_signal,
+        "performance_by_wlnbb_signal":      perf_wlnbb_signal,
+        "performance_by_d_confluence_type": perf_d_confluence_type,
+        "performance_by_core_d_l34":        perf_core_d_l34,
+        "performance_by_core_d_l43":        perf_core_d_l43,
+        "performance_by_core_d_beup":       perf_core_d_beup,
+        "false_positive_by_d_confluence_type": fp_by_d_confluence_type,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,

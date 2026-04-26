@@ -183,6 +183,14 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 skipped += 1
                 continue
 
+            # Research-only: Manual D + WLNBB confluence (non-fatal)
+            _dw: dict = {}
+            try:
+                from scanner.manual_d_wlnbb_features import compute_d_wlnbb_confluence
+                _dw = compute_d_wlnbb_confluence(bars)
+            except Exception as _exc:
+                logger.debug(f"[NpRunner] d_wlnbb skipped {sym}: {_exc}")
+
             last     = candles[-1]
             last_idx = len(candles) - 1
             vol_slice = [c["v"] for c in candles[-20:] if c.get("v")]
@@ -282,6 +290,36 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 "structure_advisory":          np.get("structure_advisory"),
                 "signal_date": signal_date,
                 "next_day":    next_day,
+                # ── Research: Manual D + WLNBB confluence ────────────────────
+                "d1":  _dw.get("d1",  False),
+                "d3":  _dw.get("d3",  False),
+                "d4":  _dw.get("d4",  False),
+                "d6":  _dw.get("d6",  False),
+                "d9":  _dw.get("d9",  False),
+                "d11": _dw.get("d11", False),
+                "d_core_any":      _dw.get("d_core_any",      False),
+                "d_secondary_any": _dw.get("d_secondary_any", False),
+                "active_d_signals": _dw.get("active_d_signals", []),
+                "l34_wlnbb":      _dw.get("l34_wlnbb",      False),
+                "l43_wlnbb":      _dw.get("l43_wlnbb",      False),
+                "be_up_wlnbb":    _dw.get("be_up_wlnbb",    False),
+                "break_up_wlnbb": _dw.get("break_up_wlnbb", False),
+                "bx_up_wlnbb":    _dw.get("bx_up_wlnbb",    False),
+                "active_wlnbb_signals": _dw.get("active_wlnbb_signals", []),
+                "d3_l34":  _dw.get("d3_l34",  False),
+                "d4_l34":  _dw.get("d4_l34",  False),
+                "d6_l34":  _dw.get("d6_l34",  False),
+                "d3_l43":  _dw.get("d3_l43",  False),
+                "d4_l43":  _dw.get("d4_l43",  False),
+                "d6_l43":  _dw.get("d6_l43",  False),
+                "d3_beup": _dw.get("d3_beup", False),
+                "d4_beup": _dw.get("d4_beup", False),
+                "d6_beup": _dw.get("d6_beup", False),
+                "core_d_l34":  _dw.get("core_d_l34",  False),
+                "core_d_l43":  _dw.get("core_d_l43",  False),
+                "core_d_beup": _dw.get("core_d_beup", False),
+                "secondary_d_confluence": _dw.get("secondary_d_confluence", False),
+                "d_confluence_type":      _dw.get("d_confluence_type", "NONE"),
             })
             _np_progress["analyzed_count"] = len(results)
 
