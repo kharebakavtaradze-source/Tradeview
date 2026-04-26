@@ -1087,7 +1087,7 @@ async def build_research_bundle(run_id: int) -> dict:
         "core_d_beup",
     )
 
-    # false_positive_by_d_confluence_type
+    # false_positive_by_d_confluence_type (v1)
     fp_by_d_conf: Counter = Counter(
         _cget(c, "d_confluence_type", "NONE") or "NONE"
         for c in fp_cands
@@ -1095,6 +1095,119 @@ async def build_research_bundle(run_id: int) -> dict:
     fp_by_d_confluence_type = {
         bkt: {"count": fp_by_d_conf[bkt], "pct_of_all_fp": _pct(fp_by_d_conf[bkt], len(fp_cands))}
         for bkt in _DCONF_ORDER if fp_by_d_conf[bkt] > 0
+    }
+
+    # ── Phase 7: Extended D/WLNBB analytics (v2 — window-aware) ─────────────
+
+    _DCONF_V2_ORDER = [
+        "D4_THEN_BEUP_5B", "D6_THEN_BEUP_5B", "D3_THEN_BEUP_5B",
+        "D4_BEUP", "D6_BEUP", "D3_BEUP",
+        "L34_THEN_D4_3B", "L34_THEN_D6_3B", "L34_THEN_D3_3B",
+        "D4_L34", "D6_L34", "D3_L34",
+        "L43_THEN_D4_3B", "L43_THEN_D6_3B", "L43_THEN_D3_3B",
+        "D4_L43", "D6_L43", "D3_L43",
+        "SECONDARY_D_WINDOW", "SECONDARY_D_CONFLUENCE", "D_ONLY", "NONE",
+    ]
+    perf_d_confluence_type_v2 = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: _cget(c, "d_confluence_type_v2", "NONE") or "NONE",
+        "d_confluence_type_v2",
+    )
+    perf_d_confluence_type_v2.sort(
+        key=lambda x: _DCONF_V2_ORDER.index(x["bucket"]) if x["bucket"] in _DCONF_V2_ORDER else 99
+    )
+
+    _FAMILY_ORDER = [
+        "D_THEN_BEUP", "SAME_BAR_BEUP",
+        "L34_THEN_D", "SAME_BAR_L34",
+        "L43_THEN_D", "SAME_BAR_L43",
+        "SECONDARY", "D_ONLY", "NONE",
+    ]
+    perf_d_confluence_family = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: _cget(c, "d_confluence_family", "NONE") or "NONE",
+        "d_confluence_family",
+    )
+    perf_d_confluence_family.sort(
+        key=lambda x: _FAMILY_ORDER.index(x["bucket"]) if x["bucket"] in _FAMILY_ORDER else 99
+    )
+
+    _TIMING_ORDER = ["D_THEN_BEUP_5B", "SAME_BAR", "BASE_THEN_D_3B", "NONE"]
+    perf_d_confluence_timing = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: _cget(c, "d_confluence_timing", "NONE") or "NONE",
+        "d_confluence_timing",
+    )
+    perf_d_confluence_timing.sort(
+        key=lambda x: _TIMING_ORDER.index(x["bucket"]) if x["bucket"] in _TIMING_ORDER else 99
+    )
+
+    _CORE_SIG_ORDER = ["D4", "D6", "D3", "D1", "D9", "D11", "NONE"]
+    perf_core_d_signal = _build_perf_buckets(
+        candidates, outcome_map,
+        lambda c: _cget(c, "d_confluence_core_signal", "NONE") or "NONE",
+        "d_confluence_core_signal",
+    )
+    perf_core_d_signal.sort(
+        key=lambda x: _CORE_SIG_ORDER.index(x["bucket"]) if x["bucket"] in _CORE_SIG_ORDER else 99
+    )
+
+    # core_signal × wlnbb_signal pair
+    def _core_wlnbb_pair(c: dict) -> str:
+        cs = _cget(c, "d_confluence_core_signal", "NONE") or "NONE"
+        ws = _cget(c, "d_confluence_wlnbb_signal", "NONE") or "NONE"
+        if cs == "NONE" and ws == "NONE":
+            return "NONE"
+        return f"{cs}|{ws}"
+
+    perf_core_d_wlnbb_pair = _build_perf_buckets(
+        candidates, outcome_map, _core_wlnbb_pair, "core_d_wlnbb_pair"
+    )
+    perf_core_d_wlnbb_pair.sort(
+        key=lambda x: x.get("avg_return_5d") or -999, reverse=True
+    )
+
+    # Cross-tab: decision × d_confluence_type_v2 family
+    def _decision_x_dconf_family(c: dict) -> str:
+        dec = c.get("np_decision") or "AVOID"
+        fam = _cget(c, "d_confluence_family", "NONE") or "NONE"
+        return f"{dec}|{fam}"
+
+    perf_d_confluence_inside_decision = _build_perf_buckets(
+        candidates, outcome_map, _decision_x_dconf_family, "decision_x_d_confluence_family"
+    )
+    _DEC_ORDER3 = ["BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID"]
+    perf_d_confluence_inside_decision.sort(key=lambda x: (
+        _DEC_ORDER3.index(x["bucket"].split("|")[0])
+        if x["bucket"].split("|")[0] in _DEC_ORDER3 else 99,
+        _FAMILY_ORDER.index(x["bucket"].split("|")[1])
+        if len(x["bucket"].split("|")) > 1 and x["bucket"].split("|")[1] in _FAMILY_ORDER else 99,
+    ))
+
+    # Cross-tab: structure_phase × d_confluence_family
+    def _structure_x_dconf_family(c: dict) -> str:
+        phase, _ = _resolve_structure(c)
+        fam = _cget(c, "d_confluence_family", "NONE") or "NONE"
+        return f"{phase}|{fam}"
+
+    perf_d_confluence_inside_structure_phase = _build_perf_buckets(
+        candidates, outcome_map, _structure_x_dconf_family, "structure_phase_x_d_confluence_family"
+    )
+    perf_d_confluence_inside_structure_phase.sort(key=lambda x: (
+        _PHASE_ORDER.index(x["bucket"].split("|")[0])
+        if x["bucket"].split("|")[0] in _PHASE_ORDER else 99,
+        _FAMILY_ORDER.index(x["bucket"].split("|")[1])
+        if len(x["bucket"].split("|")) > 1 and x["bucket"].split("|")[1] in _FAMILY_ORDER else 99,
+    ))
+
+    # false_positive_by_d_confluence_type_v2
+    fp_by_d_conf_v2: Counter = Counter(
+        _cget(c, "d_confluence_type_v2", "NONE") or "NONE"
+        for c in fp_cands
+    )
+    fp_by_d_confluence_type_v2 = {
+        bkt: {"count": fp_by_d_conf_v2[bkt], "pct_of_all_fp": _pct(fp_by_d_conf_v2[bkt], len(fp_cands))}
+        for bkt in _DCONF_V2_ORDER if fp_by_d_conf_v2[bkt] > 0
     }
 
     # ── Sections C, D: False positives + Missed movers ────────────────────────
@@ -1167,6 +1280,15 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_core_d_l43":        perf_core_d_l43,
         "performance_by_core_d_beup":       perf_core_d_beup,
         "false_positive_by_d_confluence_type": fp_by_d_confluence_type,
+        # ── Phase 7: Extended D/WLNBB analytics (v2, window-aware) ───────────
+        "performance_by_d_confluence_type_v2":             perf_d_confluence_type_v2,
+        "performance_by_d_confluence_family":              perf_d_confluence_family,
+        "performance_by_d_confluence_timing":              perf_d_confluence_timing,
+        "performance_by_core_d_signal":                    perf_core_d_signal,
+        "performance_by_core_d_wlnbb_pair":                perf_core_d_wlnbb_pair,
+        "performance_by_d_confluence_inside_decision":     perf_d_confluence_inside_decision,
+        "performance_by_d_confluence_inside_structure_phase": perf_d_confluence_inside_structure_phase,
+        "false_positive_by_d_confluence_type_v2":          fp_by_d_confluence_type_v2,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,
