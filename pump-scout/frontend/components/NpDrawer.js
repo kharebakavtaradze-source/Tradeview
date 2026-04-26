@@ -43,6 +43,12 @@ const VERDICT_CFG = {
   too_late:     { color: '#ff9800', label: 'TOO LATE'     },
   avoid:        { color: '#ff5252', label: 'AVOID'        },
 };
+const DECISION_CFG = {
+  BUY_CANDIDATE: { color: '#00e676', label: 'BUY CANDIDATE' },
+  WATCH:         { color: '#00b0ff', label: 'WATCH'         },
+  AVOID:         { color: '#ff5252', label: 'AVOID'         },
+  IMPULSE_RISK:  { color: '#ff9800', label: 'IMPULSE RISK'  },
+};
 const FLAG_CFG = {
   dilution_risk:          { color: '#ff5252', label: 'Dilution Risk'   },
   reverse_split_risk:     { color: '#ff5252', label: 'Reverse Split'   },
@@ -385,11 +391,27 @@ function S9_RedFlags({ red_flags: flags }) {
 
 function S10_Verdict({ final_verdict: fv }) {
   if (!fv) return null;
-  const cfg = VERDICT_CFG[fv.verdict] || { color: '#888', label: fv.verdict?.toUpperCase() };
+  const cfg  = VERDICT_CFG[fv.verdict] || { color: '#888', label: fv.verdict?.toUpperCase() };
+  const dcfg = fv.technical_decision ? DECISION_CFG[fv.technical_decision] : null;
   return (
     <div className={styles.verdictBlock} style={{ borderColor: cfg.color + '55', background: cfg.color + '0d' }}>
       <div className={styles.verdictTop}>
-        <span className={styles.verdictLabel} style={{ color: cfg.color }}>{cfg.label}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {dcfg && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 9, color: '#666', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                Technical Decision
+              </span>
+              <span style={{
+                fontSize: 11, fontWeight: 800, color: dcfg.color,
+                background: dcfg.color + '22', padding: '1px 8px',
+                borderRadius: 3, letterSpacing: '0.07em',
+                border: `1px solid ${dcfg.color}44`,
+              }}>{dcfg.label}</span>
+            </div>
+          )}
+          <span className={styles.verdictLabel} style={{ color: cfg.color }}>{cfg.label}</span>
+        </div>
         <span className={styles.verdictReason}>{fv.short_reason}</span>
       </div>
       {fv.key_confirmation_note && (
@@ -414,21 +436,32 @@ function S11_StructurePhase({ np }) {
   const score    = np.structure_score;
   const advisory = np.structure_advisory || [];
   const dflags   = np.decision_flags    || [];
+  const decision = np.decision;
   const allFlags = [...advisory, ...dflags].filter(Boolean);
-  if (!phase && !allFlags.length) return null;
+  if (!phase && !decision && !allFlags.length) return null;
   const pcfg = PHASE_COLOR[phase] || { color: '#888', label: phase || '—' };
+  const dcfg = DECISION_CFG[decision];
   const scoreColor = score >= 70 ? '#00e676' : score >= 40 ? '#ffd600' : '#888';
   return (
     <SecCard title="Structure Phase">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: allFlags.length ? 8 : 0 }}>
-        <span style={{
-          padding: '2px 10px', borderRadius: 4, fontSize: 11, fontWeight: 700,
-          color: pcfg.color, background: pcfg.color + '1a', letterSpacing: '0.05em',
-        }}>{pcfg.label}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: allFlags.length ? 8 : 0 }}>
+        {phase && (
+          <span style={{
+            padding: '2px 10px', borderRadius: 4, fontSize: 11, fontWeight: 700,
+            color: pcfg.color, background: pcfg.color + '1a', letterSpacing: '0.05em',
+          }}>{pcfg.label}</span>
+        )}
         {score != null && (
           <span style={{ fontSize: 12, color: '#888' }}>
             score <span style={{ color: scoreColor, fontWeight: 600 }}>{score}</span>
           </span>
+        )}
+        {dcfg && (
+          <span style={{
+            padding: '2px 10px', borderRadius: 4, fontSize: 11, fontWeight: 800,
+            color: dcfg.color, background: dcfg.color + '22', letterSpacing: '0.07em',
+            border: `1px solid ${dcfg.color}44`,
+          }}>{dcfg.label}</span>
         )}
       </div>
       {allFlags.length > 0 && (

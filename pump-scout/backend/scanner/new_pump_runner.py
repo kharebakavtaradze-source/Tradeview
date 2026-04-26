@@ -275,6 +275,9 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 "decision":                    np.get("decision"),
                 "decision_reason":             np.get("decision_reason"),
                 "decision_flags":              np.get("decision_flags"),
+                "structure_phase":             np.get("structure_phase"),
+                "structure_score":             np.get("structure_score"),
+                "structure_advisory":          np.get("structure_advisory"),
                 "signal_date": signal_date,
                 "next_day":    next_day,
             })
