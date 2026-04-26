@@ -33,6 +33,7 @@ _np_progress: dict = {
     "setup_count":    0,
     "elapsed_secs":   0,
     "last_error":     None,
+    "excluded_non_common_stock_count": 0,
 }
 
 # ── Neutral prefilters (no signal/tier bias) ───────────────────────────────────
@@ -84,6 +85,7 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
         "universe_size": 0, "fetched_count": 0, "analyzed_count": 0,
         "skipped_count": 0, "fire_count": 0, "strong_count": 0,
         "setup_count": 0, "elapsed_secs": 0, "last_error": None,
+        "excluded_non_common_stock_count": 0,
     })
 
     try:
@@ -93,11 +95,33 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
         logger.info("[NpRunner] Fetching grouped daily universe from Massive…")
         all_bars = await fetch_grouped_daily()
 
-        # ── Step 2: Neutral prefilters ────────────────────────────────────────
+        # ── Step 2: Neutral prefilters (incl. ETF/fund exclusion) ───────────────
         _np_progress["phase"] = "filtering"
+
+        # Pre-fetch ETF/fund exclusion set (cached 7 days — fast on repeated calls).
+        # Covers: ETF, ETN, ETV, FUND, CEF types + hardcoded leveraged/inverse/crypto list.
+        etf_symbols: set[str] = set()
+        try:
+            from scanner.massive_data import get_us_etf_symbols
+            etf_symbols = await get_us_etf_symbols()
+            logger.info(f"[NpRunner] ETF exclusion set loaded: {len(etf_symbols)} symbols")
+        except Exception as _exc:
+            logger.warning(f"[NpRunner] ETF exclusion fetch failed (non-fatal): {_exc}")
+
         candidates = []
+        total_symbols_before_filter   = 0
+        excluded_non_common_stock_count = 0
+        excluded_non_common_stock_examples: list[str] = []
+
         for sym, bar in all_bars.items():
+            total_symbols_before_filter += 1
             if not sym.isalpha() or len(sym) > 5:
+                continue
+            # ETF / fund / leveraged-product exclusion
+            if sym.upper() in etf_symbols:
+                excluded_non_common_stock_count += 1
+                if len(excluded_non_common_stock_examples) < 20:
+                    excluded_non_common_stock_examples.append(sym)
                 continue
             price  = bar.get("close") or bar.get("c") or 0
             volume = bar.get("volume") or bar.get("v") or 0
@@ -107,10 +131,18 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                 continue
             candidates.append(sym)
 
+        logger.info(
+            f"[NpRunner] Filter summary: total={total_symbols_before_filter} "
+            f"excluded_etf_fund={excluded_non_common_stock_count} "
+            f"examples={excluded_non_common_stock_examples[:5]} "
+            f"candidates={len(candidates)}"
+        )
+
         # Optional hard cap — only for operational override, not normal use
         if max_tickers is not None:
             candidates = candidates[:max_tickers]
         _np_progress["universe_size"] = len(candidates)
+        _np_progress["excluded_non_common_stock_count"] = excluded_non_common_stock_count
         logger.info(f"[NpRunner] Universe after neutral prefilters: {len(candidates)} tickers")
 
         # ── Step 3: Fetch candles (batched) ───────────────────────────────────
@@ -301,6 +333,8 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
             "fire_count":     _np_progress["fire_count"],
             "strong_count":   _np_progress["strong_count"],
             "setup_count":    _np_progress["setup_count"],
+            "excluded_non_common_stock_count": excluded_non_common_stock_count,
+            "excluded_non_common_stock_examples": excluded_non_common_stock_examples[:20],
             "scanned_at":     started_at.isoformat(),
             "elapsed_secs":   elapsed,
         }

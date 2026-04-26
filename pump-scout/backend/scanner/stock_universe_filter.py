@@ -9,6 +9,7 @@ This is the single source of truth for what counts as a "common stock" in
 Pump Scout.  Applied consistently across:
 
   - live universe scan       (scanner/universe_scan.py)
+  - new pump standalone scan (scanner/new_pump_runner.py)
   - historical replay scan   (replay/replay_engine.py)
   - missed mover analysis    (replay/outcome_engine.py)
   - Pump Engine / Ribbon / Ignition endpoints (via _strip_non_stocks in main.py)
@@ -41,6 +42,16 @@ Filter reason codes
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ── Name keywords that indicate non-equity instruments ────────────────────────
+# Used by is_plain_common_stock() when Polygon type is absent but name is present.
+# Upper-case; checked via substring match against the security name.
+
+_NAME_EXCLUSION_KEYWORDS: frozenset[str] = frozenset({
+    "ETF", "ETN", "FUND", "TRUST", "SHARES", "INCOME", "TREASURY",
+    "BOND", "NOTES", "ULTRA", "SHORT", "2X", "3X", "LEVERAGED",
+    "INVERSE", "DAILY", "BEAR", "BULL", "INDEX",
+})
 
 # ── Allowlist: Polygon types that represent common equity ─────────────────────
 # ONLY symbols whose Polygon "type" is one of these pass the universe filter.
@@ -130,3 +141,51 @@ def get_universe_filter_reason(symbol_meta: dict) -> str | None:
 
     reason = _POLYGON_TYPE_TO_REASON.get(ticker_type)
     return reason or "NOT_COMMON_STOCK"
+
+
+def is_plain_common_stock(ticker: str, metadata: dict | None = None) -> bool:
+    """
+    Return True only if *ticker* represents a plain common stock.
+
+    Priority order (most to least authoritative):
+      1. Polygon ``type`` field — hard allowlist (authoritative when present)
+      2. Security name keyword scan — catches ETF/Fund/Trust/Leveraged names
+      3. Ticker shape heuristics — dot-suffix, WS/WT/WW endings
+
+    Conservative: without metadata, only ticker shape provides signal.
+    When type is absent/null, checks 2 and 3 are applied.
+
+    Parameters
+    ----------
+    ticker   : raw ticker string (e.g. "AAPL", "SPY", "XYZWS").
+    metadata : optional dict with Polygon-style keys ``type`` and ``name``.
+
+    Returns
+    -------
+    bool
+        ``True``  → treat as plain common stock; include in universe.
+        ``False`` → exclude (confirmed non-equity or heuristic red flag).
+    """
+    # ── 1. Polygon type (authoritative) ──────────────────────────────────────
+    if metadata:
+        ticker_type = (metadata.get("type") or "").strip().upper()
+        if ticker_type:
+            return ticker_type in COMMON_STOCK_TYPES
+        # type absent → fall through to secondary checks
+
+    # ── 2. Ticker shape: dot-suffix → preferred / class share / warrant ───────
+    t = ticker.strip().upper()
+    if "." in t:
+        return False
+
+    # ── 3. Security name keyword check ───────────────────────────────────────
+    if metadata:
+        name = (metadata.get("name") or "").upper()
+        if any(kw in name for kw in _NAME_EXCLUSION_KEYWORDS):
+            return False
+
+    # Note: W/WS/WT/U/R ticker endings are only meaningful when Polygon type
+    # confirms WARRANT/UNIT/RIGHT — that case is already handled by check 1.
+    # Without metadata, suffix heuristics cause false positives (e.g. NEWS, FLOW).
+
+    return True
