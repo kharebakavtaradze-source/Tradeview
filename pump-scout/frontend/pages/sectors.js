@@ -5,479 +5,479 @@ import AppNav from '../components/AppNav';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-function fmt(val, plus = true) {
-  if (val == null) return '—';
-  const sign = val >= 0 && plus ? '+' : '';
-  return `${sign}${Number(val).toFixed(1)}%`;
+// ── Constants ─────────────────────────────────────────────────────────────────
+const SECTOR_ORDER = ['XLC','XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLRE','XLK','XLU'];
+
+const METRICS = [
+  { key: 'ret_1d',    label: '1D'        },
+  { key: 'ret_5d',    label: '5D'        },
+  { key: 'ret_20d',   label: '20D'       },
+  { key: 'ret_50d',   label: '50D'       },
+  { key: 'vs_spy_1d', label: 'vs SPY 1D' },
+  { key: 'vs_spy_5d', label: 'vs SPY 5D' },
+  { key: 'vs_spy_20d',label: 'vs SPY 20D'},
+];
+
+const TABLE_COLS = [
+  { key: 'etf',        label: 'ETF',        sortable: false },
+  { key: 'name',       label: 'Sector',     sortable: false },
+  { key: 'ret_1d',     label: '1D %',       sortable: true  },
+  { key: 'ret_5d',     label: '5D %',       sortable: true  },
+  { key: 'ret_20d',    label: '20D %',      sortable: true  },
+  { key: 'vs_spy_1d',  label: '1D vs SPY',  sortable: true  },
+  { key: 'vs_spy_5d',  label: '5D vs SPY',  sortable: true  },
+  { key: 'trend_label',label: 'Trend',      sortable: true  },
+  { key: 'rs_trend',   label: 'RS vs SPY',  sortable: false },
+];
+
+const RISK_COLORS = {
+  RISK_ON:  '#00c853',
+  RISK_OFF: '#f44336',
+  NEUTRAL:  '#ff9800',
+};
+
+const QUADRANT_COLORS = {
+  LEADING:   '#00c853',
+  IMPROVING: '#2196f3',
+  LAGGING:   '#f44336',
+  WEAKENING: '#ff9800',
+};
+
+const TREND_COLORS = {
+  LEADING:   '#00c853',
+  IMPROVING: '#69f0ae',
+  NEUTRAL:   '#607d8b',
+  WEAKENING: '#ff9800',
+  LAGGING:   '#f44336',
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtPct(v, decimals = 2) {
+  if (v == null) return '—';
+  const sign = v > 0 ? '+' : '';
+  return `${sign}${Number(v).toFixed(decimals)}%`;
 }
 
-function pctColor(v) {
-  if (v == null) return 'var(--text-muted)';
-  if (v > 0.5) return '#00c864';
-  if (v > 0) return '#69f0ae';
-  if (v < -1.5) return '#ff4466';
-  if (v < 0) return '#ff8866';
-  return '#ffd740';
+function retColor(v) {
+  if (v == null) return '#607d8b';
+  if (v >  2)    return '#00c853';
+  if (v >  1)    return '#00e676';
+  if (v >  0.3)  return '#69f0ae';
+  if (v > -0.3)  return '#607d8b';
+  if (v > -1)    return '#ff5252';
+  if (v > -2)    return '#f44336';
+  return '#b71c1c';
 }
 
-const CLASS_COLOR = { A: '#00c864', B: '#69f0ae', C: '#ffd740', D: '#ff8866', F: '#ff4466' };
-const CLASS_BG    = { A: 'rgba(0,200,100,0.12)', B: 'rgba(105,240,174,0.08)', C: 'rgba(255,215,64,0.08)', D: 'rgba(255,136,102,0.08)', F: 'rgba(255,68,102,0.12)' };
+function retBg(v) {
+  if (v == null) return 'rgba(96,125,139,0.10)';
+  if (v >  2)    return 'rgba(0,200,83,0.22)';
+  if (v >  1)    return 'rgba(0,200,83,0.14)';
+  if (v >  0.3)  return 'rgba(0,200,83,0.07)';
+  if (v > -0.3)  return 'rgba(96,125,139,0.07)';
+  if (v > -1)    return 'rgba(244,67,54,0.07)';
+  if (v > -2)    return 'rgba(244,67,54,0.14)';
+  return 'rgba(244,67,54,0.22)';
+}
 
-const CYCLE_EMOJI = {
-  RISK_ON_GROWTH: '🚀', LATE_CYCLE: '⚡', STAGFLATION: '⚠️',
-  RISK_OFF: '🛡', FEAR: '😱', NEUTRAL: '😐',
-};
-const CYCLE_COLOR = {
-  RISK_ON_GROWTH: '#00c864', LATE_CYCLE: '#ffd740', STAGFLATION: '#ff8800',
-  RISK_OFF: '#4488ff', FEAR: '#ff4466', NEUTRAL: 'rgba(255,255,255,0.5)',
-};
-const REGIME_COLOR = {
-  RISK_ON: '#00c864', NEUTRAL: '#ffd740', RISK_OFF: '#ff8800', FEAR: '#ff4466',
-};
+// ── RRG SVG ───────────────────────────────────────────────────────────────────
+function RRGPlot({ sectors }) {
+  const SIZE  = 360;
+  const CTR   = 180;
+  const SCALE = 8; // px per unit (1 std-dev = 10 units → ±80px from center)
 
-const SC_EMOJI  = { LEADING: '🔺', LAGGING: '🔻', NEUTRAL: '⚪' };
-const SC_COLOR  = { LEADING: '#00c864', LAGGING: '#ff4466', NEUTRAL: 'rgba(255,255,255,0.4)' };
+  function toSvg(x, y) {
+    return {
+      sx: Math.max(12, Math.min(SIZE - 12, CTR + (x - 100) * SCALE)),
+      sy: Math.max(12, Math.min(SIZE - 12, CTR - (y - 100) * SCALE)),
+    };
+  }
 
-const RETENTION_ICON = { RETAINING: '✅', RECOVERING: '🔄', FADING: '⚠️', NEUTRAL: '' };
+  const entries = Object.entries(sectors || {});
 
-function EtfBox({ symbol, pct, label }) {
-  const color = pct > 0.5 ? '#00c864' : pct < -0.5 ? '#ff4466' : pct > 0 ? '#69f0ae' : '#ff8866';
-  const bg    = pct > 0.5
-    ? 'rgba(0,200,100,0.08)' : pct < -0.5 ? 'rgba(255,68,102,0.08)'
-    : pct > 0 ? 'rgba(105,240,174,0.05)' : 'rgba(255,136,102,0.05)';
   return (
-    <div className={styles.etfBox} style={{ background: bg, borderColor: color + '40' }}>
-      <span className={styles.etfSymbol}>{symbol}</span>
-      {label && <span className={styles.etfLabel}>{label}</span>}
-      <span className={styles.etfPct} style={{ color }}>{fmt(pct)}</span>
-    </div>
+    <svg
+      width={SIZE}
+      height={SIZE}
+      style={{ background: '#13132a', borderRadius: 8, display: 'block' }}
+      aria-label="Relative Rotation Graph"
+    >
+      {/* Quadrant backgrounds */}
+      <rect x={CTR} y={0}   width={CTR} height={CTR} fill="rgba(0,200,83,0.05)"  />
+      <rect x={CTR} y={CTR} width={CTR} height={CTR} fill="rgba(255,152,0,0.05)" />
+      <rect x={0}   y={CTR} width={CTR} height={CTR} fill="rgba(244,67,54,0.05)" />
+      <rect x={0}   y={0}   width={CTR} height={CTR} fill="rgba(33,150,243,0.05)"/>
+      {/* Axes */}
+      <line x1={CTR} y1={4} x2={CTR} y2={SIZE - 4} stroke="#333" strokeWidth={1} />
+      <line x1={4} y1={CTR} x2={SIZE - 4} y2={CTR} stroke="#333" strokeWidth={1} />
+      {/* Quadrant labels */}
+      <text x={CTR + 6} y={14}         fill="#00c853" fontSize={9} fontFamily="monospace">LEADING</text>
+      <text x={CTR + 6} y={SIZE - 4}   fill="#ff9800" fontSize={9} fontFamily="monospace">WEAKENING</text>
+      <text x={4}       y={14}         fill="#2196f3" fontSize={9} fontFamily="monospace">IMPROVING</text>
+      <text x={4}       y={SIZE - 4}   fill="#f44336" fontSize={9} fontFamily="monospace">LAGGING</text>
+      {/* Axis labels */}
+      <text x={SIZE - 68} y={CTR - 5}  fill="#555" fontSize={8} fontFamily="monospace">RS-Ratio →</text>
+      <text x={CTR + 4}   y={SIZE - 18} fill="#555" fontSize={8} fontFamily="monospace" writingMode="tb">Momentum ↑</text>
+      {/* Sector dots */}
+      {entries.map(([etf, d]) => {
+        const { sx, sy } = toSvg(d.x ?? 100, d.y ?? 100);
+        const col = QUADRANT_COLORS[d.quadrant] || '#ccc';
+        return (
+          <g key={etf}>
+            <circle cx={sx} cy={sy} r={7}  fill={col} opacity={0.25} />
+            <circle cx={sx} cy={sy} r={4}  fill={col} opacity={0.9} />
+            <text   x={sx + 7} y={sy + 4} fill={col} fontSize={9} fontFamily="monospace" fontWeight="bold">
+              {etf}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
-function ClassBadge({ cls }) {
-  if (!cls) return null;
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 800, letterSpacing: '0.04em',
-      background: CLASS_BG[cls] || 'rgba(255,255,255,0.06)',
-      color: CLASS_COLOR[cls] || '#888',
-      border: `1px solid ${CLASS_COLOR[cls] || '#888'}44`,
-      borderRadius: 3, padding: '1px 5px',
-    }}>{cls}</span>
-  );
-}
+// ── Detail Panel ──────────────────────────────────────────────────────────────
+function DetailPanel({ etf, onClose }) {
+  const [detail,  setDetail]  = useState(null);
+  const [loading, setLoading] = useState(true);
 
-function SectorClassBar({ classData }) {
-  // classData: { A, B, C, D, F } counts or list of sector classes
-  const grades = ['A', 'B', 'C', 'D', 'F'];
-  return (
-    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-      {grades.map(g => classData[g] != null && (
-        <span key={g} style={{
-          fontSize: 9, fontWeight: 700,
-          background: CLASS_BG[g], color: CLASS_COLOR[g],
-          border: `1px solid ${CLASS_COLOR[g]}44`,
-          borderRadius: 3, padding: '1px 6px',
-        }}>{g}: {classData[g]}</span>
-      ))}
-    </div>
-  );
-}
-
-export default function Sectors() {
-  const [regime, setRegime]             = useState(null);
-  const [sectors, setSectors]           = useState([]);
-  const [momentum, setMomentum]         = useState({});
-  const [selectedSector, setSelectedSector] = useState(null);
-  const [sectorDetail, setSectorDetail] = useState(null);
-  const [loading, setLoading]           = useState(true);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [lastUpdated, setLastUpdated]   = useState(null);
-
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
+    if (!etf) return;
     setLoading(true);
-    try {
-      const [regRes, secRes, momRes] = await Promise.all([
-        fetch(`${API_URL}/api/market-regime`),
-        fetch(`${API_URL}/api/sector-strength`),
-        fetch(`${API_URL}/api/sector-momentum`),
-      ]);
-      if (regRes.ok) setRegime(await regRes.json());
-      if (secRes.ok) {
-        const d = await secRes.json();
-        setSectors(d.sectors || []);
-      }
-      if (momRes.ok) setMomentum(await momRes.json());
-      setLastUpdated(new Date());
-    } catch { /* silent */ }
-    finally { setLoading(false); }
+    setDetail(null);
+    fetch(`${API_URL}/api/sectors/${etf}`)
+      .then(r => r.json())
+      .then(d => { setDetail(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [etf]);
+
+  if (!etf) return null;
+
+  return (
+    <div className={styles.detailPanel}>
+      <div className={styles.detailHeader}>
+        <span className={styles.detailTitle}>{etf} — {detail?.name || '...'}</span>
+        <button className={styles.closeBtn} onClick={onClose}>✕</button>
+      </div>
+
+      {loading && <div className={styles.detailLoading}>Loading...</div>}
+
+      {!loading && detail && (
+        <>
+          {/* Return grid */}
+          <div className={styles.detailSection}>
+            <div className={styles.detailSectionTitle}>Returns</div>
+            <div className={styles.detailMetaGrid}>
+              {[['1D',{v:detail.ret_1d}],['5D',{v:detail.ret_5d}],['20D',{v:detail.ret_20d}],
+                ['50D',{v:detail.ret_50d}],['200D',{v:detail.ret_200d}],
+                ['vs SPY 1D',{v:detail.vs_spy_1d}],['vs SPY 5D',{v:detail.vs_spy_5d}]
+              ].map(([label, {v}]) => (
+                <div key={label} className={styles.detailMeta}>
+                  <div className={styles.detailMetaLabel}>{label}</div>
+                  <div style={{ color: retColor(v), fontWeight: 700 }}>{fmtPct(v)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* EMA stack */}
+          {detail.ema_20 != null && (
+            <div className={styles.detailSection}>
+              <div className={styles.detailSectionTitle}>EMA Stack · Trend: <span style={{ color: TREND_COLORS[detail.trend_label] || '#aaa' }}>{detail.trend_label}</span></div>
+              <div className={styles.detailMetaGrid}>
+                {[['EMA 20', detail.ema_20],['EMA 50', detail.ema_50],['EMA 200', detail.ema_200]].map(([label, v]) => (
+                  <div key={label} className={styles.detailMeta}>
+                    <div className={styles.detailMetaLabel}>{label}</div>
+                    <div className={styles.detailMetaValue}>{v != null ? `$${v.toFixed(2)}` : '—'}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Holdings */}
+          <div className={styles.detailSection}>
+            <div className={styles.detailSectionTitle}>Top Holdings</div>
+            <div className={styles.holdingsList}>
+              {(detail.top_holdings || []).map(sym => (
+                <span key={sym} className={styles.holdingChip}>{sym}</span>
+              ))}
+            </div>
+          </div>
+
+          {/* Top movers from scan */}
+          {detail.top_movers?.length > 0 && (
+            <div className={styles.detailSection}>
+              <div className={styles.detailSectionTitle}>Top Movers (Latest Scan)</div>
+              <div className={styles.moversList}>
+                {detail.top_movers.map(m => (
+                  <div key={m.symbol} className={styles.moverRow}>
+                    <span className={styles.moverSymbol}>{m.symbol}</span>
+                    <span className={styles.moverTier} style={{ color: m.tier === 'A' ? '#00c853' : m.tier === 'B' ? '#69f0ae' : '#ff9800' }}>{m.tier || '—'}</span>
+                    <span className={styles.moverScore}>{m.score != null ? m.score.toFixed(1) : '—'}</span>
+                    <span style={{ color: retColor(m.price_change_pct) }}>{fmtPct(m.price_change_pct)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+export default function Sectors() {
+  const [overview,     setOverview]     = useState(null);
+  const [rrg,          setRrg]          = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
+  const [heatMetric,   setHeatMetric]   = useState('ret_1d');
+  const [sortKey,      setSortKey]      = useState('ret_1d');
+  const [sortDir,      setSortDir]      = useState(-1);
+  const [selectedEtf,  setSelectedEtf]  = useState(null);
+
+  useEffect(() => {
+    Promise.all([
+      fetch(`${API_URL}/api/sectors/overview`).then(r => r.json()),
+      fetch(`${API_URL}/api/sectors/rrg`).then(r => r.json()),
+    ])
+      .then(([ov, rr]) => { setOverview(ov); setRrg(rr); setLoading(false); })
+      .catch(e => { setError(String(e)); setLoading(false); });
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const handleSort = useCallback((key) => {
+    setSortKey(prev => {
+      if (prev === key) setSortDir(d => -d);
+      else { setSortDir(-1); }
+      return key;
+    });
+  }, []);
 
-  const loadSectorDetail = useCallback(async (sector) => {
-    if (selectedSector === sector) {
-      setSelectedSector(null);
-      setSectorDetail(null);
-      return;
-    }
-    setSelectedSector(sector);
-    setLoadingDetail(true);
-    try {
-      const res = await fetch(`${API_URL}/api/sector-strength/${encodeURIComponent(sector)}`);
-      if (res.ok) setSectorDetail(await res.json());
-    } catch { /* silent */ }
-    finally { setLoadingDetail(false); }
-  }, [selectedSector]);
+  const sectorRows = overview
+    ? SECTOR_ORDER.map(etf => ({ etf, ...overview.sectors?.[etf] })).filter(r => r.name)
+    : [];
 
-  const maxScore = Math.max(...sectors.map(s => s.avg_score || 0), 1);
-  const etf      = regime?.etf_details || {};
-  const cyclePhase    = regime?.cycle_phase || 'NEUTRAL';
-  const indLeaders    = regime?.industry_leaders || [];
-  const indLaggards   = regime?.industry_laggards || [];
-  const smallCapReg   = regime?.small_cap_regime || 'NEUTRAL';
-  const iwmVsSpy      = regime?.iwm_vs_spy ?? null;
-  const iwmPct        = etf?.IWM?.pct_1d ?? regime?.iwm_pct ?? null;
-
-  // Merge sector scan data with Finviz momentum data
-  const momentumByGics = {};
-  Object.entries(momentum).forEach(([fvName, d]) => {
-    const gics = d.gics_name || fvName;
-    momentumByGics[gics] = d;
+  const sortedRows = [...sectorRows].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return typeof av === 'string' ? sortDir * av.localeCompare(bv) : sortDir * (av - bv);
   });
 
-  // Build class distribution summary
-  const classCount = { A: 0, B: 0, C: 0, D: 0, F: 0 };
-  Object.values(momentum).forEach(d => {
-    const c = d.sector_class;
-    if (c && classCount[c] != null) classCount[c]++;
-  });
-
-  const allSectorEtfs = ['XLK','XLV','XLF','XLY','XLP','XLE','XLI','XLB','XLRE','XLC','XLU'];
-  const industryEtfs  = [
-    { sym: 'SMH', label: 'Semiconductors' },
-    { sym: 'XBI', label: 'Biotech' },
-    { sym: 'ITA', label: 'Aerospace' },
-    { sym: 'TAN', label: 'Solar' },
-    { sym: 'KRE', label: 'Reg. Banks' },
-    { sym: 'XME', label: 'Metals' },
-    { sym: 'IYT', label: 'Transport' },
-  ];
+  const riskMode = overview?.risk_mode || 'NEUTRAL';
 
   return (
     <>
-      <Head><title>Pump Scout — Sector Intelligence</title></Head>
-      <div className={styles.container}>
+      <Head><title>Sector Rotation — Pump Scout</title></Head>
+      <AppNav />
+      <div className={styles.page}>
+        <h1 className={styles.pageTitle}>Sector Rotation</h1>
 
-        <AppNav />
+        {loading && <div className={styles.loading}>Loading sector data…</div>}
+        {error   && <div className={styles.error}>Error: {error}</div>}
 
-        {/* ── Header ── */}
-        <header className={styles.header}>
-          <h1 className={styles.title}>🗂 Sector Intelligence</h1>
-          {lastUpdated && (
-            <span className={styles.timestamp}>
-              {lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          )}
-        </header>
-
-        {/* ── Regime + Cycle Phase Banner ── */}
-        {regime && (
-          <div className={styles.regimeBanner}>
-            <div className={styles.regimeLeft}>
-              <span className={styles.regimeLabel}
-                style={{ color: REGIME_COLOR[regime.regime] || '#ffd740' }}>
-                {regime.regime}
-              </span>
-              <span className={styles.regimeEtfs}>
-                SPY <b style={{ color: pctColor(regime.spy_pct) }}>{fmt(regime.spy_pct)}</b>
-                {' '} QQQ <b style={{ color: pctColor(regime.qqq_pct) }}>{fmt(regime.qqq_pct)}</b>
-                {etf.XLE && <>{' '} XLE <b style={{ color: pctColor(etf.XLE.pct_1d) }}>{fmt(etf.XLE.pct_1d)}</b></>}
-                {etf.GLD && <>{' '} GLD <b style={{ color: pctColor(etf.GLD.pct_1d) }}>{fmt(etf.GLD.pct_1d)}</b></>}
-              </span>
-            </div>
-            <div className={styles.cycleBlock}>
-              <span style={{
-                fontSize: 11, fontWeight: 800, letterSpacing: '0.05em',
-                color: CYCLE_COLOR[cyclePhase] || '#fff',
-              }}>
-                {CYCLE_EMOJI[cyclePhase]} {cyclePhase.replace(/_/g, ' ')}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Strong/Weak tags from regime */}
-        {regime && (
-          <div className={styles.rotationRow}>
-            {(regime.strong_sectors || []).length > 0 && (
-              <div className={styles.rotIn}>
-                <span className={styles.rotTag} style={{ color: '#00c864' }}>▲ IN</span>
-                {regime.strong_sectors.slice(0, 4).map(s => (
-                  <span key={s} className={styles.rotSector} style={{ color: '#00c864', borderColor: '#00c86430', background: 'rgba(0,200,100,0.07)' }}>{s}</span>
-                ))}
-              </div>
-            )}
-            {(regime.weak_sectors || []).length > 0 && (
-              <div className={styles.rotOut}>
-                <span className={styles.rotTag} style={{ color: '#ff4466' }}>▼ OUT</span>
-                {regime.weak_sectors.slice(0, 4).map(s => (
-                  <span key={s} className={styles.rotSector} style={{ color: '#ff4466', borderColor: '#ff446630', background: 'rgba(255,68,102,0.07)' }}>{s}</span>
-                ))}
-              </div>
-            )}
-            {/* Class distribution summary */}
-            {Object.values(classCount).some(v => v > 0) && (
-              <div style={{ marginLeft: 'auto' }}>
-                <SectorClassBar classData={classCount} />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Sector ETF Heatmap ── */}
-        {regime && (
-          <section className={styles.section}>
-            <div className={styles.sectionLabel}>SECTOR ETFs</div>
-            <div className={styles.etfGrid}>
-              {allSectorEtfs.map(sym => (
-                <EtfBox key={sym} symbol={sym} pct={etf[sym]?.pct_1d} />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* ── Industry ETF + IWM ── */}
-        {regime && (
-          <section className={styles.section}>
-            <div className={styles.sectionLabel} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              INDUSTRY ETFs
-              {iwmPct != null && (
-                <span style={{ fontWeight: 400, color: SC_COLOR[smallCapReg] || 'rgba(255,255,255,0.45)', fontSize: 9 }}>
-                  {SC_EMOJI[smallCapReg]} IWM (Small Cap) {fmt(iwmPct)}
-                  {iwmVsSpy != null && <span style={{ color: 'rgba(255,255,255,0.35)', marginLeft: 4 }}>vs SPY {fmt(iwmVsSpy)}</span>}
-                </span>
-              )}
-            </div>
-            <div className={styles.etfGrid} style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-              <EtfBox symbol="IWM" pct={iwmPct} label="Small Cap" />
-              {industryEtfs.map(({ sym, label }) => (
-                <EtfBox key={sym} symbol={sym} pct={etf[sym]?.pct_1d} label={label} />
-              ))}
-            </div>
-            {/* Leaders / Laggards */}
-            {(indLeaders.length > 0 || indLaggards.length > 0) && (
-              <div className={styles.indRow}>
-                {indLeaders.length > 0 && (
-                  <div>
-                    <span style={{ fontSize: 9, color: '#00c864', fontWeight: 700, marginRight: 6 }}>↑ Leaders</span>
-                    {indLeaders.slice(0, 4).map(e => (
-                      <span key={e.symbol || e.name} style={{
-                        fontSize: 9, fontWeight: 700, color: '#00c864',
-                        background: 'rgba(0,200,100,0.1)', border: '1px solid rgba(0,200,100,0.25)',
-                        borderRadius: 3, padding: '1px 5px', marginRight: 4,
-                      }}>
-                        {e.symbol} {fmt(e.pct_1d)}
-                        {e.name && <span style={{ opacity: 0.55, marginLeft: 3 }}>· {e.name}</span>}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {indLaggards.length > 0 && (
-                  <div style={{ marginTop: 4 }}>
-                    <span style={{ fontSize: 9, color: '#ff4466', fontWeight: 700, marginRight: 6 }}>↓ Laggards</span>
-                    {indLaggards.slice(0, 4).map(e => (
-                      <span key={e.symbol || e.name} style={{
-                        fontSize: 9, fontWeight: 700, color: '#ff4466',
-                        background: 'rgba(255,68,102,0.1)', border: '1px solid rgba(255,68,102,0.25)',
-                        borderRadius: 3, padding: '1px 5px', marginRight: 4,
-                      }}>
-                        {e.symbol} {fmt(e.pct_1d)}
-                        {e.name && <span style={{ opacity: 0.55, marginLeft: 3 }}>· {e.name}</span>}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* ── Finviz Live Momentum ── */}
-        {Object.keys(momentum).length > 0 && (
-          <section className={styles.section}>
-            <div className={styles.sectionLabel}>LIVE SECTOR FLOW (FINVIZ)</div>
-            <div className={styles.momentumGrid}>
-              {Object.entries(momentum)
-                .sort((a, b) => (a[1].rank_1d || 99) - (b[1].rank_1d || 99))
-                .map(([name, d]) => {
-                  const pct = d.change_pct;
-                  const sc  = d.sector_class;
-                  const ret = d.retention;
-                  const trending = d.trending;
-                  const color = pctColor(pct);
+        {!loading && overview && (
+          <>
+            {/* ① Benchmarks */}
+            <section className={styles.section}>
+              <div className={styles.benchmarkGrid}>
+                {['SPY','QQQ','IWM','DIA'].map(sym => {
+                  const d = overview.benchmarks?.[sym] || {};
                   return (
-                    <div key={name} className={styles.momCard}
-                      style={{
-                        borderColor: trending ? '#ffd74040' : 'rgba(255,255,255,0.07)',
-                        background: trending ? 'rgba(255,215,64,0.04)' : 'rgba(255,255,255,0.02)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 4 }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: '#e0e0e0', lineHeight: 1.2 }}>
-                          {trending && '🔥 '}{d.gics_name || name}
-                        </span>
-                        <ClassBadge cls={sc} />
+                    <div key={sym} className={styles.benchmarkCard}>
+                      <div className={styles.benchmarkSym}>{sym}</div>
+                      <div className={styles.benchmarkName}>{d.name || sym}</div>
+                      <div className={styles.benchmarkClose}>{d.close != null ? `$${d.close.toFixed(2)}` : '—'}</div>
+                      <div className={styles.benchmarkReturns}>
+                        <span style={{ color: retColor(d.ret_1d) }}>{fmtPct(d.ret_1d)}</span>
+                        <span className={styles.retSep}>/</span>
+                        <span style={{ color: retColor(d.ret_5d) }}>{fmtPct(d.ret_5d)}</span>
+                        <span className={styles.retSep}>/</span>
+                        <span style={{ color: retColor(d.ret_20d) }}>{fmtPct(d.ret_20d)}</span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
-                        <span style={{ fontSize: 15, fontWeight: 800, color }}>{fmt(pct)}</span>
-                        {d.vs_spy_1d != null && (
-                          <span style={{ fontSize: 9, color: d.vs_spy_1d > 0 ? '#69f0ae' : 'rgba(255,100,100,0.7)' }}>
-                            {d.vs_spy_1d > 0 ? '▲' : '▼'} SPY {fmt(d.vs_spy_1d)}
-                          </span>
-                        )}
-                      </div>
-                      {ret && ret !== 'NEUTRAL' && (
-                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>
-                          {RETENTION_ICON[ret]} {ret}
-                        </div>
-                      )}
-                      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', marginTop: 2 }}>
-                        #{d.rank_1d}
-                      </div>
+                      <div className={styles.benchmarkLabels}>1D / 5D / 20D</div>
                     </div>
                   );
                 })}
-            </div>
-          </section>
-        )}
+              </div>
+            </section>
 
-        {/* ── Sector Scan Table (from scan data) ── */}
-        <section className={styles.section}>
-          <div className={styles.sectionLabel}>SCAN-BASED STRENGTH</div>
-          {loading ? (
-            <div className={styles.loading}>Loading sector data…</div>
-          ) : sectors.length === 0 ? (
-            <div className={styles.empty}>No sector data yet. Run a scan first.</div>
-          ) : (
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Sector</th>
-                    <th>Grade</th>
-                    <th>Score</th>
-                    <th>CMF</th>
-                    <th>1D Flow</th>
-                    <th>vs SPY</th>
-                    <th>Leader</th>
-                    <th>Count</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sectors.map(s => {
-                    const pct    = Math.round((s.avg_score / maxScore) * 100);
-                    const isWeak   = regime?.weak_sectors?.includes(s.sector);
-                    const isStrong = regime?.strong_sectors?.includes(s.sector);
-                    const isSelected = selectedSector === s.sector;
-                    // Try to enrich with Finviz momentum
-                    const mom = momentumByGics[s.sector] || null;
-                    const sc  = mom?.sector_class || null;
-                    // Prefer Finviz momentum; fall back to scan avg price-change (treat 0 as no data)
-                    const flowPct = mom?.change_pct ?? (s.momentum_pct || null);
-                    const vsSpyPct = mom?.vs_spy_1d ?? null;
-                    return (
-                      <>
-                        <tr
-                          key={s.sector}
-                          className={`${styles.row} ${isSelected ? styles.rowSelected : ''}`}
-                          onClick={() => loadSectorDetail(s.sector)}
+            {/* ② Risk mode banner */}
+            <section className={styles.section}>
+              <div
+                className={styles.riskBanner}
+                style={{ borderColor: RISK_COLORS[riskMode], background: `${RISK_COLORS[riskMode]}18` }}
+              >
+                <span className={styles.riskBadge} style={{ background: RISK_COLORS[riskMode] }}>
+                  {riskMode.replace('_', ' ')}
+                </span>
+                <span className={styles.riskDetail}>
+                  Growth avg:&nbsp;
+                  <b style={{ color: retColor(overview.risk_detail?.growth_avg) }}>
+                    {fmtPct(overview.risk_detail?.growth_avg)}
+                  </b>
+                  &nbsp;·&nbsp;Defensive avg:&nbsp;
+                  <b style={{ color: retColor(overview.risk_detail?.defensive_avg) }}>
+                    {fmtPct(overview.risk_detail?.defensive_avg)}
+                  </b>
+                  &nbsp;·&nbsp;Spread:&nbsp;
+                  <b style={{ color: retColor(overview.risk_score) }}>
+                    {overview.risk_score > 0 ? '+' : ''}{overview.risk_score?.toFixed(2)}%
+                  </b>
+                  &nbsp;(5D basis)
+                </span>
+              </div>
+            </section>
+
+            {/* ③ Heatmap */}
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionTitle}>Sector Heatmap</span>
+                <div className={styles.metricToggle}>
+                  {METRICS.map(m => (
+                    <button
+                      key={m.key}
+                      className={`${styles.metricBtn} ${heatMetric === m.key ? styles.metricBtnActive : ''}`}
+                      onClick={() => setHeatMetric(m.key)}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className={styles.heatmapGrid}>
+                {SECTOR_ORDER.map(etf => {
+                  const d   = overview.sectors?.[etf] || {};
+                  const val = d[heatMetric];
+                  return (
+                    <div
+                      key={etf}
+                      className={`${styles.heatBox} ${selectedEtf === etf ? styles.heatBoxSelected : ''}`}
+                      style={{ background: retBg(val), borderColor: retColor(val) }}
+                      onClick={() => setSelectedEtf(etf === selectedEtf ? null : etf)}
+                    >
+                      <div className={styles.heatEtf}>{etf}</div>
+                      <div className={styles.heatName}>{d.name?.split(' ').slice(-1)[0] || ''}</div>
+                      <div className={styles.heatVal} style={{ color: retColor(val) }}>{fmtPct(val)}</div>
+                      {d.rrg_quadrant && (
+                        <div className={styles.heatQuadrant} style={{ color: QUADRANT_COLORS[d.rrg_quadrant] }}>
+                          {d.rrg_quadrant}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* ④ Sortable overview table */}
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionTitle}>Overview Table</span>
+                <span className={styles.sectionSub}>click row to expand · click header to sort</span>
+              </div>
+              <div className={styles.tableWrap}>
+                <table className={styles.overviewTable}>
+                  <thead>
+                    <tr>
+                      {TABLE_COLS.map(col => (
+                        <th
+                          key={col.key}
+                          className={col.sortable ? styles.thSortable : styles.th}
+                          onClick={col.sortable ? () => handleSort(col.key) : undefined}
                         >
-                          <td className={styles.sectorName}>
-                            {s.sector}
-                            {isStrong && <span className={styles.strongTag}>💪</span>}
-                            {isWeak   && <span className={styles.weakTag}>⚠</span>}
-                            {mom?.trending && <span style={{ marginLeft: 5, fontSize: 9 }}>🔥</span>}
-                          </td>
-                          <td><ClassBadge cls={sc} /></td>
-                          <td>
-                            <div className={styles.scoreCell}>
-                              <div className={styles.scoreBar} style={{ width: `${pct}%` }} />
-                              <span>{(s.avg_score || 0).toFixed(0)}</span>
-                            </div>
-                          </td>
-                          <td style={{ color: 'rgba(255,255,255,0.6)' }}>
-                            {s.avg_cmf_pctl != null ? `${s.avg_cmf_pctl.toFixed(0)}%ile` : '—'}
-                          </td>
-                          <td style={{ color: pctColor(flowPct), fontWeight: 700 }}>
-                            {fmt(flowPct)}
-                          </td>
-                          <td style={{ color: vsSpyPct != null ? (vsSpyPct > 0 ? '#69f0ae' : '#ff8866') : 'var(--text-muted)' }}>
-                            {vsSpyPct != null ? fmt(vsSpyPct) : '—'}
-                          </td>
-                          <td className={styles.leader}>{s.leader_symbol || '—'}</td>
-                          <td style={{ color: 'var(--text-muted)' }}>{s.ticker_count || 0}</td>
-                        </tr>
-                        {isSelected && (
-                          <tr key={`${s.sector}-detail`}>
-                            <td colSpan={8} className={styles.detailCell}>
-                              {loadingDetail ? (
-                                <div className={styles.detailLoading}>Loading…</div>
-                              ) : sectorDetail ? (
-                                <div className={styles.tickerGrid}>
-                                  {(sectorDetail.tickers_detail || []).map(t => (
-                                    <div key={t.symbol} className={styles.tickerRow}>
-                                      <span className={styles.tickerSym}>{t.symbol}</span>
-                                      <span className={styles.tickerTier}>{t.tier}</span>
-                                      <span className={styles.tickerScore}>{t.score?.toFixed(0)}</span>
-                                      <span style={{ color: pctColor(t.price_change_pct), fontSize: 10 }}>
-                                        {fmt(t.price_change_pct)}
-                                      </span>
-                                      <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>
-                                        CMF {t.cmf_pctl?.toFixed(0)}%ile
-                                      </span>
-                                      {t.setup_quality?.quality && (
-                                        <span style={{
-                                          fontSize: 9, fontWeight: 700,
-                                          color: { PRIME: '#00c864', STRONG: '#69f0ae', MODERATE: '#ffd740', WEAK: '#ff8866', AVOID: '#ff4466' }[t.setup_quality.quality] || '#888',
-                                          background: 'rgba(255,255,255,0.05)', borderRadius: 3, padding: '1px 5px',
-                                        }}>
-                                          {t.setup_quality.quality}
-                                        </span>
-                                      )}
-                                      {t.sympathy?.is_sympathy && (
-                                        <span className={styles.sympathyTag}>
-                                          🔗 lag {t.sympathy.lag_pct?.toFixed(1)}%
-                                        </span>
-                                      )}
-                                    </div>
-                                  ))}
-                                  {(sectorDetail.tickers_detail || []).length === 0 && (
-                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                      No tickers with detail in this sector from the latest scan.
-                                    </span>
-                                  )}
-                                </div>
-                              ) : null}
-                            </td>
-                          </tr>
-                        )}
-                      </>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+                          {col.label}
+                          {col.sortable && sortKey === col.key && (
+                            <span className={styles.sortArrow}>{sortDir > 0 ? ' ↑' : ' ↓'}</span>
+                          )}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedRows.map(row => (
+                      <tr
+                        key={row.etf}
+                        className={`${styles.tableRow} ${selectedEtf === row.etf ? styles.tableRowSelected : ''}`}
+                        onClick={() => setSelectedEtf(row.etf === selectedEtf ? null : row.etf)}
+                      >
+                        <td className={styles.tdEtf}>{row.etf}</td>
+                        <td className={styles.tdName}>{row.name}</td>
+                        <td style={{ color: retColor(row.ret_1d)    }}>{fmtPct(row.ret_1d)}</td>
+                        <td style={{ color: retColor(row.ret_5d)    }}>{fmtPct(row.ret_5d)}</td>
+                        <td style={{ color: retColor(row.ret_20d)   }}>{fmtPct(row.ret_20d)}</td>
+                        <td style={{ color: retColor(row.vs_spy_1d) }}>{fmtPct(row.vs_spy_1d)}</td>
+                        <td style={{ color: retColor(row.vs_spy_5d) }}>{fmtPct(row.vs_spy_5d)}</td>
+                        <td>
+                          <span
+                            className={styles.trendChip}
+                            style={{
+                              background: `${TREND_COLORS[row.trend_label] || '#607d8b'}1e`,
+                              color: TREND_COLORS[row.trend_label] || '#607d8b',
+                            }}
+                          >
+                            {row.trend_label || '—'}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className={styles.rsTrendText}
+                            style={{ color: row.rs_trend === 'OUTPERFORMING' ? '#00c853' : row.rs_trend === 'UNDERPERFORMING' ? '#f44336' : '#ff9800' }}
+                          >
+                            {row.rs_trend === 'OUTPERFORMING' ? '↑ OUT' : row.rs_trend === 'UNDERPERFORMING' ? '↓ UNDER' : '= NEUT'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
 
-        {/* ── Footer ── */}
-        <div className={styles.footer}>
-          <button className={styles.refreshBtn} onClick={fetchData}>⟳ Refresh</button>
-          <span className={styles.footerNote}>
-            Sector data updates after each scan · Regime detects at 7:55 AM ET
-          </span>
-        </div>
+            {/* ⑤ Detail panel */}
+            {selectedEtf && (
+              <DetailPanel etf={selectedEtf} onClose={() => setSelectedEtf(null)} />
+            )}
+
+            {/* ⑥ RRG scatter */}
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionTitle}>Relative Rotation Graph</span>
+                <span className={styles.sectionSub}>x = RS-Ratio (100 = SPY neutral) · y = RS-Momentum · normalized across sectors</span>
+              </div>
+              <div className={styles.rrgContainer}>
+                <RRGPlot sectors={rrg?.sectors ?? overview.sectors} />
+                <div className={styles.rrgLegend}>
+                  {Object.entries(QUADRANT_COLORS).map(([q, col]) => (
+                    <div key={q} className={styles.legendItem}>
+                      <span className={styles.legendDot} style={{ background: col }} />
+                      <span>{q}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            {/* ⑦ Macro context placeholder */}
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionTitle}>Macro Context</span>
+                <span className={styles.sectionSub}>coming soon</span>
+              </div>
+              <div className={styles.macroGrid}>
+                {['10Y Treasury Yield','VIX','USD Index (DXY)','Fed Rate Expectations','Gold (GLD)','Oil (USO)'].map(label => (
+                  <div key={label} className={styles.macroCard}>
+                    <div className={styles.macroLabel}>{label}</div>
+                    <div className={styles.macroValue}>—</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
       </div>
     </>
   );

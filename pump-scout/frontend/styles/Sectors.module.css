@@ -1,355 +1,510 @@
-.container {
-  margin: 0 auto;
-  padding: 16px 12px 48px;
-  font-family: var(--font-ui);
-  color: var(--text);
+/* Sectors.module.css — Pump Scout sector rotation page */
+
+.page {
   min-height: 100vh;
-  background: var(--bg);
+  background: #0d0d1a;
+  color: #e0e0e0;
+  padding: 20px 24px 60px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-/* ── Header ── */
-.header {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-
-.back {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-decoration: none;
-  transition: color var(--t-fast);
-}
-.back:hover { color: var(--text); }
-
-.title {
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  margin: 0;
-}
-
-.timestamp {
-  font-size: 10px;
-  color: var(--text-muted);
-  margin-left: auto;
-}
-
-/* ── Regime Banner ── */
-.regimeBanner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 10px 14px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.regimeLeft {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.regimeLabel {
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-}
-
-.regimeEtfs {
-  font-size: 11px;
-  color: var(--text-dim);
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.cycleBlock {
-  padding: 4px 10px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-}
-
-/* ── Rotation Row ── */
-.rotationRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-  min-height: 24px;
-}
-
-.rotIn, .rotOut {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.rotTag {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-}
-
-.rotSector {
-  font-size: 9px;
+.pageTitle {
+  font-size: 20px;
   font-weight: 700;
-  border: 1px solid;
-  border-radius: 3px;
-  padding: 1px 5px;
+  color: #fff;
+  margin: 0 0 20px;
+  letter-spacing: 0.5px;
 }
 
-/* ── Section ── */
-.section {
-  margin-bottom: 18px;
-}
-
-.sectionLabel {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-  text-transform: uppercase;
-}
-
-/* ── ETF Heatmap ── */
-.etfGrid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 6px;
-}
-
-@media (max-width: 600px) {
-  .etfGrid { grid-template-columns: repeat(3, 1fr); }
-}
-
-.etfBox {
-  border: 1px solid;
-  border-radius: var(--r-sm);
-  padding: 6px 8px;
+.loading {
+  color: #888;
+  padding: 40px;
   text-align: center;
+  font-size: 14px;
 }
 
-.etfSymbol {
-  display: block;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text-muted);
+.error {
+  color: #f44336;
+  padding: 16px;
+  border: 1px solid #f44336;
+  border-radius: 6px;
+  font-size: 12px;
+  background: rgba(244, 67, 54, 0.08);
 }
 
-.etfLabel {
-  display: block;
-  font-size: 8px;
-  color: var(--text-muted);
-  margin-top: 1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* ── Sections ─────────────────────────────────────────────────────────────── */
+.section {
+  margin-bottom: 32px;
 }
 
-.etfPct {
-  display: block;
-  font-size: 13px;
-  font-weight: 800;
-  margin-top: 2px;
-}
-
-/* ── Industry row ── */
-.indRow {
-  margin-top: 8px;
+.sectionHeader {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
-/* ── Live Momentum Grid ── */
-.momentumGrid {
+.sectionTitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.sectionSub {
+  font-size: 10px;
+  color: #555;
+}
+
+/* ── Benchmarks ───────────────────────────────────────────────────────────── */
+.benchmarkGrid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
+  gap: 10px;
 }
 
 @media (max-width: 700px) {
-  .momentumGrid { grid-template-columns: repeat(2, 1fr); }
+  .benchmarkGrid { grid-template-columns: repeat(2, 1fr); }
 }
 
-.momCard {
-  border: 1px solid;
-  border-radius: var(--r-sm);
-  padding: 8px 10px;
-  transition: background var(--t-fast);
-}
-.momCard:hover { background: var(--surface2) !important; }
-
-/* ── Sector Table ── */
-.loading, .empty {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 30px;
-  font-size: 12px;
+.benchmarkCard {
+  background: #13132a;
+  border: 1px solid #242438;
+  border-radius: 8px;
+  padding: 14px 16px;
 }
 
-.tableWrap {
-  overflow-x: auto;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
-}
-
-.table th {
-  text-align: left;
-  padding: 5px 8px;
-  color: var(--text-muted);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  font-size: 9px;
-  border-bottom: 1px solid var(--border);
-}
-
-.table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
-
-.row {
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.row:hover { background: var(--surface); }
-.rowSelected { background: var(--accent-dim); }
-
-.sectorName {
-  font-weight: 700;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.strongTag {
-  margin-left: 5px;
-  font-size: 10px;
-}
-.weakTag {
-  margin-left: 5px;
-  font-size: 10px;
-  color: var(--amber);
-}
-
-.scoreCell {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.scoreBar {
-  height: 5px;
-  background: linear-gradient(90deg, var(--accent), var(--cyan));
-  border-radius: var(--r-sm);
-  min-width: 3px;
-  flex-shrink: 0;
-  max-width: 90px;
-}
-
-.leader {
-  font-weight: 700;
-  color: var(--accent);
-}
-
-/* ── Detail Expand ── */
-.detailCell {
-  padding: 8px 12px 12px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.detailLoading {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.tickerGrid {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.tickerRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-
-.tickerSym {
+.benchmarkSym {
+  font-size: 16px;
   font-weight: 800;
-  font-size: 12px;
-  width: 56px;
-  flex-shrink: 0;
+  color: #fff;
+  letter-spacing: 0.3px;
 }
 
-.tickerTier {
+.benchmarkName {
+  font-size: 10px;
+  color: #555;
+  margin-bottom: 10px;
+}
+
+.benchmarkClose {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ccc;
+  margin-bottom: 6px;
+}
+
+.benchmarkReturns {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.retSep {
+  color: #333;
+  margin: 0 5px;
+}
+
+.benchmarkLabels {
   font-size: 9px;
-  font-weight: 700;
-  background: var(--surface2);
-  border-radius: var(--r-sm);
-  padding: 1px 5px;
-  color: var(--text-dim);
+  color: #444;
+  margin-top: 3px;
 }
 
-.tickerScore {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent);
-}
-
-.sympathyTag {
-  font-size: 9px;
-  font-weight: 700;
-  background: var(--cyan-dim);
-  border: 1px solid var(--cyan-border);
-  color: var(--cyan);
-  border-radius: var(--r-sm);
-  padding: 1px 5px;
-}
-
-/* ── Footer ── */
-.footer {
+/* ── Risk Banner ──────────────────────────────────────────────────────────── */
+.riskBanner {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-top: 20px;
+  padding: 12px 18px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  flex-wrap: wrap;
 }
 
-.refreshBtn {
-  background: var(--surface);
-  border: 1px solid var(--border2);
-  color: var(--text);
-  border-radius: var(--r-sm);
-  padding: 5px 14px;
+.riskBadge {
   font-size: 11px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all var(--t-fast);
+  font-weight: 800;
+  color: #000;
+  padding: 4px 14px;
+  border-radius: 4px;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
 }
-.refreshBtn:hover { background: var(--surface2); }
 
-.footerNote {
+.riskDetail {
+  font-size: 12px;
+  color: #999;
+}
+
+/* ── Metric Toggle ────────────────────────────────────────────────────────── */
+.metricToggle {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.metricBtn {
+  background: #13132a;
+  border: 1px solid #242438;
+  border-radius: 4px;
+  color: #666;
+  cursor: pointer;
   font-size: 10px;
-  color: var(--text-muted);
+  font-family: inherit;
+  padding: 4px 10px;
+  transition: all 0.12s;
+}
+
+.metricBtn:hover {
+  border-color: #3a3a5e;
+  color: #bbb;
+}
+
+.metricBtnActive {
+  background: #1e1e40;
+  border-color: #5c6bc0;
+  color: #fff;
+}
+
+/* ── Heatmap ─────────────────────────────────────────────────────────────── */
+.heatmapGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
+  gap: 7px;
+}
+
+.heatBox {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: opacity 0.12s, transform 0.1s;
+  min-height: 82px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  user-select: none;
+}
+
+.heatBox:hover {
+  opacity: 0.82;
+  transform: translateY(-1px);
+}
+
+.heatBoxSelected {
+  outline: 2px solid #5c6bc0;
+}
+
+.heatEtf {
+  font-size: 14px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.heatName {
+  font-size: 9px;
+  color: #777;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heatVal {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 3px 0;
+}
+
+.heatQuadrant {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+}
+
+/* ── Overview Table ───────────────────────────────────────────────────────── */
+.tableWrap {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid #242438;
+}
+
+.overviewTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.overviewTable thead th {
+  background: #10101e;
+  color: #666;
+  padding: 10px 14px;
+  text-align: right;
+  font-weight: 600;
+  border-bottom: 1px solid #242438;
+}
+
+.overviewTable thead th:first-child,
+.overviewTable thead th:nth-child(2) {
+  text-align: left;
+}
+
+.th {
+  cursor: default;
+}
+
+.thSortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.thSortable:hover {
+  color: #bbb;
+}
+
+.sortArrow {
+  color: #5c6bc0;
+}
+
+.overviewTable tbody td {
+  padding: 9px 14px;
+  text-align: right;
+  border-bottom: 1px solid #18182c;
+  font-weight: 500;
+}
+
+.overviewTable tbody td:first-child,
+.overviewTable tbody td:nth-child(2) {
+  text-align: left;
+}
+
+.tableRow {
+  cursor: pointer;
+  transition: background 0.08s;
+}
+
+.tableRow:hover {
+  background: #1a1a2e;
+}
+
+.tableRowSelected {
+  background: #1a1a30;
+  outline: 1px solid #5c6bc0;
+}
+
+.tdEtf {
+  font-weight: 800;
+  color: #fff;
+  font-size: 13px;
+}
+
+.tdName {
+  color: #999;
+  font-size: 11px;
+  max-width: 170px;
+}
+
+.trendChip {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+}
+
+.rsTrendText {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+/* ── Detail Panel ─────────────────────────────────────────────────────────── */
+.detailPanel {
+  background: #10101e;
+  border: 1px solid #2a2a4e;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+}
+
+.detailHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.detailTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.closeBtn:hover {
+  color: #ccc;
+}
+
+.detailLoading {
+  color: #666;
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+.detailSection {
+  margin-bottom: 16px;
+}
+
+.detailSectionTitle {
+  font-size: 10px;
+  color: #555;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 8px;
+}
+
+.detailMetaGrid {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.detailMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 56px;
+}
+
+.detailMetaLabel {
+  font-size: 9px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detailMetaValue {
+  font-size: 12px;
+  font-weight: 600;
+  color: #bbb;
+}
+
+.holdingsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.holdingChip {
+  background: #1a1a38;
+  border: 1px solid #333358;
+  border-radius: 4px;
+  color: #bbb;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+}
+
+.moversList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.moverRow {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.moverSymbol {
+  font-weight: 800;
+  color: #fff;
+  min-width: 60px;
+}
+
+.moverTier {
+  font-weight: 700;
+  min-width: 16px;
+}
+
+.moverScore {
+  color: #777;
+  min-width: 36px;
+}
+
+/* ── RRG ──────────────────────────────────────────────────────────────────── */
+.rrgContainer {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.rrgLegend {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #888;
+  font-weight: 600;
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Macro Grid ───────────────────────────────────────────────────────────── */
+.macroGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.macroCard {
+  background: #13132a;
+  border: 1px solid #1e1e38;
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.macroLabel {
+  font-size: 10px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.macroValue {
+  font-size: 20px;
+  font-weight: 700;
+  color: #333;
 }
