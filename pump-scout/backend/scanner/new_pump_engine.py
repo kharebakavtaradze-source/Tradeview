@@ -1286,6 +1286,11 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
       • Mid-score cap: structure_score 46-65 → max WATCH (R21: 46_65 bucket -0.70% 5d).
       • CONFIRMED/TRIGGERED + non-whitelisted sequence → WATCH (not BUY).
       • EARLY/SETUP phase + weak score (<46) → AVOID.
+      v3.7 — Replay R22 (n=927, run_id=22, 2026-03-01..2026-04-24):
+      • Validation: BUY n=36 +4.67% 5d 63.9% WR — clean edge, all in 66_100 bucket.
+      • SETUP_ONLY_L34 + mid_ss → AVOID (was WATCH). R22: WATCH|46_65 -0.84% 5d
+        37.8% WR (n=219, dominated by SETUP_ONLY_L34); SETUP_ONLY_L34 = 44% of all FPs.
+      • SETUP_ONLY_FRI34 unaffected (base ss=62 → naturally lands in 66_100 → WATCH).
     """
     flags: list = []
     _ss = structure_score or 0
@@ -1409,11 +1414,21 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
         return "WATCH", f"phase={_sp} ss={_ss} seq={seq_lbl} — not whitelisted for BUY", flags
 
     # ── D. Early / setup structure ─────────────────────────────────────────────
+    # v3.7 (R22): SETUP_ONLY_L34 + mid_ss → AVOID (was WATCH).
+    # R22: WATCH|46_65 -0.84% 5d, 37.8% WR (n=219, mostly SETUP_ONLY_L34).
+    # SETUP_ONLY_L34 also = 44.2% of all FPs (n=126/285), FP rate 32.9%.
+    # SETUP_ONLY_FRI34 (base ss=62) lands in 66_100 → keeps WATCH path.
     if _sp in ("EARLY_STRUCTURE", "SETUP_PHASE"):
+        if seq_lbl == "SETUP_ONLY_L34":
+            # SETUP_ONLY_L34 needs ss>=66 to earn even WATCH (rare: 38 base + 28pts).
+            if _high_ss:
+                flags.append("setup_only_l34_high_score_watch")
+                return "WATCH", f"phase={_sp} ss={_ss} seq=SETUP_ONLY_L34 — high score", flags
+            flags.append("l34_setup_only_mid_score_avoid")
+            return "AVOID", f"SETUP_ONLY_L34 ss={_ss} — no edge at mid/weak score", flags
+
         if seq_lbl == "SETUP_ONLY_FRI34":
             flags.append("watch_fri34_setup_strength")
-        elif seq_lbl == "SETUP_ONLY_L34":
-            flags.append("watch_setup_only_progression")
         if _high_ss:
             flags.append("early_structure_high_score_watch")
             return "WATCH", f"phase={_sp} ss={_ss} — waiting for trigger/confirm", flags
