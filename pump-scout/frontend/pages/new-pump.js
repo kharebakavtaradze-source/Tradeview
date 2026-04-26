@@ -145,6 +145,92 @@ function labelCounts(results) {
   return c;
 }
 
+// ── v3.6 Decision + Structure Phase configs ───────────────────────────────────
+
+const DECISION_CFG = {
+  BUY_CANDIDATE: { color: '#00e676', label: 'BUY'     },
+  WATCH:         { color: '#ffd600', label: 'WATCH'   },
+  AVOID:         { color: '#ff5252', label: 'AVOID'   },
+  IMPULSE_RISK:  { color: '#ff9800', label: 'IMPULSE' },
+};
+
+const PHASE_CFG = {
+  CONFIRMED_STRUCTURE: { color: '#00e676', short: 'CONFIRMED' },
+  TRIGGERED_STRUCTURE: { color: '#00b0ff', short: 'TRIGGERED' },
+  EARLY_STRUCTURE:     { color: '#ffd600', short: 'EARLY'     },
+  SETUP_PHASE:         { color: '#ffd600', short: 'SETUP'     },
+  IMPULSE_ONLY:        { color: '#c084fc', short: 'IMPULSE'   },
+  BROKEN_STRUCTURE:    { color: '#ff9800', short: 'BROKEN'    },
+  DEGRADED:            { color: '#ff5252', short: 'DEGRADED'  },
+  TRUE_NONE:           { color: '#444',    short: 'NONE'      },
+};
+
+const ALL_DECISIONS = ['BUY_CANDIDATE', 'WATCH', 'AVOID', 'IMPULSE_RISK'];
+const ALL_PHASES = [
+  'CONFIRMED_STRUCTURE', 'TRIGGERED_STRUCTURE',
+  'EARLY_STRUCTURE', 'SETUP_PHASE', 'IMPULSE_ONLY',
+  'BROKEN_STRUCTURE', 'DEGRADED', 'TRUE_NONE',
+];
+const SS_BUCKETS = [
+  { value: '66_100', label: '66–100 (edge zone)' },
+  { value: '46_65',  label: '46–65 (caution)'    },
+  { value: '26_45',  label: '26–45 (weak)'        },
+  { value: '0_25',   label: '0–25 (avoid)'        },
+];
+
+function ssColor(s) {
+  if (s == null) return '#444';
+  if (s >= 66) return '#00e676';
+  if (s >= 46) return '#ff9800';
+  return '#ff5252';
+}
+
+function DecisionBadge({ decision, reason }) {
+  if (!decision) return <span style={{ color: '#333', fontSize: 9 }}>—</span>;
+  const cfg = DECISION_CFG[decision] || { color: '#888', label: decision };
+  return (
+    <span
+      title={reason || decision}
+      style={{
+        display: 'inline-block', padding: '2px 7px', borderRadius: 3,
+        fontSize: 9, fontWeight: 800, letterSpacing: '0.07em',
+        color: cfg.color, background: cfg.color + '22',
+        border: `1px solid ${cfg.color}44`, whiteSpace: 'nowrap', cursor: 'default',
+      }}
+    >
+      {cfg.label}
+    </span>
+  );
+}
+
+function PhaseBadge({ phase }) {
+  if (!phase) return <span style={{ color: '#333', fontSize: 9 }}>—</span>;
+  const cfg = PHASE_CFG[phase] || { color: '#888', short: phase };
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 6px', borderRadius: 3,
+      fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+      color: cfg.color, background: cfg.color + '1a',
+      border: `1px solid ${cfg.color}33`, whiteSpace: 'nowrap',
+    }}>
+      {cfg.short}
+    </span>
+  );
+}
+
+function decisionOrder(d) {
+  return { BUY_CANDIDATE: 0, WATCH: 1, IMPULSE_RISK: 2, AVOID: 3 }[d] ?? 9;
+}
+
+function decisionCounts(results) {
+  const c = { BUY_CANDIDATE: 0, WATCH: 0, AVOID: 0, IMPULSE_RISK: 0 };
+  for (const r of results) {
+    const d = r.decision;
+    if (d in c) c[d]++;
+  }
+  return c;
+}
+
 // ── Sort helpers ──────────────────────────────────────────────────────────────
 
 function applySort(rows, lp, col, dir) {
@@ -153,12 +239,14 @@ function applySort(rows, lp, col, dir) {
   return [...rows].sort((a, b) => {
     let va, vb;
     switch (col) {
-      case 'score':    va = a.new_pump_score;               vb = b.new_pump_score;               break;
-      case 'sig_date': va = a.signal_date;                  vb = b.signal_date;                  break;
-      case 'price':    va = lp[a.symbol]?.price ?? a.price; vb = lp[b.symbol]?.price ?? b.price; break;
-      case 'change':   va = lp[a.symbol]?.change_pct;       vb = lp[b.symbol]?.change_pct;       break;
-      case 'nd_ret':   va = a.next_day?.return_pct;         vb = b.next_day?.return_pct;         break;
-      case 'volume':   va = a.volume_today;                 vb = b.volume_today;                 break;
+      case 'score':          va = a.new_pump_score;               vb = b.new_pump_score;               break;
+      case 'structure_score': va = a.structure_score;             vb = b.structure_score;             break;
+      case 'decision':       return m * (decisionOrder(a.decision) - decisionOrder(b.decision));
+      case 'sig_date':       va = a.signal_date;                  vb = b.signal_date;                  break;
+      case 'price':          va = lp[a.symbol]?.price ?? a.price; vb = lp[b.symbol]?.price ?? b.price; break;
+      case 'change':         va = lp[a.symbol]?.change_pct;       vb = lp[b.symbol]?.change_pct;       break;
+      case 'nd_ret':         va = a.next_day?.return_pct;         vb = b.next_day?.return_pct;         break;
+      case 'volume':         va = a.volume_today;                 vb = b.volume_today;                 break;
       default: return 0;
     }
     if (va == null && vb == null) return 0;
@@ -307,6 +395,9 @@ export default function NewPumpPage() {
   const [minScore,     setMinScore]     = useState(0);
   const [labelF,       setLabelF]       = useState('');
   const [seqF,         setSeqF]         = useState('');
+  const [decisionF,    setDecisionF]    = useState('');
+  const [phaseF,       setPhaseF]       = useState('');
+  const [ssBucketF,    setSsBucketF]    = useState('');
   const [scanning,     setScanning]     = useState(false);
   const [scanStatus,   setScanStatus]   = useState(null);
   const [regime,       setRegime]       = useState(null);
@@ -331,6 +422,9 @@ export default function NewPumpPage() {
       if (minScore > 0) params.set('min_score', minScore);
       if (labelF)       params.set('label', labelF);
       if (seqF)         params.set('sequence', seqF);
+      if (decisionF)    params.set('decision', decisionF);
+      if (phaseF)       params.set('phase', phaseF);
+      if (ssBucketF)    params.set('ss_bucket', ssBucketF);
       const res = await fetch(`${API_URL}/api/new-pump/latest?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
@@ -345,7 +439,7 @@ export default function NewPumpPage() {
     } finally {
       setLoading(false);
     }
-  }, [minScore, labelF, seqF]);
+  }, [minScore, labelF, seqF, decisionF, phaseF, ssBucketF]);
 
   const triggerScan = useCallback(async () => {
     if (scanning) return;
@@ -495,11 +589,12 @@ export default function NewPumpPage() {
     return () => window.removeEventListener('keydown', handler);
   }, [drawerSym]);
 
-  const results = data?.results || [];
-  const counts  = labelCounts(results);
-  const regCfg  = REGIME_CFG[regime?.regime] || REGIME_CFG.NEUTRAL;
-  const sorted  = applySort(results, livePrices, sortCol, sortDir);
-  const ndRows  = results.filter(r => r.next_day?.return_pct != null);
+  const results   = data?.results || [];
+  const counts    = labelCounts(results);
+  const dCounts   = decisionCounts(results);
+  const regCfg    = REGIME_CFG[regime?.regime] || REGIME_CFG.NEUTRAL;
+  const sorted    = applySort(results, livePrices, sortCol, sortDir);
+  const ndRows    = results.filter(r => r.next_day?.return_pct != null);
   const ndWin   = ndRows.filter(r => r.next_day.return_pct > 0).length;
   const ndLoss  = ndRows.length - ndWin;
   const ndAvg   = ndRows.length
@@ -549,7 +644,7 @@ export default function NewPumpPage() {
           </div>
         )}
 
-        {/* Summary bar */}
+        {/* Summary bar — legacy label counts */}
         {results.length > 0 && (
           <div className={styles.summaryBar}>
             {ALL_LABELS.map(lbl => (
@@ -561,6 +656,24 @@ export default function NewPumpPage() {
             <div className={styles.summaryItem}>
               <span className={styles.summaryNum}>{results.length}</span>
               <span className={styles.summaryLbl}>Total</span>
+            </div>
+          </div>
+        )}
+
+        {/* Decision summary bar — v3.6 authority counts */}
+        {results.length > 0 && (
+          <div className={styles.summaryBar} style={{ borderColor: 'rgba(0,230,118,0.15)' }}>
+            {[['BUY_CANDIDATE','#00e676'],['WATCH','#ffd600'],['IMPULSE_RISK','#ff9800'],['AVOID','#ff5252']].map(([d, col]) => (
+              <div key={d} className={styles.summaryItem}>
+                <span className={styles.summaryNum} style={{ color: col }}>{dCounts[d] || 0}</span>
+                <span className={styles.summaryLbl} style={{ color: col + 'aa' }}>
+                  {DECISION_CFG[d]?.label || d}
+                </span>
+              </div>
+            ))}
+            <div className={styles.summaryItem} style={{ opacity: 0.5 }}>
+              <span className={styles.summaryNum} style={{ fontSize: 9 }}>v3.6</span>
+              <span className={styles.summaryLbl}>Decision Authority</span>
             </div>
           </div>
         )}
@@ -623,6 +736,48 @@ export default function NewPumpPage() {
             </select>
           </div>
 
+          <div className={styles.filterGroup}>
+            <span className={styles.filterLabel} style={{ color: '#00e676' }}>Decision</span>
+            <select
+              className={styles.select}
+              value={decisionF}
+              onChange={e => setDecisionF(e.target.value)}
+            >
+              <option value="">All</option>
+              {ALL_DECISIONS.map(d => (
+                <option key={d} value={d}>{DECISION_CFG[d]?.label || d}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.filterGroup}>
+            <span className={styles.filterLabel} style={{ color: '#00b0ff' }}>Phase</span>
+            <select
+              className={styles.select}
+              value={phaseF}
+              onChange={e => setPhaseF(e.target.value)}
+            >
+              <option value="">All</option>
+              {ALL_PHASES.map(p => (
+                <option key={p} value={p}>{PHASE_CFG[p]?.short || p}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.filterGroup}>
+            <span className={styles.filterLabel} style={{ color: '#ffd600' }}>SS Bucket</span>
+            <select
+              className={styles.select}
+              value={ssBucketF}
+              onChange={e => setSsBucketF(e.target.value)}
+            >
+              <option value="">All</option>
+              {SS_BUCKETS.map(b => (
+                <option key={b.value} value={b.value}>{b.label}</option>
+              ))}
+            </select>
+          </div>
+
           <button
             className={styles.refreshBtn}
             onClick={fetchData}
@@ -679,8 +834,15 @@ export default function NewPumpPage() {
                 <tr>
                   <th>Symbol</th>
                   <th className={styles.actionTh}>Action</th>
+                  <SortTh col="decision"       sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Decision</SortTh>
+                  <th>Phase</th>
+                  <SortTh col="structure_score" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>
+                    <span title="Structure Score: ≥66 edge zone (green), 46–65 caution (amber), <46 avoid (red)">SS</span>
+                  </SortTh>
                   <th>State</th>
-                  <SortTh col="score"    sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Score</SortTh>
+                  <SortTh col="score" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>
+                    <span title="Legacy NP Score — diagnostic only. Routing uses Structure Phase + Score + Sequence (v3.6).">NP Score</span>
+                  </SortTh>
                   <th>Label</th>
                   <th>Sequence</th>
                   <th>L34</th>
@@ -735,9 +897,21 @@ export default function NewPumpPage() {
                           <div className={styles.journalError}>{journalErrors[r.symbol]}</div>
                         )}
                       </td>
+                      <td><DecisionBadge decision={r.decision} reason={r.decision_reason} /></td>
+                      <td><PhaseBadge phase={r.structure_phase} /></td>
+                      <td
+                        className={styles.scoreCell}
+                        style={{ color: ssColor(r.structure_score), fontWeight: 700 }}
+                        title={r.structure_score != null ? `Structure Score: ${r.structure_score}` : 'No structure score'}
+                      >
+                        {r.structure_score ?? '—'}
+                      </td>
                       <td><StateBadge state={r.state} impulseLbl={r.impulse_label} /></td>
-                      <td className={styles.scoreCell}
-                          style={{ color: SCORE_COLOR(r.new_pump_score) }}>
+                      <td
+                        className={styles.scoreCell}
+                        style={{ color: SCORE_COLOR(r.new_pump_score), opacity: 0.75 }}
+                        title="Legacy NP Score — diagnostic only. Routing uses Structure Phase + Score + Sequence (v3.6)."
+                      >
                         {fmt(r.new_pump_score)}
                       </td>
                       <td><LabelBadge label={r.new_pump_label} /></td>
