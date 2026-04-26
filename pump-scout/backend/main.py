@@ -1011,21 +1011,25 @@ async def new_pump_status():
 
 @app.get("/api/new-pump/latest")
 async def new_pump_latest(
-    min_score:  float = 0.0,
-    label:      str   = "",
-    sequence:   str   = "",
-    max_results: int  = 500,
+    min_score:    float = 0.0,
+    label:        str   = "",
+    sequence:     str   = "",
+    decision:     str   = "",   # BUY_CANDIDATE | WATCH | AVOID | IMPULSE_RISK
+    phase:        str   = "",   # CONFIRMED_STRUCTURE | TRIGGERED_STRUCTURE | ...
+    ss_bucket:    str   = "",   # 66_100 | 46_65 | 26_45 | 0_25
+    max_results:  int   = 500,
 ):
     """
     Return latest New Pump scan results from standalone pipeline.
-    Filters: min_score, label, sequence.
-    Sorted by label tier then score descending.
+    Filters: min_score, label, sequence, decision, phase, ss_bucket.
+    Fields include v3.6 decision authority: decision, structure_phase,
+    structure_score, decision_reason, decision_flags, decision_authority.
     """
     from scanner.new_pump_runner import get_latest
     data = get_latest()
     results = data.get("results", [])
 
-    # Strip ETFs/funds from New Pump results (same filter applied to other scan endpoints)
+    # Strip ETFs/funds
     exclusions = await _get_exclusion_set()
     results = _strip_non_stocks(results, exclusions)
 
@@ -1035,6 +1039,20 @@ async def new_pump_latest(
         results = [r for r in results if r.get("new_pump_label") == label]
     if sequence:
         results = [r for r in results if r.get("new_pump_sequence_label") == sequence]
+    if decision:
+        results = [r for r in results if r.get("decision") == decision]
+    if phase:
+        results = [r for r in results if r.get("structure_phase") == phase]
+    if ss_bucket:
+        def _in_bucket(r):
+            ss = r.get("structure_score")
+            if ss is None: return False
+            if ss_bucket == "66_100": return ss >= 66
+            if ss_bucket == "46_65":  return 46 <= ss < 66
+            if ss_bucket == "26_45":  return 26 <= ss < 46
+            if ss_bucket == "0_25":   return ss < 26
+            return True
+        results = [r for r in results if _in_bucket(r)]
 
     return {
         "results":      results[:min(max_results, 1000)],
@@ -1042,7 +1060,11 @@ async def new_pump_latest(
         "universe":     data.get("universe", 0),
         "scanned_at":   data.get("scanned_at"),
         "elapsed_secs": data.get("elapsed_secs"),
-        "filters":      {"min_score": min_score, "label": label, "sequence": sequence},
+        "excluded_non_common_stock_count": data.get("excluded_non_common_stock_count", 0),
+        "filters":      {
+            "min_score": min_score, "label": label, "sequence": sequence,
+            "decision": decision, "phase": phase, "ss_bucket": ss_bucket,
+        },
     }
 
 
