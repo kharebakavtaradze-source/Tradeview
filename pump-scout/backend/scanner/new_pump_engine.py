@@ -1291,6 +1291,16 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
       • SETUP_ONLY_L34 + mid_ss → AVOID (was WATCH). R22: WATCH|46_65 -0.84% 5d
         37.8% WR (n=219, dominated by SETUP_ONLY_L34); SETUP_ONLY_L34 = 44% of all FPs.
       • SETUP_ONLY_FRI34 unaffected (base ss=62 → naturally lands in 66_100 → WATCH).
+      v3.8 — Replay R25 (n=2254, run_id=25, 2026-01-01..2026-04-25):
+      • expansion_timing_risk=HIGH n=768 -3.68% 5d 37.4% WR — strongest single
+        negative signal in R25. Added as routing gate: demote BUY→WATCH; AVOID
+        when paired with mid_ss (structure score 46-65).
+      • ce_state=OVERHEATED_EXPANSION n=295 -2.36% 5d 35.5% WR — was advisory
+        flag only. Now AVOID outside CONFIRMED/TRIGGERED phase + non-whitelisted
+        sequence; CONFIRMED/TRIGGERED carve-out preserved (structural support
+        offsets timing risk).
+      • Validations confirmed unchanged: ISOLATED_G4 -1.80% 5d (n=674),
+        SETUP_ONLY_L34+mid_ss -1.49% 5d (n=957), NEUTRAL/BROKEN_SETUP AVOID.
     """
     flags: list = []
     _ss = structure_score or 0
@@ -1390,12 +1400,47 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
     if _mid_ss:
         flags.append("mid_structure_score_caution")
 
+    # ── v3.8 (R25): expansion_timing_risk = HIGH — hard demotion ─────────────
+    # R25: n=768 -3.68% 5d 37.4% WR — strongest negative signal.
+    # Mid-score + HIGH ftr → AVOID; high-score → cap at WATCH (no BUY).
+    _ftr_high = (ce_risk == "HIGH")
+    if _ftr_high:
+        flags.append("expansion_timing_risk_high")
+        if _mid_ss:
+            flags.append("ftr_high_mid_ss_avoid")
+            return (
+                "AVOID",
+                f"expansion_timing_risk=HIGH ss={_ss} — timing risk + mid score",
+                flags,
+            )
+
+    # ── v3.8 (R25): OVERHEATED_EXPANSION outside structural support → AVOID ──
+    # R25: n=295 -2.36% 5d 35.5% WR. Carve-out preserved for CONFIRMED/TRIGGERED
+    # phase + whitelisted sequence (structural support offsets timing risk).
+    if (ce_state == "OVERHEATED_EXPANSION"
+            and _sp not in ("CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE")
+            and seq_lbl not in _BUY_SEQUENCE_WHITELIST):
+        flags.append("overheated_expansion_no_structural_support_avoid")
+        return (
+            "AVOID",
+            f"ce_state=OVERHEATED_EXPANSION phase={_sp} seq={seq_lbl} — no structural support",
+            flags,
+        )
+
     # ── A. High-confidence BUY ─────────────────────────────────────────────────
     # Requires: ss >= 66 + CONFIRMED/TRIGGERED phase + whitelisted sequence.
     # R21: structure_score 66_100 was strongly positive; whitelist removes negative seqs.
+    # v3.8: HIGH expansion_timing_risk caps at WATCH (no BUY) even with full structural support.
     if (_high_ss
             and _sp in ("CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE")
             and seq_lbl in _BUY_SEQUENCE_WHITELIST):
+        if _ftr_high:
+            flags.append("ftr_high_buy_demoted_to_watch")
+            return (
+                "WATCH",
+                f"phase={_sp} ss={_ss} seq={seq_lbl} — BUY demoted: expansion_timing_risk=HIGH",
+                flags,
+            )
         flags.append("structure_score_66_buy")
         return (
             "BUY_CANDIDATE",
