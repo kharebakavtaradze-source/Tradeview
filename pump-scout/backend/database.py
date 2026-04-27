@@ -491,6 +491,23 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("valid_full_sequence_days_pre",         "INTEGER"),
 ]
 
+_REPLAY_OUTCOME_MIGRATIONS = [
+    ("max_high",        "FLOAT"),
+    ("max_gain_day",    "INTEGER"),
+    ("max_gain_date",   "VARCHAR(10)"),
+    ("giveback_pct",    "FLOAT"),
+    ("hit_5pct",        "BOOLEAN"),
+    ("hit_10pct",       "BOOLEAN"),
+    ("hit_20pct",       "BOOLEAN"),
+    ("hit_50pct",       "BOOLEAN"),
+    ("hit_100pct",      "BOOLEAN"),
+    ("hit_5pct_day",    "INTEGER"),
+    ("hit_10pct_day",   "INTEGER"),
+    ("hit_20pct_day",   "INTEGER"),
+    ("hit_50pct_day",   "INTEGER"),
+    ("hit_100pct_day",  "INTEGER"),
+]
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -566,6 +583,11 @@ async def _run_migrations(conn):
         for col, coltype in _RAW_PATTERN_EP_MIGRATIONS:
             try:
                 await conn.execute(text(f"ALTER TABLE raw_pattern_episode_features ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
+        for col, coltype in _REPLAY_OUTCOME_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE replay_outcomes ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
     else:
@@ -657,6 +679,15 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration replay_signal_candidates.{col} failed (non-fatal): {e}")
+
+        # MFE columns on replay_outcomes
+        for col, coltype in _REPLAY_OUTCOME_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE replay_outcomes ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration replay_outcomes.{col} failed (non-fatal): {e}")
 
         # Drop removed AI advisory tables (idempotent)
         for tbl in ("ai_signal_analysis", "ai_review_reports", "ai_insights"):
@@ -2671,6 +2702,23 @@ class ReplayOutcome(Base):
     max_drawdown_pct    = Column(Float,       nullable=True)
     alpha_vs_spy        = Column(Float,       nullable=True)
     outcome_label       = Column(String(30),  nullable=True)   # SUCCESSFUL_BREAKOUT | FAILED_BREAKOUT | etc.
+    # MFE (Maximum Favorable Excursion) fields
+    max_high            = Column(Float,       nullable=True)   # actual high price at peak
+    max_gain_day        = Column(Integer,     nullable=True)   # 0-based day offset of peak
+    max_gain_date       = Column(String(10),  nullable=True)   # YYYY-MM-DD of peak
+    giveback_pct        = Column(Float,       nullable=True)   # max_gain_pct - return_pct
+    # Threshold hit flags (populated for horizon=10d rows; NULL for 1d/3d/5d)
+    hit_5pct            = Column(Boolean,     nullable=True)
+    hit_10pct           = Column(Boolean,     nullable=True)
+    hit_20pct           = Column(Boolean,     nullable=True)
+    hit_50pct           = Column(Boolean,     nullable=True)
+    hit_100pct          = Column(Boolean,     nullable=True)
+    # First day when threshold was reached (NULL if never reached)
+    hit_5pct_day        = Column(Integer,     nullable=True)
+    hit_10pct_day       = Column(Integer,     nullable=True)
+    hit_20pct_day       = Column(Integer,     nullable=True)
+    hit_50pct_day       = Column(Integer,     nullable=True)
+    hit_100pct_day      = Column(Integer,     nullable=True)
     created_at          = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -2918,6 +2966,21 @@ async def save_replay_outcomes(outcomes: list[dict]) -> int:
                 max_drawdown_pct    = o.get("max_drawdown_pct"),
                 alpha_vs_spy        = o.get("alpha_vs_spy"),
                 outcome_label       = o.get("outcome_label"),
+                # MFE fields
+                max_high            = o.get("max_high"),
+                max_gain_day        = o.get("max_gain_day"),
+                max_gain_date       = o.get("max_gain_date"),
+                giveback_pct        = o.get("giveback_pct"),
+                hit_5pct            = o.get("hit_5pct"),
+                hit_10pct           = o.get("hit_10pct"),
+                hit_20pct           = o.get("hit_20pct"),
+                hit_50pct           = o.get("hit_50pct"),
+                hit_100pct          = o.get("hit_100pct"),
+                hit_5pct_day        = o.get("hit_5pct_day"),
+                hit_10pct_day       = o.get("hit_10pct_day"),
+                hit_20pct_day       = o.get("hit_20pct_day"),
+                hit_50pct_day       = o.get("hit_50pct_day"),
+                hit_100pct_day      = o.get("hit_100pct_day"),
             )
             session.add(row)
         await session.commit()
@@ -2941,6 +3004,21 @@ async def get_replay_outcomes(run_id: int) -> list[dict]:
                 "exit_price": r.exit_price, "return_pct": r.return_pct,
                 "max_gain_pct": r.max_gain_pct, "max_drawdown_pct": r.max_drawdown_pct,
                 "alpha_vs_spy": r.alpha_vs_spy, "outcome_label": r.outcome_label,
+                # MFE fields
+                "max_high":       r.max_high,
+                "max_gain_day":   r.max_gain_day,
+                "max_gain_date":  r.max_gain_date,
+                "giveback_pct":   r.giveback_pct,
+                "hit_5pct":       r.hit_5pct,
+                "hit_10pct":      r.hit_10pct,
+                "hit_20pct":      r.hit_20pct,
+                "hit_50pct":      r.hit_50pct,
+                "hit_100pct":     r.hit_100pct,
+                "hit_5pct_day":   r.hit_5pct_day,
+                "hit_10pct_day":  r.hit_10pct_day,
+                "hit_20pct_day":  r.hit_20pct_day,
+                "hit_50pct_day":  r.hit_50pct_day,
+                "hit_100pct_day": r.hit_100pct_day,
             }
             for r in rows
         ]

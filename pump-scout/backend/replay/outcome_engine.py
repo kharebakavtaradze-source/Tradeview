@@ -202,6 +202,40 @@ async def compute_outcomes_for_run(
                     if window_lows:
                         max_dd = round((min(window_lows) - entry_price) / entry_price * 100, 2)
 
+                # ── MFE fields ────────────────────────────────────────────────
+                max_high_val  = None
+                max_gain_day  = None
+                max_gain_date = None
+                giveback_pct  = None
+                if entry_price and entry_price > 0 and window_highs:
+                    _peak_val = max(window_highs)
+                    _peak_idx = window_highs.index(_peak_val)
+                    max_high_val  = _peak_val
+                    max_gain_day  = _peak_idx  # 0-based day offset within window
+                    _t = forwards[_peak_idx].get("t")
+                    if _t:
+                        from datetime import datetime, timezone as _tz
+                        max_gain_date = datetime.fromtimestamp(
+                            _t / 1000, tz=_tz.utc
+                        ).strftime("%Y-%m-%d")
+                    if max_gain is not None and ret is not None:
+                        giveback_pct = round(max_gain - ret, 2)
+
+                # ── Hit-threshold fields (10d only) ───────────────────────────
+                hit_5pct = hit_10pct = hit_20pct = hit_50pct = hit_100pct = None
+                hit_5d   = hit_10d  = hit_20d   = hit_50d   = hit_100d   = None
+                if horizon == "10d" and entry_price and entry_price > 0 and window_highs:
+                    for _di, _h in enumerate(window_highs):
+                        _g = (_h - entry_price) / entry_price * 100
+                        if hit_5d   is None and _g >= 5:    hit_5d   = _di; hit_5pct   = True
+                        if hit_10d  is None and _g >= 10:   hit_10d  = _di; hit_10pct  = True
+                        if hit_20d  is None and _g >= 20:   hit_20d  = _di; hit_20pct  = True
+                        if hit_50d  is None and _g >= 50:   hit_50d  = _di; hit_50pct  = True
+                        if hit_100d is None and _g >= 100:  hit_100d = _di; hit_100pct = True
+                    hit_5pct   = bool(hit_5pct);   hit_10pct = bool(hit_10pct)
+                    hit_20pct  = bool(hit_20pct);  hit_50pct = bool(hit_50pct)
+                    hit_100pct = bool(hit_100pct)
+
                 spy_ret = _spy_return(cal_days)
                 alpha = round(ret - spy_ret, 2) if (ret is not None and spy_ret is not None) else None
 
@@ -221,6 +255,21 @@ async def compute_outcomes_for_run(
                     "max_drawdown_pct":    max_dd,
                     "alpha_vs_spy":        alpha,
                     "outcome_label":       label,
+                    # MFE
+                    "max_high":            max_high_val,
+                    "max_gain_day":        max_gain_day,
+                    "max_gain_date":       max_gain_date,
+                    "giveback_pct":        giveback_pct,
+                    "hit_5pct":            hit_5pct,
+                    "hit_10pct":           hit_10pct,
+                    "hit_20pct":           hit_20pct,
+                    "hit_50pct":           hit_50pct,
+                    "hit_100pct":          hit_100pct,
+                    "hit_5pct_day":        hit_5d,
+                    "hit_10pct_day":       hit_10d,
+                    "hit_20pct_day":       hit_20d,
+                    "hit_50pct_day":       hit_50d,
+                    "hit_100pct_day":      hit_100d,
                 })
 
     await asyncio.gather(*[_process_candidate(c) for c in candidates])
