@@ -1525,6 +1525,13 @@ async def get_recent_np_signals(days: int = 5) -> list[dict]:
             "sector": r.sector,
             "price": r.price,
             "tier": r.tier,
+            # NP quality signals — used by AI portfolio for per-candidate assessment
+            "np_state":                       r.np_state,
+            "np_base_quality_score":          r.np_base_quality_score,
+            "np_fake_trigger_risk":           r.np_fake_trigger_risk,
+            "np_expansion_timing_risk":       r.np_expansion_timing_risk,
+            "np_compression_expansion_state": r.np_compression_expansion_state,
+            "np_decision":                    r.np_decision,
         }
         for r in rows
     ]
