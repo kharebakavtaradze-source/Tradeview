@@ -287,6 +287,266 @@ function DecisionSummary({ bundle }) {
   );
 }
 
+// ── D/WLNBB Combination Winrate Matrix ───────────────────────────────────────
+
+const DW_FAMILIES  = ['ALL','SAME_BAR_L34','SAME_BAR_L43','SAME_BAR_BEUP','L34_THEN_D','L43_THEN_D','D_THEN_BEUP'];
+const DW_DSIGS     = ['ALL','D1','D3','D4','D6','D9','D11'];
+const DW_WLNBB     = ['ALL','L34','L43','BE_UP'];
+const DW_TIMINGS   = ['ALL','SAME_BAR','BASE_THEN_D_3B','D_THEN_BEUP_5B'];
+const DW_MINCOUNTS = [1,3,5,10];
+const DW_SORT_KEYS = ['count','win_rate_5d','avg_return_5d','avg_return_10d','false_positive_rate','avg_max_drawdown_pct'];
+
+const DW_HEATMAP_ROWS = ['D1','D3','D4','D6','D9','D11'];
+const DW_HEATMAP_COLS = [
+  {label:'L34 SAME', sig_d:null, sig_w:'L34',   timing:'SAME_BAR'},
+  {label:'L43 SAME', sig_d:null, sig_w:'L43',   timing:'SAME_BAR'},
+  {label:'BE SAME',  sig_d:null, sig_w:'BE_UP',  timing:'SAME_BAR'},
+  {label:'L34→D',    sig_d:null, sig_w:'L34',   timing:'BASE_THEN_D_3B'},
+  {label:'L43→D',    sig_d:null, sig_w:'L43',   timing:'BASE_THEN_D_3B'},
+  {label:'D→BE',     sig_d:null, sig_w:'BE_UP',  timing:'D_THEN_BEUP_5B'},
+];
+
+function dwRowColor(row) {
+  if (!row || row.count < 5) return '#2a2a2a';
+  const wr = row.win_rate_5d ?? 0;
+  const ar = row.avg_return_5d ?? 0;
+  if (wr >= 60 && ar > 0)  return 'rgba(76,175,80,0.18)';
+  if (wr < 40  || ar < 0)  return 'rgba(244,67,54,0.14)';
+  if (ar > 0.5 && row.count < 10) return 'rgba(255,193,7,0.14)';
+  return 'transparent';
+}
+
+function fmt(v, decimals=1) {
+  if (v == null) return '—';
+  return Number(v).toFixed(decimals);
+}
+
+function DWlnbbMatrix({ bundle }) {
+  const matrix  = bundle.d_wlnbb_combination_matrix  ?? [];
+  const summary = bundle.d_wlnbb_combination_summary  ?? {};
+
+  const [familyFilter,  setFamilyFilter]  = useState('ALL');
+  const [dFilter,       setDFilter]       = useState('ALL');
+  const [wFilter,       setWFilter]       = useState('ALL');
+  const [timingFilter,  setTimingFilter]  = useState('ALL');
+  const [minCount,      setMinCount]      = useState(1);
+  const [sortKey,       setSortKey]       = useState('count');
+  const [sortDir,       setSortDir]       = useState(-1);
+  const [viewMode,      setViewMode]      = useState('table');
+  const [expanded,      setExpanded]      = useState(false);
+
+  if (!matrix.length) return null;
+
+  function toggleSort(key) {
+    if (sortKey === key) setSortDir(d => -d);
+    else { setSortKey(key); setSortDir(-1); }
+  }
+
+  const filtered = matrix
+    .filter(r =>
+      (familyFilter === 'ALL' || r.family      === familyFilter) &&
+      (dFilter      === 'ALL' || r.signal_d    === dFilter)      &&
+      (wFilter      === 'ALL' || r.signal_wlnbb=== wFilter)      &&
+      (timingFilter === 'ALL' || r.timing      === timingFilter)  &&
+      r.count >= minCount
+    )
+    .sort((a,b) => {
+      const av = a[sortKey] ?? (sortDir > 0 ? Infinity : -Infinity);
+      const bv = b[sortKey] ?? (sortDir > 0 ? Infinity : -Infinity);
+      return sortDir * (bv - av);
+    });
+
+  // Heatmap lookup
+  function heatCell(dsig, col) {
+    return matrix.find(r =>
+      r.signal_d     === dsig &&
+      r.signal_wlnbb === col.sig_w &&
+      r.timing       === col.timing
+    );
+  }
+
+  const selClass = s => ({ background: s ? '#1e1e40' : '#13132a', border: `1px solid ${s ? '#5c6bc0' : '#242438'}`, borderRadius: 3, color: s ? '#fff' : '#666', cursor:'pointer', fontSize:10, fontFamily:'inherit', padding:'3px 8px' });
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
+        <span style={{ fontSize:10, color:'#888', fontWeight:700, letterSpacing:'0.5px', textTransform:'uppercase' }}>View</span>
+        {['table','heatmap'].map(m => (
+          <button key={m} style={selClass(viewMode===m)} onClick={() => setViewMode(m)}>{m}</button>
+        ))}
+        <span style={{ fontSize:10, color:'#444', marginLeft:8 }}>Family:</span>
+        <select value={familyFilter} onChange={e => setFamilyFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
+          {DW_FAMILIES.map(f => <option key={f} value={f}>{f}</option>)}
+        </select>
+        <span style={{ fontSize:10, color:'#444' }}>D:</span>
+        <select value={dFilter} onChange={e => setDFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
+          {DW_DSIGS.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <span style={{ fontSize:10, color:'#444' }}>WLNBB:</span>
+        <select value={wFilter} onChange={e => setWFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
+          {DW_WLNBB.map(w => <option key={w} value={w}>{w}</option>)}
+        </select>
+        <span style={{ fontSize:10, color:'#444' }}>Timing:</span>
+        <select value={timingFilter} onChange={e => setTimingFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
+          {DW_TIMINGS.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <span style={{ fontSize:10, color:'#444' }}>Min n:</span>
+        <select value={minCount} onChange={e => setMinCount(Number(e.target.value))} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
+          {DW_MINCOUNTS.map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </div>
+
+      {viewMode === 'heatmap' ? (
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ borderCollapse:'collapse', fontSize:11, whiteSpace:'nowrap' }}>
+            <thead>
+              <tr>
+                <th style={{ padding:'6px 10px', color:'#555', textAlign:'left', borderBottom:'1px solid #242438' }}>D \ WLNBB</th>
+                {DW_HEATMAP_COLS.map(col => (
+                  <th key={col.label} style={{ padding:'6px 10px', color:'#777', borderBottom:'1px solid #242438', textAlign:'center', fontSize:10 }}>{col.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {DW_HEATMAP_ROWS.map(dsig => (
+                <tr key={dsig}>
+                  <td style={{ padding:'6px 10px', color:'#bbb', fontWeight:700 }}>{dsig}</td>
+                  {DW_HEATMAP_COLS.map(col => {
+                    const cell = heatCell(dsig, col);
+                    const bg   = dwRowColor(cell);
+                    return (
+                      <td key={col.label} style={{ padding:'6px 8px', background:bg, textAlign:'center', border:'1px solid #1a1a2e', minWidth:72 }}>
+                        {cell ? (
+                          <>
+                            <div style={{ fontSize:12, fontWeight:700, color: (cell.win_rate_5d ?? 0) >= 55 ? '#81c784' : (cell.win_rate_5d ?? 0) < 40 ? '#e57373' : '#ccc' }}>
+                              {fmt(cell.win_rate_5d)}%
+                            </div>
+                            <div style={{ fontSize:9, color:'#555' }}>n={cell.count}</div>
+                          </>
+                        ) : <span style={{ color:'#333' }}>—</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div style={{ overflowX:'auto', border:'1px solid #242438', borderRadius:6 }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11, whiteSpace:'nowrap' }}>
+            <thead>
+              <tr>
+                {[
+                  ['combination','Combination'],
+                  ['family','Family'],
+                  ['signal_d','D'],
+                  ['signal_wlnbb','WLNBB'],
+                  ['timing','Timing'],
+                  ['count','n'],
+                  ['win_rate_1d','WR1d%'],
+                  ['win_rate_3d','WR3d%'],
+                  ['win_rate_5d','WR5d%'],
+                  ['win_rate_10d','WR10d%'],
+                  ['avg_return_1d','Avg1d%'],
+                  ['avg_return_3d','Avg3d%'],
+                  ['avg_return_5d','Avg5d%'],
+                  ['avg_return_10d','Avg10d%'],
+                  ['median_return_5d','Med5d%'],
+                  ['avg_max_gain_pct','MaxGain%'],
+                  ['avg_max_drawdown_pct','MaxDD%'],
+                  ['alpha_vs_spy_5d','α5d'],
+                  ['alpha_vs_spy_10d','α10d'],
+                  ['false_positive_count','FP#'],
+                  ['false_positive_rate','FP%'],
+                  ['failed_breakout_count','FB#'],
+                  ['no_follow_through_count','NFT#'],
+                ].map(([key, label]) => {
+                  const sortable = DW_SORT_KEYS.includes(key);
+                  return (
+                    <th key={key}
+                      onClick={sortable ? () => toggleSort(key) : undefined}
+                      style={{ padding:'7px 10px', background:'#10101e', color: sortKey===key ? '#9fa8da' : '#666', textAlign: ['combination','family','signal_d','signal_wlnbb','timing'].includes(key) ? 'left' : 'right', borderBottom:'1px solid #242438', cursor: sortable ? 'pointer' : 'default', fontWeight:600, userSelect:'none', fontSize:10 }}>
+                      {label}{sortable && sortKey===key ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((row, i) => {
+                const bg = dwRowColor(row);
+                return (
+                  <tr key={row.combination} style={{ background: i%2===0 ? bg : bg, borderBottom:'1px solid #18182c', cursor: expanded===row.combination ? 'default' : 'pointer' }}
+                    onClick={() => setExpanded(expanded===row.combination ? null : row.combination)}>
+                    <td style={{ padding:'7px 10px', fontWeight:700, color:'#fff' }}>{row.combination}</td>
+                    <td style={{ padding:'7px 10px', color:'#888', fontSize:10 }}>{row.family}</td>
+                    <td style={{ padding:'7px 10px', color:'#aaa' }}>{row.signal_d}</td>
+                    <td style={{ padding:'7px 10px', color:'#aaa' }}>{row.signal_wlnbb}</td>
+                    <td style={{ padding:'7px 10px', color:'#666', fontSize:10 }}>{row.timing}</td>
+                    <td style={{ padding:'7px 10px', textAlign:'right', color: row.count < 5 ? '#666' : '#ccc', fontWeight: row.count >= 10 ? 700 : 500 }}>{row.count}</td>
+                    {[
+                      ['win_rate_1d',  v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
+                      ['win_rate_3d',  v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
+                      ['win_rate_5d',  v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
+                      ['win_rate_10d', v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
+                      ['avg_return_1d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
+                      ['avg_return_3d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
+                      ['avg_return_5d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
+                      ['avg_return_10d', v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
+                      ['median_return_5d', v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
+                      ['avg_max_gain_pct',     v => `${fmt(v)}%`, () => '#9fa8da'],
+                      ['avg_max_drawdown_pct', v => `${fmt(v)}%`, v => v < -3 ? '#e57373' : '#ccc'],
+                      ['alpha_vs_spy_5d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
+                      ['alpha_vs_spy_10d', v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
+                      ['false_positive_count', v => v, () => '#ccc'],
+                      ['false_positive_rate',  v => `${fmt(v)}%`, v => v > 30 ? '#e57373' : v < 15 ? '#81c784' : '#ccc'],
+                      ['failed_breakout_count',      v => v, () => '#ccc'],
+                      ['no_follow_through_count',    v => v, () => '#ccc'],
+                    ].map(([key, display, color]) => {
+                      const v = row[key];
+                      return (
+                        <td key={key} style={{ padding:'7px 10px', textAlign:'right', color: v != null ? color(v) : '#333', fontWeight:500 }}>
+                          {v != null ? display(v) : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <div style={{ padding:'20px', color:'#555', textAlign:'center', fontSize:11 }}>No combinations match the current filters.</div>}
+        </div>
+      )}
+
+      {/* Summary block */}
+      {summary.best_by_5d_return?.length > 0 && (
+        <div style={{ display:'flex', gap:20, flexWrap:'wrap', marginTop:14 }}>
+          {[
+            ['Best Avg5d Return (n≥3)',  summary.best_by_5d_return,  r => `${fmt(r.avg_return_5d)}%`,  '#81c784'],
+            ['Best WinRate5d (n≥3)',     summary.best_by_win_rate_5d, r => `${fmt(r.win_rate_5d)}%`,   '#9fa8da'],
+            ['Worst Avg5d Return (n≥3)', summary.worst_by_5d_return, r => `${fmt(r.avg_return_5d)}%`, '#e57373'],
+          ].map(([title, rows, valFn, col]) => (
+            <div key={title} style={{ background:'#13132a', border:'1px solid #1e1e38', borderRadius:6, padding:'10px 14px', minWidth:180, flex:'1 1 180px' }}>
+              <div style={{ fontSize:9, color:'#555', textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:8, fontWeight:700 }}>{title}</div>
+              {rows.map((r, i) => (
+                <div key={r.combination} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:11, marginBottom:3 }}>
+                  <span style={{ color:'#bbb', fontWeight:600 }}>{i+1}. {r.combination}</span>
+                  <span style={{ color:col, fontWeight:700 }}>{valFn(r)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {summary.min_sample_threshold_note && (
+        <div style={{ fontSize:9, color:'#444', marginTop:8 }}>{summary.min_sample_threshold_note}</div>
+      )}
+    </div>
+  );
+}
+
 function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
   const [copied, setCopied] = useState(false);
 
@@ -528,6 +788,15 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
           </div>
         )}
       </div>
+
+      {/* D/WLNBB Combination Winrate Matrix */}
+      {(bundle.d_wlnbb_combination_matrix?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle}>D / WLNBB Combination Winrate Matrix</div>
+          <div className={styles.researchWarning}>⚠ Research only — does not affect scoring, routing, or D formulas</div>
+          <DWlnbbMatrix bundle={bundle} />
+        </div>
+      )}
     </div>
   );
 }
