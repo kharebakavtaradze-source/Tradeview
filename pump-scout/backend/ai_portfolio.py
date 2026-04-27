@@ -197,6 +197,109 @@ async def _get_np_candidates() -> list[dict]:
     return candidates
 
 
+async def _enrich_np_with_replay_edge(np_candidates: list[dict]) -> None:
+    """
+    Pre-compute per-candidate replay edge from the latest completed replay run
+    and attach the stats directly to each candidate dict in-place.
+
+    Adds these fields per candidate:
+      - replay_wr5d         (best win-rate found across matching dimensions)
+      - replay_n            (sample size of the dimension that produced the best WR)
+      - replay_avg_ret_5d   (avg 5d return of that matching cohort)
+      - replay_edge_label   (e.g. "SEQ:L34_PRE_BREAKOUT" / "CE:ACCUMULATION_READY")
+      - replay_edge_score   (composite score for ranking — higher is better)
+
+    Lookup precedence: D/WLNBB combo > sequence > CE state. The dimension with
+    the highest n*WR product wins. Falls back to neutral 50% / n=0 if no match.
+    """
+    if not np_candidates:
+        return
+    try:
+        from database import get_replay_history, get_replay_candidates, get_replay_outcomes
+        runs = await get_replay_history(limit=5)
+        run = next((r for r in runs if r.get("status") == "completed"), None)
+        if not run:
+            return
+        run_id = run["id"]
+        cands  = await get_replay_candidates(run_id, limit=5000)
+        outs   = await get_replay_outcomes(run_id)
+        if not cands or not outs:
+            return
+
+        # candidate_id → 5d return
+        out_map = {
+            o["replay_candidate_id"]: o["return_pct"]
+            for o in outs
+            if o.get("horizon") == "5d" and o.get("return_pct") is not None
+        }
+
+        def _stats(label_fn) -> dict[str, dict]:
+            """label → {n, wr5d, avg_ret_5d}"""
+            from collections import defaultdict
+            buckets: dict[str, list[float]] = defaultdict(list)
+            for c in cands:
+                cid = c.get("id")
+                if cid not in out_map:
+                    continue
+                lbl = label_fn(c)
+                if not lbl or lbl == "NONE":
+                    continue
+                buckets[lbl].append(out_map[cid])
+            out: dict[str, dict] = {}
+            for lbl, rets in buckets.items():
+                if len(rets) < 3:
+                    continue
+                wins = sum(1 for r in rets if r >= 3.0)
+                out[lbl] = {
+                    "n":           len(rets),
+                    "wr5d":        round(wins / len(rets) * 100, 1),
+                    "avg_ret_5d":  round(sum(rets) / len(rets), 2),
+                }
+            return out
+
+        seq_map = _stats(lambda c: c.get("new_pump_sequence_label"))
+        ce_map  = _stats(lambda c: c.get("np_compression_expansion_state"))
+        def _dw(c):
+            snap = c.get("snapshot") or {}
+            np_d = snap.get("new_pump") or {}
+            return (np_d.get("d_confluence_type_v2") or
+                    snap.get("d_confluence_type_v2"))
+        dw_map  = _stats(_dw)
+
+        for c in np_candidates:
+            best = None  # (score, n, wr, ret, label)
+            for lookup_label, m in (
+                (f"DW:{c.get('np_setup_via') or ''}", dw_map),
+                (f"SEQ:{c.get('np_sequence') or ''}", seq_map),
+                (f"CE:{c.get('np_ce_state') or ''}", ce_map),
+            ):
+                # Match by raw key (strip prefix used only for display)
+                key = lookup_label.split(":", 1)[1]
+                stats = m.get(key)
+                if not stats:
+                    continue
+                # Composite: WR weighted by sqrt(n)
+                from math import sqrt
+                score = stats["wr5d"] * sqrt(stats["n"])
+                if best is None or score > best[0]:
+                    best = (score, stats["n"], stats["wr5d"],
+                            stats["avg_ret_5d"], lookup_label)
+            if best:
+                c["replay_edge_score"] = round(best[0], 1)
+                c["replay_n"]          = best[1]
+                c["replay_wr5d"]       = best[2]
+                c["replay_avg_ret_5d"] = best[3]
+                c["replay_edge_label"] = best[4]
+            else:
+                c["replay_edge_score"] = 0
+                c["replay_n"]          = 0
+                c["replay_wr5d"]       = None
+                c["replay_avg_ret_5d"] = None
+                c["replay_edge_label"] = "NO_MATCH"
+    except Exception as exc:
+        logger.warning(f"NP replay-edge enrichment failed: {exc}")
+
+
 async def _build_portfolio_memory() -> dict[str, dict]:
     """
     Derive per-ticker win/loss memory from the last 100 closed positions.
@@ -468,6 +571,15 @@ async def ai_portfolio_decisions():
 
     # New Pump candidates from replay history (last 5 days)
     np_candidates = await _get_np_candidates()
+    # Enrich each NP candidate with per-row replay edge stats so AI sees
+    # WR/n/avg_ret directly in the candidate JSON without cross-referencing.
+    await _enrich_np_with_replay_edge(np_candidates)
+    # Best edge first — AI consumes top-8 below
+    np_candidates.sort(
+        key=lambda c: (c.get("replay_edge_score") or 0,
+                       c.get("np_base_quality_score") or 0),
+        reverse=True,
+    )
 
     # No qualified candidates → hold cash, skip API call
     if not qualified and not np_candidates:
@@ -608,7 +720,9 @@ OPEN POSITIONS ({len(portfolio_ctx)} total, {len(near_stop_positions)} near stop
 SCANNER CANDIDATES (Wyckoff/CMF pre-filtered):
 {json.dumps(scan_ctx, indent=2)}
 
-NEW PUMP CANDIDATES (NP engine FIRE/STRONG, last 5 days):
+NEW PUMP CANDIDATES (NP engine FIRE/STRONG, last 5 days, sorted by replay edge desc):
+Each row carries pre-computed replay edge: replay_wr5d, replay_n, replay_avg_ret_5d, replay_edge_label.
+These come from the latest completed replay run — use them as your primary memory of what works.
 {json.dumps(np_ctx, indent=2)}
 
 USER WATCHLIST (manual trades for context):
@@ -643,9 +757,14 @@ STRICT RULES (not negotiable):
     fake_trigger_risk_high_caution, expansion_timing_risk_high_caution, or ce_overheated_caution;
     boost confidence when base_quality_high + early_setup + ce_accumulation_ready_positive stack.
     Priors do NOT override source, but shape sizing and conviction.
-11. Use SIGNAL QUALITY MEMORY: cross-reference each candidate's np_sequence and np_ce_state
-    against the replay win-rate stats in the digest. Prefer sequences with >60% WR5d.
-    Hard pass on candidates where np_expansion_timing_risk=HIGH AND np_decision=AVOID.
+11. Use SIGNAL QUALITY MEMORY: every NP candidate already has its own replay_wr5d, replay_n,
+    replay_avg_ret_5d, replay_edge_label fields pre-computed from the latest replay run.
+    Strongly favor NP candidates with replay_wr5d ≥ 55% AND replay_n ≥ 5.
+    Hard pass ONLY when np_decision is explicitly the string "AVOID" (not null/missing).
+12. EDGE MANDATE: if 1+ NP candidate has replay_wr5d ≥ 55% AND replay_n ≥ 5 AND no hard rule blocks it,
+    you SHOULD buy at least one (subject to cash and slot limits). Holding cash while a measurable
+    NP edge is sitting in front of you is a quantifiable miss — don't default to "no trade" out of
+    inertia. Explain WHY you're skipping each high-edge candidate if you do skip them.
 
 For each BUY include stop_loss, target_price (TP1), target_price_2 (TP2), sell_pct_at_target_1 (default 50).
 
@@ -655,7 +774,8 @@ Rank candidates explicitly before committing. For each candidate you consider, a
 2. Signal quality: prefer np_decision=BUY_CANDIDATE, np_base_quality_score≥60, ftr=LOW
 3. Context quality: boost if ce_accumulation_ready + early_setup + bull_stack + CMF+ stack
 4. Caution: downrank if isolated_signal_penalty / fake_trigger_risk_high / expansion_timing_risk_high
-5. Replay memory: use SIGNAL QUALITY MEMORY WR stats — favor sequences/CE states with proven edge
+5. Replay memory: each NP row has replay_wr5d/replay_n/replay_avg_ret_5d/replay_edge_label
+   already attached — sort your final picks so the highest-edge NP rises to the top
 6. Wallet fit: reject if remaining cash < min position; prefer smaller size under wallet pressure
 7. Tie-break: cleanest research prior + memory stack wins
 
@@ -693,13 +813,21 @@ Respond in Russian. Return JSON only:
 }}"""
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
+        # Sonnet 4.6 with extended thinking — user asked the AI to actually
+        # reason over the replay analytics before deciding ("he must think").
+        # Thinking budget 3000 tok; response budget 2200 tok → max_tokens 5500.
+        client = anthropic.AsyncAnthropic(api_key=api_key, timeout=120.0)
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2200,
+            model="claude-sonnet-4-6",
+            max_tokens=5500,
+            thinking={"type": "enabled", "budget_tokens": 3000},
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text.replace("```json", "").replace("```", "").strip()
+        # With extended thinking, content has thinking + text blocks; pick text.
+        text = next(
+            (b.text for b in response.content if getattr(b, "type", None) == "text"),
+            "",
+        ).replace("```json", "").replace("```", "").strip()
         result = json.loads(text)
     except Exception as e:
         logger.error(f"Portfolio decisions AI call failed: {e}")
