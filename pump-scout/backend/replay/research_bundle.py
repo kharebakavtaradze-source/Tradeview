@@ -110,6 +110,125 @@ def _bucket_stats(cand_ids: list[int], outcome_map: dict) -> dict:
     }
 
 
+# ── D/WLNBB combination matrix definitions ───────────────────────────────────
+# (combination_name, family, signal_d, signal_wlnbb, timing, field_key)
+_DW_COMBO_DEFS: list[tuple] = [
+    # A. Same-bar core
+    ("D3_L34_SAME",    "SAME_BAR_L34",  "D3",  "L34",   "SAME_BAR",       "d3_l34_same"),
+    ("D4_L34_SAME",    "SAME_BAR_L34",  "D4",  "L34",   "SAME_BAR",       "d4_l34_same"),
+    ("D6_L34_SAME",    "SAME_BAR_L34",  "D6",  "L34",   "SAME_BAR",       "d6_l34_same"),
+    ("D3_L43_SAME",    "SAME_BAR_L43",  "D3",  "L43",   "SAME_BAR",       "d3_l43_same"),
+    ("D4_L43_SAME",    "SAME_BAR_L43",  "D4",  "L43",   "SAME_BAR",       "d4_l43_same"),
+    ("D6_L43_SAME",    "SAME_BAR_L43",  "D6",  "L43",   "SAME_BAR",       "d6_l43_same"),
+    ("D3_BEUP_SAME",   "SAME_BAR_BEUP", "D3",  "BE_UP", "SAME_BAR",       "d3_beup_same"),
+    ("D4_BEUP_SAME",   "SAME_BAR_BEUP", "D4",  "BE_UP", "SAME_BAR",       "d4_beup_same"),
+    ("D6_BEUP_SAME",   "SAME_BAR_BEUP", "D6",  "BE_UP", "SAME_BAR",       "d6_beup_same"),
+    # B. Base-then-D window (3-bar)
+    ("L34_THEN_D3_3B", "L34_THEN_D",    "D3",  "L34",   "BASE_THEN_D_3B", "l34_then_d3_3b"),
+    ("L34_THEN_D4_3B", "L34_THEN_D",    "D4",  "L34",   "BASE_THEN_D_3B", "l34_then_d4_3b"),
+    ("L34_THEN_D6_3B", "L34_THEN_D",    "D6",  "L34",   "BASE_THEN_D_3B", "l34_then_d6_3b"),
+    ("L43_THEN_D3_3B", "L43_THEN_D",    "D3",  "L43",   "BASE_THEN_D_3B", "l43_then_d3_3b"),
+    ("L43_THEN_D4_3B", "L43_THEN_D",    "D4",  "L43",   "BASE_THEN_D_3B", "l43_then_d4_3b"),
+    ("L43_THEN_D6_3B", "L43_THEN_D",    "D6",  "L43",   "BASE_THEN_D_3B", "l43_then_d6_3b"),
+    # C. D-then-BE_UP window (5-bar)
+    ("D3_THEN_BEUP_5B","D_THEN_BEUP",   "D3",  "BE_UP", "D_THEN_BEUP_5B", "d3_then_beup_5b"),
+    ("D4_THEN_BEUP_5B","D_THEN_BEUP",   "D4",  "BE_UP", "D_THEN_BEUP_5B", "d4_then_beup_5b"),
+    ("D6_THEN_BEUP_5B","D_THEN_BEUP",   "D6",  "BE_UP", "D_THEN_BEUP_5B", "d6_then_beup_5b"),
+    # D. Secondary same-bar
+    ("D1_L34",   "SECONDARY", "D1",  "L34",   "SAME_BAR", "d1_l34_same"),
+    ("D9_L34",   "SECONDARY", "D9",  "L34",   "SAME_BAR", "d9_l34_same"),
+    ("D11_L34",  "SECONDARY", "D11", "L34",   "SAME_BAR", "d11_l34_same"),
+    ("D1_L43",   "SECONDARY", "D1",  "L43",   "SAME_BAR", "d1_l43_same"),
+    ("D9_L43",   "SECONDARY", "D9",  "L43",   "SAME_BAR", "d9_l43_same"),
+    ("D11_L43",  "SECONDARY", "D11", "L43",   "SAME_BAR", "d11_l43_same"),
+    ("D1_BEUP",  "SECONDARY", "D1",  "BE_UP", "SAME_BAR", "d1_beup_same"),
+    ("D9_BEUP",  "SECONDARY", "D9",  "BE_UP", "SAME_BAR", "d9_beup_same"),
+    ("D11_BEUP", "SECONDARY", "D11", "BE_UP", "SAME_BAR", "d11_beup_same"),
+]
+
+
+def _build_dw_combination_matrix(
+    candidates:  list[dict],
+    outcome_map: dict,
+    fp_cand_ids: set,
+    cget_fn,
+) -> list[dict]:
+    """Per-combination winrate/performance matrix for all 27 D×WLNBB pairings."""
+    rows: list[dict] = []
+
+    for combo, family, sig_d, sig_w, timing, field in _DW_COMBO_DEFS:
+        matching = [c for c in candidates if cget_fn(c, field)]
+        if not matching:
+            continue
+
+        cids  = [c["id"] for c in matching]
+        stats = _bucket_stats(cids, outcome_map)
+
+        # win_rate_1d / win_rate_10d (not in _bucket_stats)
+        wr1d  = _win_rate([outcome_map.get(c, {}).get("1d",  {}).get("return_pct") for c in cids])
+        wr10d = _win_rate([outcome_map.get(c, {}).get("10d", {}).get("return_pct") for c in cids])
+
+        # Median 5d
+        r5_clean = sorted(
+            v for cid in cids
+            for v in [outcome_map.get(cid, {}).get("5d", {}).get("return_pct")]
+            if v is not None
+        )
+        median_5d = round(r5_clean[len(r5_clean) // 2], 2) if r5_clean else None
+
+        fp_count  = sum(1 for cid in cids if cid in fp_cand_ids)
+        fb_count  = sum(
+            1 for cid in cids
+            if (outcome_map.get(cid, {}).get("5d", {}).get("return_pct") or 0) < 0
+        )
+        nft_count = sum(
+            1 for cid in cids
+            for v in [outcome_map.get(cid, {}).get("5d", {}).get("return_pct")]
+            if v is not None and 0 <= v < 1.0
+        )
+
+        examples = [
+            {
+                "symbol":          c.get("symbol"),
+                "scan_date":       c.get("scan_date"),
+                "return_5d":       outcome_map.get(c["id"], {}).get("5d",  {}).get("return_pct"),
+                "return_10d":      outcome_map.get(c["id"], {}).get("10d", {}).get("return_pct"),
+                "decision":        c.get("np_decision"),
+                "structure_phase": c.get("np_structure_phase"),
+            }
+            for c in matching[:5]
+        ]
+
+        rows.append({
+            "combination":             combo,
+            "family":                  family,
+            "signal_d":                sig_d,
+            "signal_wlnbb":            sig_w,
+            "timing":                  timing,
+            "count":                   stats["count"],
+            "win_rate_1d":             wr1d,
+            "win_rate_3d":             stats.get("win_rate_3d"),
+            "win_rate_5d":             stats.get("win_rate_5d"),
+            "win_rate_10d":            wr10d,
+            "avg_return_1d":           stats.get("avg_return_1d"),
+            "avg_return_3d":           stats.get("avg_return_3d"),
+            "avg_return_5d":           stats.get("avg_return_5d"),
+            "avg_return_10d":          stats.get("avg_return_10d"),
+            "median_return_5d":        median_5d,
+            "avg_max_gain_pct":        stats.get("avg_max_gain_pct"),
+            "avg_max_drawdown_pct":    stats.get("avg_max_drawdown_pct"),
+            "alpha_vs_spy_5d":         stats.get("alpha_vs_spy_5d"),
+            "alpha_vs_spy_10d":        stats.get("alpha_vs_spy_10d"),
+            "false_positive_count":    fp_count,
+            "false_positive_rate":     round(fp_count / len(cids) * 100, 1),
+            "failed_breakout_count":   fb_count,
+            "no_follow_through_count": nft_count,
+            "top_examples":            examples,
+        })
+
+    return rows
+
+
 def _build_perf_buckets(candidates: list[dict], outcome_map: dict,
                          bucket_fn, label: str) -> list[dict]:
     """
@@ -1210,6 +1329,31 @@ async def build_research_bundle(run_id: int) -> dict:
         for bkt in _DCONF_V2_ORDER if fp_by_d_conf_v2[bkt] > 0
     }
 
+    # ── D/WLNBB Combination Winrate Matrix ───────────────────────────────────
+    dw_combo_matrix = _build_dw_combination_matrix(
+        candidates, outcome_map, fp_cand_ids, _cget
+    )
+    _nonzero = [r for r in dw_combo_matrix if r["count"] > 0]
+    _min3    = [r for r in _nonzero if r["count"] >= 3]
+    dw_combo_summary = {
+        "total_candidates":      len(candidates),
+        "coverage_pct":          d_wlnbb_coverage_pct,
+        "nonzero_combinations":  len(_nonzero),
+        "best_by_5d_return":     [
+            {"combination": r["combination"], "avg_return_5d": r["avg_return_5d"], "count": r["count"]}
+            for r in sorted(_min3, key=lambda x: x.get("avg_return_5d") or -999, reverse=True)[:5]
+        ],
+        "best_by_win_rate_5d":   [
+            {"combination": r["combination"], "win_rate_5d": r["win_rate_5d"], "count": r["count"]}
+            for r in sorted(_min3, key=lambda x: x.get("win_rate_5d") or 0, reverse=True)[:5]
+        ],
+        "worst_by_5d_return":    [
+            {"combination": r["combination"], "avg_return_5d": r["avg_return_5d"], "count": r["count"]}
+            for r in sorted(_min3, key=lambda x: x.get("avg_return_5d") or 999)[:5]
+        ],
+        "min_sample_threshold_note": "Rows with n < 5 are directional only.",
+    }
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -1289,6 +1433,8 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_d_confluence_inside_decision":     perf_d_confluence_inside_decision,
         "performance_by_d_confluence_inside_structure_phase": perf_d_confluence_inside_structure_phase,
         "false_positive_by_d_confluence_type_v2":          fp_by_d_confluence_type_v2,
+        "d_wlnbb_combination_matrix":       dw_combo_matrix,
+        "d_wlnbb_combination_summary":      dw_combo_summary,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,
