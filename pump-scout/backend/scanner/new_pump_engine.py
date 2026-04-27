@@ -1248,12 +1248,25 @@ _BUY_SEQUENCE_WHITELIST = frozenset({
     "SETUP_ONLY_FRI34",
 })
 
+# D/WLNBB combo structure-score boost (Layer 2).
+# Gate: n≥30 AND WR5d≥65% validated via replay/dw_combo_analysis.py.
+# Run `python -m replay.dw_combo_analysis` after each major replay run to refresh.
+# Boost is applied to the _ss threshold comparison only — hard AVOID gates are unaffected.
+# Triple confluence (+3): D + L34 + BE_UP same bar — small-n signal, conservative boost.
+_COMBO_BOOST_MAP: dict[str, int] = {
+    "D4_L34_SAME":  5,   # R25 WR5d≈70.8% — validated
+    "D6_BEUP_SAME": 5,   # R25 WR5d≈71.0% — validated
+    # Triple (d_triple_confluence_type field — handled separately below)
+}
+_TRIPLE_BOOST = 3   # conservative until n grows across multiple replay runs
+
 
 def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
             missing_piece, ce_state, ce_score, ce_risk,
             impulse_label, impulse_score,
             np_label=None, age_l34=None, age_fri34=None,
-            structure_phase=None, structure_score=None) -> tuple:
+            structure_phase=None, structure_score=None,
+            d_combo_type="NONE", has_triple_d_l34_beup=False) -> tuple:
     """
     Returns (decision, decision_reason, decision_flags).
 
@@ -1305,6 +1318,17 @@ def _decide(*, state, engine_path, seq_lbl, bq_score, sustain_profile, ftr,
     flags: list = []
     _ss = structure_score or 0
     _sp = structure_phase or "TRUE_NONE"
+
+    # ── D/WLNBB combo boost (Layer 2) ────────────────────────────────────────
+    # Applied before threshold checks so the boost naturally lifts borderline
+    # candidates over the 46 (mid) and 66 (high) gates. Hard AVOID returns
+    # above are not reachable here — they fire before threshold logic.
+    _combo_boost = _COMBO_BOOST_MAP.get(d_combo_type or "NONE", 0)
+    if has_triple_d_l34_beup and _combo_boost < _TRIPLE_BOOST:
+        _combo_boost = _TRIPLE_BOOST
+    if _combo_boost:
+        flags.append(f"d_combo_boost_{d_combo_type}_{_combo_boost:+d}")
+        _ss = _ss + _combo_boost
 
     # ── Hard AVOID: state-based structural failures (unchanged from v3.x) ─────
     if state == "NEUTRAL":
@@ -1600,11 +1624,15 @@ def run(bars):
     return _build_signal_history(bars)["signals"]
 
 
-def analyze(bars):
+def analyze(bars, *, d_combo_type="NONE", has_triple_d_l34_beup=False):
     """
     Full analysis for the most recent bar.
 
     bars: list of dicts with keys open/high/low/close/volume, oldest-first.
+    d_combo_type: d_confluence_type_v2 value from manual_d_wlnbb_features — optional
+        boost applied to structure_score threshold comparison when combo is in
+        _COMBO_BOOST_MAP (Layer 2, validated via replay/dw_combo_analysis.py).
+    has_triple_d_l34_beup: from d_triple_confluence_type — gives smaller conservative boost.
 
     Returns dict with:
       has_l34, has_fri34, has_g4, has_b2
@@ -1824,7 +1852,7 @@ def analyze(bars):
         impulse_score=impulse["impulse_score"],
     )
 
-    # Final decision layer — now receives structure_phase + structure_score.
+    # Final decision layer — now receives structure_phase + structure_score + d_combo.
     decision, decision_reason, decision_flags = _decide(
         state=state,
         engine_path=engine_path,
@@ -1843,6 +1871,8 @@ def analyze(bars):
         age_fri34=age_fri34,
         structure_phase=structure_phase,
         structure_score=structure_score,
+        d_combo_type=d_combo_type,
+        has_triple_d_l34_beup=has_triple_d_l34_beup,
     )
 
     return dict(
