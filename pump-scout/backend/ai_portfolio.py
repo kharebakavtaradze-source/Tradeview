@@ -178,6 +178,12 @@ async def _get_np_candidates() -> list[dict]:
             "source": "new_pump",
             "np_setup_via": s.get("np_setup_via"),
             "np_sequence": s.get("new_pump_sequence_label"),
+            "np_state": s.get("np_state"),
+            "np_base_quality_score": s.get("np_base_quality_score"),
+            "np_fake_trigger_risk": s.get("np_fake_trigger_risk"),
+            "np_expansion_timing_risk": s.get("np_expansion_timing_risk"),
+            "np_ce_state": s.get("np_compression_expansion_state"),
+            "np_decision": s.get("np_decision"),
             "scan_date": s.get("scan_date"),
             "sector": s.get("sector", ""),
             "atr": 0,
@@ -282,6 +288,39 @@ async def _build_research_priors(scan_ctx: list[dict], np_ctx: list[dict]) -> di
             notes.append("early_setup_context_positive")
         if r.get("tier") == "FIRE":
             notes.append("strong_label_bias_positive")
+
+        # NP quality signals (v3.7+)
+        bq = r.get("np_base_quality_score")
+        if bq is not None:
+            if bq >= 60:
+                notes.append("base_quality_high")
+            elif bq < 35:
+                notes.append("base_quality_low_caution")
+
+        ftr = r.get("np_fake_trigger_risk") or "LOW"
+        if ftr == "HIGH":
+            notes.append("fake_trigger_risk_high_caution")
+        elif ftr == "LOW":
+            notes.append("fake_trigger_risk_low_positive")
+
+        etr = r.get("np_expansion_timing_risk") or "LOW"
+        if etr == "HIGH":
+            notes.append("expansion_timing_risk_high_caution")
+
+        ce = r.get("np_ce_state") or "NONE"
+        if ce == "ACCUMULATION_READY":
+            notes.append("ce_accumulation_ready_positive")
+        elif ce == "OVERHEATED_EXPANSION":
+            notes.append("ce_overheated_caution")
+
+        decision = r.get("np_decision") or ""
+        if decision == "BUY_CANDIDATE":
+            notes.append("np_engine_buy_candidate")
+        elif decision == "AVOID":
+            notes.append("np_engine_avoid_flagged")
+        elif decision == "WATCH":
+            notes.append("np_engine_watch_only")
+
         existing = adjustments.get(r["symbol"], [])
         merged = list(dict.fromkeys(existing + notes))
         if merged:
@@ -541,6 +580,16 @@ async def ai_portfolio_decisions():
     # Research priors — broad evidence-based biases from Replay + Raw Pattern
     research_priors = await _build_research_priors(scan_ctx, np_ctx)
 
+    # Research memory digest — live replay stats (sequence, CE state, D/WLNBB combos)
+    research_digest_text = ""
+    try:
+        from replay.ai_context import build_research_digest
+        rd = await build_research_digest()
+        if rd.get("has_data"):
+            research_digest_text = rd["text"]
+    except Exception as _e:
+        logger.debug(f"Research digest load skipped: {_e}")
+
     prompt = f"""You are an AI trader managing a ${_baseline:.0f} paper trading portfolio.
 Your goal is to maximize risk-adjusted returns using Wyckoff accumulation and New Pump signals.
 
@@ -568,8 +617,10 @@ USER WATCHLIST (manual trades for context):
 TICKER MEMORY (prior trades in current candidates):
 {json.dumps(memory_ctx, indent=2) if memory_ctx else 'none'}
 
-RESEARCH PRIORS (broad biases from Replay + Raw Pattern + Pump Study evidence):
+RESEARCH PRIORS (broad evidence-based biases from Replay + Raw Pattern):
 {json.dumps(research_priors, indent=2)}
+
+{f"SIGNAL QUALITY MEMORY (live replay stats — use to rank candidates):{chr(10)}{research_digest_text}" if research_digest_text else ""}
 
 RISK FLAGS:
 - Near stop (within 3%): {[p['symbol'] for p in near_stop_positions] or 'none'}
@@ -584,25 +635,32 @@ STRICT RULES (not negotiable):
    Stop: entry - ATR×1.5. For NP candidates without ATR use price-based estimate.
 5. Risk 2% of portfolio per trade via ATR sizing (min $50, max $600)
 6. Max 5 positions — prefer cash in RISK_OFF/FEAR regime
-7. SELL if: held > 14d without 10% gain, hype > 70, dist_to_stop < 3%, Wyckoff→DISTRIBUTION
+7. SELL if: held > 14d without 10% gain, hype > 70, dist_to_stop < 3%, Wyckoff→DISTRIBUTION,
+   or the NP signal that triggered entry is now flagged AVOID/np_engine_avoid_flagged
 8. Never chase: skip if moved >5% today, sector in weak_sectors list
 9. Use TICKER MEMORY: avoid repeat losers; prefer proven winners
-10. Use RESEARCH PRIORS: downsize/caution candidates with isolated_signal_penalty or
-    extreme_anomaly_caution; boost confidence when early_setup / bull_stack / strong_label
-    notes stack. Priors do NOT override New Pump source, but shape sizing and tone.
+10. Use RESEARCH PRIORS: downsize/caution candidates with isolated_signal_penalty,
+    fake_trigger_risk_high_caution, expansion_timing_risk_high_caution, or ce_overheated_caution;
+    boost confidence when base_quality_high + early_setup + ce_accumulation_ready_positive stack.
+    Priors do NOT override source, but shape sizing and conviction.
+11. Use SIGNAL QUALITY MEMORY: cross-reference each candidate's np_sequence and np_ce_state
+    against the replay win-rate stats in the digest. Prefer sequences with >60% WR5d.
+    Hard pass on candidates where np_expansion_timing_risk=HIGH AND np_decision=AVOID.
 
 For each BUY include stop_loss, target_price (TP1), target_price_2 (TP2), sell_pct_at_target_1 (default 50).
 
 RANKING INSTRUCTIONS:
 Rank candidates explicitly before committing. For each candidate you consider, apply:
 1. Source quality: new_pump FIRE > new_pump STRONG > scanner FIRE > scanner ARM
-2. Context quality: boost if early_setup / bull_stack / CMF+ / ACCUMULATION
-3. Caution: downrank if isolated_signal_penalty / extreme_anomaly / bad ticker memory
-4. Wallet fit: reject if remaining cash < min position; prefer smaller size under wallet pressure
-5. Tie-break: favor the candidate with cleaner research prior stack
+2. Signal quality: prefer np_decision=BUY_CANDIDATE, np_base_quality_score≥60, ftr=LOW
+3. Context quality: boost if ce_accumulation_ready + early_setup + bull_stack + CMF+ stack
+4. Caution: downrank if isolated_signal_penalty / fake_trigger_risk_high / expansion_timing_risk_high
+5. Replay memory: use SIGNAL QUALITY MEMORY WR stats — favor sequences/CE states with proven edge
+6. Wallet fit: reject if remaining cash < min position; prefer smaller size under wallet pressure
+7. Tie-break: cleanest research prior + memory stack wins
 
 For each BUY include structured explanation fields (lists, 2–4 items max each):
-- confidence_drivers: what boosted this idea
+- confidence_drivers: what boosted this idea (include replay WR stat if applicable)
 - caution_drivers: what penalised or flagged this idea (empty list if none)
 - sizing_reason: one sentence on why this exact size
 - why_selected_over_peers: one sentence on why this beat other candidates today
@@ -638,7 +696,7 @@ Respond in Russian. Return JSON only:
         client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1800,
+            max_tokens=2200,
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.content[0].text.replace("```json", "").replace("```", "").strip()
