@@ -765,27 +765,40 @@ def _build_experiments(summary: dict,
 # ── MFE helpers ──────────────────────────────────────────────────────────────
 
 def _build_mfe_map(outcomes: list[dict]) -> dict[int, dict]:
-    """Build {candidate_id: 10d MFE fields} from outcome rows."""
+    """Build {candidate_id: per-horizon MFE fields} from outcome rows."""
     mfe_map: dict[int, dict] = {}
     for o in outcomes:
-        if o.get("horizon") != "10d":
+        hz = o.get("horizon")
+        if hz not in ("1d", "3d", "5d", "10d"):
             continue
         cid = o.get("replay_candidate_id")
         if cid is None:
             continue
-        mfe_map[cid] = {
-            "max_gain_10d_pct":  o.get("max_gain_pct"),
-            "giveback_10d_pct":  o.get("giveback_pct"),
-            "return_10d":        o.get("return_pct"),
-            "max_gain_10d_day":  o.get("max_gain_day"),
-            "max_gain_10d_date": o.get("max_gain_date"),
-            "max_high_10d":      o.get("max_high"),
-            "hit_5pct":          o.get("hit_5pct"),
-            "hit_10pct":         o.get("hit_10pct"),
-            "hit_20pct":         o.get("hit_20pct"),
-            "hit_50pct":         o.get("hit_50pct"),
-            "hit_100pct":        o.get("hit_100pct"),
-        }
+        if cid not in mfe_map:
+            mfe_map[cid] = {}
+        m = mfe_map[cid]
+        mg_pct = o.get("max_gain_pct")
+        ret    = o.get("return_pct")
+        # Derive giveback if column is NULL (old rows pre-migration)
+        gb = o.get("giveback_pct")
+        if gb is None and mg_pct is not None and ret is not None:
+            gb = round(mg_pct - ret, 2)
+        m[f"max_gain_{hz}_pct"]  = mg_pct
+        m[f"max_high_{hz}"]      = o.get("max_high")
+        m[f"max_gain_{hz}_day"]  = o.get("max_gain_day")
+        m[f"max_gain_{hz}_date"] = o.get("max_gain_date")
+        m[f"giveback_{hz}_pct"]  = gb
+        m[f"return_{hz}"]        = ret
+        if hz == "10d":
+            # Derive hit booleans from max_gain_pct — correct even for old rows
+            # where the stored hit_Xpct columns are NULL.
+            # max_gain_pct = max(window_highs − entry)/entry, so
+            # max_gain_pct >= threshold ↔ some bar high hit that threshold.
+            m["hit_5pct_10d"]   = (mg_pct is not None and mg_pct >= 5.0)
+            m["hit_10pct_10d"]  = (mg_pct is not None and mg_pct >= 10.0)
+            m["hit_20pct_10d"]  = (mg_pct is not None and mg_pct >= 20.0)
+            m["hit_50pct_10d"]  = (mg_pct is not None and mg_pct >= 50.0)
+            m["hit_100pct_10d"] = (mg_pct is not None and mg_pct >= 100.0)
     return mfe_map
 
 
@@ -800,6 +813,11 @@ def _mfe_stats(candidate_ids: list[int], mfe_map: dict) -> dict:
         mg = m.get("max_gain_10d_pct")
         if mg is not None:
             gains.append(mg)
+            # Derive hit counts directly from max_gain_pct — works for old rows
+            # where hit_Xpct_10d stored columns were NULL
+            if mg >= 10: h10c += 1
+            if mg >= 20: h20c += 1
+            if mg >= 50: h50c += 1
         gb = m.get("giveback_10d_pct")
         if gb is not None:
             gbacks.append(gb)
@@ -809,12 +827,6 @@ def _mfe_stats(candidate_ids: list[int], mfe_map: dict) -> dict:
         day = m.get("max_gain_10d_day")
         if day is not None:
             ttm.append(day)
-        if m.get("hit_10pct"):
-            h10c += 1
-        if m.get("hit_20pct"):
-            h20c += 1
-        if m.get("hit_50pct"):
-            h50c += 1
 
     n = len(gains)
     if n == 0:
@@ -940,8 +952,10 @@ def _build_mfe_sections(
         return rows
 
     # 2. mfe_by_decision
+    # Use np_decision directly — avoids _cget "decision" key mismatch and
+    # the False default that caused everything to bucket as NONE.
     mfe_by_decision = _mfe_section(_group(
-        lambda c: _cg(c, "decision") or "NONE"
+        lambda c: c.get("np_decision") or "UNKNOWN"
     ))
 
     # 3. mfe_by_structure_phase
@@ -949,7 +963,10 @@ def _build_mfe_sections(
         "CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE", "EARLY_STRUCTURE",
         "SETUP_PHASE", "IMPULSE_ONLY", "DEGRADED", "NONE",
     ]
-    sp_groups = _group(lambda c: _cg(c, "structure_phase") or "NONE")
+    def _sp_label(c: dict) -> str:
+        np_d = c.get("new_pump") or (c.get("snapshot") or {}).get("new_pump") or {}
+        return np_d.get("structure_phase") or "UNKNOWN"
+    sp_groups = _group(_sp_label)
     mfe_by_structure_phase = _mfe_section(sp_groups)
     mfe_by_structure_phase.sort(
         key=lambda x: _SP_ORDER.index(x["bucket"]) if x["bucket"] in _SP_ORDER else 99
@@ -984,6 +1001,7 @@ def _build_mfe_sections(
 
     top_mfe_examples = []
     for mg, c, m in scored_examples[:20]:
+        _np_d = c.get("new_pump") or (c.get("snapshot") or {}).get("new_pump") or {}
         top_mfe_examples.append({
             "symbol":            c.get("symbol"),
             "scan_date":         c.get("scan_date"),
@@ -994,11 +1012,12 @@ def _build_mfe_sections(
             "max_gain_10d_date": m.get("max_gain_10d_date"),
             "return_10d":        m.get("return_10d"),
             "giveback_10d_pct":  m.get("giveback_10d_pct"),
-            "hit_10pct":         m.get("hit_10pct"),
-            "hit_20pct":         m.get("hit_20pct"),
-            "hit_50pct":         m.get("hit_50pct"),
-            "decision":          _cg(c, "decision"),
-            "structure_phase":   _cg(c, "structure_phase"),
+            "hit_10pct":         m.get("hit_10pct_10d"),
+            "hit_20pct":         m.get("hit_20pct_10d"),
+            "hit_50pct":         m.get("hit_50pct_10d"),
+            "decision":          c.get("np_decision") or None,
+            "structure_phase":   _np_d.get("structure_phase") or None,
+            "structure_score":   _np_d.get("structure_score"),
             "sequence":          c.get("new_pump_sequence_label"),
             "d_confluence_type": _d_conf_mfe_label(c),
         })
@@ -1183,10 +1202,10 @@ async def build_research_bundle(run_id: int) -> dict:
     )
 
     # ── Phase 9: Final decision layer bucket ─────────────────────────────────
-    _DEC_ORDER = ["BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID"]
+    _DEC_ORDER = ["BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID", "UNKNOWN"]
     perf_decision = _build_perf_buckets(
         candidates, outcome_map,
-        lambda c: c.get("np_decision") or "AVOID",
+        lambda c: c.get("np_decision") or "UNKNOWN",
         "decision",
     )
     perf_decision.sort(
@@ -1274,7 +1293,7 @@ async def build_research_bundle(run_id: int) -> dict:
 
     # Cross-tab: decision × structure_score_bucket
     def _decision_ss_bucket(c: dict) -> str:
-        dec = c.get("np_decision") or "AVOID"
+        dec = c.get("np_decision") or "UNKNOWN"
         ss_bkt = _structure_score_bucket(c)
         return f"{dec}|{ss_bkt}"
 
@@ -1544,7 +1563,7 @@ async def build_research_bundle(run_id: int) -> dict:
 
     # Cross-tab: decision × d_confluence_type_v2 family
     def _decision_x_dconf_family(c: dict) -> str:
-        dec = c.get("np_decision") or "AVOID"
+        dec = c.get("np_decision") or "UNKNOWN"
         fam = _cget(c, "d_confluence_family", "NONE") or "NONE"
         return f"{dec}|{fam}"
 
@@ -1631,7 +1650,7 @@ async def build_research_bundle(run_id: int) -> dict:
     perf_triple_confluence_type = perf_d_l34_beup_same
 
     def _decision_x_triple(c: dict) -> str:
-        dec   = c.get("np_decision") or "AVOID"
+        dec   = c.get("np_decision") or "UNKNOWN"
         triple = _triple_type_bucket(c)
         return f"{dec}|{triple}"
 
