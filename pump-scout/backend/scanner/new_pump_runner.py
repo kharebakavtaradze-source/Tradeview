@@ -177,19 +177,24 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
                      "close": c["c"], "volume": c["v"]}
                     for c in candles
                 ]
-                np = np_analyze(bars)
+
+                # Compute D + WLNBB confluence first — feeds combo boost into analyze()
+                _dw: dict = {}
+                try:
+                    from scanner.manual_d_wlnbb_features import compute_d_wlnbb_confluence
+                    _dw = compute_d_wlnbb_confluence(bars)
+                except Exception as _exc:
+                    logger.debug(f"[NpRunner] d_wlnbb skipped {sym}: {_exc}")
+
+                np = np_analyze(
+                    bars,
+                    d_combo_type=_dw.get("d_confluence_type_v2") or "NONE",
+                    has_triple_d_l34_beup=bool(_dw.get("has_triple_d_l34_beup")),
+                )
             except Exception as exc:
                 logger.debug(f"[NpRunner] analyze failed {sym}: {exc}")
                 skipped += 1
                 continue
-
-            # Research-only: Manual D + WLNBB confluence (non-fatal)
-            _dw: dict = {}
-            try:
-                from scanner.manual_d_wlnbb_features import compute_d_wlnbb_confluence
-                _dw = compute_d_wlnbb_confluence(bars)
-            except Exception as _exc:
-                logger.debug(f"[NpRunner] d_wlnbb skipped {sym}: {_exc}")
 
             last     = candles[-1]
             last_idx = len(candles) - 1

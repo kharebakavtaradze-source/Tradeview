@@ -134,6 +134,83 @@ function NpStateBadge({ seq }) {
   );
 }
 
+// ── D/WLNBB combo badge (Layer 1: surfacing, no decision authority here) ─────
+// Validated boosters (also influence routing in engine v3.9):
+//   D4_L34_SAME, D6_BEUP_SAME → +5 ss (replay R25 WR5d ≈70.8%/71.0%)
+// Triple confluence (research-grade): +3 ss
+const COMBO_CFG = {
+  // Validated — applied as +5 boost in routing
+  D4_L34_SAME:  { color: '#4ade80', label: 'D4·L34',  boost: 5,  tip: 'D4 + L34 same bar — replay WR5d≈70.8%, +5 ss boost' },
+  D6_BEUP_SAME: { color: '#4ade80', label: 'D6·BE↑',  boost: 5,  tip: 'D6 + BE_UP same bar — replay WR5d≈71.0%, +5 ss boost' },
+  // Strong stats but pending n-validation — surfaced only
+  D6_L34_SAME:  { color: '#9c6bde', label: 'D6·L34',  boost: 0,  tip: 'D6 + L34 same bar — research only' },
+  D3_L34_SAME:  { color: '#9c6bde', label: 'D3·L34',  boost: 0,  tip: 'D3 + L34 same bar — research only' },
+  D4_BEUP_SAME: { color: '#9c6bde', label: 'D4·BE↑',  boost: 0,  tip: 'D4 + BE_UP same bar — research only' },
+  D3_BEUP_SAME: { color: '#9c6bde', label: 'D3·BE↑',  boost: 0,  tip: 'D3 + BE_UP same bar — research only' },
+  // L43 family
+  D4_L43_SAME:  { color: '#a8a8a8', label: 'D4·L43',  boost: 0,  tip: 'D4 + L43 same bar — research only' },
+  D6_L43_SAME:  { color: '#a8a8a8', label: 'D6·L43',  boost: 0,  tip: 'D6 + L43 same bar — research only' },
+  D3_L43_SAME:  { color: '#a8a8a8', label: 'D3·L43',  boost: 0,  tip: 'D3 + L43 same bar — research only' },
+  // Secondary (D1/D9/D11)
+  SECONDARY_D_L34_SAME:  { color: '#888', label: 'sD·L34', boost: 0, tip: 'D1/D9/D11 + L34 same bar' },
+  SECONDARY_D_BEUP_SAME: { color: '#888', label: 'sD·BE↑', boost: 0, tip: 'D1/D9/D11 + BE_UP same bar' },
+  SECONDARY_D_L43_SAME:  { color: '#888', label: 'sD·L43', boost: 0, tip: 'D1/D9/D11 + L43 same bar' },
+};
+
+function ComboBadge({ comboType, hasTriple }) {
+  // Triple confluence takes visual priority — it's the rarest and strongest signal.
+  if (hasTriple) {
+    return (
+      <span
+        style={{
+          display: 'inline-block',
+          padding: '2px 6px',
+          borderRadius: 3,
+          fontSize: 8,
+          fontWeight: 800,
+          letterSpacing: '0.04em',
+          color: '#fff',
+          background: 'linear-gradient(90deg, #9c6bde, #4ade80)',
+          border: '1px solid #fff4',
+          boxShadow: '0 0 6px #9c6bde66',
+        }}
+        title="TRIPLE: D + L34 + BE_UP same bar — research-grade confluence, +3 ss boost"
+      >
+        ⬡ TRIPLE
+      </span>
+    );
+  }
+
+  if (!comboType || comboType === 'NONE') {
+    return <span style={{ color: '#444', fontSize: 9 }}>—</span>;
+  }
+
+  const cfg = COMBO_CFG[comboType] || {
+    color: '#666', label: comboType.replace('_SAME', '').replace('_', '·').toLowerCase(),
+    boost: 0, tip: comboType,
+  };
+
+  const isBoosted = cfg.boost > 0;
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '2px 6px',
+        borderRadius: 3,
+        fontSize: 8,
+        fontWeight: 800,
+        letterSpacing: '0.04em',
+        color: cfg.color,
+        background: `${cfg.color}22`,
+        border: `1px solid ${cfg.color}${isBoosted ? '88' : '44'}`,
+      }}
+      title={cfg.tip}
+    >
+      {isBoosted ? '⚡ ' : ''}{cfg.label}
+    </span>
+  );
+}
+
 // ── Count how many rows per label ─────────────────────────────────────────────
 
 function labelCounts(results) {
@@ -845,6 +922,11 @@ export default function NewPumpPage() {
                   </SortTh>
                   <th>Label</th>
                   <th>Sequence</th>
+                  <th>
+                    <span title="D/WLNBB Confluence — d_confluence_type_v2 (and triple D+L34+BE_UP). ⚡ = validated boost in routing (+5 ss). ⬡ TRIPLE = 3-signal same-bar confluence (+3 ss).">
+                      Conf
+                    </span>
+                  </th>
                   <th>L34</th>
                   <th>FRI34</th>
                   <th>G4</th>
@@ -916,6 +998,12 @@ export default function NewPumpPage() {
                       </td>
                       <td><LabelBadge label={r.new_pump_label} /></td>
                       <td className={styles.seqCell}>{r.new_pump_sequence_label || '—'}</td>
+                      <td>
+                        <ComboBadge
+                          comboType={r.d_confluence_type_v2}
+                          hasTriple={r.has_triple_d_l34_beup}
+                        />
+                      </td>
                       <td><Pill on={r.has_l34}   label="L34"   /></td>
                       <td><Pill on={r.has_fri34} label="FRI34" /></td>
                       <td><Pill on={r.has_g4}    label="G4"    /></td>
