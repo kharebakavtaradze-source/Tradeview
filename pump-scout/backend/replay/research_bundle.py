@@ -762,6 +762,257 @@ def _build_experiments(summary: dict,
     return experiments
 
 
+# ── MFE helpers ──────────────────────────────────────────────────────────────
+
+def _build_mfe_map(outcomes: list[dict]) -> dict[int, dict]:
+    """Build {candidate_id: 10d MFE fields} from outcome rows."""
+    mfe_map: dict[int, dict] = {}
+    for o in outcomes:
+        if o.get("horizon") != "10d":
+            continue
+        cid = o.get("replay_candidate_id")
+        if cid is None:
+            continue
+        mfe_map[cid] = {
+            "max_gain_10d_pct":  o.get("max_gain_pct"),
+            "giveback_10d_pct":  o.get("giveback_pct"),
+            "return_10d":        o.get("return_pct"),
+            "max_gain_10d_day":  o.get("max_gain_day"),
+            "max_gain_10d_date": o.get("max_gain_date"),
+            "max_high_10d":      o.get("max_high"),
+            "hit_5pct":          o.get("hit_5pct"),
+            "hit_10pct":         o.get("hit_10pct"),
+            "hit_20pct":         o.get("hit_20pct"),
+            "hit_50pct":         o.get("hit_50pct"),
+            "hit_100pct":        o.get("hit_100pct"),
+        }
+    return mfe_map
+
+
+def _mfe_stats(candidate_ids: list[int], mfe_map: dict) -> dict:
+    """Aggregate MFE stats for a set of candidate IDs."""
+    gains, gbacks, ret10s, ttm = [], [], [], []
+    h10c = h20c = h50c = 0
+    for cid in candidate_ids:
+        m = mfe_map.get(cid)
+        if not m:
+            continue
+        mg = m.get("max_gain_10d_pct")
+        if mg is not None:
+            gains.append(mg)
+        gb = m.get("giveback_10d_pct")
+        if gb is not None:
+            gbacks.append(gb)
+        r10 = m.get("return_10d")
+        if r10 is not None:
+            ret10s.append(r10)
+        day = m.get("max_gain_10d_day")
+        if day is not None:
+            ttm.append(day)
+        if m.get("hit_10pct"):
+            h10c += 1
+        if m.get("hit_20pct"):
+            h20c += 1
+        if m.get("hit_50pct"):
+            h50c += 1
+
+    n = len(gains)
+    if n == 0:
+        return {"count": len(candidate_ids), "mfe_n": 0}
+
+    gains_s = sorted(gains)
+    median_g = gains_s[n // 2]
+    return {
+        "count":                    len(candidate_ids),
+        "mfe_n":                    n,
+        "avg_return_10d":           _avg(ret10s),
+        "avg_max_gain_10d_pct":     round(sum(gains) / n, 2),
+        "median_max_gain_10d_pct":  round(median_g, 2),
+        "hit_10pct_rate":           round(h10c / n * 100, 1),
+        "hit_20pct_rate":           round(h20c / n * 100, 1),
+        "hit_50pct_rate":           round(h50c / n * 100, 1),
+        "avg_time_to_max_gain_10d": round(sum(ttm) / len(ttm), 1) if ttm else None,
+        "avg_giveback_10d_pct":     round(sum(gbacks) / len(gbacks), 2) if gbacks else None,
+    }
+
+
+def _max_gain_bucket(mg: Optional[float]) -> str:
+    if mg is None or mg <= 0:
+        return "NEGATIVE_OR_ZERO"
+    if mg < 5:
+        return "0_5"
+    if mg < 10:
+        return "5_10"
+    if mg < 20:
+        return "10_20"
+    if mg < 50:
+        return "20_50"
+    if mg < 100:
+        return "50_100"
+    return "100_PLUS"
+
+
+_MAX_GAIN_BUCKET_ORDER = [
+    "NEGATIVE_OR_ZERO", "0_5", "5_10", "10_20", "20_50", "50_100", "100_PLUS",
+]
+
+# Simplified D-confluence labels for MFE cross-tab
+def _d_conf_mfe_label(c: dict) -> str:
+    snap     = c.get("snapshot") or {}
+    np_snap  = snap.get("new_pump") or {}
+    combo    = (np_snap.get("d_confluence_type_v2") or snap.get("d_confluence_type_v2") or "NONE")
+    _MAP = {
+        "D6_BEUP_SAME":          "D6_BEUP",
+        "D4_BEUP_SAME":          "D4_BEUP",
+        "D3_BEUP_SAME":          "D3_BEUP",
+        "D4_L34_SAME":           "D4_L34",
+        "D3_L34_SAME":           "D3_L34",
+        "D6_L34_SAME":           "D6_L34",
+        "SECONDARY_D_BEUP_SAME": "SECONDARY_D_CONFLUENCE",
+        "SECONDARY_D_L34_SAME":  "SECONDARY_D_CONFLUENCE",
+        "SECONDARY_D_L43_SAME":  "SECONDARY_D_CONFLUENCE",
+    }
+    return _MAP.get(combo, "NONE")
+
+
+def _build_mfe_sections(
+    candidates:  list[dict],
+    outcomes:    list[dict],
+    outcome_map: dict,
+    cget_fn = None,
+) -> tuple:
+    """
+    Returns 6-tuple:
+      (perf_mfe_bucket, mfe_by_decision, mfe_by_structure_phase,
+       mfe_by_d_confluence, mfe_by_sequence, top_mfe_examples)
+    """
+    mfe_map = _build_mfe_map(outcomes)
+
+    def _cg(c, key):
+        if cget_fn is not None:
+            return cget_fn(c, key)
+        v = c.get(key)
+        if v is None:
+            v = (c.get("new_pump") or {}).get(key)
+        if v is None:
+            v = (c.get("snapshot") or {}).get(key)
+        return v
+
+    # 1. performance_by_max_gain_10d_bucket
+    buckets: dict[str, list[int]] = {b: [] for b in _MAX_GAIN_BUCKET_ORDER}
+    for c in candidates:
+        cid = c.get("id")
+        if cid is None:
+            continue
+        mg = mfe_map.get(cid, {}).get("max_gain_10d_pct") if cid in mfe_map else None
+        buckets[_max_gain_bucket(mg)].append(cid)
+
+    perf_mfe_bucket = []
+    for bname in _MAX_GAIN_BUCKET_ORDER:
+        cids = buckets[bname]
+        if not cids:
+            continue
+        row = _mfe_stats(cids, mfe_map)
+        row["bucket"] = bname
+        # Add avg_return_5d from outcome_map
+        r5s = [outcome_map.get(cid, {}).get("5d", {}).get("return_pct")
+               for cid in cids if outcome_map.get(cid, {}).get("5d", {}).get("return_pct") is not None]
+        row["avg_return_5d"] = _avg(r5s)
+        perf_mfe_bucket.append(row)
+
+    # 2–5: helper to group candidates by label function
+    def _group(label_fn):
+        groups: dict[str, list[int]] = defaultdict(list)
+        for c in candidates:
+            cid = c.get("id")
+            if cid is None:
+                continue
+            groups[label_fn(c) or "NONE"].append(cid)
+        return groups
+
+    def _mfe_section(groups: dict) -> list[dict]:
+        rows = []
+        for label, cids in groups.items():
+            row = _mfe_stats(cids, mfe_map)
+            row["bucket"] = label
+            rows.append(row)
+        rows.sort(key=lambda x: (x.get("avg_max_gain_10d_pct") or 0), reverse=True)
+        return rows
+
+    # 2. mfe_by_decision
+    mfe_by_decision = _mfe_section(_group(
+        lambda c: _cg(c, "decision") or "NONE"
+    ))
+
+    # 3. mfe_by_structure_phase
+    _SP_ORDER = [
+        "CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE", "EARLY_STRUCTURE",
+        "SETUP_PHASE", "IMPULSE_ONLY", "DEGRADED", "NONE",
+    ]
+    sp_groups = _group(lambda c: _cg(c, "structure_phase") or "NONE")
+    mfe_by_structure_phase = _mfe_section(sp_groups)
+    mfe_by_structure_phase.sort(
+        key=lambda x: _SP_ORDER.index(x["bucket"]) if x["bucket"] in _SP_ORDER else 99
+    )
+
+    # 4. mfe_by_d_confluence_type
+    _DC_ORDER = ["D6_BEUP", "D4_BEUP", "D3_BEUP", "D4_L34", "D3_L34",
+                 "D6_L34", "SECONDARY_D_CONFLUENCE", "NONE"]
+    dc_groups = _group(_d_conf_mfe_label)
+    mfe_by_d_confluence = _mfe_section(dc_groups)
+    mfe_by_d_confluence.sort(
+        key=lambda x: _DC_ORDER.index(x["bucket"]) if x["bucket"] in _DC_ORDER else 99
+    )
+
+    # 5. mfe_by_sequence
+    mfe_by_sequence = _mfe_section(_group(
+        lambda c: c.get("new_pump_sequence_label") or "NONE"
+    ))
+
+    # 6. top_max_gain_examples_10d — top 20 candidates by max_gain_10d_pct
+    scored_examples = []
+    for c in candidates:
+        cid = c.get("id")
+        if cid not in mfe_map:
+            continue
+        m = mfe_map[cid]
+        mg = m.get("max_gain_10d_pct")
+        if mg is None or mg <= 0:
+            continue
+        scored_examples.append((mg, c, m))
+    scored_examples.sort(key=lambda x: x[0], reverse=True)
+
+    top_mfe_examples = []
+    for mg, c, m in scored_examples[:20]:
+        top_mfe_examples.append({
+            "symbol":            c.get("symbol"),
+            "scan_date":         c.get("scan_date"),
+            "entry_price":       c.get("price"),
+            "max_high_10d":      m.get("max_high_10d"),
+            "max_gain_10d_pct":  round(mg, 2),
+            "max_gain_10d_day":  m.get("max_gain_10d_day"),
+            "max_gain_10d_date": m.get("max_gain_10d_date"),
+            "return_10d":        m.get("return_10d"),
+            "giveback_10d_pct":  m.get("giveback_10d_pct"),
+            "hit_10pct":         m.get("hit_10pct"),
+            "hit_20pct":         m.get("hit_20pct"),
+            "hit_50pct":         m.get("hit_50pct"),
+            "decision":          _cg(c, "decision"),
+            "structure_phase":   _cg(c, "structure_phase"),
+            "sequence":          c.get("new_pump_sequence_label"),
+            "d_confluence_type": _d_conf_mfe_label(c),
+        })
+
+    return (
+        perf_mfe_bucket,
+        mfe_by_decision,
+        mfe_by_structure_phase,
+        mfe_by_d_confluence,
+        mfe_by_sequence,
+        top_mfe_examples,
+    )
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def build_research_bundle(run_id: int) -> dict:
@@ -1445,6 +1696,16 @@ async def build_research_bundle(run_id: int) -> dict:
             f"Decision-aligned: {line}" for line in decision_aligned["insights"][:2]
         )
 
+    # ── Section H: MFE / max-high analytics ──────────────────────────────────
+    (
+        perf_mfe_bucket,
+        mfe_by_decision,
+        mfe_by_structure_phase,
+        mfe_by_d_confluence,
+        mfe_by_sequence,
+        top_mfe_examples,
+    ) = _build_mfe_sections(candidates, outcomes, outcome_map, cget_fn=_cget)
+
     bundle = {
         "run":                              run,
         "summary":                          summary,
@@ -1500,6 +1761,13 @@ async def build_research_bundle(run_id: int) -> dict:
         "pattern_review":                   pattern_review,
         "suggested_experiments":            suggested_experiments,
         "decision_aligned_research":        decision_aligned,
+        # ── Section H: MFE / max-high analytics ──────────────────────────────
+        "performance_by_max_gain_10d_bucket": perf_mfe_bucket,
+        "mfe_by_decision":                    mfe_by_decision,
+        "mfe_by_structure_phase":             mfe_by_structure_phase,
+        "mfe_by_d_confluence_type":           mfe_by_d_confluence,
+        "mfe_by_sequence":                    mfe_by_sequence,
+        "top_max_gain_examples_10d":          top_mfe_examples,
     }
 
     logger.info(
