@@ -144,6 +144,11 @@ _DW_COMBO_DEFS: list[tuple] = [
     ("D1_BEUP",  "SECONDARY", "D1",  "BE_UP", "SAME_BAR", "d1_beup_same"),
     ("D9_BEUP",  "SECONDARY", "D9",  "BE_UP", "SAME_BAR", "d9_beup_same"),
     ("D11_BEUP", "SECONDARY", "D11", "BE_UP", "SAME_BAR", "d11_beup_same"),
+    # E. Triple: D + L34 + BE_UP same-bar
+    ("D3_L34_BEUP_SAME",        "TRIPLE_D_L34_BEUP", "D3",       "TRIPLE_L34_BEUP", "SAME_BAR", "d3_l34_beup_same"),
+    ("D4_L34_BEUP_SAME",        "TRIPLE_D_L34_BEUP", "D4",       "TRIPLE_L34_BEUP", "SAME_BAR", "d4_l34_beup_same"),
+    ("D6_L34_BEUP_SAME",        "TRIPLE_D_L34_BEUP", "D6",       "TRIPLE_L34_BEUP", "SAME_BAR", "d6_l34_beup_same"),
+    ("SECONDARY_D_L34_BEUP_SAME","TRIPLE_D_L34_BEUP","SECONDARY","TRIPLE_L34_BEUP", "SAME_BAR", "secondary_d_l34_beup_same"),
 ]
 
 
@@ -1354,6 +1359,57 @@ async def build_research_bundle(run_id: int) -> dict:
         "min_sample_threshold_note": "Rows with n < 5 are directional only.",
     }
 
+    # ── Triple confluence analytics (D + L34 + BE_UP same-bar) ───────────────
+    _TRIPLE_BUCKET_ORDER = [
+        "D4_L34_BEUP_SAME", "D6_L34_BEUP_SAME", "D3_L34_BEUP_SAME",
+        "SECONDARY_D_L34_BEUP_SAME", "NO_TRIPLE",
+    ]
+
+    def _triple_type_bucket(c: dict) -> str:
+        t = _cget(c, "d_triple_confluence_type", "NONE") or "NONE"
+        return t if t != "NONE" else "NO_TRIPLE"
+
+    perf_d_l34_beup_same = _build_perf_buckets(
+        candidates, outcome_map, _triple_type_bucket, "d_triple_confluence_type"
+    )
+    perf_d_l34_beup_same.sort(key=lambda x: (
+        _TRIPLE_BUCKET_ORDER.index(x["bucket"])
+        if x["bucket"] in _TRIPLE_BUCKET_ORDER else 99
+    ))
+
+    perf_triple_confluence_type = perf_d_l34_beup_same
+
+    def _decision_x_triple(c: dict) -> str:
+        dec   = c.get("np_decision") or "AVOID"
+        triple = _triple_type_bucket(c)
+        return f"{dec}|{triple}"
+
+    perf_triple_inside_decision = _build_perf_buckets(
+        candidates, outcome_map, _decision_x_triple, "decision_x_triple_type"
+    )
+    _DEC_ORDER_T = ["BUY_CANDIDATE", "WATCH", "IMPULSE_RISK", "AVOID"]
+    perf_triple_inside_decision.sort(key=lambda x: (
+        _DEC_ORDER_T.index(x["bucket"].split("|")[0])
+        if x["bucket"].split("|")[0] in _DEC_ORDER_T else 99,
+        _TRIPLE_BUCKET_ORDER.index(x["bucket"].split("|")[1])
+        if len(x["bucket"].split("|")) > 1 and x["bucket"].split("|")[1] in _TRIPLE_BUCKET_ORDER else 99,
+    ))
+
+    def _structure_x_triple(c: dict) -> str:
+        phase, _ = _resolve_structure(c)
+        triple    = _triple_type_bucket(c)
+        return f"{phase}|{triple}"
+
+    perf_triple_inside_structure_phase = _build_perf_buckets(
+        candidates, outcome_map, _structure_x_triple, "structure_phase_x_triple_type"
+    )
+    perf_triple_inside_structure_phase.sort(key=lambda x: (
+        _PHASE_ORDER.index(x["bucket"].split("|")[0])
+        if x["bucket"].split("|")[0] in _PHASE_ORDER else 99,
+        _TRIPLE_BUCKET_ORDER.index(x["bucket"].split("|")[1])
+        if len(x["bucket"].split("|")) > 1 and x["bucket"].split("|")[1] in _TRIPLE_BUCKET_ORDER else 99,
+    ))
+
     # ── Sections C, D: False positives + Missed movers ────────────────────────
     false_positives = _build_false_positives(candidates, outcome_map)
     missed_section  = _build_missed_section(missed)
@@ -1435,6 +1491,10 @@ async def build_research_bundle(run_id: int) -> dict:
         "false_positive_by_d_confluence_type_v2":          fp_by_d_confluence_type_v2,
         "d_wlnbb_combination_matrix":       dw_combo_matrix,
         "d_wlnbb_combination_summary":      dw_combo_summary,
+        "performance_by_d_l34_beup_same":               perf_d_l34_beup_same,
+        "performance_by_triple_confluence_type":         perf_triple_confluence_type,
+        "performance_by_triple_inside_decision":         perf_triple_inside_decision,
+        "performance_by_triple_inside_structure_phase":  perf_triple_inside_structure_phase,
         "false_positives":                  false_positives,
         "missed_movers":                    missed_section,
         "pattern_review":                   pattern_review,

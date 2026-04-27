@@ -557,6 +557,17 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     d1_l43_same  = d1 and l43;  d9_l43_same  = d9 and l43;  d11_l43_same  = d11 and l43
     d1_beup_same = d1 and beup; d9_beup_same = d9 and beup; d11_beup_same = d11 and beup
 
+    # Triple: D + L34 + BE_UP same-bar (research/reporting only — does not affect scoring)
+    d3_l34_beup_same  = d3 and l34 and beup
+    d4_l34_beup_same  = d4 and l34 and beup
+    d6_l34_beup_same  = d6 and l34 and beup
+    core_d_l34_beup_same = d3_l34_beup_same or d4_l34_beup_same or d6_l34_beup_same
+
+    d1_l34_beup_same  = d1 and l34 and beup
+    d9_l34_beup_same  = d9 and l34 and beup
+    d11_l34_beup_same = d11 and l34 and beup
+    secondary_d_l34_beup_same = d1_l34_beup_same or d9_l34_beup_same or d11_l34_beup_same
+
     # Aggregate booleans
     core_d_l34  = d_core_any and l34
     core_d_l43  = d_core_any and l43
@@ -635,6 +646,14 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     elif secondary_d_confluence: type_v2 = "SECONDARY_D_CONFLUENCE"
     elif d_core_any or d_secondary_any: type_v2 = "D_ONLY"
     else:                        type_v2 = "NONE"
+
+    # Triple confluence type: D + L34 + BE_UP same-bar (independent field, does not replace type_v2)
+    if   d4_l34_beup_same:           triple_type = "D4_L34_BEUP_SAME"
+    elif d6_l34_beup_same:           triple_type = "D6_L34_BEUP_SAME"
+    elif d3_l34_beup_same:           triple_type = "D3_L34_BEUP_SAME"
+    elif secondary_d_l34_beup_same:  triple_type = "SECONDARY_D_L34_BEUP_SAME"
+    else:                            triple_type = "NONE"
+    has_triple_d_l34_beup = triple_type != "NONE"
 
     # Family
     _FAMILY_MAP = {
@@ -797,6 +816,17 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
         "d_confluence_core_signal":  core_sig,
         "d_confluence_wlnbb_signal": wlnbb_sig,
         "window_explanation":        expl,
+        # ── Triple: D + L34 + BE_UP same-bar (research/reporting only) ────────
+        "d3_l34_beup_same":  d3_l34_beup_same,
+        "d4_l34_beup_same":  d4_l34_beup_same,
+        "d6_l34_beup_same":  d6_l34_beup_same,
+        "core_d_l34_beup_same": core_d_l34_beup_same,
+        "d1_l34_beup_same":  d1_l34_beup_same,
+        "d9_l34_beup_same":  d9_l34_beup_same,
+        "d11_l34_beup_same": d11_l34_beup_same,
+        "secondary_d_l34_beup_same": secondary_d_l34_beup_same,
+        "d_triple_confluence_type": triple_type,
+        "has_triple_d_l34_beup":    has_triple_d_l34_beup,
         # ── Legacy v1 (kept for backward compat) ──────────────────────────────
         "d_confluence_type": d_confluence_type,
     }
@@ -844,6 +874,13 @@ def _empty_confluence() -> dict:
         "d_confluence_core_signal":  "NONE",
         "d_confluence_wlnbb_signal": "NONE",
         "window_explanation":        "",
+        # Triple: D + L34 + BE_UP same-bar
+        "d3_l34_beup_same": False, "d4_l34_beup_same": False, "d6_l34_beup_same": False,
+        "core_d_l34_beup_same": False,
+        "d1_l34_beup_same": False, "d9_l34_beup_same": False, "d11_l34_beup_same": False,
+        "secondary_d_l34_beup_same": False,
+        "d_triple_confluence_type": "NONE",
+        "has_triple_d_l34_beup":    False,
         # Legacy v1
         "d_confluence_type": "NONE",
     }
@@ -871,6 +908,11 @@ _D_COUNT_FIELDS = [
     # window D → BE Up (5 bars)
     "d3_then_beup_5b", "d4_then_beup_5b", "d6_then_beup_5b",
     "core_d_then_beup_5b",
+    # triple: D + L34 + BE_UP same-bar
+    "d3_l34_beup_same", "d4_l34_beup_same", "d6_l34_beup_same",
+    "core_d_l34_beup_same",
+    "d1_l34_beup_same", "d9_l34_beup_same", "d11_l34_beup_same",
+    "secondary_d_l34_beup_same",
 ]
 
 
@@ -952,6 +994,15 @@ def compute_d_wlnbb_pre_counts(
             "d4_then_beup_5b": beup_ and _dp("d4", 5),
             "d6_then_beup_5b": beup_ and _dp("d6", 5),
             "core_d_then_beup_5b": beup_ and (_dp("d3", 5) or _dp("d4", 5) or _dp("d6", 5)),
+            # triple: D + L34 + BE_UP same-bar
+            "d3_l34_beup_same":  d3_ and l34_ and beup_,
+            "d4_l34_beup_same":  d4_ and l34_ and beup_,
+            "d6_l34_beup_same":  d6_ and l34_ and beup_,
+            "core_d_l34_beup_same": (d3_ or d4_ or d6_) and l34_ and beup_,
+            "d1_l34_beup_same":  d1_ and l34_ and beup_,
+            "d9_l34_beup_same":  d9_ and l34_ and beup_,
+            "d11_l34_beup_same": d11_ and l34_ and beup_,
+            "secondary_d_l34_beup_same": (d1_ or d9_ or d11_) and l34_ and beup_,
         }
 
         for f in _D_COUNT_FIELDS:

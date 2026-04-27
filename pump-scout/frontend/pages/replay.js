@@ -289,7 +289,7 @@ function DecisionSummary({ bundle }) {
 
 // ── D/WLNBB Combination Winrate Matrix ───────────────────────────────────────
 
-const DW_FAMILIES  = ['ALL','SAME_BAR_L34','SAME_BAR_L43','SAME_BAR_BEUP','L34_THEN_D','L43_THEN_D','D_THEN_BEUP'];
+const DW_FAMILIES  = ['ALL','SAME_BAR_L34','SAME_BAR_L43','SAME_BAR_BEUP','L34_THEN_D','L43_THEN_D','D_THEN_BEUP','TRIPLE_D_L34_BEUP'];
 const DW_DSIGS     = ['ALL','D1','D3','D4','D6','D9','D11'];
 const DW_WLNBB     = ['ALL','L34','L43','BE_UP'];
 const DW_TIMINGS   = ['ALL','SAME_BAR','BASE_THEN_D_3B','D_THEN_BEUP_5B'];
@@ -693,6 +693,35 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
         </div>
         <BucketTable data={bundle.performance_by_new_pump_sequence} />
       </div>
+
+      {/* Triple D + L34 + BE_UP */}
+      {(bundle.performance_by_d_l34_beup_same?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#9c6bde' }}>
+            ⬡ Triple D + L34 + BE_UP
+          </div>
+          <div style={{ fontSize: 9, color: '#555', marginBottom: 8 }}>
+            Research only — same-bar D + L34 + BE_UP confluence. Does not affect scoring or routing.
+          </div>
+          <BucketTable data={bundle.performance_by_d_l34_beup_same} />
+          {(bundle.performance_by_triple_inside_decision?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 6 }}>
+                Triple × Decision
+              </div>
+              <BucketTable data={bundle.performance_by_triple_inside_decision} />
+            </div>
+          )}
+          {(bundle.performance_by_triple_inside_structure_phase?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 6 }}>
+                Triple × Structure Phase
+              </div>
+              <BucketTable data={bundle.performance_by_triple_inside_structure_phase} />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* False Positives */}
       <div className={styles.bundleSection}>
