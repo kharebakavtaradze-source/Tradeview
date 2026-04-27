@@ -169,6 +169,40 @@ async def _load_replay_digest() -> tuple[str, Optional[dict]]:
         state_rows.sort(key=lambda x: state_order.index(x["bucket"])
                         if x["bucket"] in state_order else 99)
 
+        # ── CE state (compression/expansion) ─────────────────────────────────
+        ce_rows = _compute_perf_rows(
+            candidates, out_map,
+            lambda c: c.get("np_compression_expansion_state") or "NONE",
+        )
+        ce_order = ["ACCUMULATION_READY", "EXPANSION_START", "COMPRESSED_BASE",
+                    "OVERHEATED_EXPANSION", "NONE"]
+        ce_rows = [r for r in ce_rows if r["n"] >= 5]
+        ce_rows.sort(key=lambda x: ce_order.index(x["bucket"])
+                     if x["bucket"] in ce_order else 99)
+
+        # ── D/WLNBB combo performance (from snapshot JSON) ────────────────────
+        def _dw_combo_bucket(c: dict) -> str | None:
+            snap = c.get("snapshot") or {}
+            new_pump = snap.get("new_pump") or {}
+            # d_confluence_type_v2 is the primary combo classifier
+            combo = (new_pump.get("d_confluence_type_v2")
+                     or snap.get("d_confluence_type_v2"))
+            if combo and combo != "NONE":
+                return combo
+            return None
+
+        dw_rows = _compute_perf_rows(candidates, out_map, _dw_combo_bucket, min_n=3)
+        # Sort best WR first for AI readability
+        dw_rows.sort(key=lambda x: x["win_rate"], reverse=True)
+
+        # ── expansion timing risk ─────────────────────────────────────────────
+        etr_rows = _compute_perf_rows(
+            candidates, out_map,
+            lambda c: c.get("np_expansion_timing_risk") or "LOW",
+        )
+        etr_order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+        etr_rows.sort(key=lambda x: etr_order.get(x["bucket"], 9))
+
         # ── standout tickers ──────────────────────────────────────────────────
         scored = [(c, out_map.get(c["id"])) for c in candidates if c.get("id") in out_map]
 
@@ -193,6 +227,16 @@ async def _load_replay_digest() -> tuple[str, Optional[dict]]:
 
         if state_rows:
             lines += ["", "NP STATE:", _fmt_perf(state_rows, width=14)]
+
+        if ce_rows:
+            lines += ["", "CE STATE (compression/expansion):", _fmt_perf(ce_rows, width=22)]
+
+        if etr_rows:
+            lines += ["", "EXPANSION TIMING RISK:", _fmt_perf(etr_rows, width=10)]
+
+        if dw_rows:
+            lines += ["", "D/WLNBB COMBO PERFORMANCE (top by WR, research only):"]
+            lines.append(_fmt_perf(dw_rows, width=28, top=10))
 
         if worst:
             lines += ["", "FALSE POSITIVE EXAMPLES (worst 5d):"]
