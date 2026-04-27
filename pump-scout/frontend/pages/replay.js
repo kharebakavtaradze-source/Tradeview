@@ -316,11 +316,6 @@ function dwRowColor(row) {
   return 'transparent';
 }
 
-function fmt(v, decimals=1) {
-  if (v == null) return '—';
-  return Number(v).toFixed(decimals);
-}
-
 function DWlnbbMatrix({ bundle }) {
   const matrix  = bundle.d_wlnbb_combination_matrix  ?? [];
   const summary = bundle.d_wlnbb_combination_summary  ?? {};
