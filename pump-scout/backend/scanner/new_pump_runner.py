@@ -21,7 +21,7 @@ _running: bool = False
 
 _np_progress: dict = {
     "running":        False,
-    "phase":          "idle",   # idle|fetching_universe|filtering|fetching_candles|analyzing|done|error
+    "phase":          "idle",   # idle|fetching_universe|filtering|fetching_candles|analyzing|enriching|enriching_context|done|error
     "started_at":     None,
     "finished_at":    None,
     "universe_size":  0,
@@ -342,6 +342,15 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
             for r in results:
                 r.setdefault("sector", None)
                 r.setdefault("industry", None)
+
+        # ── Step 7: Context enrichment (sector/macro/news/sympathy) ──────────────
+        _np_progress["phase"] = "enriching_context"
+        try:
+            from scanner.np_context_enricher import enrich_np_candidates
+            results = await enrich_np_candidates(results)
+            logger.info("[NpRunner] Context enrichment complete")
+        except Exception as _ctx_exc:
+            logger.warning(f"[NpRunner] Context enrichment failed (non-fatal): {_ctx_exc}")
 
         _latest = {
             "results":        results,

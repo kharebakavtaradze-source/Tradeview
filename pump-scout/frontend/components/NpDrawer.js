@@ -594,9 +594,238 @@ function S12_DWlnbb({ d_wlnbb: dw }) {
   );
 }
 
+// ── S13: Sector / Macro / News / Sympathy Context ────────────────────────────
+
+const REGIME_LABEL_COLOR = {
+  RISK_ON:           { color: '#00e676', bg: 'rgba(0,230,118,0.10)' },
+  RISK_OFF:          { color: '#ff5252', bg: 'rgba(255,82,82,0.10)' },
+  FEAR:              { color: '#ff6d00', bg: 'rgba(255,109,0,0.10)' },
+  ROTATION_ENERGY:   { color: '#ffd740', bg: 'rgba(255,215,64,0.10)' },
+  ROTATION_DEFENSIVE:{ color: '#80cbc4', bg: 'rgba(128,203,196,0.10)' },
+  NEUTRAL:           { color: '#888',    bg: 'rgba(136,136,136,0.08)' },
+};
+
+const HYPE_TIER_COLOR = {
+  VIRAL: { color: '#ff4400', bg: 'rgba(255,68,0,0.12)' },
+  HOT:   { color: '#ff8800', bg: 'rgba(255,136,0,0.10)' },
+  WARM:  { color: '#ffd600', bg: 'rgba(255,214,0,0.08)' },
+  COLD:  { color: '#555',    bg: 'transparent' },
+};
+
+const TREND_LABEL_COLOR = {
+  LEADING:   '#00e676',
+  IMPROVING: '#69f0ae',
+  NEUTRAL:   '#607d8b',
+  WEAKENING: '#ff9800',
+  LAGGING:   '#f44336',
+  UNKNOWN:   '#444',
+};
+
+function CtxRow({ label, children }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
+      <span style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.06em', minWidth: 90, flexShrink: 0 }}>
+        {label}
+      </span>
+      <span style={{ fontSize: 11, color: '#bbb' }}>{children}</span>
+    </div>
+  );
+}
+
+function Chip({ label, color, bg }) {
+  if (!label) return null;
+  return (
+    <span style={{
+      display: 'inline-block', padding: '1px 7px', borderRadius: 3,
+      fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
+      color: color || '#aaa', background: bg || (color ? color + '18' : '#ffffff0c'),
+      border: `1px solid ${color || '#555'}44`, marginRight: 4, whiteSpace: 'nowrap',
+    }}>{label}</span>
+  );
+}
+
+function S13_Context({ rowData }) {
+  const sc  = rowData?.sector_context;
+  const mc  = rowData?.macro_context;
+  const nhc = rowData?.news_hype_context;
+  const syc = rowData?.sympathy_context;
+
+  const hasAny = sc || mc || nhc || syc;
+  if (!hasAny) return null;
+
+  const regimeCfg = REGIME_LABEL_COLOR[mc?.market_regime] || REGIME_LABEL_COLOR.NEUTRAL;
+  const hypeCfg   = HYPE_TIER_COLOR[nhc?.hype_tier]      || HYPE_TIER_COLOR.COLD;
+  const trendCol  = TREND_LABEL_COLOR[sc?.sector_trend]   || '#444';
+
+  return (
+    <SecCard title="Sector · Macro · News · Sympathy">
+
+      {/* ── Sector ── */}
+      {sc && sc.sector_context_source !== 'unavailable' && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
+            Sector Context
+            <span style={{ marginLeft: 6, color: '#333', fontStyle: 'italic', textTransform: 'none' }}>
+              {sc.sector_context_source === 'live' ? '(live)' : sc.sector_context_source === 'static' ? '(static)' : ''}
+            </span>
+          </div>
+
+          <CtxRow label="Sector / ETF">
+            <b style={{ color: '#ddd' }}>{sc.sector || '—'}</b>
+            {sc.sector_etf && <span style={{ color: '#888', marginLeft: 5 }}>({sc.sector_etf})</span>}
+          </CtxRow>
+          {sc.industry && (
+            <CtxRow label="Industry">
+              <span style={{ color: '#aaa' }}>{sc.industry}</span>
+            </CtxRow>
+          )}
+          <CtxRow label="Sector Trend">
+            <span style={{ color: trendCol, fontWeight: 700 }}>{sc.sector_trend}</span>
+            {sc.sector_rrg_quadrant && (
+              <span style={{ marginLeft: 6, color: '#555', fontSize: 10 }}>
+                RRG: <span style={{ color: TREND_LABEL_COLOR[sc.sector_rrg_quadrant] || '#888' }}>
+                  {sc.sector_rrg_quadrant}
+                </span>
+              </span>
+            )}
+          </CtxRow>
+          <div style={{ marginTop: 3, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {sc.strong_sector && <Chip label="TAILWIND" color="#00e676" />}
+            {sc.weak_sector   && <Chip label="HEADWIND" color="#ff5252" />}
+            {!sc.strong_sector && !sc.weak_sector && sc.sector && (
+              <Chip label="NEUTRAL SECTOR" color="#607d8b" />
+            )}
+          </div>
+        </div>
+      )}
+      {sc?.sector_context_source === 'unavailable' && (
+        <div style={{ fontSize: 10, color: '#444', marginBottom: 8, fontStyle: 'italic' }}>
+          Sector data unavailable
+        </div>
+      )}
+
+      {/* ── Macro ── */}
+      {mc && mc.macro_context_source !== 'unavailable' && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
+            Macro / Regime
+          </div>
+          <CtxRow label="Regime">
+            <Chip
+              label={(mc.market_regime || 'NEUTRAL').replace(/_/g, ' ')}
+              color={regimeCfg.color}
+              bg={regimeCfg.bg}
+            />
+          </CtxRow>
+          {mc.macro_tailwind && (
+            <CtxRow label="Alignment">
+              <span style={{ color: '#00e676', fontWeight: 700 }}>TAILWIND</span>
+              <span style={{ color: '#555', fontSize: 10, marginLeft: 6 }}>{mc.macro_reason}</span>
+            </CtxRow>
+          )}
+          {mc.macro_headwind && (
+            <CtxRow label="Alignment">
+              <span style={{ color: '#ff5252', fontWeight: 700 }}>HEADWIND</span>
+              <span style={{ color: '#555', fontSize: 10, marginLeft: 6 }}>{mc.macro_reason}</span>
+            </CtxRow>
+          )}
+          {!mc.macro_tailwind && !mc.macro_headwind && mc.macro_reason && (
+            <CtxRow label="Alignment">
+              <span style={{ color: '#666', fontSize: 10 }}>{mc.macro_reason}</span>
+            </CtxRow>
+          )}
+          {mc.strong_sectors?.length > 0 && (
+            <CtxRow label="Leading">
+              <span style={{ color: '#888', fontSize: 10 }}>{mc.strong_sectors.join(', ')}</span>
+            </CtxRow>
+          )}
+        </div>
+      )}
+
+      {/* ── News / Hype ── */}
+      {nhc && nhc.news_context_source !== 'unavailable' && nhc.hype_tier !== 'COLD' && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
+            Hype Monitor
+          </div>
+          <CtxRow label="Hype Tier">
+            <Chip label={nhc.hype_tier} color={hypeCfg.color} bg={hypeCfg.bg} />
+            {nhc.hype_state && nhc.hype_state !== 'COLD' && (
+              <span style={{ fontSize: 10, color: '#666', marginLeft: 4 }}>{nhc.hype_state.replace(/_/g, ' ')}</span>
+            )}
+          </CtxRow>
+          {nhc.hype_score != null && (
+            <CtxRow label="Hype Score">
+              <span style={{ color: nhc.hype_score >= 60 ? '#ff8800' : '#888' }}>{nhc.hype_score}</span>
+              <span style={{ fontSize: 10, color: '#555', marginLeft: 6 }}>
+                2h:{nhc.article_count_2h ?? '—'} · 6h:{nhc.article_count_6h ?? '—'} · 24h:{nhc.article_count_24h ?? '—'}
+              </span>
+            </CtxRow>
+          )}
+          {nhc.catalyst_type && (
+            <CtxRow label="Catalyst">
+              <Chip label={nhc.catalyst_type.replace(/_/g, ' ')} color="#ffd600" />
+            </CtxRow>
+          )}
+          {nhc.catalyst_risk_flags?.length > 0 && (
+            <CtxRow label="Risk Flags">
+              {nhc.catalyst_risk_flags.map(f => <Chip key={f} label={f.replace(/_/g, ' ')} color="#ff5252" />)}
+            </CtxRow>
+          )}
+        </div>
+      )}
+      {nhc?.news_context_source === 'unavailable' && (
+        <div style={{ fontSize: 10, color: '#444', marginBottom: 8, fontStyle: 'italic' }}>
+          Not in hype monitor coverage
+        </div>
+      )}
+
+      {/* ── Sympathy ── */}
+      {syc && syc.sympathy_theme && (
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
+            Sympathy
+          </div>
+          <CtxRow label="Theme">
+            <span style={{ color: '#bbb' }}>{syc.sympathy_theme}</span>
+          </CtxRow>
+          {syc.leader_symbol && (
+            <CtxRow label="Leader">
+              <span style={{ color: '#fff', fontWeight: 700 }}>{syc.leader_symbol}</span>
+              {syc.leader_return_1d != null && (
+                <span style={{ color: syc.leader_return_1d > 0 ? '#00e676' : '#ff5252', marginLeft: 6, fontSize: 10 }}>
+                  1D {syc.leader_return_1d > 0 ? '+' : ''}{syc.leader_return_1d?.toFixed(2)}%
+                </span>
+              )}
+            </CtxRow>
+          )}
+          <CtxRow label="Alignment">
+            <Chip
+              label={syc.candidate_alignment}
+              color={syc.candidate_alignment === 'LAG' ? '#ffd600' : syc.candidate_alignment === 'LEAD' ? '#00e676' : '#888'}
+            />
+            {syc.sympathy_score > 0 && (
+              <span style={{ fontSize: 10, color: '#555', marginLeft: 4 }}>score {syc.sympathy_score}</span>
+            )}
+          </CtxRow>
+          {syc.sympathy_reason && (
+            <div style={{ fontSize: 10, color: '#555', marginTop: 2, fontStyle: 'italic' }}>
+              {syc.sympathy_reason}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ fontSize: 9, color: '#444', marginTop: 6, fontStyle: 'italic' }}>
+        Context only — does not affect decision or routing
+      </div>
+    </SecCard>
+  );
+}
+
 // ── Main drawer ───────────────────────────────────────────────────────────────
 
-export default function NpDrawer({ sym, dataCache, loading, error, onClose }) {
+export default function NpDrawer({ sym, dataCache, loading, error, onClose, rowData }) {
   if (!sym) return null;
   const payload = dataCache?.[sym];
 
@@ -629,6 +858,7 @@ export default function NpDrawer({ sym, dataCache, loading, error, onClose }) {
               <S5_News news={payload.news} />
               <S6_Technical technical_context={payload.technical_context} />
               <S7_Market market_context={payload.market_context} />
+              <S13_Context rowData={rowData} />
               <S8_AI ai_analysis={payload.ai_analysis} />
               <S9_RedFlags red_flags={payload.red_flags} />
               <S12_DWlnbb d_wlnbb={payload.d_wlnbb} />
