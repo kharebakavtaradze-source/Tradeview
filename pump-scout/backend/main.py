@@ -1231,6 +1231,22 @@ async def sectors_top_movers():
     return await get_all_top_movers()
 
 
+@app.get("/api/sectors/subsector-map")
+async def sectors_subsector_map():
+    """Full static subsector taxonomy — ETF → subsector → tickers. No live data."""
+    from sectors.subsector_map import get_subsector_map
+    return get_subsector_map()
+
+
+@app.get("/api/sectors/context/{symbol}")
+async def sector_context_for_symbol(symbol: str):
+    """Sector + subsector context for a single ticker."""
+    from sectors.sector_engine import get_sector_snapshot
+    from sectors.subsector_map import get_symbol_context
+    snap = await get_sector_snapshot()
+    return get_symbol_context(symbol, snap)
+
+
 @app.get("/api/sectors/{etf}")
 async def sector_detail(etf: str):
     """Full detail for one sector ETF: returns, trend, RS, top holdings, top movers."""
@@ -1239,6 +1255,36 @@ async def sector_detail(etf: str):
     if etf not in SECTOR_ETFS:
         raise HTTPException(status_code=404, detail=f"Unknown sector ETF: {etf}")
     return await get_sector_detail(etf)
+
+
+@app.get("/api/sectors/{etf}/subsectors")
+async def sector_subsectors(etf: str):
+    """Subsectors for one sector ETF with strength labels and active ticker counts."""
+    from sectors.sector_engine import get_sector_snapshot, SECTOR_ETFS
+    from sectors.subsector_map import get_subsectors_for_etf
+    etf = etf.upper()
+    if etf not in SECTOR_ETFS:
+        raise HTTPException(status_code=404, detail=f"Unknown sector ETF: {etf}")
+    snap = await get_sector_snapshot()
+    result = get_subsectors_for_etf(etf, snap)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"No subsectors for {etf}")
+    return result
+
+
+@app.get("/api/sectors/{etf}/subsectors/{subsector}")
+async def sector_subsector_detail(etf: str, subsector: str):
+    """Tickers and top active movers for one subsector."""
+    from sectors.sector_engine import get_sector_snapshot, SECTOR_ETFS
+    from sectors.subsector_map import get_subsector_detail, SUBSECTOR_TAXONOMY
+    etf = etf.upper()
+    if etf not in SECTOR_ETFS:
+        raise HTTPException(status_code=404, detail=f"Unknown sector ETF: {etf}")
+    snap = await get_sector_snapshot()
+    result = get_subsector_detail(etf, subsector, snap)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Subsector '{subsector}' not found in {etf}")
+    return result
 
 
 # ─── Admin / Maintenance routes ───────────────────────────────────────────────

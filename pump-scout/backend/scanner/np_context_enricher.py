@@ -1,0 +1,435 @@
+"""
+NP Context Enricher — attaches sector/macro/news/sympathy context to New Pump candidates.
+
+Design constraints:
+- NO per-ticker network calls; uses only in-memory cached snapshots
+- All failures are non-fatal: returns UNKNOWN/null, never raises
+- Context is purely additive — decision/score/routing are never touched
+- Call enrich_np_candidates(results) once per scan batch
+
+Cache freshness (module-level, independent of existing module caches):
+- sector_snapshot  : 30 min  (mirrors sector_engine._TTL)
+- market_regime    : 60 min  (regime is daily; re-fetching hourly is cheap)
+- hype_map         : sync from hype_monitor._latest_results (schedule-driven)
+"""
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
+# ── Module-level snapshot cache ──────────────────────────────────────────────
+_sector_snapshot: dict | None = None
+_sector_snapshot_ts: float    = 0.0
+_SECTOR_TTL = 1800  # 30 min
+
+_regime: dict | None  = None
+_regime_ts: float     = 0.0
+_REGIME_TTL = 3600    # 60 min
+
+# ── GICS ↔ ETF mappings ──────────────────────────────────────────────────────
+_GICS_TO_ETF: dict[str, str] = {
+    "Information Technology":  "XLK",
+    "Health Care":             "XLV",
+    "Financials":              "XLF",
+    "Consumer Discretionary":  "XLY",
+    "Consumer Staples":        "XLP",
+    "Energy":                  "XLE",
+    "Industrials":             "XLI",
+    "Materials":               "XLB",
+    "Real Estate":             "XLRE",
+    "Communication Services":  "XLC",
+    "Utilities":               "XLU",
+}
+
+# Sectors that are growth-oriented (positive in RISK_ON)
+_GROWTH_SECTORS: set[str] = {
+    "Information Technology", "Communication Services",
+    "Consumer Discretionary", "Financials", "Industrials",
+}
+# Sectors that are defensive (positive in RISK_OFF / FEAR)
+_DEFENSIVE_SECTORS: set[str] = {
+    "Utilities", "Consumer Staples", "Health Care", "Real Estate",
+}
+
+
+# ── Snapshot helpers ─────────────────────────────────────────────────────────
+
+async def _get_sector_snapshot() -> dict:
+    """Return cached sector snapshot (30-min TTL). Empty dict on failure."""
+    global _sector_snapshot, _sector_snapshot_ts
+    now = time.time()
+    if _sector_snapshot is not None and now - _sector_snapshot_ts < _SECTOR_TTL:
+        return _sector_snapshot
+    try:
+        from sectors.sector_engine import get_sector_snapshot
+        snap = await get_sector_snapshot()
+        _sector_snapshot = snap or {}
+        _sector_snapshot_ts = now
+        return _sector_snapshot
+    except Exception as exc:
+        logger.debug(f"[NpEnricher] sector_snapshot unavailable: {exc}")
+        return _sector_snapshot or {}
+
+
+async def _get_regime() -> dict:
+    """Return cached market regime (60-min TTL). Empty dict on failure."""
+    global _regime, _regime_ts
+    now = time.time()
+    if _regime is not None and now - _regime_ts < _REGIME_TTL:
+        return _regime
+    try:
+        from scanner.market_regime import get_latest_regime
+        reg = await get_latest_regime()
+        _regime = reg or {}
+        _regime_ts = now
+        return _regime
+    except Exception as exc:
+        logger.debug(f"[NpEnricher] market_regime unavailable: {exc}")
+        return _regime or {}
+
+
+def _get_hype_map() -> dict[str, dict]:
+    """Return {SYMBOL: hype_result} from hype monitor in-memory state. Never raises."""
+    try:
+        from hype_monitor.monitor import get_latest_hype_results
+        results = get_latest_hype_results()
+        return {r["ticker"].upper(): r for r in results if r.get("ticker")}
+    except Exception:
+        return {}
+
+
+# ── Per-field builders ───────────────────────────────────────────────────────
+
+def _build_sector_context(row: dict, snapshot: dict) -> dict:
+    """
+    sector_context fields derived from sector_engine snapshot.
+    Never raises.
+    """
+    sector   = row.get("sector") or ""
+    industry = row.get("industry") or ""
+    etf      = _GICS_TO_ETF.get(sector, "")
+
+    sector_data: dict = {}
+    if etf:
+        sector_data = snapshot.get("sectors", {}).get(etf, {})
+
+    trend_label  = sector_data.get("trend_label")    or "UNKNOWN"
+    rs_trend     = sector_data.get("rs_trend")        or "UNKNOWN"
+    rs_momentum  = sector_data.get("rs_momentum")
+    rrg_quadrant = sector_data.get("rrg_quadrant")
+
+    risk_mode   = snapshot.get("risk_mode")
+    strong_secs = set()
+    weak_secs   = set()
+
+    # Derive strong/weak from risk_mode
+    if risk_mode == "RISK_ON":
+        strong_secs = _GROWTH_SECTORS
+        weak_secs   = _DEFENSIVE_SECTORS
+    elif risk_mode in ("RISK_OFF", "FEAR"):
+        strong_secs = _DEFENSIVE_SECTORS
+        weak_secs   = _GROWTH_SECTORS
+
+    strong_sector = bool(sector and sector in strong_secs)
+    weak_sector   = bool(sector and sector in weak_secs)
+
+    source_status = "live" if sector_data else ("static" if sector else "unavailable")
+
+    return {
+        "sector":              sector   or None,
+        "sector_etf":          etf      or None,
+        "industry":            industry or None,
+        "sector_trend":        trend_label,
+        "sector_rs_momentum":  rs_momentum,
+        "sector_rrg_quadrant": rrg_quadrant,
+        "sector_risk_mode":    risk_mode,
+        "strong_sector":       strong_sector,
+        "weak_sector":         weak_sector,
+        "sector_context_source": source_status,
+    }
+
+
+def _build_macro_context(row: dict, regime: dict) -> dict:
+    """
+    macro_context fields derived from market_regime snapshot.
+    Never raises.
+    """
+    if not regime:
+        return {
+            "market_regime":    "UNKNOWN",
+            "risk_mode":        None,
+            "strong_sectors":   [],
+            "weak_sectors":     [],
+            "macro_tailwind":   False,
+            "macro_headwind":   False,
+            "macro_reason":     None,
+            "macro_context_source": "unavailable",
+        }
+
+    market_regime  = regime.get("regime")  or "NEUTRAL"
+    risk_mode      = regime.get("risk_mode") or market_regime
+    strong_sectors = regime.get("strong_sectors") or []
+    weak_sectors   = regime.get("weak_sectors")   or []
+
+    sector = row.get("sector") or ""
+
+    # Tailwind: ticker's sector is in the regime's strong list
+    macro_tailwind = bool(sector and any(
+        s.lower() in sector.lower() or sector.lower() in s.lower()
+        for s in strong_sectors
+    ))
+    # Headwind: ticker's sector is in the regime's weak list
+    macro_headwind = bool(sector and any(
+        s.lower() in sector.lower() or sector.lower() in s.lower()
+        for s in weak_sectors
+    ))
+
+    # Human-readable reason
+    if macro_tailwind:
+        macro_reason = f"Sector '{sector}' in regime tailwind ({market_regime})"
+    elif macro_headwind:
+        macro_reason = f"Sector '{sector}' faces regime headwind ({market_regime})"
+    else:
+        macro_reason = f"Neutral in {market_regime} regime"
+
+    return {
+        "market_regime":    market_regime,
+        "risk_mode":        risk_mode,
+        "strong_sectors":   strong_sectors,
+        "weak_sectors":     weak_sectors,
+        "macro_tailwind":   macro_tailwind,
+        "macro_headwind":   macro_headwind,
+        "macro_reason":     macro_reason,
+        "macro_context_source": "live" if regime else "unavailable",
+    }
+
+
+def _build_news_hype_context(row: dict, hype_map: dict[str, dict]) -> dict:
+    """
+    news_hype_context fields from hype_monitor in-memory results.
+    Only covers tickers that appear in the hype monitor's last run.
+    Never raises.
+    """
+    sym = (row.get("symbol") or "").upper()
+    hr  = hype_map.get(sym)
+
+    if not hr:
+        return {
+            "hype_score":        None,
+            "hype_tier":         "COLD",
+            "hype_state":        "UNKNOWN",
+            "article_count_2h":  None,
+            "article_count_6h":  None,
+            "article_count_24h": None,
+            "catalyst_type":     None,
+            "catalyst_risk_flags": [],
+            "news_context_source": "unavailable",
+        }
+
+    hs       = hr.get("hype_score") or {}
+    vel      = hr.get("velocity")   or {}
+    divs     = hr.get("divergences") or []
+    news     = hr.get("news")        or {}
+
+    hype_index = hs.get("hype_index")
+    hype_tier  = hs.get("hype_tier") or "COLD"
+
+    # hype_state: derive from divergences
+    div_types = [d.get("type") for d in divs if d.get("type")]
+    if "SILENT_VOLUME" in div_types:
+        hype_state = "SILENT_ACCUMULATION"
+    elif "HYPE_NO_VOLUME" in div_types:
+        hype_state = "HYPE_WITHOUT_VOLUME"
+    elif "PEAK_FADING" in div_types:
+        hype_state = "PEAK_FADING"
+    elif hype_tier in ("HOT", "VIRAL"):
+        hype_state = "ACTIVE_HYPE"
+    elif hype_tier == "WARM":
+        hype_state = "MILD_HYPE"
+    else:
+        hype_state = "COLD"
+
+    # Catalyst type
+    catalyst_type = None
+    if news.get("has_sec_filing"):
+        catalyst_type = "SEC_FILING"
+    elif news.get("has_real_news"):
+        catalyst_type = "REAL_NEWS"
+    elif (news.get("count_24h") or 0) > 2:
+        catalyst_type = "PR_ACTIVITY"
+
+    # Risk flags
+    catalyst_risk_flags: list[str] = []
+    if "HYPE_NO_VOLUME" in div_types:
+        catalyst_risk_flags.append("HYPE_NO_VOLUME")
+    if "PEAK_FADING" in div_types:
+        catalyst_risk_flags.append("PEAK_FADING")
+
+    return {
+        "hype_score":        round(hype_index, 1) if hype_index is not None else None,
+        "hype_tier":         hype_tier,
+        "hype_state":        hype_state,
+        "article_count_2h":  round(vel.get("velocity_2h") or 0, 1),
+        "article_count_6h":  round(vel.get("velocity_6h") or 0, 1),
+        "article_count_24h": round(vel.get("velocity_24h") or 0, 1),
+        "catalyst_type":     catalyst_type,
+        "catalyst_risk_flags": catalyst_risk_flags,
+        "news_context_source": "live",
+    }
+
+
+def _build_sympathy_context(row: dict, all_results: list[dict], snapshot: dict) -> dict:
+    """
+    sympathy_context: identify the sector/industry leader and alignment.
+    Uses only already-enriched rows from the same scan batch.
+    Never raises.
+    """
+    symbol   = (row.get("symbol") or "").upper()
+    sector   = row.get("sector")   or ""
+    industry = row.get("industry") or ""
+    my_score = row.get("new_pump_score") or 0
+
+    if not sector:
+        return {
+            "sympathy_theme":      None,
+            "leader_symbol":       None,
+            "leader_return_1d":    None,
+            "leader_return_5d":    None,
+            "candidate_alignment": "UNKNOWN",
+            "sympathy_score":      0,
+            "sympathy_reason":     "No sector data",
+        }
+
+    # Pool: same sector, different symbol
+    same_sector = [
+        r for r in all_results
+        if r.get("sector") == sector and (r.get("symbol") or "").upper() != symbol
+    ]
+    # Prefer industry-level pool (stronger sympathy signal)
+    same_industry = [
+        r for r in same_sector
+        if industry and r.get("industry") == industry
+    ] if industry else []
+
+    pool = same_industry or same_sector
+
+    if not pool:
+        # We might be the only ticker in this sector — still provide sector ETF context
+        etf = _GICS_TO_ETF.get(sector, "")
+        sec_data = snapshot.get("sectors", {}).get(etf, {})
+        return {
+            "sympathy_theme":      industry or sector,
+            "leader_symbol":       None,
+            "leader_return_1d":    sec_data.get("ret_1d"),
+            "leader_return_5d":    sec_data.get("ret_5d"),
+            "candidate_alignment": "LEAD",
+            "sympathy_score":      0,
+            "sympathy_reason":     f"Only ticker from {industry or sector} in current scan",
+        }
+
+    # Identify leader by NP score
+    pool_sorted = sorted(pool, key=lambda r: r.get("new_pump_score") or 0, reverse=True)
+    leader      = pool_sorted[0]
+    leader_sym  = (leader.get("symbol") or "").upper()
+    leader_score = leader.get("new_pump_score") or 0
+
+    # Sector ETF returns for leader-level context
+    etf = _GICS_TO_ETF.get(sector, "")
+    sec_data = snapshot.get("sectors", {}).get(etf, {})
+    leader_ret_1d = sec_data.get("ret_1d")
+    leader_ret_5d = sec_data.get("ret_5d")
+
+    # Alignment
+    if leader_score > my_score + 5:
+        alignment = "LAG"
+        reason    = f"{leader_sym} leads {industry or sector} (score {leader_score:.0f} vs {my_score:.0f})"
+    elif my_score >= leader_score:
+        alignment = "LEAD"
+        reason    = f"Leading {industry or sector} in current scan (score {my_score:.0f})"
+    else:
+        alignment = "PEER"
+        reason    = f"Peer in {industry or sector} (score spread <5pts)"
+
+    # Sympathy score: how valuable is this sympathy signal?
+    # Higher if leader has a strong NP label and we're lagging
+    leader_label = leader.get("new_pump_label") or ""
+    base = 0
+    if leader_label in ("NEW_PUMP_FIRE", "NEW_PUMP_STRONG"):
+        base = 30
+    elif leader_label == "NEW_PUMP_SETUP":
+        base = 15
+
+    sym_score = base + min(50, int(leader_score * 0.5)) if alignment == "LAG" else 0
+
+    return {
+        "sympathy_theme":      industry or sector,
+        "leader_symbol":       leader_sym if alignment != "LEAD" else None,
+        "leader_return_1d":    leader_ret_1d,
+        "leader_return_5d":    leader_ret_5d,
+        "candidate_alignment": alignment,
+        "sympathy_score":      sym_score,
+        "sympathy_reason":     reason,
+    }
+
+
+# ── Main entry point ─────────────────────────────────────────────────────────
+
+async def enrich_np_candidates(results: list[dict]) -> list[dict]:
+    """
+    Attach sector_context / macro_context / news_hype_context / sympathy_context
+    to every row in results.  Mutates rows in-place for efficiency; also returns list.
+
+    Guaranteed non-fatal: any per-section failure falls back to null/UNKNOWN fields.
+    Cache freshness: sector 30min, regime 60min, hype sync from last monitor run.
+    """
+    if not results:
+        return results
+
+    # ── Fetch snapshots (one I/O round per TTL, shared across all rows) ───────
+    try:
+        snapshot = await _get_sector_snapshot()
+    except Exception:
+        snapshot = {}
+
+    try:
+        regime = await _get_regime()
+    except Exception:
+        regime = {}
+
+    hype_map = _get_hype_map()
+
+    logger.info(
+        f"[NpEnricher] Enriching {len(results)} candidates | "
+        f"sector_snap={'ok' if snapshot else 'empty'} "
+        f"regime={'ok' if regime else 'empty'} "
+        f"hype_tickers={len(hype_map)}"
+    )
+
+    for row in results:
+        try:
+            row["sector_context"]    = _build_sector_context(row, snapshot)
+        except Exception as exc:
+            logger.debug(f"[NpEnricher] sector_context failed {row.get('symbol')}: {exc}")
+            row["sector_context"]    = {"sector_context_source": "error"}
+
+        try:
+            row["macro_context"]     = _build_macro_context(row, regime)
+        except Exception as exc:
+            logger.debug(f"[NpEnricher] macro_context failed {row.get('symbol')}: {exc}")
+            row["macro_context"]     = {"macro_context_source": "error"}
+
+        try:
+            row["news_hype_context"] = _build_news_hype_context(row, hype_map)
+        except Exception as exc:
+            logger.debug(f"[NpEnricher] news_hype_context failed {row.get('symbol')}: {exc}")
+            row["news_hype_context"] = {"news_context_source": "error"}
+
+    # Sympathy needs all rows with sectors already present, so runs after sector pass
+    for row in results:
+        try:
+            row["sympathy_context"] = _build_sympathy_context(row, results, snapshot)
+        except Exception as exc:
+            logger.debug(f"[NpEnricher] sympathy_context failed {row.get('symbol')}: {exc}")
+            row["sympathy_context"] = {"candidate_alignment": "UNKNOWN", "sympathy_score": 0}
+
+    return results

@@ -1022,7 +1022,33 @@ export default function NewPumpPage() {
                       <td><NdRetCell nd={r.next_day} /></td>
                       <td><NdWLCell nd={r.next_day} /></td>
                       <td>{fmtVol(r.volume_today)}</td>
-                      <td className={styles.sectorCell}>{r.sector || '—'}</td>
+                      <td className={styles.sectorCell}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span>{r.sector || '—'}</span>
+                          <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                            {r.sector_context?.strong_sector && (
+                              <span style={{ fontSize: 8, padding: '0px 4px', borderRadius: 2, background: 'rgba(0,230,118,0.12)', color: '#00e676', fontWeight: 700, letterSpacing: '0.04em' }}>TAIL</span>
+                            )}
+                            {r.sector_context?.weak_sector && (
+                              <span style={{ fontSize: 8, padding: '0px 4px', borderRadius: 2, background: 'rgba(255,82,82,0.10)', color: '#ff5252', fontWeight: 700, letterSpacing: '0.04em' }}>HEAD</span>
+                            )}
+                            {r.macro_context?.market_regime && r.macro_context.market_regime !== 'NEUTRAL' && (
+                              <span style={{ fontSize: 8, padding: '0px 4px', borderRadius: 2, background: 'rgba(96,125,139,0.12)', color: '#90a4ae', fontWeight: 700, letterSpacing: '0.04em' }}>
+                                {r.macro_context.market_regime.replace('_', ' ')}
+                              </span>
+                            )}
+                            {r.news_hype_context?.hype_tier && r.news_hype_context.hype_tier !== 'COLD' && (
+                              <span style={{
+                                fontSize: 8, padding: '0px 4px', borderRadius: 2, fontWeight: 700, letterSpacing: '0.04em',
+                                background: r.news_hype_context.hype_tier === 'VIRAL' ? 'rgba(255,68,0,0.12)' : r.news_hype_context.hype_tier === 'HOT' ? 'rgba(255,136,0,0.10)' : 'rgba(255,214,0,0.08)',
+                                color: r.news_hype_context.hype_tier === 'VIRAL' ? '#ff4400' : r.news_hype_context.hype_tier === 'HOT' ? '#ff8800' : '#ffd600',
+                              }}>
+                                {r.news_hype_context.hype_tier}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1039,6 +1065,7 @@ export default function NewPumpPage() {
         loading={drawerLoading}
         error={drawerError}
         onClose={() => setDrawerSym(null)}
+        rowData={results.find(r => r.symbol === drawerSym)}
       />
     </>
   );
