@@ -145,24 +145,91 @@ def _atr_position_size(portfolio_value: float, entry: float, atr: float,
     return round(max(50.0, min(600.0, size)), 2)
 
 
+def _np_result_to_signal(r: dict) -> dict:
+    """Normalize a live new_pump_runner result row to the same shape as get_recent_np_signals."""
+    label = r.get("new_pump_label") or ""
+    # new_pump_runner labels: NEW_PUMP_FIRE → "FIRE", NEW_PUMP_STRONG → "STRONG"
+    norm_label = label.replace("NEW_PUMP_", "") if label.startswith("NEW_PUMP_") else label
+    return {
+        "symbol":                    r.get("symbol", ""),
+        "scan_date":                 r.get("signal_date") or r.get("scanned_at", "")[:10],
+        "new_pump_label":            norm_label,
+        "new_pump_score":            r.get("new_pump_score"),
+        "new_pump_sequence_label":   r.get("new_pump_sequence_label"),
+        "np_setup_via":              r.get("setup_via") or (
+                                         "L34"   if r.get("has_l34")   else
+                                         "FRI34" if r.get("has_fri34") else "NONE"),
+        "np_has_l34":                r.get("has_l34"),
+        "np_has_fri34":              r.get("has_fri34"),
+        "np_has_g4":                 r.get("has_g4"),
+        "np_has_b2":                 r.get("has_b2"),
+        "np_age_l34":                r.get("age_l34"),
+        "np_age_fri34":              r.get("age_fri34"),
+        "np_is_isolated_trigger":    r.get("has_g4") and not r.get("has_l34") and not r.get("has_fri34"),
+        "sector":                    r.get("sector"),
+        "price":                     r.get("price"),
+        "tier":                      norm_label,
+        "np_state":                  r.get("state"),
+        "np_base_quality_score":     r.get("base_quality_score"),
+        "np_fake_trigger_risk":      r.get("fake_trigger_risk"),
+        "np_expansion_timing_risk":  r.get("expansion_timing_risk"),
+        "np_compression_expansion_state": r.get("compression_expansion_state"),
+        "np_decision":               r.get("decision"),
+        "np_d_confluence_type_v2":   r.get("d_confluence_type_v2"),
+    }
+
+
 async def _get_np_candidates() -> list[dict]:
     """
-    Fetch recent New Pump FIRE/STRONG signals from replay history (last 5 days).
-    Skips isolated triggers (G4 with no setup) and non-stock securities.
-    Returns list of candidate dicts compatible with the scan_ctx format.
+    Fetch recent New Pump FIRE/STRONG signals.
+
+    Sources (merged, deduplicated):
+    1. replay_signal_candidates DB — signals from the latest completed replay run
+       covering recent scan dates (last 7 days).
+    2. Live new_pump_runner._latest — results of the most recent live NP scan
+       (in memory; populated when user runs New Pump scan or it runs on schedule).
+
+    Having both sources ensures the AI always has NP candidates even when the
+    replay's tail end has few signals or hasn't been run recently.
     """
     from scanner.sector_map import NON_STOCK_SECURITIES
-    try:
-        np_signals = await get_recent_np_signals(days=5)
-    except Exception as e:
-        logger.warning(f"NP candidate fetch failed: {e}")
-        return []
 
+    # ── Source 1: replay DB ────────────────────────────────────────────────────
+    db_signals: list[dict] = []
+    try:
+        db_signals = await get_recent_np_signals(days=7)
+    except Exception as e:
+        logger.warning(f"NP DB signals fetch failed: {e}")
+
+    # ── Source 2: live in-memory NP scan results ───────────────────────────────
+    live_signals: list[dict] = []
+    try:
+        from scanner.new_pump_runner import get_latest as _np_get_latest
+        np_latest = _np_get_latest()
+        if np_latest and np_latest.get("results"):
+            for r in np_latest["results"]:
+                lbl = r.get("new_pump_label") or ""
+                norm = lbl.replace("NEW_PUMP_", "") if lbl.startswith("NEW_PUMP_") else lbl
+                if norm in ("FIRE", "STRONG"):
+                    live_signals.append(_np_result_to_signal(r))
+        if live_signals:
+            logger.info(f"NP live scan: {len(live_signals)} FIRE/STRONG signals available")
+    except Exception as e:
+        logger.debug(f"NP live signals unavailable: {e}")
+
+    # Merge: DB first (has decision/CE fields from replay), live supplements
+    all_signals = db_signals + [
+        s for s in live_signals
+        if not any(d["symbol"] == s["symbol"] for d in db_signals)
+    ]
+    logger.info(f"NP candidates: db={len(db_signals)} live={len(live_signals)} merged={len(all_signals)}")
+
+    # ── Filter and build ───────────────────────────────────────────────────────
     seen: set[str] = set()
     candidates: list[dict] = []
-    for s in np_signals:
+    for s in all_signals:
         sym = s["symbol"]
-        if sym in NON_STOCK_SECURITIES or sym in seen:
+        if not sym or sym in NON_STOCK_SECURITIES or sym in seen:
             continue
         if s.get("np_is_isolated_trigger"):
             continue
@@ -180,7 +247,7 @@ async def _get_np_candidates() -> list[dict]:
         candidates.append({
             "symbol": sym,
             "price": price,
-            "tier": s["new_pump_label"],
+            "tier": s.get("new_pump_label") or s.get("tier", ""),
             "score": round(s.get("new_pump_score") or 0, 1),
             "source": "new_pump",
             "np_setup_via": s.get("np_setup_via"),
@@ -202,6 +269,7 @@ async def _get_np_candidates() -> list[dict]:
             "hype": 0,
             "rs_score": 0,
         })
+    logger.info(f"NP candidates after filters: {len(candidates)}")
     return candidates
 
 
@@ -764,6 +832,9 @@ STRICT RULES (not negotiable):
    or the NP signal that triggered entry is now flagged AVOID/np_engine_avoid_flagged
 8. Never chase: skip if moved >5% today, sector in weak_sectors list
 9. Use TICKER MEMORY: avoid repeat losers; prefer proven winners
+   IMPORTANT: do NOT sell a position AND buy the same ticker in the same session.
+   If you want to exit, do so — but do not re-enter the same day. The system will
+   block same-session re-buys anyway, so a sell+rebuy wastes a slot and shows 0% P&L.
 10. Use RESEARCH PRIORS: downsize/caution candidates with isolated_signal_penalty,
     fake_trigger_risk_high_caution, or ce_overheated_caution;
     boost confidence when base_quality_high + early_setup + ce_accumulation_ready_positive stack.
@@ -786,11 +857,12 @@ STRICT RULES (not negotiable):
     TRIGGER_AFTER_FRI34 → WR5d=62.5% (n=16)  ← strong but low-n
     ISOLATED_B2         → WR5d=42.3% but avg5d=+4.68% (volatile — high upside, lower WR)
     BUY_CANDIDATE decision label adds further confidence regardless of sequence.
-14. EDGE MANDATE: if 1+ NP candidate has replay_wr5d ≥ 55% AND replay_n ≥ 5 AND no hard rule blocks it,
-    you SHOULD buy at least one (subject to cash and slot limits). Holding cash while a measurable
-    NP edge is sitting in front of you is a quantifiable miss — don't default to "no trade" out of
-    inertia. Explain WHY you're skipping each high-edge candidate if you do skip them.
-    Hard pass ONLY when np_decision is explicitly the string "AVOID" (not null/missing).
+14. EDGE MANDATE — you MUST buy at least one NP candidate if ANY of these is true:
+    a) replay_wr5d ≥ 55% AND replay_n ≥ 5 (replay edge confirmed)
+    b) np_decision = "BUY_CANDIDATE" (Run #26: WR5d=61.5% — the engine has validated it)
+    c) np_ce_state in ("ACCUMULATION_READY", "TRIGGERED") (Run #26: WR5d ≥ 62%)
+    Hard pass ONLY when np_decision is explicitly "AVOID". null/missing decision is NOT a reason
+    to skip. Explain specifically why you skip each NP candidate that meets (a), (b), or (c).
 
 For each BUY include stop_loss, target_price (TP1), target_price_2 (TP2), sell_pct_at_target_1 (default 50).
 
@@ -864,6 +936,10 @@ Respond in Russian. Return JSON only:
     executed_buys = 0
     executed_sells = 0
 
+    # Track symbols already held or sold this session — prevents 0% round-trips
+    open_symbols = {p["symbol"].upper() for p in open_positions}
+    sold_in_session: set[str] = set()
+
     for d in decisions:
         action = d.get("action", "").upper()
         symbol = d.get("symbol", "").upper()
@@ -874,6 +950,14 @@ Respond in Russian. Return JSON only:
             if not price:
                 price = await _fetch_price(symbol) or 0
             if price <= 0 or len(open_positions) >= 5:
+                continue
+            # Prevent same-session sell→buy round-trip (creates 0% trades)
+            if symbol in sold_in_session:
+                logger.info(f"AI portfolio: skipping re-buy of {symbol} — sold in same session")
+                continue
+            # Prevent duplicate positions — don't buy what's already held
+            if symbol in open_symbols:
+                logger.info(f"AI portfolio: skipping BUY {symbol} — already in open positions")
                 continue
 
             # Find source — check scan_ctx first, then np_ctx
@@ -931,6 +1015,7 @@ Respond in Russian. Return JSON only:
             )
             cash -= amount
             executed_buys += 1
+            open_symbols.add(symbol)
             open_positions = await get_open_ai_positions()
 
         elif action == "SELL":
@@ -943,6 +1028,8 @@ Respond in Russian. Return JSON only:
             if closed:
                 cash += closed.get("current_value", 0)
                 executed_sells += 1
+                sold_in_session.add(symbol)
+                open_symbols.discard(symbol)
 
     # Recalculate total value
     open_pos = await get_open_ai_positions()
