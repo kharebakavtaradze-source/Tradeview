@@ -136,6 +136,136 @@ function RRGPlot({ sectors }) {
   );
 }
 
+// ── Subsector strength color map ──────────────────────────────────────────────
+const SUBSECTOR_COLORS = {
+  SUBSECTOR_LEADING:   '#00c853',
+  SUBSECTOR_IMPROVING: '#69f0ae',
+  SUBSECTOR_NEUTRAL:   '#607d8b',
+  SUBSECTOR_WEAKENING: '#ff9800',
+  SUBSECTOR_LAGGING:   '#f44336',
+  SUBSECTOR_UNKNOWN:   '#333',
+};
+
+// ── Subsector drill-down panel ────────────────────────────────────────────────
+function SubsectorPanel({ etf }) {
+  const [data,            setData]            = useState(null);
+  const [loading,         setLoading]         = useState(true);
+  const [selectedSub,     setSelectedSub]     = useState(null);
+  const [subDetail,       setSubDetail]       = useState(null);
+  const [subDetailLoading,setSubDetailLoading]= useState(false);
+
+  useEffect(() => {
+    if (!etf) return;
+    setLoading(true);
+    setData(null);
+    setSelectedSub(null);
+    setSubDetail(null);
+    fetch(`${API_URL}/api/sectors/${etf}/subsectors`)
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [etf]);
+
+  const handleSubClick = (sub) => {
+    if (selectedSub === sub.name) {
+      setSelectedSub(null);
+      setSubDetail(null);
+      return;
+    }
+    setSelectedSub(sub.name);
+    setSubDetail(null);
+    setSubDetailLoading(true);
+    fetch(`${API_URL}/api/sectors/${etf}/subsectors/${encodeURIComponent(sub.name)}`)
+      .then(r => r.json())
+      .then(d => { setSubDetail(d); setSubDetailLoading(false); })
+      .catch(() => setSubDetailLoading(false));
+  };
+
+  if (loading) return <div className={styles.detailLoading} style={{ marginTop: 8 }}>Loading subsectors…</div>;
+  if (!data?.subsectors?.length) return null;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className={styles.detailSectionTitle} style={{ marginBottom: 8 }}>Subsectors</div>
+
+      {/* Mini subsector heatmap */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+        {data.subsectors.map(sub => {
+          const col = SUBSECTOR_COLORS[sub.subsector_strength] || '#555';
+          const isSelected = selectedSub === sub.name;
+          return (
+            <div
+              key={sub.name}
+              onClick={() => handleSubClick(sub)}
+              style={{
+                background: `${col}12`,
+                border: `1px solid ${isSelected ? col : col + '44'}`,
+                borderRadius: 6,
+                padding: '7px 12px',
+                cursor: 'pointer',
+                minWidth: 120,
+                outline: isSelected ? `2px solid ${col}` : 'none',
+                transition: 'opacity 0.1s',
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#ccc', marginBottom: 3 }}>
+                {sub.name}
+              </div>
+              <div style={{ fontSize: 9, color: col, fontWeight: 700, letterSpacing: '0.4px' }}>
+                {sub.subsector_strength.replace('SUBSECTOR_', '')}
+              </div>
+              <div style={{ fontSize: 9, color: '#555', marginTop: 2 }}>
+                {sub.active_count}/{sub.ticker_count} active
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Subsector detail: top active tickers */}
+      {selectedSub && (
+        <div style={{ background: '#0e0e20', border: '1px solid #2a2a4e', borderRadius: 6, padding: '10px 14px' }}>
+          <div className={styles.detailSectionTitle} style={{ marginBottom: 8 }}>
+            {selectedSub} — Active Tickers
+          </div>
+          {subDetailLoading && <div className={styles.detailLoading}>Loading…</div>}
+          {subDetail && (
+            <>
+              {subDetail.top_active?.length > 0 ? (
+                <div className={styles.moversList}>
+                  {subDetail.top_active.map(m => (
+                    <div key={m.symbol} className={styles.moverRow}>
+                      <span className={styles.moverSymbol}>{m.symbol}</span>
+                      <span className={styles.moverTier} style={{ color: m.tier === 'A' ? '#00c853' : m.tier === 'B' ? '#69f0ae' : '#ff9800' }}>
+                        {m.tier || '—'}
+                      </span>
+                      <span className={styles.moverScore}>{m.score != null ? m.score.toFixed(1) : '—'}</span>
+                      <span style={{ color: retColor(m.price_change_pct) }}>{fmtPct(m.price_change_pct)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: '#555' }}>No active scan candidates in this subsector.</div>
+              )}
+              {/* All tickers in subsector */}
+              {subDetail.tickers?.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div className={styles.detailSectionTitle} style={{ marginBottom: 6 }}>All Tickers</div>
+                  <div className={styles.holdingsList}>
+                    {subDetail.tickers.map(t => (
+                      <span key={t} className={styles.holdingChip}>{t}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Detail Panel ──────────────────────────────────────────────────────────────
 function DetailPanel({ etf, onClose }) {
   const [detail,  setDetail]  = useState(null);
@@ -221,6 +351,9 @@ function DetailPanel({ etf, onClose }) {
               </div>
             </div>
           )}
+
+          {/* Subsector drill-down */}
+          <SubsectorPanel etf={etf} />
         </>
       )}
     </div>
