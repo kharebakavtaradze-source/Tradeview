@@ -1538,8 +1538,17 @@ async def get_recent_np_signals(days: int = 5) -> list[dict]:
             ).order_by(ReplaySignalCandidate.scan_date.desc()).limit(30)
         )
         rows = result.scalars().all()
-    return [
-        {
+    result_list = []
+    for r in rows:
+        # Extract d_confluence_type_v2 from snapshot JSON for D/WLNBB combo lookup
+        dct_v2 = None
+        try:
+            snap = json.loads(r.candidate_snapshot_json or "{}")
+            np_d = snap.get("new_pump") or {}
+            dct_v2 = np_d.get("d_confluence_type_v2") or snap.get("d_confluence_type_v2")
+        except Exception:
+            pass
+        result_list.append({
             "symbol": r.symbol,
             "scan_date": r.scan_date,
             "new_pump_label": r.new_pump_label,
@@ -1563,9 +1572,10 @@ async def get_recent_np_signals(days: int = 5) -> list[dict]:
             "np_expansion_timing_risk":       r.np_expansion_timing_risk,
             "np_compression_expansion_state": r.np_compression_expansion_state,
             "np_decision":                    r.np_decision,
-        }
-        for r in rows
-    ]
+            # D/WLNBB combo classifier (extracted from snapshot JSON)
+            "np_d_confluence_type_v2":        dct_v2,
+        })
+    return result_list
 
 
 async def get_ai_portfolio_history(limit: int = 10) -> List[dict]:
