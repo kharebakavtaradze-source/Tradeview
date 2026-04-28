@@ -84,7 +84,8 @@ def _compute_perf_rows(
         n = len(returns)
         if n < min_n:
             continue
-        win_rate = sum(1 for r in returns if r > 0) / n * 100
+        # Use >=3% threshold to match research_bundle.py and _enrich_np_with_replay_edge
+        win_rate = sum(1 for r in returns if r >= 3.0) / n * 100
         avg_ret  = sum(returns) / n
         rows.append({"bucket": bk, "n": n, "win_rate": win_rate, "avg_ret": avg_ret})
     rows.sort(key=lambda x: x["avg_ret"], reverse=True)
