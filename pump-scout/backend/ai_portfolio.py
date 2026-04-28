@@ -166,6 +166,13 @@ async def _get_np_candidates() -> list[dict]:
             continue
         if s.get("np_is_isolated_trigger"):
             continue
+        # SETUP_ONLY sequences confirmed noise: Run #26 SETUP_ONLY_L34 avg5d=-1.47% (n=958)
+        seq = s.get("new_pump_sequence_label") or ""
+        if seq.startswith("SETUP_ONLY"):
+            continue
+        # HIGH expansion timing risk confirmed destructive: Run #26 WR5d=36.6%, avg5d=-3.95%
+        if s.get("np_expansion_timing_risk") == "HIGH":
+            continue
         seen.add(sym)
         price = await _fetch_price(sym) or s.get("price") or 0
         if price <= 0:
@@ -184,6 +191,7 @@ async def _get_np_candidates() -> list[dict]:
             "np_expansion_timing_risk": s.get("np_expansion_timing_risk"),
             "np_ce_state": s.get("np_compression_expansion_state"),
             "np_decision": s.get("np_decision"),
+            "np_d_confluence_type_v2": s.get("np_d_confluence_type_v2"),
             "scan_date": s.get("scan_date"),
             "sector": s.get("sector", ""),
             "atr": 0,
@@ -269,7 +277,8 @@ async def _enrich_np_with_replay_edge(np_candidates: list[dict]) -> None:
         for c in np_candidates:
             best = None  # (score, n, wr, ret, label)
             for lookup_label, m in (
-                (f"DW:{c.get('np_setup_via') or ''}", dw_map),
+                # np_d_confluence_type_v2 = D4_L34_SAME / D6_BEUP_SAME etc. (not setup_via)
+                (f"DW:{c.get('np_d_confluence_type_v2') or ''}", dw_map),
                 (f"SEQ:{c.get('np_sequence') or ''}", seq_map),
                 (f"CE:{c.get('np_ce_state') or ''}", ce_map),
             ):
@@ -412,7 +421,9 @@ async def _build_research_priors(scan_ctx: list[dict], np_ctx: list[dict]) -> di
 
         ce = r.get("np_ce_state") or "NONE"
         if ce == "ACCUMULATION_READY":
-            notes.append("ce_accumulation_ready_positive")
+            notes.append("ce_accumulation_ready_positive")   # Run #26: WR5d=67.2%
+        elif ce == "TRIGGERED":
+            notes.append("ce_triggered_positive")             # Run #26: WR5d=62.0%
         elif ce == "OVERHEATED_EXPANSION":
             notes.append("ce_overheated_caution")
 
@@ -754,17 +765,32 @@ STRICT RULES (not negotiable):
 8. Never chase: skip if moved >5% today, sector in weak_sectors list
 9. Use TICKER MEMORY: avoid repeat losers; prefer proven winners
 10. Use RESEARCH PRIORS: downsize/caution candidates with isolated_signal_penalty,
-    fake_trigger_risk_high_caution, expansion_timing_risk_high_caution, or ce_overheated_caution;
+    fake_trigger_risk_high_caution, or ce_overheated_caution;
     boost confidence when base_quality_high + early_setup + ce_accumulation_ready_positive stack.
     Priors do NOT override source, but shape sizing and conviction.
-11. Use SIGNAL QUALITY MEMORY: every NP candidate already has its own replay_wr5d, replay_n,
-    replay_avg_ret_5d, replay_edge_label fields pre-computed from the latest replay run.
-    Strongly favor NP candidates with replay_wr5d ≥ 55% AND replay_n ≥ 5.
-    Hard pass ONLY when np_decision is explicitly the string "AVOID" (not null/missing).
-12. EDGE MANDATE: if 1+ NP candidate has replay_wr5d ≥ 55% AND replay_n ≥ 5 AND no hard rule blocks it,
+11. CE STATE PRIORITY (Run #26 validated, 2256 candidates):
+    ACCUMULATION_READY → WR5d=67.2%  ← strongest positive signal
+    TRIGGERED          → WR5d=62.0%  ← confirmed positive
+    COMPRESSED_BASE    → neutral, watch for breakout
+    OVERHEATED_EXPANSION → avoid (negative expected value)
+    Candidates with ACCUMULATION_READY or TRIGGERED CE state should be prioritized over others.
+12. D/WLNBB CONFIRMED COMBOS (Run #26):
+    D4_L34_SAME  → WR5d=70.8% (n=24)  ← top confirmed combo
+    D6_BEUP_SAME → WR5d=69.7% (n=33)  ← confirmed strong
+    D6_L34_SAME  → WR5d=43.5%  (weak, avoid)
+    D3_BEUP_SAME → WR5d=31.1%  (weak, avoid)
+    A candidate with replay_edge_label="DW:D4_L34_SAME" or "DW:D6_BEUP_SAME" has the highest
+    historical edge. Prioritize these when replay_n ≥ 10.
+13. TOP SEQUENCES (Run #26):
+    TRIGGER_AFTER_L34   → WR5d=61.8% (n=55)  ← best confirmed sequence
+    TRIGGER_AFTER_FRI34 → WR5d=62.5% (n=16)  ← strong but low-n
+    ISOLATED_B2         → WR5d=42.3% but avg5d=+4.68% (volatile — high upside, lower WR)
+    BUY_CANDIDATE decision label adds further confidence regardless of sequence.
+14. EDGE MANDATE: if 1+ NP candidate has replay_wr5d ≥ 55% AND replay_n ≥ 5 AND no hard rule blocks it,
     you SHOULD buy at least one (subject to cash and slot limits). Holding cash while a measurable
     NP edge is sitting in front of you is a quantifiable miss — don't default to "no trade" out of
     inertia. Explain WHY you're skipping each high-edge candidate if you do skip them.
+    Hard pass ONLY when np_decision is explicitly the string "AVOID" (not null/missing).
 
 For each BUY include stop_loss, target_price (TP1), target_price_2 (TP2), sell_pct_at_target_1 (default 50).
 
@@ -772,12 +798,13 @@ RANKING INSTRUCTIONS:
 Rank candidates explicitly before committing. For each candidate you consider, apply:
 1. Source quality: new_pump FIRE > new_pump STRONG > scanner FIRE > scanner ARM
 2. Signal quality: prefer np_decision=BUY_CANDIDATE, np_base_quality_score≥60, ftr=LOW
-3. Context quality: boost if ce_accumulation_ready + early_setup + bull_stack + CMF+ stack
-4. Caution: downrank if isolated_signal_penalty / fake_trigger_risk_high / expansion_timing_risk_high
-5. Replay memory: each NP row has replay_wr5d/replay_n/replay_avg_ret_5d/replay_edge_label
+3. CE state: ACCUMULATION_READY (WR5d=67.2%) > TRIGGERED (WR5d=62.0%) >> others
+4. DW combo: D4_L34_SAME (WR5d=70.8%) or D6_BEUP_SAME (WR5d=69.7%) = highest edge
+5. Caution: downrank if isolated_signal_penalty / fake_trigger_risk_high
+6. Replay memory: each NP row has replay_wr5d/replay_n/replay_avg_ret_5d/replay_edge_label
    already attached — sort your final picks so the highest-edge NP rises to the top
-6. Wallet fit: reject if remaining cash < min position; prefer smaller size under wallet pressure
-7. Tie-break: cleanest research prior + memory stack wins
+7. Wallet fit: reject if remaining cash < min position; prefer smaller size under wallet pressure
+8. Tie-break: cleanest research prior + memory stack wins
 
 For each BUY include structured explanation fields (lists, 2–4 items max each):
 - confidence_drivers: what boosted this idea (include replay WR stat if applicable)
