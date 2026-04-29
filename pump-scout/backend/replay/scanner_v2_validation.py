@@ -86,7 +86,11 @@ def resolve_scanner_v2_decision(c: dict, cget: Callable) -> tuple[Optional[str],
         return None, "unknown"
 
     p_label, _ = resolve_priority_label(c, cget)
-    exp_risk = cget(c, "expansion_timing_risk") or "LOW"
+    # Replay rows expose this as `np_expansion_timing_risk`; live/in-memory rows
+    # use `expansion_timing_risk`. Check both before defaulting to LOW.
+    exp_risk = (cget(c, "expansion_timing_risk")
+                or cget(c, "np_expansion_timing_risk")
+                or "LOW")
 
     if np_decision == "BUY_CANDIDATE":
         if p_label == "PRIORITY_HIGH" and exp_risk != "HIGH":

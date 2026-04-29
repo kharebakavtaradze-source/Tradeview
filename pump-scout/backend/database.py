@@ -2688,6 +2688,13 @@ class ReplaySignalCandidate(Base):
     np_expansion_timing_risk       = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
     np_decision                    = Column(String(20), nullable=True)  # BUY_CANDIDATE/WATCH/IMPULSE_RISK/AVOID
     np_decision_reason             = Column(String(200), nullable=True) # human-readable
+    # ── Scanner v2 / priority enrichment (added Task 9) ──────────────────────
+    # Computed by enrich_np_candidates + build_v2_row in replay_engine.
+    # Columns are queryable; full JSON of flags/reason/contexts lives in snapshot.
+    priority_score        = Column(Float,      nullable=True)            # 0–100
+    priority_label        = Column(String(20), nullable=True)            # PRIORITY_HIGH/MEDIUM/LOW/RISKY
+    scanner_v2_decision   = Column(String(25), nullable=True)            # BUY_CANDIDATE_HIGH/NORMAL/WATCH_HIGH/MED/LOW/AVOID_*
+    scanner_v2_score      = Column(Float,      nullable=True)            # 0–100
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -2916,6 +2923,10 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 np_expansion_timing_risk       = c.get("np_expansion_timing_risk"),
                 np_decision                    = c.get("np_decision"),
                 np_decision_reason             = (c.get("np_decision_reason") or "")[:200] if c.get("np_decision_reason") else None,
+                priority_score                 = c.get("priority_score"),
+                priority_label                 = c.get("priority_label"),
+                scanner_v2_decision            = c.get("scanner_v2_decision"),
+                scanner_v2_score               = c.get("scanner_v2_score"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -2941,6 +2952,53 @@ async def update_replay_candidate_decision(candidate_id: int,
             return False
         row.np_decision        = decision
         row.np_decision_reason = (decision_reason or "")[:200] if decision_reason else None
+        await session.commit()
+        return True
+
+
+async def update_replay_candidate_v2(candidate_id: int, fields: dict) -> bool:
+    """
+    Patch priority + Scanner v2 fields on an existing replay candidate row,
+    and merge non-column extras (priority_flags/reason, scanner_v2_flags/reason,
+    sector_context, macro_context, news_hype_context, sympathy_context,
+    decision_flags, subsector) into the snapshot JSON blob so the research
+    bundle's _cget snapshot path can read them.
+
+    Used by the recalc_service to backfill Scanner v2 fields on existing
+    replay rows without a full rescan.  Returns True if the row was found.
+    """
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplaySignalCandidate).where(ReplaySignalCandidate.id == candidate_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return False
+
+        # Direct columns
+        if "priority_score" in fields:      row.priority_score      = fields["priority_score"]
+        if "priority_label" in fields:      row.priority_label      = fields["priority_label"]
+        if "scanner_v2_decision" in fields: row.scanner_v2_decision = fields["scanner_v2_decision"]
+        if "scanner_v2_score" in fields:    row.scanner_v2_score    = fields["scanner_v2_score"]
+
+        # Snapshot-blob extras
+        try:
+            snap = json.loads(row.candidate_snapshot_json or "{}")
+        except Exception:
+            snap = {}
+        for k in ("priority_flags", "priority_reason",
+                  "scanner_v2_flags", "scanner_v2_reason",
+                  "sector_context", "macro_context",
+                  "news_hype_context", "sympathy_context",
+                  "decision_flags", "subsector",
+                  "priority_score", "priority_label",
+                  "scanner_v2_decision", "scanner_v2_score"):
+            if k in fields and isinstance(
+                fields[k], (int, float, str, bool, type(None), list, dict)
+            ):
+                snap[k] = fields[k]
+        row.candidate_snapshot_json = json.dumps(snap)
+
         await session.commit()
         return True
 
@@ -3138,6 +3196,10 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "np_expansion_timing_risk":       r.np_expansion_timing_risk,
         "np_decision":                    r.np_decision,
         "np_decision_reason":             r.np_decision_reason,
+        "priority_score":                 r.priority_score,
+        "priority_label":                 r.priority_label,
+        "scanner_v2_decision":            r.scanner_v2_decision,
+        "scanner_v2_score":               r.scanner_v2_score,
         "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":              r.created_at.isoformat() if r.created_at else None,
     }
