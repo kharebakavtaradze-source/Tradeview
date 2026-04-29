@@ -1157,6 +1157,98 @@ async def get_pump_scan():
     _retired_scan_endpoint("Pump Engine")
 
 
+# ─── Scanner v2 — New Pump as structural core ─────────────────────────────────
+
+@app.get("/api/scanner/v2/latest")
+async def scanner_v2_latest(
+    decision:        str   = "",    # filter by np_decision (BUY_CANDIDATE | WATCH | AVOID | IMPULSE_RISK)
+    final_decision:  str   = "",    # filter by scanner_v2_decision
+    priority_label:  str   = "",    # PRIORITY_HIGH | PRIORITY_MEDIUM | PRIORITY_LOW | PRIORITY_RISKY
+    structure_phase: str   = "",    # CONFIRMED_STRUCTURE | TRIGGERED_STRUCTURE | …
+    sector:          str   = "",    # e.g. "Information Technology"
+    subsector:       str   = "",    # e.g. "Semiconductors"
+    min_score:       float = 0.0,   # filter by scanner_v2_score
+    limit:           int   = 500,
+):
+    """
+    Scanner v2 — uses the latest New Pump results as the structural core.
+
+    np_decision is the eligibility gate (never overridden).
+    priority_score / priority_label provide the ranking layer.
+    scanner_v2_decision is the final classification:
+      BUY_CANDIDATE_HIGH | BUY_CANDIDATE_NORMAL
+      WATCH_HIGH | WATCH_MEDIUM | WATCH_LOW
+      AVOID_RISK | AVOID_LOTTERY | AVOID_DEAD
+
+    Sorted: scanner_v2_score desc → structure_score desc → symbol.
+    """
+    from scanner.new_pump_runner import get_latest
+    from scanner.scanner_v2 import build_v2_results, decision_counts, np_decision_counts
+
+    data = get_latest()
+    np_results = data.get("results", [])
+
+    exclusions = await _get_exclusion_set()
+    np_results = _strip_non_stocks(np_results, exclusions)
+
+    # Build and sort all v2 rows first (ranking uses full-set scores)
+    v2_results = build_v2_results(np_results)
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    if decision:
+        v2_results = [
+            r for r in v2_results
+            if (r.get("new_pump") or {}).get("np_decision") == decision
+        ]
+    if final_decision:
+        v2_results = [r for r in v2_results if r.get("scanner_v2_decision") == final_decision]
+    if priority_label:
+        v2_results = [
+            r for r in v2_results
+            if (r.get("priority") or {}).get("priority_label") == priority_label
+        ]
+    if structure_phase:
+        v2_results = [
+            r for r in v2_results
+            if (r.get("new_pump") or {}).get("structure_phase") == structure_phase
+        ]
+    if sector:
+        v2_results = [
+            r for r in v2_results
+            if (r.get("sector") or "").lower() == sector.lower()
+        ]
+    if subsector:
+        v2_results = [
+            r for r in v2_results
+            if (r.get("subsector") or "").lower() == subsector.lower()
+        ]
+    if min_score > 0:
+        v2_results = [r for r in v2_results if (r.get("scanner_v2_score") or 0) >= min_score]
+
+    return {
+        "results":              v2_results[:min(limit, 1000)],
+        "total":                len(v2_results),
+        "v2_decision_counts":   decision_counts(v2_results),
+        "np_decision_counts":   np_decision_counts(v2_results),
+        "scanned_at":           data.get("scanned_at"),
+        "universe":             data.get("universe", 0),
+        "elapsed_secs":         data.get("elapsed_secs"),
+        "source":               "new_pump_runner",
+        "decision_engine":      "scanner_v2",
+        "engine_version":       "v2.0",
+        "filters": {
+            "decision":        decision,
+            "final_decision":  final_decision,
+            "priority_label":  priority_label,
+            "structure_phase": structure_phase,
+            "sector":          sector,
+            "subsector":       subsector,
+            "min_score":       min_score,
+            "limit":           limit,
+        },
+    }
+
+
 @app.get("/api/sector-performance/latest")
 async def sector_performance_latest():
     """Return live Finviz sector performance (daily change%). Cached up to 4 hours."""
