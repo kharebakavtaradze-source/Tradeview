@@ -566,6 +566,163 @@ def _build_validation_questions(validation: dict, summary: dict) -> list[dict]:
         q6_d, q6_v, q6_int,
     ))
 
+    # ── Q07: Sector LEADING/IMPROVING improves WATCH_HIGH ────────────────────
+    v2_sector = validation.get("performance_by_scanner_v2_decision_sector_strength") or []
+
+    def _aggregate_by_label_set(
+        section: list, v2_label: str, label_set: frozenset,
+    ) -> tuple[Optional[float], int]:
+        """
+        Sum count-weighted avg_return_5d across rows whose bucket is
+        "<v2_label>|<x>" where x ∈ label_set.  Returns (weighted_avg, total_n).
+        """
+        total_weighted = 0.0
+        total_n        = 0
+        for row in section:
+            b = row.get("bucket") or ""
+            if "|" not in b:
+                continue
+            v2, suffix = b.split("|", 1)
+            if v2 != v2_label or suffix not in label_set:
+                continue
+            r5 = row.get("avg_return_5d")
+            n  = row.get("count") or 0
+            if r5 is None or n <= 0:
+                continue
+            total_weighted += r5 * n
+            total_n        += n
+        if total_n == 0:
+            return None, 0
+        return round(total_weighted / total_n, 2), total_n
+
+    wh_sec_pos_5, wh_sec_pos_n = _aggregate_by_label_set(v2_sector, "WATCH_HIGH", _SECTOR_POSITIVE)
+    wh_sec_neg_5, wh_sec_neg_n = _aggregate_by_label_set(v2_sector, "WATCH_HIGH", _SECTOR_NEGATIVE)
+    q7_v = _verdict_cmp(wh_sec_pos_5, wh_sec_neg_5, wh_sec_pos_n, wh_sec_neg_n)
+    q7_d = _delta(wh_sec_pos_5, wh_sec_neg_5)
+    if q7_v == "INSUFFICIENT_DATA":
+        q7_int = (
+            f"INSUFFICIENT_DATA: WATCH_HIGH × sector "
+            f"positive n={wh_sec_pos_n}, negative n={wh_sec_neg_n} "
+            f"(need ≥{MIN_COMPARISON_N} each)"
+        )
+    else:
+        q7_int = (
+            f"WATCH_HIGH × LEADING/IMPROVING avg5d {_fmt5(wh_sec_pos_5)} "
+            f"(n={wh_sec_pos_n}) vs LAGGING/WEAKENING/UNKNOWN "
+            f"{_fmt5(wh_sec_neg_5)} (n={wh_sec_neg_n})"
+        )
+    questions.append(_new_question(
+        "Q07",
+        "Does sector LEADING/IMPROVING improve WATCH_HIGH vs LAGGING/WEAKENING/UNKNOWN?",
+        q7_d, q7_v, q7_int,
+    ))
+
+    # ── Q08: Macro RISK_OFF reduces quality vs RISK_ON ───────────────────────
+    v2_macro = validation.get("performance_by_scanner_v2_decision_macro_regime") or []
+
+    # Aggregate across actionable buckets (BUY_HIGH + BUY_NORMAL + WATCH_HIGH).
+    macro_on_w  = 0.0; macro_on_n  = 0
+    macro_off_w = 0.0; macro_off_n = 0
+    for v2_label in ("BUY_CANDIDATE_HIGH", "BUY_CANDIDATE_NORMAL", "WATCH_HIGH"):
+        on_avg,  on_n  = _aggregate_by_label_set(v2_macro, v2_label, _MACRO_POSITIVE)
+        off_avg, off_n = _aggregate_by_label_set(v2_macro, v2_label, _MACRO_NEGATIVE)
+        if on_avg  is not None and on_n  > 0:
+            macro_on_w  += on_avg  * on_n;  macro_on_n  += on_n
+        if off_avg is not None and off_n > 0:
+            macro_off_w += off_avg * off_n; macro_off_n += off_n
+    macro_on_avg  = round(macro_on_w  / macro_on_n,  2) if macro_on_n  else None
+    macro_off_avg = round(macro_off_w / macro_off_n, 2) if macro_off_n else None
+
+    if macro_on_n == 0 and macro_off_n == 0:
+        q8_v   = "INSUFFICIENT_DATA"
+        q8_int = ("INSUFFICIENT_DATA: no macro regime labels found for "
+                  "actionable buckets — check macro_context coverage.")
+    else:
+        q8_v = _verdict_cmp(
+            macro_on_avg, macro_off_avg,
+            macro_on_n, macro_off_n,
+            direction="higher_is_better",
+        )
+        q8_int = (
+            f"Actionable × RISK_ON-family avg5d {_fmt5(macro_on_avg)} "
+            f"(n={macro_on_n}) vs RISK_OFF-family {_fmt5(macro_off_avg)} "
+            f"(n={macro_off_n})"
+        )
+    questions.append(_new_question(
+        "Q08",
+        "Does macro RISK_OFF reduce performance vs RISK_ON across actionable buckets?",
+        _delta(macro_on_avg, macro_off_avg),
+        q8_v, q8_int,
+    ))
+
+    # ── Q09: Scanner v2 reduces FP rate vs legacy FIRE/ARM ───────────────────
+    fp_v2      = validation.get("false_positive_by_scanner_v2_decision") or []
+    old_vs_new = validation.get("old_vs_new_scanner_comparison") or {}
+    by_legacy  = old_vs_new.get("by_legacy_tier") or []
+
+    def _weighted_fp(rows: list, label_n_field: str = "count") -> tuple[Optional[float], int]:
+        """
+        Compute count-weighted FP rate across the given rows.
+        Each row must have false_positive_rate and a count field
+        (label_n_field — "count" for legacy, "with_5d_data" for fp_v2).
+        """
+        total_w = 0.0
+        total_n = 0
+        for row in rows:
+            fpr = row.get("false_positive_rate")
+            n   = row.get(label_n_field) or 0
+            if fpr is None or n <= 0:
+                continue
+            total_w += fpr * n
+            total_n += n
+        if total_n == 0:
+            return None, 0
+        return round(total_w / total_n, 2), total_n
+
+    legacy_rows = [_safe_row(by_legacy, "FIRE"), _safe_row(by_legacy, "ARM")]
+    legacy_fp,  legacy_n = _weighted_fp(legacy_rows, label_n_field="count")
+
+    v2_rows = [_safe_row(fp_v2, "BUY_CANDIDATE_HIGH"), _safe_row(fp_v2, "BUY_CANDIDATE_NORMAL")]
+    v2_fp,  v2_n  = _weighted_fp(v2_rows,  label_n_field="with_5d_data")
+
+    q9_v = _verdict_cmp(
+        v2_fp, legacy_fp,
+        v2_n,  legacy_n,
+        direction="lower_is_better",
+    )
+    q9_d = _delta(v2_fp, legacy_fp)
+    if q9_v == "INSUFFICIENT_DATA":
+        q9_int = (
+            f"INSUFFICIENT_DATA: v2 BUY n={v2_n}, legacy FIRE+ARM n={legacy_n} "
+            f"(need ≥{MIN_COMPARISON_N} each)"
+        )
+    else:
+        q9_int = (
+            f"Legacy FIRE+ARM FP rate {_fmt5(legacy_fp)} (n={legacy_n}) vs "
+            f"v2 BUY (HIGH+NORMAL) FP rate {_fmt5(v2_fp)} (n={v2_n})"
+        )
+    questions.append(_new_question(
+        "Q09",
+        "Does Scanner v2 BUY reduce false-positive rate vs legacy FIRE/ARM?",
+        q9_d, q9_v, q9_int,
+    ))
+
+    # ── Q10: UNKNOWN bucket < 5% (results trustworthy) ───────────────────────
+    debug   = validation.get("_debug") or {}
+    unk_pct = debug.get("scanner_v2_unknown_pct", 100.0)
+    q10_v   = _verdict_threshold(unk_pct, 5.0, direction="below")
+    q10_int = (
+        f"scanner_v2_unknown_pct = {unk_pct}% — "
+        + ("results are trustworthy."
+           if q10_v == "PASS"
+           else "high UNKNOWN% undermines cross-tab conclusions.")
+    )
+    questions.append(_new_question(
+        "Q10",
+        "Is the Scanner v2 UNKNOWN bucket < 5% (results trustworthy)?",
+        unk_pct, q10_v, q10_int,
+    ))
+
     return questions
 
 
