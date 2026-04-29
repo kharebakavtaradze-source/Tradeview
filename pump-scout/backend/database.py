@@ -508,6 +508,40 @@ _REPLAY_OUTCOME_MIGRATIONS = [
     ("hit_100pct_day",  "INTEGER"),
 ]
 
+# replay_signal_candidates: columns added post-initial-deployment.
+# Used by both SQLite and Postgres migration branches.
+_REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
+    # New Pump columns
+    ("new_pump_score",                 "FLOAT"),
+    ("new_pump_label",                 "VARCHAR(30)"),
+    ("new_pump_sequence_label",        "VARCHAR(40)"),
+    ("np_has_l34",                     "BOOLEAN"),
+    ("np_has_fri34",                   "BOOLEAN"),
+    ("np_has_g4",                      "BOOLEAN"),
+    ("np_has_b2",                      "BOOLEAN"),
+    ("np_age_l34",                     "INTEGER"),
+    ("np_age_fri34",                   "INTEGER"),
+    ("np_setup_via",                   "VARCHAR(10)"),
+    ("np_is_isolated_trigger",         "BOOLEAN"),
+    ("np_state",                       "VARCHAR(20)"),
+    ("np_engine_path",                 "VARCHAR(20)"),
+    ("np_base_quality_score",          "INTEGER"),
+    ("np_sustain_proxy_score",         "INTEGER"),
+    ("np_sustain_profile",             "VARCHAR(10)"),
+    ("np_fake_trigger_risk",           "VARCHAR(10)"),
+    ("np_compression_expansion_state", "VARCHAR(30)"),
+    ("np_compression_expansion_score", "INTEGER"),
+    ("np_compression_expansion_label", "VARCHAR(15)"),
+    ("np_expansion_timing_risk",       "VARCHAR(10)"),
+    ("np_decision",                    "VARCHAR(20)"),
+    ("np_decision_reason",             "VARCHAR(200)"),
+    # Scanner v2 / priority enrichment (Task 9)
+    ("priority_score",                 "FLOAT"),
+    ("priority_label",                 "VARCHAR(20)"),
+    ("scanner_v2_decision",            "VARCHAR(25)"),
+    ("scanner_v2_score",               "FLOAT"),
+]
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -590,6 +624,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE replay_outcomes ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for col, coltype in _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE replay_signal_candidates ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -647,32 +686,8 @@ async def _run_migrations(conn):
             except Exception as e:
                 logger.warning(f"Migration raw_pattern_episode_features.{col} failed (non-fatal): {e}")
 
-        # New Pump columns on replay_signal_candidates
-        for col, coltype in (
-            ("new_pump_score",           "FLOAT"),
-            ("new_pump_label",           "VARCHAR(30)"),
-            ("new_pump_sequence_label",  "VARCHAR(40)"),
-            ("np_has_l34",              "BOOLEAN"),
-            ("np_has_fri34",            "BOOLEAN"),
-            ("np_has_g4",               "BOOLEAN"),
-            ("np_has_b2",               "BOOLEAN"),
-            ("np_age_l34",              "INTEGER"),
-            ("np_age_fri34",            "INTEGER"),
-            ("np_setup_via",            "VARCHAR(10)"),
-            ("np_is_isolated_trigger",  "BOOLEAN"),
-            ("np_state",                "VARCHAR(20)"),
-            ("np_engine_path",          "VARCHAR(20)"),
-            ("np_base_quality_score",   "INTEGER"),
-            ("np_sustain_proxy_score",  "INTEGER"),
-            ("np_sustain_profile",      "VARCHAR(10)"),
-            ("np_fake_trigger_risk",    "VARCHAR(10)"),
-            ("np_compression_expansion_state", "VARCHAR(30)"),
-            ("np_compression_expansion_score", "INTEGER"),
-            ("np_compression_expansion_label", "VARCHAR(15)"),
-            ("np_expansion_timing_risk",       "VARCHAR(10)"),
-            ("np_decision",                    "VARCHAR(20)"),
-            ("np_decision_reason",             "VARCHAR(200)"),
-        ):
+        # replay_signal_candidates columns added post-initial-deployment
+        for col, coltype in _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS:
             try:
                 await conn.execute(text(
                     f"ALTER TABLE replay_signal_candidates ADD COLUMN IF NOT EXISTS {col} {coltype}"
