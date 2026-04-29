@@ -243,6 +243,35 @@ const PHASE_CFG = {
 };
 
 const ALL_DECISIONS = ['BUY_CANDIDATE', 'WATCH', 'AVOID', 'IMPULSE_RISK'];
+
+const PRIORITY_CFG = {
+  PRIORITY_HIGH:   { color: '#00e676', label: 'HIGH',  bg: 'rgba(0,230,118,0.12)'  },
+  PRIORITY_MEDIUM: { color: '#ffd600', label: 'MED',   bg: 'rgba(255,214,0,0.10)'  },
+  PRIORITY_LOW:    { color: '#607d8b', label: 'LOW',   bg: 'rgba(96,125,139,0.10)' },
+  PRIORITY_RISKY:  { color: '#ff5252', label: 'RISKY', bg: 'rgba(255,82,82,0.10)'  },
+};
+
+function PriorityBadge({ score, label, flags }) {
+  if (score == null && !label) return <span style={{ color: '#333', fontSize: 9 }}>—</span>;
+  const cfg = PRIORITY_CFG[label] || { color: '#888', label: label || '—', bg: 'transparent' };
+  return (
+    <span
+      title={flags?.join(', ') || label}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '2px 6px', borderRadius: 3,
+        fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+        color: cfg.color, background: cfg.bg,
+        border: `1px solid ${cfg.color}44`, whiteSpace: 'nowrap',
+      }}
+    >
+      {score != null && (
+        <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.85 }}>{score}</span>
+      )}
+      <span>{cfg.label}</span>
+    </span>
+  );
+}
 const ALL_PHASES = [
   'CONFIRMED_STRUCTURE', 'TRIGGERED_STRUCTURE',
   'EARLY_STRUCTURE', 'SETUP_PHASE', 'IMPULSE_ONLY',
@@ -316,9 +345,10 @@ function applySort(rows, lp, col, dir) {
   return [...rows].sort((a, b) => {
     let va, vb;
     switch (col) {
-      case 'score':          va = a.new_pump_score;               vb = b.new_pump_score;               break;
-      case 'structure_score': va = a.structure_score;             vb = b.structure_score;             break;
-      case 'decision':       return m * (decisionOrder(a.decision) - decisionOrder(b.decision));
+      case 'score':           va = a.new_pump_score;               vb = b.new_pump_score;               break;
+      case 'structure_score': va = a.structure_score;             vb = b.structure_score;              break;
+      case 'priority_score':  va = a.priority_score;              vb = b.priority_score;               break;
+      case 'decision':        return m * (decisionOrder(a.decision) - decisionOrder(b.decision));
       case 'sig_date':       va = a.signal_date;                  vb = b.signal_date;                  break;
       case 'price':          va = lp[a.symbol]?.price ?? a.price; vb = lp[b.symbol]?.price ?? b.price; break;
       case 'change':         va = lp[a.symbol]?.change_pct;       vb = lp[b.symbol]?.change_pct;       break;
@@ -912,6 +942,9 @@ export default function NewPumpPage() {
                   <th>Symbol</th>
                   <th className={styles.actionTh}>Action</th>
                   <SortTh col="decision"       sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>Decision</SortTh>
+                  <SortTh col="priority_score" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>
+                    <span title="Priority score 0–100: ranking only, does not affect decision or routing">Priority</span>
+                  </SortTh>
                   <th>Phase</th>
                   <SortTh col="structure_score" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>
                     <span title="Structure Score: ≥66 edge zone (green), 46–65 caution (amber), <46 avoid (red)">SS</span>
@@ -980,6 +1013,13 @@ export default function NewPumpPage() {
                         )}
                       </td>
                       <td><DecisionBadge decision={r.decision} reason={r.decision_reason} /></td>
+                      <td>
+                        <PriorityBadge
+                          score={r.priority_score}
+                          label={r.priority_label}
+                          flags={r.priority_flags}
+                        />
+                      </td>
                       <td><PhaseBadge phase={r.structure_phase} /></td>
                       <td
                         className={styles.scoreCell}

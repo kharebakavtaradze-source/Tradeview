@@ -636,6 +636,76 @@ const STRENGTH_COLOR = {
   SUBSECTOR_UNKNOWN:   '#444',
 };
 
+const PRIORITY_CFG = {
+  PRIORITY_HIGH:   { color: '#00e676', label: 'HIGH',  bg: 'rgba(0,230,118,0.12)'  },
+  PRIORITY_MEDIUM: { color: '#ffd600', label: 'MED',   bg: 'rgba(255,214,0,0.10)'  },
+  PRIORITY_LOW:    { color: '#607d8b', label: 'LOW',   bg: 'rgba(96,125,139,0.10)' },
+  PRIORITY_RISKY:  { color: '#ff5252', label: 'RISKY', bg: 'rgba(255,82,82,0.10)'  },
+};
+
+function S14_Priority({ rowData, payload }) {
+  const ps = rowData?.priority_score ?? payload?.priority_score;
+  const pl = rowData?.priority_label ?? payload?.priority_label;
+  const pf = rowData?.priority_flags ?? payload?.priority_flags;
+  const pr = rowData?.priority_reason ?? payload?.priority_reason;
+
+  if (ps == null && !pl) return null;
+
+  const cfg = PRIORITY_CFG[pl] || { color: '#888', label: pl || '—', bg: 'transparent' };
+
+  return (
+    <SecCard title="Priority Ranking">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
+        <span style={{
+          fontSize: 30, fontWeight: 900, color: cfg.color,
+          fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em', lineHeight: 1,
+        }}>
+          {ps ?? '—'}
+        </span>
+        <div>
+          <span style={{
+            display: 'inline-block', padding: '2px 9px', borderRadius: 3,
+            fontSize: 12, fontWeight: 800, letterSpacing: '0.08em',
+            color: cfg.color, background: cfg.bg,
+            border: `1px solid ${cfg.color}44`,
+          }}>
+            {cfg.label}
+          </span>
+          <div style={{ fontSize: 9, color: '#444', marginTop: 4 }}>
+            ranking only — does not affect decision or routing
+          </div>
+        </div>
+      </div>
+      {pf?.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+          {pf.map(f => {
+            const isNeg = f.startsWith('expansion_risk') || f.startsWith('over') ||
+              f.startsWith('sector_lag') || f.startsWith('macro_head') ||
+              f.startsWith('risk_off') || f.startsWith('hype_late') ||
+              f.startsWith('d3_beup') || f.startsWith('d6_l34_poor') ||
+              f.startsWith('d_standalone') || f.startsWith('setup_only');
+            return (
+              <span key={f} style={{
+                fontSize: 9, padding: '1px 6px', borderRadius: 3,
+                color: isNeg ? '#ff7070' : '#88c488',
+                background: isNeg ? 'rgba(255,82,82,0.06)' : 'rgba(0,230,118,0.06)',
+                border: `1px solid ${isNeg ? '#ff525244' : '#00e67644'}`,
+              }}>
+                {f.replace(/_/g, ' ')}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {pr && (
+        <div style={{ fontSize: 9, color: '#444', fontStyle: 'italic', wordBreak: 'break-all', lineHeight: 1.5 }}>
+          {pr}
+        </div>
+      )}
+    </SecCard>
+  );
+}
+
 function CtxRow({ label, children }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
@@ -892,6 +962,7 @@ export default function NpDrawer({ sym, dataCache, loading, error, onClose, rowD
               <S5_News news={payload.news} />
               <S6_Technical technical_context={payload.technical_context} />
               <S7_Market market_context={payload.market_context} />
+              <S14_Priority rowData={rowData} payload={payload} />
               <S13_Context rowData={rowData} payload={payload} />
               <S8_AI ai_analysis={payload.ai_analysis} />
               <S9_RedFlags red_flags={payload.red_flags} />

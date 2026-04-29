@@ -461,4 +461,20 @@ async def enrich_np_candidates(results: list[dict]) -> list[dict]:
             logger.debug(f"[NpEnricher] sympathy_context failed {row.get('symbol')}: {exc}")
             row["sympathy_context"] = {"candidate_alignment": "UNKNOWN", "sympathy_score": 0}
 
+    # Priority scoring — runs last so all context blocks are already attached
+    try:
+        from scanner.np_priority_scorer import compute_priority
+        for row in results:
+            try:
+                p = compute_priority(row)
+                row["priority_score"]  = p["priority_score"]
+                row["priority_label"]  = p["priority_label"]
+                row["priority_flags"]  = p["priority_flags"]
+                row["priority_reason"] = p["priority_reason"]
+            except Exception as exc:
+                logger.debug(f"[NpEnricher] priority failed {row.get('symbol')}: {exc}")
+        logger.info(f"[NpEnricher] Priority scoring complete for {len(results)} rows")
+    except Exception as exc:
+        logger.warning(f"[NpEnricher] Priority scoring skipped (non-fatal): {exc}")
+
     return results
