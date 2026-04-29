@@ -868,23 +868,24 @@ _MAX_GAIN_BUCKET_ORDER = [
     "NEGATIVE_OR_ZERO", "0_5", "5_10", "10_20", "20_50", "50_100", "100_PLUS",
 ]
 
-# Simplified D-confluence labels for MFE cross-tab
-def _d_conf_mfe_label(c: dict) -> str:
-    snap     = c.get("snapshot") or {}
-    np_snap  = snap.get("new_pump") or {}
-    combo    = (np_snap.get("d_confluence_type_v2") or snap.get("d_confluence_type_v2") or "NONE")
-    _MAP = {
-        "D6_BEUP_SAME":          "D6_BEUP",
-        "D4_BEUP_SAME":          "D4_BEUP",
-        "D3_BEUP_SAME":          "D3_BEUP",
-        "D4_L34_SAME":           "D4_L34",
-        "D3_L34_SAME":           "D3_L34",
-        "D6_L34_SAME":           "D6_L34",
-        "SECONDARY_D_BEUP_SAME": "SECONDARY_D_CONFLUENCE",
-        "SECONDARY_D_L34_SAME":  "SECONDARY_D_CONFLUENCE",
-        "SECONDARY_D_L43_SAME":  "SECONDARY_D_CONFLUENCE",
-    }
-    return _MAP.get(combo, "NONE")
+# v2 → simplified label mapping (module-level, shared across MFE functions)
+_DCONF_V2_TO_SIMPLE: dict[str, str] = {
+    "D6_BEUP_SAME":          "D6_BEUP",
+    "D4_BEUP_SAME":          "D4_BEUP",
+    "D3_BEUP_SAME":          "D3_BEUP",
+    "D4_L34_SAME":           "D4_L34",
+    "D3_L34_SAME":           "D3_L34",
+    "D6_L34_SAME":           "D6_L34",
+    "D4_L43_SAME":           "D4_L43",
+    "D3_L43_SAME":           "D3_L43",
+    "D6_L43_SAME":           "D6_L43",
+    "SECONDARY_D_BEUP_SAME": "SECONDARY_D_CONFLUENCE",
+    "SECONDARY_D_L34_SAME":  "SECONDARY_D_CONFLUENCE",
+    "SECONDARY_D_L43_SAME":  "SECONDARY_D_CONFLUENCE",
+}
+
+_DCONF_BEUP_LABELS: frozenset[str] = frozenset({"D6_BEUP", "D4_BEUP", "D3_BEUP"})
+_DCONF_L34_LABELS:  frozenset[str] = frozenset({"D4_L34", "D3_L34", "D6_L34"})
 
 
 def _build_mfe_sections(
@@ -894,9 +895,11 @@ def _build_mfe_sections(
     cget_fn = None,
 ) -> tuple:
     """
-    Returns 6-tuple:
+    Returns 10-tuple:
       (perf_mfe_bucket, mfe_by_decision, mfe_by_structure_phase,
-       mfe_by_d_confluence, mfe_by_sequence, top_mfe_examples)
+       mfe_by_d_confluence, mfe_by_sequence, top_mfe_examples,
+       mfe_by_d_confluence_v2, mfe_by_core_d_beup, mfe_by_core_d_l34,
+       mfe_debug)
     """
     mfe_map = _build_mfe_map(outcomes)
 
@@ -951,6 +954,25 @@ def _build_mfe_sections(
         rows.sort(key=lambda x: (x.get("avg_max_gain_10d_pct") or 0), reverse=True)
         return rows
 
+    # ── D-confluence resolvers using _cg (same 3-path lookup as _cget) ────────
+    def _dc_label(c: dict) -> str:
+        """v1 preferred; falls back to mapped v2. Uses _cg for 3-path lookup."""
+        v1 = _cg(c, "d_confluence_type")
+        if v1 and v1 != "NONE":
+            return v1
+        v2 = _cg(c, "d_confluence_type_v2")
+        if v2 and v2 != "NONE":
+            return _DCONF_V2_TO_SIMPLE.get(v2, "NONE")
+        return "NONE"
+
+    def _dc_v2_label(c: dict) -> str:
+        """v2 preferred; falls back to v1 when v2 absent."""
+        v2 = _cg(c, "d_confluence_type_v2")
+        if v2 and v2 != "NONE":
+            return _DCONF_V2_TO_SIMPLE.get(v2, "NONE")
+        v1 = _cg(c, "d_confluence_type")
+        return v1 if v1 and v1 != "NONE" else "NONE"
+
     # 2. mfe_by_decision
     # Use np_decision directly — avoids _cget "decision" key mismatch and
     # the False default that caused everything to bucket as NONE.
@@ -972,10 +994,10 @@ def _build_mfe_sections(
         key=lambda x: _SP_ORDER.index(x["bucket"]) if x["bucket"] in _SP_ORDER else 99
     )
 
-    # 4. mfe_by_d_confluence_type
+    # 4. mfe_by_d_confluence_type — FIXED: uses _dc_label with 3-path _cg lookup
     _DC_ORDER = ["D6_BEUP", "D4_BEUP", "D3_BEUP", "D4_L34", "D3_L34",
                  "D6_L34", "SECONDARY_D_CONFLUENCE", "NONE"]
-    dc_groups = _group(_d_conf_mfe_label)
+    dc_groups = _group(_dc_label)
     mfe_by_d_confluence = _mfe_section(dc_groups)
     mfe_by_d_confluence.sort(
         key=lambda x: _DC_ORDER.index(x["bucket"]) if x["bucket"] in _DC_ORDER else 99
@@ -1019,8 +1041,33 @@ def _build_mfe_sections(
             "structure_phase":   _np_d.get("structure_phase") or None,
             "structure_score":   _np_d.get("structure_score"),
             "sequence":          c.get("new_pump_sequence_label"),
-            "d_confluence_type": _d_conf_mfe_label(c),
+            "d_confluence_type": _dc_label(c),  # fixed: uses _cg 3-path lookup
         })
+
+    # 7. mfe_by_d_confluence_type_v2 (v2 field mapped to simple labels)
+    mfe_by_d_confluence_v2 = _mfe_section(_group(_dc_v2_label))
+    mfe_by_d_confluence_v2.sort(
+        key=lambda x: _DC_ORDER.index(x["bucket"]) if x["bucket"] in _DC_ORDER else 99
+    )
+
+    # 8. mfe_by_core_d_beup
+    mfe_by_core_d_beup = _mfe_section(
+        _group(lambda c: "BEUP" if _dc_label(c) in _DCONF_BEUP_LABELS else "NO_BEUP")
+    )
+
+    # 9. mfe_by_core_d_l34
+    mfe_by_core_d_l34 = _mfe_section(
+        _group(lambda c: "L34" if _dc_label(c) in _DCONF_L34_LABELS else "NO_L34")
+    )
+
+    # Debug counters
+    _all_dc = [_dc_label(c) for c in candidates]
+    _resolved = sum(1 for lbl in _all_dc if lbl != "NONE")
+    mfe_debug = {
+        "d_confluence_field_coverage_pct":  _pct(_resolved, len(candidates)) if candidates else 0.0,
+        "mfe_d_confluence_resolved_count":  _resolved,
+        "mfe_d_confluence_missing_count":   len(_all_dc) - _resolved,
+    }
 
     return (
         perf_mfe_bucket,
@@ -1029,6 +1076,10 @@ def _build_mfe_sections(
         mfe_by_d_confluence,
         mfe_by_sequence,
         top_mfe_examples,
+        mfe_by_d_confluence_v2,
+        mfe_by_core_d_beup,
+        mfe_by_core_d_l34,
+        mfe_debug,
     )
 
 
@@ -1723,6 +1774,10 @@ async def build_research_bundle(run_id: int) -> dict:
         mfe_by_d_confluence,
         mfe_by_sequence,
         top_mfe_examples,
+        mfe_by_d_confluence_v2,
+        mfe_by_core_d_beup,
+        mfe_by_core_d_l34,
+        mfe_debug,
     ) = _build_mfe_sections(candidates, outcomes, outcome_map, cget_fn=_cget)
 
     bundle = {
@@ -1785,8 +1840,15 @@ async def build_research_bundle(run_id: int) -> dict:
         "mfe_by_decision":                    mfe_by_decision,
         "mfe_by_structure_phase":             mfe_by_structure_phase,
         "mfe_by_d_confluence_type":           mfe_by_d_confluence,
+        "mfe_by_d_confluence_type_v2":        mfe_by_d_confluence_v2,
+        "mfe_by_core_d_beup":                 mfe_by_core_d_beup,
+        "mfe_by_core_d_l34":                  mfe_by_core_d_l34,
         "mfe_by_sequence":                    mfe_by_sequence,
         "top_max_gain_examples_10d":          top_mfe_examples,
+        # ── MFE D-confluence debug counters ──────────────────────────────────
+        "d_confluence_field_coverage_pct":    mfe_debug["d_confluence_field_coverage_pct"],
+        "mfe_d_confluence_resolved_count":    mfe_debug["mfe_d_confluence_resolved_count"],
+        "mfe_d_confluence_missing_count":     mfe_debug["mfe_d_confluence_missing_count"],
     }
 
     logger.info(
