@@ -595,6 +595,11 @@ async def build_drawer_payload(symbol: str) -> dict:
         "macro_context":     np_result.get("macro_context"),
         "news_hype_context": np_result.get("news_hype_context"),
         "sympathy_context":  np_result.get("sympathy_context"),
+        # Priority ranking — ranking only, does not affect decision
+        "priority_score":  np_result.get("priority_score"),
+        "priority_label":  np_result.get("priority_label"),
+        "priority_flags":  np_result.get("priority_flags"),
+        "priority_reason": np_result.get("priority_reason"),
     }
 
     _store(symbol, payload)
