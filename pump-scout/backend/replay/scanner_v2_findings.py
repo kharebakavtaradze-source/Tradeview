@@ -208,6 +208,48 @@ def _build_acceptance_checks(
         note      = "0% means enrich_np_candidates did not attach macro_context.",
     ))
 
+    # ── Bucket-existence checks (C05–C07) ────────────────────────────────────
+    perf_v2 = validation.get("performance_by_scanner_v2_decision") or []
+
+    # ── C05: BUY_CANDIDATE_HIGH bucket exists (count ≥ 1) ────────────────────
+    bch_count = _safe_get(perf_v2, "BUY_CANDIDATE_HIGH", "count") or 0
+    checks.append(_new_check(
+        "C05", "BUY_CANDIDATE_HIGH bucket exists (count ≥ 1)",
+        passed    = bch_count >= 1,
+        value     = bch_count,
+        threshold = "≥ 1",
+        note      = "Existence check only — performance evaluation requires "
+                    f"≥{MIN_BUCKET_N} (handled in Q01).",
+    ))
+
+    # ── C06: All 3 WATCH tiers present ───────────────────────────────────────
+    _WATCH = ("WATCH_HIGH", "WATCH_MEDIUM", "WATCH_LOW")
+    watch_present = {
+        lbl: (_safe_get(perf_v2, lbl, "count") or 0) >= 1 for lbl in _WATCH
+    }
+    missing_watch = [k for k, v in watch_present.items() if not v]
+    checks.append(_new_check(
+        "C06", "All WATCH tiers present (HIGH / MEDIUM / LOW)",
+        passed    = not missing_watch,
+        value     = watch_present,
+        threshold = "all 3 present",
+        note      = "" if not missing_watch else f"Missing: {missing_watch}",
+    ))
+
+    # ── C07: All AVOID buckets present ───────────────────────────────────────
+    _AVOID = ("AVOID_RISK", "AVOID_LOTTERY", "AVOID_DEAD")
+    avoid_present = {
+        lbl: (_safe_get(perf_v2, lbl, "count") or 0) >= 1 for lbl in _AVOID
+    }
+    missing_avoid = [k for k, v in avoid_present.items() if not v]
+    checks.append(_new_check(
+        "C07", "All AVOID buckets present (RISK / LOTTERY / DEAD)",
+        passed    = not missing_avoid,
+        value     = avoid_present,
+        threshold = "all 3 present",
+        note      = "" if not missing_avoid else f"Missing: {missing_avoid}",
+    ))
+
     return checks
 
 
