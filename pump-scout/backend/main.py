@@ -2165,6 +2165,57 @@ async def replay_refresh_combined(run_id: int):
     return await replay_recalculate_derived(run_id)
 
 
+@app.post("/api/replay/{run_id}/recalculate-scanner-v2")
+async def replay_recalculate_scanner_v2(run_id: int):
+    """
+    Backfill priority_score / priority_label / scanner_v2_decision /
+    scanner_v2_score (plus contexts in snapshot) for every candidate of an
+    existing replay run, then rebuild the research bundle.
+
+    Safe to run on pre-Task-9 replay runs that lack Scanner v2 fields.
+    Does NOT re-fetch candles or rescan the universe.
+    """
+    from database import get_replay_run
+    from replay.recalc_service import (
+        recalculate_priority_and_v2, rebuild_research_bundle,
+    )
+
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    try:
+        recalc_stats = await recalculate_priority_and_v2(run_id)
+    except Exception as exc:
+        logger.error(f"[REPLAY/V2-RECALC] run_id={run_id} failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Scanner v2 recalc failed: {str(exc)[:200]}")
+
+    bundle_rebuilt = True
+    bundle_stats   = None
+    try:
+        bundle_stats = await rebuild_research_bundle(run_id)
+    except Exception as exc:
+        logger.warning(f"[REPLAY/V2-RECALC] bundle rebuild failed: {exc}")
+        bundle_rebuilt = False
+
+    return {
+        "ok":                         True,
+        "run_id":                     run_id,
+        "mode":                       "recalculate_scanner_v2",
+        "candidate_count_total":      recalc_stats["candidate_count_total"],
+        "updated_candidate_count":    recalc_stats["updated_candidate_count"],
+        "skipped_insufficient_count": recalc_stats["skipped_insufficient"],
+        "recalculated_fields": [
+            "priority_score", "priority_label", "priority_flags", "priority_reason",
+            "scanner_v2_decision", "scanner_v2_score", "scanner_v2_flags", "scanner_v2_reason",
+            "sector_context", "macro_context", "news_hype_context", "sympathy_context",
+            "subsector", "decision_flags",
+        ],
+        "research_bundle_rebuilt":    bundle_rebuilt,
+        "bundle_stats":               bundle_stats,
+    }
+
+
 # ── Decision-aligned research (additive to legacy Raw Pattern / Pump Study) ──
 
 @app.get("/api/replay/{run_id}/decision-aligned-research")

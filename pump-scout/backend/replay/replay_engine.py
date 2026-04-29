@@ -551,4 +551,110 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
         f"[REPLAY] {as_of_date}: scored {len(ranked)} → "
         f"{len(candidates)} candidates (FIRE/ARM/BASE)"
     )
+
+    # ── Step 6: Context + priority + Scanner v2 enrichment ───────────────────
+    # Mirrors live runner.py Step 7. Attaches sector_context, macro_context,
+    # news_hype_context, sympathy_context, priority_*, and scanner_v2_* fields
+    # so research bundle Scanner v2 sections can compute correctly.
+    if candidates:
+        try:
+            await _enrich_replay_candidates(candidates)
+        except Exception as exc:
+            logger.warning(f"[REPLAY] enrichment failed (non-fatal): {exc}")
+
     return candidates
+
+
+async def _enrich_replay_candidates(candidates: list[dict]) -> None:
+    """
+    Run the live enrichment pipeline (sector/macro/hype/sympathy + priority +
+    Scanner v2) on a batch of replay candidates.  Mutates each candidate
+    dict in-place: adds top-level priority_*, sector_context, macro_context,
+    news_hype_context, sympathy_context, scanner_v2_*, subsector fields
+    AND mirrors them into candidate["snapshot"] so they survive JSON storage.
+    """
+    from scanner.np_context_enricher import enrich_np_candidates
+    from scanner.scanner_v2 import build_v2_row
+
+    # Build np_row shape that enrich_np_candidates expects.
+    # enrich + priority + v2 read flat top-level fields like decision /
+    # structure_phase / structure_score, not the np_-prefixed replay names.
+    np_rows: list[dict] = []
+    for c in candidates:
+        np_res = c.get("new_pump") or {}
+        np_row = {
+            "symbol":                  c.get("symbol"),
+            "sector":                  c.get("sector"),
+            "industry":                c.get("snapshot", {}).get("industry"),
+            "price":                   c.get("price"),
+            "volume_today":            c.get("snapshot", {}).get("volume"),
+            # NP engine outputs (live runner gets these from analyze())
+            "decision":                np_res.get("decision"),
+            "decision_reason":         np_res.get("decision_reason"),
+            "decision_flags":          np_res.get("decision_flags") or [],
+            "structure_phase":         np_res.get("structure_phase"),
+            "structure_score":         np_res.get("structure_score"),
+            "expansion_timing_risk":   np_res.get("expansion_timing_risk"),
+            "compression_expansion_state": np_res.get("compression_expansion_state"),
+            "new_pump_sequence_label": np_res.get("new_pump_sequence_label") or c.get("new_pump_sequence_label"),
+            "accumulation_ready":      np_res.get("accumulation_ready"),
+            # D/WLNBB
+            "d_confluence_type":       c.get("d_confluence_type"),
+            "d_confluence_type_v2":    c.get("d_confluence_type_v2"),
+            "active_d_signals":        c.get("active_d_signals") or [],
+            "active_wlnbb_signals":    c.get("active_wlnbb_signals") or [],
+        }
+        np_rows.append(np_row)
+
+    # Enrich (sector/macro/hype/sympathy contexts + priority scoring)
+    try:
+        await enrich_np_candidates(np_rows)
+    except Exception as exc:
+        logger.warning(f"[REPLAY] enrich_np_candidates failed: {exc}")
+
+    # Compute Scanner v2 row per candidate
+    by_symbol = {row.get("symbol"): row for row in np_rows}
+    for idx, c in enumerate(candidates):
+        sym = c.get("symbol")
+        np_row = by_symbol.get(sym) or {}
+
+        # Priority fields
+        c["priority_score"]  = np_row.get("priority_score")
+        c["priority_label"]  = np_row.get("priority_label")
+        c["priority_flags"]  = np_row.get("priority_flags") or []
+        c["priority_reason"] = np_row.get("priority_reason")
+
+        # Context fields
+        c["sector_context"]    = np_row.get("sector_context")
+        c["macro_context"]     = np_row.get("macro_context")
+        c["news_hype_context"] = np_row.get("news_hype_context")
+        c["sympathy_context"]  = np_row.get("sympathy_context")
+
+        # Scanner v2 row
+        try:
+            v2 = build_v2_row(np_row, rank=idx + 1)
+            c["scanner_v2_decision"] = v2.get("scanner_v2_decision")
+            c["scanner_v2_score"]    = v2.get("scanner_v2_score")
+            c["scanner_v2_reason"]   = v2.get("scanner_v2_reason")
+            c["scanner_v2_flags"]    = v2.get("scanner_v2_flags") or []
+            c["subsector"]           = v2.get("subsector")
+        except Exception as exc:
+            logger.debug(f"[REPLAY] build_v2_row failed for {sym}: {exc}")
+            c["scanner_v2_decision"] = None
+            c["scanner_v2_score"]    = None
+            c["scanner_v2_reason"]   = f"build_error: {exc}"
+            c["scanner_v2_flags"]    = ["build_error"]
+
+        # Decision flags from NP engine — needed by validation resolver
+        c["decision_flags"] = np_row.get("decision_flags") or []
+
+        # Mirror into snapshot blob so they survive DB persistence and the
+        # research bundle's _cget snapshot path picks them up
+        snap = c.setdefault("snapshot", {})
+        for k in ("priority_score", "priority_label", "priority_flags", "priority_reason",
+                  "sector_context", "macro_context", "news_hype_context", "sympathy_context",
+                  "scanner_v2_decision", "scanner_v2_score", "scanner_v2_reason", "scanner_v2_flags",
+                  "subsector", "decision_flags"):
+            v = c.get(k)
+            if isinstance(v, (int, float, str, bool, type(None), list, dict)):
+                snap[k] = v
