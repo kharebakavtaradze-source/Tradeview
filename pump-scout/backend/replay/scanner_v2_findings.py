@@ -126,7 +126,93 @@ def _fmt5(v: Optional[float]) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN ENTRY POINT (Task 1b–4b will fill these in)
+# TASK 1: ACCEPTANCE CHECKS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _new_check(check_id: str, description: str, passed: bool,
+               value, threshold, note: str = "") -> dict:
+    """Stable shape for every acceptance-check row."""
+    return {
+        "id":          check_id,
+        "description": description,
+        "passed":      bool(passed),
+        "value":       value,
+        "threshold":   threshold,
+        "note":        note,
+    }
+
+
+def _build_acceptance_checks(
+    validation:           dict,
+    summary:              dict,
+    d_wlnbb_coverage_pct: float,
+) -> list[dict]:
+    """
+    Run 10 acceptance checks against the already-computed validation dict.
+    Returns a list of check dicts; never raises.
+
+    Task 1b implements C01–C04b (data coverage). Task 1c, 1d add the rest.
+    """
+    debug   = validation.get("_debug") or {}
+    n_total = summary.get("total_candidates", 0)
+    checks: list[dict] = []
+
+    # ── C01: Total candidates > 0 ────────────────────────────────────────────
+    checks.append(_new_check(
+        "C01", "Total candidates > 0",
+        passed    = n_total > 0,
+        value     = n_total,
+        threshold = "> 0",
+        note      = "" if n_total > 0 else "Replay produced no candidates — nothing to evaluate.",
+    ))
+
+    # ── C02: scanner_v2_unknown_pct ≤ 5% ─────────────────────────────────────
+    unknown_pct = debug.get("scanner_v2_unknown_pct", 100.0)
+    checks.append(_new_check(
+        "C02", "Scanner v2 UNKNOWN bucket ≤ 5%",
+        passed    = unknown_pct <= 5.0,
+        value     = unknown_pct,
+        threshold = "≤ 5%",
+        note      = "High UNKNOWN% means enrichment or priority_score is missing.",
+    ))
+
+    # ── C03: priority coverage (direct + derived) ≥ 90% ──────────────────────
+    p_direct  = debug.get("priority_direct",  0)
+    p_derived = debug.get("priority_derived", 0)
+    p_cov_pct = round((p_direct + p_derived) / n_total * 100, 1) if n_total else 0.0
+    checks.append(_new_check(
+        "C03", "Priority label coverage (direct + derived) ≥ 90%",
+        passed    = p_cov_pct >= 90.0,
+        value     = p_cov_pct,
+        threshold = "≥ 90%",
+        note      = "Low coverage means priority_score was not computed for many candidates.",
+    ))
+
+    # ── C04: Sector context coverage > 0% ────────────────────────────────────
+    sec_cov = debug.get("sector_context_coverage_pct", 0.0)
+    checks.append(_new_check(
+        "C04", "Sector context coverage > 0%",
+        passed    = sec_cov > 0.0,
+        value     = sec_cov,
+        threshold = "> 0%",
+        note      = "0% means enrich_np_candidates did not attach sector_context.",
+    ))
+
+    # ── C04b: Macro context coverage > 0% ────────────────────────────────────
+    mac_cov = debug.get("macro_context_coverage_pct", 0.0)
+    checks.append(_new_check(
+        "C04b", "Macro context coverage > 0%",
+        passed    = mac_cov > 0.0,
+        value     = mac_cov,
+        threshold = "> 0%",
+        note      = "0% means enrich_np_candidates did not attach macro_context.",
+    ))
+
+    return checks
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN ENTRY POINT (Task 2–4 will fill these in)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_scanner_v2_findings(
@@ -138,8 +224,16 @@ def build_scanner_v2_findings(
     Build all scanner v2 auto-evaluation findings from the already-computed
     validation dict.  Returns a stable dict shape; never raises.
     """
+    try:
+        acceptance_checks = _build_acceptance_checks(
+            validation, summary, d_wlnbb_coverage_pct,
+        )
+    except Exception as exc:
+        logger.warning(f"[FINDINGS] acceptance_checks failed: {exc}")
+        acceptance_checks = []
+
     return {
-        "acceptance_checks":    [],
+        "acceptance_checks":    acceptance_checks,
         "validation_questions": [],
         "regressions":          [],
         "statistical_verdict":  {"verdict": "PENDING", "summary": "not yet implemented"},
