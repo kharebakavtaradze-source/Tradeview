@@ -727,7 +727,188 @@ def _build_validation_questions(validation: dict, summary: dict) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN ENTRY POINT (Task 3–4 will fill these in)
+# TASK 3: REGRESSION DETECTION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _new_regression(rid: str, description: str, severity: str,
+                    value, triggered: bool, note: str = "") -> dict:
+    """Stable shape for every regression row."""
+    return {
+        "regression_id": rid,
+        "description":   description,
+        "severity":      severity,
+        "value":         value,
+        "triggered":     bool(triggered),
+        "note":          note,
+    }
+
+
+def _detect_regressions(validation: dict, summary: dict) -> list[dict]:
+    """
+    Auto-detect suspicious patterns that indicate broken evaluation.
+    Returns a list of regression rows; never raises.
+
+    Severity: HIGH (fatal — needs investigation),
+              MEDIUM (notable — may be acceptable),
+              INFO (worth flagging but not a problem).
+
+    Comparisons require MIN_BUCKET_N on each side or the regression is
+    skipped (not falsely cleared, not falsely triggered).
+    """
+    perf_v2  = validation.get("performance_by_scanner_v2_decision") or []
+    mfe_v2   = validation.get("mfe_by_scanner_v2_decision")         or []
+    perf_pri = validation.get("performance_by_priority_label")      or []
+    debug    = validation.get("_debug") or {}
+    n_total  = summary.get("total_candidates", 0)
+
+    regressions: list[dict] = []
+
+    bch  = _safe_row(perf_v2, "BUY_CANDIDATE_HIGH")
+    wh   = _safe_row(perf_v2, "WATCH_HIGH")
+    wl   = _safe_row(perf_v2, "WATCH_LOW")
+    bch5, bch_n = bch.get("avg_return_5d"), bch.get("count") or 0
+    wh5,  wh_n  = wh.get("avg_return_5d"),  wh.get("count")  or 0
+    wl5,  wl_n  = wl.get("avg_return_5d"),  wl.get("count")  or 0
+
+    ph = _safe_row(perf_pri, "PRIORITY_HIGH")
+    pl = _safe_row(perf_pri, "PRIORITY_LOW")
+    ph5, ph_n = ph.get("avg_return_5d"), ph.get("count") or 0
+    pl5, pl_n = pl.get("avg_return_5d"), pl.get("count") or 0
+
+    # ── R01: BUY_CANDIDATE_HIGH underperforms WATCH_HIGH ─────────────────────
+    # MEDIUM by default — WATCH_HIGH can legitimately be opportunity-rich.
+    # HIGH only if BUY_HIGH also underperforms WATCH_LOW or PRIORITY_LOW
+    # (a true priority inversion).
+    if (bch5 is not None and bch_n >= MIN_BUCKET_N
+            and wh5 is not None and wh_n >= MIN_BUCKET_N):
+        triggered = bch5 < wh5
+        if triggered:
+            fatal_below_low = (
+                (wl5 is not None and wl_n >= MIN_BUCKET_N and bch5 < wl5)
+                or
+                (pl5 is not None and pl_n >= MIN_BUCKET_N and bch5 < pl5)
+            )
+            severity = "HIGH" if fatal_below_low else "MEDIUM"
+            note     = (
+                "Also underperforms WATCH_LOW or PRIORITY_LOW — "
+                "priority inversion is fatal."
+                if fatal_below_low
+                else "WATCH_HIGH may be more opportunity-rich; "
+                     "compare MFE (Q02b) before treating as fatal."
+            )
+        else:
+            severity, note = "INFO", ""
+        regressions.append(_new_regression(
+            "R01",
+            "BUY_CANDIDATE_HIGH underperforms WATCH_HIGH by avg_return_5d",
+            severity,
+            f"BUY_HIGH {_fmt5(bch5)} vs WATCH_HIGH {_fmt5(wh5)} "
+            f"(WATCH_LOW {_fmt5(wl5)}, PRIORITY_LOW {_fmt5(pl5)})",
+            triggered, note,
+        ))
+
+    # ── R02: Any AVOID bucket avg_return_5d > BUY_CANDIDATE_HIGH ─────────────
+    if bch5 is not None and bch_n >= MIN_BUCKET_N:
+        for avoid_lbl in ("AVOID_RISK", "AVOID_LOTTERY", "AVOID_DEAD"):
+            row  = _safe_row(perf_v2, avoid_lbl)
+            av5  = row.get("avg_return_5d")
+            av_n = row.get("count") or 0
+            if av5 is None or av_n < MIN_BUCKET_N:
+                continue
+            triggered = av5 > bch5
+            if triggered:
+                regressions.append(_new_regression(
+                    "R02",
+                    f"{avoid_lbl} outperforms BUY_CANDIDATE_HIGH (AVOID beating BUY)",
+                    "HIGH",
+                    f"{avoid_lbl} {_fmt5(av5)} (n={av_n}) > "
+                    f"BUY_HIGH {_fmt5(bch5)} (n={bch_n})",
+                    True,
+                    note="Scoring inversion — inspect priority_score formula "
+                         "and AVOID routing.",
+                ))
+
+    # ── R03: PRIORITY_HIGH underperforms PRIORITY_LOW ────────────────────────
+    if (ph5 is not None and ph_n >= MIN_BUCKET_N
+            and pl5 is not None and pl_n >= MIN_BUCKET_N):
+        triggered = ph5 < pl5
+        regressions.append(_new_regression(
+            "R03",
+            "PRIORITY_HIGH underperforms PRIORITY_LOW (priority score not discriminating)",
+            "HIGH" if triggered else "INFO",
+            f"PRIORITY_HIGH {_fmt5(ph5)} (n={ph_n}) vs "
+            f"PRIORITY_LOW {_fmt5(pl5)} (n={pl_n})",
+            triggered,
+            note="Indicates the priority_score formula is inverted." if triggered else "",
+        ))
+
+    # ── R04: scanner_v2_unknown_pct > 20% ────────────────────────────────────
+    unk_pct   = debug.get("scanner_v2_unknown_pct", 0.0)
+    triggered = unk_pct > 20.0
+    regressions.append(_new_regression(
+        "R04",
+        "scanner_v2_unknown_pct > 20% (enrichment likely failed)",
+        "HIGH",
+        f"{unk_pct}%",
+        triggered,
+        note="Run /api/replay/{run_id}/recalculate-scanner-v2 to backfill, "
+             "or re-run replay with current code." if triggered else "",
+    ))
+
+    # ── R05: Single Scanner v2 bucket holds > 90% of all candidates ──────────
+    if n_total > 0 and perf_v2:
+        for row in perf_v2:
+            count = row.get("count") or 0
+            pct   = round(count / n_total * 100, 1)
+            if pct > 90.0:
+                regressions.append(_new_regression(
+                    "R05",
+                    "Single Scanner v2 bucket holds > 90% of all candidates",
+                    "HIGH",
+                    f"{row.get('bucket')}: {pct}% ({count}/{n_total})",
+                    True,
+                    note="All candidates collapsed into one label — likely "
+                         "enrichment or routing failure.",
+                ))
+                break  # one collapse is enough; don't double-flag
+
+    # ── R06: AVOID_LOTTERY MFE < AVOID_DEAD MFE (lottery profile inverted) ───
+    al_mfe = _safe_row(mfe_v2, "AVOID_LOTTERY")
+    ad_mfe = _safe_row(mfe_v2, "AVOID_DEAD")
+    al_mg, al_mn = al_mfe.get("avg_max_gain_10d_pct"), al_mfe.get("mfe_n") or 0
+    ad_mg, ad_mn = ad_mfe.get("avg_max_gain_10d_pct"), ad_mfe.get("mfe_n") or 0
+    if (al_mg is not None and ad_mg is not None
+            and al_mn >= MIN_BUCKET_N and ad_mn >= MIN_BUCKET_N):
+        triggered = al_mg < ad_mg
+        regressions.append(_new_regression(
+            "R06",
+            "AVOID_LOTTERY MFE < AVOID_DEAD MFE (lottery profile inverted)",
+            "MEDIUM",
+            f"LOTTERY max_gain10d {_fmt5(al_mg)} (mfe_n={al_mn}) vs "
+            f"DEAD {_fmt5(ad_mg)} (mfe_n={ad_mn})",
+            triggered,
+            note="By design AVOID_LOTTERY should have higher MFE than "
+                 "AVOID_DEAD." if triggered else "",
+        ))
+
+    # ── R07: BUY_CANDIDATE_HIGH count = 0 with total candidates > 20 ─────────
+    if n_total > 20:
+        triggered = bch_n == 0
+        regressions.append(_new_regression(
+            "R07",
+            "BUY_CANDIDATE_HIGH count = 0 with total candidates > 20",
+            "MEDIUM",
+            f"BUY_HIGH n={bch_n}, total n={n_total}",
+            triggered,
+            note="Expand date range / universe, or lower the priority_score "
+                 "HIGH threshold from 75." if triggered else "",
+        ))
+
+    return regressions
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN ENTRY POINT (Task 4 will fill these in)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_scanner_v2_findings(
@@ -753,10 +934,16 @@ def build_scanner_v2_findings(
         logger.warning(f"[FINDINGS] validation_questions failed: {exc}")
         validation_questions = []
 
+    try:
+        regressions = _detect_regressions(validation, summary)
+    except Exception as exc:
+        logger.warning(f"[FINDINGS] regressions failed: {exc}")
+        regressions = []
+
     return {
         "acceptance_checks":    acceptance_checks,
         "validation_questions": validation_questions,
-        "regressions":          [],
+        "regressions":          regressions,
         "statistical_verdict":  {"verdict": "PENDING", "summary": "not yet implemented"},
         "recommendations":      [],
     }
