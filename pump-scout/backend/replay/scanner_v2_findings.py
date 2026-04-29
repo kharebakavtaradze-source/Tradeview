@@ -298,7 +298,162 @@ def _build_acceptance_checks(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN ENTRY POINT (Task 2–4 will fill these in)
+# TASK 2: VALIDATION QUESTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _new_question(qid: str, question: str, delta, verdict: str,
+                  interpretation: str) -> dict:
+    """Stable shape for every validation-question row."""
+    return {
+        "question_id":    qid,
+        "question":       question,
+        "delta":          delta,
+        "verdict":        verdict,
+        "interpretation": interpretation,
+    }
+
+
+def _build_validation_questions(validation: dict, summary: dict) -> list[dict]:
+    """
+    Auto-answer the 10 (+1 split) Scanner v2 validation questions from the
+    already-computed validation dict.  Each row is
+    {question_id, question, delta, verdict, interpretation}.
+
+    Task 2a: Q01, Q02a, Q02b, Q03.  Tasks 2b / 2c add the rest.
+    """
+    perf_v2  = validation.get("performance_by_scanner_v2_decision") or []
+    mfe_v2   = validation.get("mfe_by_scanner_v2_decision")         or []
+    perf_pri = validation.get("performance_by_priority_label")      or []
+
+    questions: list[dict] = []
+
+    # ── Q01: BUY_CANDIDATE_HIGH vs BUY_CANDIDATE_NORMAL by avg_return_5d ─────
+    bch_row = _safe_row(perf_v2, "BUY_CANDIDATE_HIGH")
+    bcn_row = _safe_row(perf_v2, "BUY_CANDIDATE_NORMAL")
+    bch5    = bch_row.get("avg_return_5d")
+    bcn5    = bcn_row.get("avg_return_5d")
+    bch_n   = bch_row.get("count") or 0
+    bcn_n   = bcn_row.get("count") or 0
+    q1_d    = _delta(bch5, bcn5)
+    q1_v    = _verdict_cmp(bch5, bcn5, bch_n, bcn_n)
+    if q1_v == "INSUFFICIENT_DATA":
+        q1_int = (
+            f"INSUFFICIENT_DATA: BUY_HIGH n={bch_n}, BUY_NORMAL n={bcn_n} "
+            f"(need ≥{MIN_COMPARISON_N} each)"
+        )
+    else:
+        q1_int = (
+            f"BUY_CANDIDATE_HIGH avg5d {_fmt5(bch5)} (n={bch_n}) vs "
+            f"NORMAL {_fmt5(bcn5)} (n={bcn_n}); delta {_fmt5(q1_d)}"
+        )
+    questions.append(_new_question(
+        "Q01",
+        "Does BUY_CANDIDATE_HIGH outperform BUY_CANDIDATE_NORMAL by avg_return_5d?",
+        q1_d, q1_v, q1_int,
+    ))
+
+    # ── Q02a: WATCH close-return hierarchy (HIGH > MEDIUM > LOW by 5d) ───────
+    wh_row = _safe_row(perf_v2, "WATCH_HIGH")
+    wm_row = _safe_row(perf_v2, "WATCH_MEDIUM")
+    wl_row = _safe_row(perf_v2, "WATCH_LOW")
+    wh5, wm5, wl5 = wh_row.get("avg_return_5d"), wm_row.get("avg_return_5d"), wl_row.get("avg_return_5d")
+    wh_n, wm_n, wl_n = wh_row.get("count") or 0, wm_row.get("count") or 0, wl_row.get("count") or 0
+    q2a_hm = _verdict_cmp(wh5, wm5, wh_n, wm_n)
+    q2a_ml = _verdict_cmp(wm5, wl5, wm_n, wl_n)
+    if "INSUFFICIENT_DATA" in (q2a_hm, q2a_ml):
+        q2a_v = "INSUFFICIENT_DATA"
+    elif q2a_hm == "PASS" and q2a_ml == "PASS":
+        q2a_v = "PASS"
+    else:
+        q2a_v = "FAIL"
+    q2a_int = (
+        f"WATCH_HIGH {_fmt5(wh5)} (n={wh_n}), MED {_fmt5(wm5)} (n={wm_n}), "
+        f"LOW {_fmt5(wl5)} (n={wl_n}) | HIGH>MED: {q2a_hm}, MED>LOW: {q2a_ml}"
+    )
+    questions.append(_new_question(
+        "Q02a",
+        "WATCH close-return hierarchy: WATCH_HIGH > WATCH_MEDIUM > WATCH_LOW (avg_return_5d)?",
+        _delta(wh5, wl5), q2a_v, q2a_int,
+    ))
+
+    # ── Q02b: WATCH opportunity hierarchy (MFE-based) ────────────────────────
+    wh_mfe = _safe_row(mfe_v2, "WATCH_HIGH")
+    wm_mfe = _safe_row(mfe_v2, "WATCH_MEDIUM")
+    wl_mfe = _safe_row(mfe_v2, "WATCH_LOW")
+    wh_mg = wh_mfe.get("avg_max_gain_10d_pct")
+    wm_mg = wm_mfe.get("avg_max_gain_10d_pct")
+    wl_mg = wl_mfe.get("avg_max_gain_10d_pct")
+    wh_mn = wh_mfe.get("mfe_n") or 0
+    wm_mn = wm_mfe.get("mfe_n") or 0
+    wl_mn = wl_mfe.get("mfe_n") or 0
+    # Compare HIGH vs LOW (the cleanest opportunity test); if both MED & LOW
+    # are sparse, fall back to HIGH vs MED.
+    if wh_mn >= MIN_COMPARISON_N and wl_mn >= MIN_COMPARISON_N:
+        q2b_v = _verdict_cmp(wh_mg, wl_mg, wh_mn, wl_mn)
+        q2b_d = _delta(wh_mg, wl_mg)
+    elif wh_mn >= MIN_COMPARISON_N and wm_mn >= MIN_COMPARISON_N:
+        q2b_v = _verdict_cmp(wh_mg, wm_mg, wh_mn, wm_mn)
+        q2b_d = _delta(wh_mg, wm_mg)
+    else:
+        q2b_v = "INSUFFICIENT_DATA"
+        q2b_d = None
+    q2b_int = (
+        f"WATCH_HIGH max_gain10d {_fmt5(wh_mg)} (mfe_n={wh_mn}), "
+        f"MED {_fmt5(wm_mg)} (mfe_n={wm_mn}), "
+        f"LOW {_fmt5(wl_mg)} (mfe_n={wl_mn})"
+    )
+    if q2a_v == "FAIL" and q2b_v == "PASS":
+        q2b_int += (
+            " — WATCH_HIGH may be more opportunity-rich but not better by close-return."
+        )
+    questions.append(_new_question(
+        "Q02b",
+        "WATCH opportunity hierarchy: WATCH_HIGH ≥ WATCH_MEDIUM/LOW by avg_max_gain_10d_pct?",
+        q2b_d, q2b_v, q2b_int,
+    ))
+
+    # ── Q03: PRIORITY_HIGH > MEDIUM > LOW > RISKY by avg_return_5d ───────────
+    ph_row = _safe_row(perf_pri, "PRIORITY_HIGH")
+    pm_row = _safe_row(perf_pri, "PRIORITY_MEDIUM")
+    pl_row = _safe_row(perf_pri, "PRIORITY_LOW")
+    pr_row = _safe_row(perf_pri, "PRIORITY_RISKY")
+    ph5, pm5, pl5, pr5 = (ph_row.get("avg_return_5d"), pm_row.get("avg_return_5d"),
+                           pl_row.get("avg_return_5d"), pr_row.get("avg_return_5d"))
+    ph_n = ph_row.get("count") or 0
+    pm_n = pm_row.get("count") or 0
+    pl_n = pl_row.get("count") or 0
+    pr_n = pr_row.get("count") or 0
+
+    q3_hm = _verdict_cmp(ph5, pm5, ph_n, pm_n)
+    q3_ml = _verdict_cmp(pm5, pl5, pm_n, pl_n)
+    # PRIORITY_RISKY is sparse — only include when both sides meet threshold.
+    if pl_n >= MIN_COMPARISON_N and pr_n >= MIN_COMPARISON_N:
+        q3_lr = _verdict_cmp(pl5, pr5, pl_n, pr_n)
+    else:
+        q3_lr = "SKIP"
+    if "INSUFFICIENT_DATA" in (q3_hm, q3_ml):
+        q3_v = "INSUFFICIENT_DATA"
+    else:
+        all_pass = (q3_hm == "PASS" and q3_ml == "PASS"
+                    and q3_lr in ("PASS", "SKIP"))
+        q3_v = "PASS" if all_pass else "FAIL"
+    q3_d = _delta(ph5, pr5 if pr5 is not None else pl5)
+    q3_int = (
+        f"HIGH {_fmt5(ph5)} (n={ph_n}), MED {_fmt5(pm5)} (n={pm_n}), "
+        f"LOW {_fmt5(pl5)} (n={pl_n}), RISKY {_fmt5(pr5)} (n={pr_n}) | "
+        f"H>M: {q3_hm}, M>L: {q3_ml}, L>R: {q3_lr}"
+    )
+    questions.append(_new_question(
+        "Q03",
+        "PRIORITY_HIGH > PRIORITY_MEDIUM > PRIORITY_LOW > PRIORITY_RISKY by avg_return_5d?",
+        q3_d, q3_v, q3_int,
+    ))
+
+    return questions
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN ENTRY POINT (Task 3–4 will fill these in)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_scanner_v2_findings(
@@ -318,9 +473,15 @@ def build_scanner_v2_findings(
         logger.warning(f"[FINDINGS] acceptance_checks failed: {exc}")
         acceptance_checks = []
 
+    try:
+        validation_questions = _build_validation_questions(validation, summary)
+    except Exception as exc:
+        logger.warning(f"[FINDINGS] validation_questions failed: {exc}")
+        validation_questions = []
+
     return {
         "acceptance_checks":    acceptance_checks,
-        "validation_questions": [],
+        "validation_questions": validation_questions,
         "regressions":          [],
         "statistical_verdict":  {"verdict": "PENDING", "summary": "not yet implemented"},
         "recommendations":      [],
