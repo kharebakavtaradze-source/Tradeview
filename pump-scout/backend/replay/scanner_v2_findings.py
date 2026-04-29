@@ -250,6 +250,50 @@ def _build_acceptance_checks(
         note      = "" if not missing_avoid else f"Missing: {missing_avoid}",
     ))
 
+    # ── MFE / signal coverage / collapse checks (C08–C10) ────────────────────
+    mfe_v2 = validation.get("mfe_by_scanner_v2_decision") or []
+
+    # ── C08: MFE data populated (at least 1 candidate with 10d MFE) ──────────
+    mfe_n_total = sum((row.get("mfe_n") or 0) for row in mfe_v2)
+    checks.append(_new_check(
+        "C08", "MFE data populated (≥ 1 candidate with 10d MFE)",
+        passed    = mfe_n_total >= 1,
+        value     = mfe_n_total,
+        threshold = "≥ 1",
+        note      = "0 means no candidate has a 10d outcome — re-run outcome "
+                    "computation or expand the replay window.",
+    ))
+
+    # ── C09: D/WLNBB coverage > 0% ───────────────────────────────────────────
+    checks.append(_new_check(
+        "C09", "D/WLNBB coverage > 0%",
+        passed    = (d_wlnbb_coverage_pct or 0.0) > 0.0,
+        value     = d_wlnbb_coverage_pct,
+        threshold = "> 0%",
+        note      = "0% means run pre-dates D/WLNBB feature — re-run replay "
+                    "to populate D/WLNBB analytics.",
+    ))
+
+    # ── C10: No single v2 bucket holds > 80% of all candidates ───────────────
+    max_pct          = 0.0
+    dominant_bucket  = None
+    if n_total > 0 and perf_v2:
+        for row in perf_v2:
+            pct = round((row.get("count") or 0) / n_total * 100, 1)
+            if pct > max_pct:
+                max_pct         = pct
+                dominant_bucket = row.get("bucket")
+    checks.append(_new_check(
+        "C10", "No single Scanner v2 bucket holds > 80% of all candidates",
+        passed    = max_pct <= 80.0,
+        value     = (
+            f"{dominant_bucket}: {max_pct}%" if dominant_bucket else "—"
+        ),
+        threshold = "≤ 80% per bucket",
+        note      = "Single-bucket dominance signals enrichment failure or "
+                    "a routing collapse (e.g. everything → WATCH_LOW).",
+    ))
+
     return checks
 
 
