@@ -1,5 +1,16 @@
 """
 Main scan orchestrator — ties together all scanner modules.
+
+LEGACY STATUS
+-------------
+This module is FROZEN as a feature source (OLD_MAIN_SCANNER_STATUS = "LEGACY_FEATURE_SOURCE").
+  - All existing endpoints (/api/scan/*) continue to work unchanged.
+  - Tier labels FIRE/ARM/BASE/WATCH are LEGACY labels only.
+    They do NOT map to Scanner v2 BUY/WATCH/AVOID decisions.
+  - Old FIRE cannot create a Scanner v2 BUY signal.
+  - HYPE/SYMPATHY/FLOW/STEALTH/SILENT features from this scanner may be consumed
+    as context inputs by Scanner v2 via scanner.legacy_context.extract_legacy_context().
+  - The authoritative decision engine is new_pump_engine.py (Scanner v2).
 """
 import logging
 from datetime import datetime
