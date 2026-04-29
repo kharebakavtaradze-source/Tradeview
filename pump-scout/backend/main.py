@@ -371,6 +371,24 @@ async def trigger_scan(background_tasks: BackgroundTasks):
     return {"status": "started", "message": "Scan started in background"}
 
 
+# ─── Legacy scanner context (read-only, feature-source only) ─────────────────
+
+@app.get("/api/legacy-scanner/context/{symbol}")
+async def get_legacy_scanner_context(symbol: str):
+    """
+    Return raw feature context from the old (legacy) main scanner for one ticker.
+
+    The old scanner is FROZEN as a feature source.  Its tier labels
+    (FIRE/ARM/BASE/WATCH) are legacy only and do NOT map to Scanner v2 decisions.
+    This endpoint exposes hype, sympathy, flow, stealth, and silent signals for
+    research and Scanner v2 context enrichment.
+    """
+    from scanner.legacy_context import extract_legacy_context
+    data = await get_latest_scan()
+    ctx = extract_legacy_context(symbol.upper(), scan_data=data)
+    return ctx
+
+
 # ─── Watchlist routes ────────────────────────────────────────────────────────
 
 @app.get("/api/watchlist")
