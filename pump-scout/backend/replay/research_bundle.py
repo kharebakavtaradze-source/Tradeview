@@ -1780,6 +1780,17 @@ async def build_research_bundle(run_id: int) -> dict:
         mfe_debug,
     ) = _build_mfe_sections(candidates, outcomes, outcome_map, cget_fn=_cget)
 
+    # ── Section I: Scanner v2 validation (additive, read-only) ───────────────
+    try:
+        from replay.scanner_v2_validation import build_scanner_v2_validation
+        _v2_mfe_map = _build_mfe_map(outcomes)
+        scanner_v2_validation = build_scanner_v2_validation(
+            candidates, outcomes, outcome_map, _v2_mfe_map, _cget,
+        )
+    except Exception as exc:
+        logger.warning(f"[BUNDLE] scanner_v2 validation skipped: {exc}")
+        scanner_v2_validation = {"_error": str(exc)}
+
     bundle = {
         "run":                              run,
         "summary":                          summary,
@@ -1849,6 +1860,19 @@ async def build_research_bundle(run_id: int) -> dict:
         "d_confluence_field_coverage_pct":    mfe_debug["d_confluence_field_coverage_pct"],
         "mfe_d_confluence_resolved_count":    mfe_debug["mfe_d_confluence_resolved_count"],
         "mfe_d_confluence_missing_count":     mfe_debug["mfe_d_confluence_missing_count"],
+        # ── Section I: Scanner v2 validation (additive, read-only) ───────────
+        "performance_by_scanner_v2_decision":          scanner_v2_validation.get("performance_by_scanner_v2_decision"),
+        "mfe_by_scanner_v2_decision":                  scanner_v2_validation.get("mfe_by_scanner_v2_decision"),
+        "false_positive_by_scanner_v2_decision":       scanner_v2_validation.get("false_positive_by_scanner_v2_decision"),
+        "old_vs_new_scanner_comparison":               scanner_v2_validation.get("old_vs_new_scanner_comparison"),
+        "performance_by_priority_label":               scanner_v2_validation.get("performance_by_priority_label"),
+        "mfe_by_priority_label":                       scanner_v2_validation.get("mfe_by_priority_label"),
+        "performance_by_np_decision_priority_label":   scanner_v2_validation.get("performance_by_np_decision_priority_label"),
+        "performance_by_scanner_v2_decision_d_confluence":     scanner_v2_validation.get("performance_by_scanner_v2_decision_d_confluence"),
+        "performance_by_scanner_v2_decision_sector_strength":  scanner_v2_validation.get("performance_by_scanner_v2_decision_sector_strength"),
+        "performance_by_scanner_v2_decision_macro_regime":     scanner_v2_validation.get("performance_by_scanner_v2_decision_macro_regime"),
+        "missed_movers_by_scanner_v2_decision":        scanner_v2_validation.get("missed_movers_by_scanner_v2_decision"),
+        "scanner_v2_validation_debug":                 scanner_v2_validation.get("_debug"),
     }
 
     logger.info(
