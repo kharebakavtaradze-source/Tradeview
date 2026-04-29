@@ -590,6 +590,11 @@ async def build_drawer_payload(symbol: str) -> dict:
         "red_flags":        red_flags,
         "final_verdict":    final_verdict,
         "d_wlnbb":          d_wlnbb,
+        # Context enrichment fields — passed through from scan cache or null
+        "sector_context":    np_result.get("sector_context"),
+        "macro_context":     np_result.get("macro_context"),
+        "news_hype_context": np_result.get("news_hype_context"),
+        "sympathy_context":  np_result.get("sympathy_context"),
     }
 
     _store(symbol, payload)

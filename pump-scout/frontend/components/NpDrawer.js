@@ -621,6 +621,21 @@ const TREND_LABEL_COLOR = {
   UNKNOWN:   '#444',
 };
 
+const STRENGTH_COLOR = {
+  SECTOR_LEADING:      '#00e676',
+  SECTOR_IMPROVING:    '#69f0ae',
+  SECTOR_NEUTRAL:      '#607d8b',
+  SECTOR_WEAKENING:    '#ff9800',
+  SECTOR_LAGGING:      '#f44336',
+  SECTOR_UNKNOWN:      '#444',
+  SUBSECTOR_LEADING:   '#00e676',
+  SUBSECTOR_IMPROVING: '#69f0ae',
+  SUBSECTOR_NEUTRAL:   '#607d8b',
+  SUBSECTOR_WEAKENING: '#ff9800',
+  SUBSECTOR_LAGGING:   '#f44336',
+  SUBSECTOR_UNKNOWN:   '#444',
+};
+
 function CtxRow({ label, children }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
@@ -644,11 +659,13 @@ function Chip({ label, color, bg }) {
   );
 }
 
-function S13_Context({ rowData }) {
-  const sc  = rowData?.sector_context;
-  const mc  = rowData?.macro_context;
-  const nhc = rowData?.news_hype_context;
-  const syc = rowData?.sympathy_context;
+function S13_Context({ rowData, payload }) {
+  // rowData (table row) takes priority; drawer payload is the fallback for
+  // symbols opened directly without a visible table row.
+  const sc  = rowData?.sector_context  ?? payload?.sector_context;
+  const mc  = rowData?.macro_context   ?? payload?.macro_context;
+  const nhc = rowData?.news_hype_context ?? payload?.news_hype_context;
+  const syc = rowData?.sympathy_context  ?? payload?.sympathy_context;
 
   const hasAny = sc || mc || nhc || syc;
   if (!hasAny) return null;
@@ -673,7 +690,24 @@ function S13_Context({ rowData }) {
           <CtxRow label="Sector / ETF">
             <b style={{ color: '#ddd' }}>{sc.sector || '—'}</b>
             {sc.sector_etf && <span style={{ color: '#888', marginLeft: 5 }}>({sc.sector_etf})</span>}
+            {sc.sector_strength && sc.sector_strength !== 'SECTOR_UNKNOWN' && (
+              <Chip
+                label={sc.sector_strength.replace('SECTOR_', '')}
+                color={STRENGTH_COLOR[sc.sector_strength] || '#555'}
+              />
+            )}
           </CtxRow>
+          {sc.subsector && (
+            <CtxRow label="Subsector">
+              <span style={{ color: '#aaa' }}>{sc.subsector}</span>
+              {sc.subsector_strength && sc.subsector_strength !== 'SUBSECTOR_UNKNOWN' && (
+                <Chip
+                  label={sc.subsector_strength.replace('SUBSECTOR_', '')}
+                  color={STRENGTH_COLOR[sc.subsector_strength] || '#555'}
+                />
+              )}
+            </CtxRow>
+          )}
           {sc.industry && (
             <CtxRow label="Industry">
               <span style={{ color: '#aaa' }}>{sc.industry}</span>
@@ -858,7 +892,7 @@ export default function NpDrawer({ sym, dataCache, loading, error, onClose, rowD
               <S5_News news={payload.news} />
               <S6_Technical technical_context={payload.technical_context} />
               <S7_Market market_context={payload.market_context} />
-              <S13_Context rowData={rowData} />
+              <S13_Context rowData={rowData} payload={payload} />
               <S8_AI ai_analysis={payload.ai_analysis} />
               <S9_RedFlags red_flags={payload.red_flags} />
               <S12_DWlnbb d_wlnbb={payload.d_wlnbb} />
