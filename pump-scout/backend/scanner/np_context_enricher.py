@@ -100,11 +100,13 @@ def _get_hype_map() -> dict[str, dict]:
 
 # ── Per-field builders ───────────────────────────────────────────────────────
 
-def _build_sector_context(row: dict, snapshot: dict) -> dict:
+def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None = None) -> dict:
     """
     sector_context fields derived from sector_engine snapshot.
+    scan_results: full NP batch (used for subsector_strength computation).
     Never raises.
     """
+    symbol   = (row.get("symbol") or "").upper()
     sector   = row.get("sector") or ""
     industry = row.get("industry") or ""
     etf      = _GICS_TO_ETF.get(sector, "")
@@ -135,10 +137,37 @@ def _build_sector_context(row: dict, snapshot: dict) -> dict:
 
     source_status = "live" if sector_data else ("static" if sector else "unavailable")
 
+    # ── Subsector + strength labels ───────────────────────────────────────────
+    try:
+        from sectors.subsector_map import (
+            TICKER_TO_SUBSECTOR, SUBSECTOR_TAXONOMY,
+            sector_trend_to_strength, compute_subsector_strength,
+        )
+        # Subsector for this ticker
+        sub_result = TICKER_TO_SUBSECTOR.get(symbol)
+        subsector  = sub_result[1] if sub_result else None
+
+        # Sector-level strength label
+        sector_strength = sector_trend_to_strength(trend_label if trend_label != "UNKNOWN" else "")
+
+        # Subsector-level strength: use NP batch as scan_results proxy
+        _scan = scan_results or []
+        sub_tickers = SUBSECTOR_TAXONOMY.get(etf, {}).get(subsector, []) if (etf and subsector) else []
+        # Adapt: subsector_map expects score field; NP results use new_pump_score
+        _proxy = [{"symbol": r.get("symbol"), "score": r.get("new_pump_score")} for r in _scan]
+        subsector_strength = compute_subsector_strength(sub_tickers, _proxy, trend_label) if sub_tickers else "SUBSECTOR_UNKNOWN"
+    except Exception:
+        subsector          = None
+        sector_strength    = "SECTOR_UNKNOWN"
+        subsector_strength = "SUBSECTOR_UNKNOWN"
+
     return {
         "sector":              sector   or None,
         "sector_etf":          etf      or None,
+        "subsector":           subsector,
         "industry":            industry or None,
+        "sector_strength":     sector_strength,
+        "subsector_strength":  subsector_strength,
         "sector_trend":        trend_label,
         "sector_rs_momentum":  rs_momentum,
         "sector_rrg_quadrant": rrg_quadrant,
@@ -407,7 +436,7 @@ async def enrich_np_candidates(results: list[dict]) -> list[dict]:
 
     for row in results:
         try:
-            row["sector_context"]    = _build_sector_context(row, snapshot)
+            row["sector_context"]    = _build_sector_context(row, snapshot, results)
         except Exception as exc:
             logger.debug(f"[NpEnricher] sector_context failed {row.get('symbol')}: {exc}")
             row["sector_context"]    = {"sector_context_source": "error"}

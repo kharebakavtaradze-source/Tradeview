@@ -1025,6 +1025,11 @@ export default function NewPumpPage() {
                       <td className={styles.sectorCell}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <span>{r.sector || '—'}</span>
+                          {r.sector_context?.subsector && (
+                            <span style={{ fontSize: 9, color: '#555', fontStyle: 'italic' }}>
+                              {r.sector_context.subsector}
+                            </span>
+                          )}
                           <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                             {r.sector_context?.strong_sector && (
                               <span style={{ fontSize: 8, padding: '0px 4px', borderRadius: 2, background: 'rgba(0,230,118,0.12)', color: '#00e676', fontWeight: 700, letterSpacing: '0.04em' }}>TAIL</span>
