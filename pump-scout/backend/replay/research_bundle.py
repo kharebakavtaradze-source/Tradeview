@@ -1791,6 +1791,18 @@ async def build_research_bundle(run_id: int) -> dict:
         logger.warning(f"[BUNDLE] scanner_v2 validation skipped: {exc}")
         scanner_v2_validation = {"_error": str(exc)}
 
+    # ── Section J: Scanner v2 auto-evaluation findings (read-only) ────────────
+    try:
+        from replay.scanner_v2_findings import build_scanner_v2_findings
+        scanner_v2_findings = build_scanner_v2_findings(
+            validation=scanner_v2_validation,
+            summary=summary,
+            d_wlnbb_coverage_pct=d_wlnbb_coverage_pct,
+        )
+    except Exception as exc:
+        logger.warning(f"[BUNDLE] scanner_v2 findings skipped: {exc}")
+        scanner_v2_findings = {"_error": str(exc)}
+
     bundle = {
         "run":                              run,
         "summary":                          summary,
@@ -1873,6 +1885,12 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_scanner_v2_decision_macro_regime":     scanner_v2_validation.get("performance_by_scanner_v2_decision_macro_regime"),
         "missed_movers_by_scanner_v2_decision":        scanner_v2_validation.get("missed_movers_by_scanner_v2_decision"),
         "scanner_v2_validation_debug":                 scanner_v2_validation.get("_debug"),
+        # ── Section J: Scanner v2 auto-evaluation findings ────────────────────
+        "scanner_v2_acceptance_checks":    scanner_v2_findings.get("acceptance_checks"),
+        "scanner_v2_validation_questions": scanner_v2_findings.get("validation_questions"),
+        "scanner_v2_regressions":          scanner_v2_findings.get("regressions"),
+        "scanner_v2_statistical_verdict":  scanner_v2_findings.get("statistical_verdict"),
+        "scanner_v2_recommendations":      scanner_v2_findings.get("recommendations"),
     }
 
     logger.info(
