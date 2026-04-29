@@ -908,7 +908,237 @@ def _detect_regressions(validation: dict, summary: dict) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN ENTRY POINT (Task 4 will fill these in)
+# TASK 4a: STATISTICAL VERDICT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_statistical_verdict(validation: dict, summary: dict) -> dict:
+    """
+    Compare v2 actionable bucket (BUY_HIGH + BUY_NORMAL + WATCH_HIGH,
+    count-weighted) against NP BUY_CANDIDATE and legacy FIRE.
+
+    Verdict: V2_OUTPERFORMS / V2_UNDERPERFORMS / V2_MIXED / INSUFFICIENT_DATA.
+    Requires MIN_RUN_N total actionable candidates for a run-level verdict.
+    """
+    perf_v2    = validation.get("performance_by_scanner_v2_decision") or []
+    mfe_v2     = validation.get("mfe_by_scanner_v2_decision")         or []
+    old_vs_new = validation.get("old_vs_new_scanner_comparison")       or {}
+    by_np      = old_vs_new.get("by_np_decision")                      or []
+    by_legacy  = old_vs_new.get("by_legacy_tier")                      or []
+
+    _ACTIONABLE = ("BUY_CANDIDATE_HIGH", "BUY_CANDIDATE_NORMAL", "WATCH_HIGH")
+
+    # ── v2 actionable aggregate ───────────────────────────────────────────────
+    v2_w5 = 0.0; v2_n = 0
+    best_bucket: Optional[str] = None
+    best_r5:     Optional[float] = None
+
+    for lbl in _ACTIONABLE:
+        row = _safe_row(perf_v2, lbl)
+        r5  = row.get("avg_return_5d")
+        n   = row.get("count") or 0
+        if r5 is not None and n > 0:
+            v2_w5 += r5 * n
+            v2_n  += n
+        if r5 is not None and n >= MIN_BUCKET_N:
+            if best_r5 is None or r5 > best_r5:
+                best_r5, best_bucket = r5, lbl
+
+    v2_avg_r5 = round(v2_w5 / v2_n, 2) if v2_n > 0 else None
+
+    # count-weighted MFE average across actionable
+    mfe_w = 0.0; mfe_ng = 0
+    for lbl in _ACTIONABLE:
+        mfe_row = _safe_row(mfe_v2, lbl)
+        mg = mfe_row.get("avg_max_gain_10d_pct")
+        mn = mfe_row.get("mfe_n") or 0
+        if mg is not None and mn > 0:
+            mfe_w += mg * mn
+            mfe_ng += mn
+    v2_avg_mg = round(mfe_w / mfe_ng, 2) if mfe_ng > 0 else None
+
+    # ── NP BUY_CANDIDATE ─────────────────────────────────────────────────────
+    np_row = _safe_row(by_np, "BUY_CANDIDATE")
+    np_r5  = np_row.get("avg_return_5d")
+    np_n   = np_row.get("count") or 0
+
+    # ── legacy FIRE ──────────────────────────────────────────────────────────
+    fire_row = _safe_row(by_legacy, "FIRE")
+    fire_r5  = fire_row.get("avg_return_5d")
+    fire_n   = fire_row.get("count") or 0
+
+    v2_vs_np     = _delta(v2_avg_r5, np_r5)
+    v2_vs_legacy = _delta(v2_avg_r5, fire_r5)
+
+    # ── verdict ──────────────────────────────────────────────────────────────
+    if v2_n < MIN_RUN_N:
+        verdict = "INSUFFICIENT_DATA"
+        sv_summary = (
+            f"v2 actionable n={v2_n} < {MIN_RUN_N} — too few candidates "
+            "for a reliable performance verdict."
+        )
+    else:
+        np_ok     = np_n   >= MIN_COMPARISON_N and np_r5   is not None
+        legacy_ok = fire_n >= MIN_COMPARISON_N and fire_r5 is not None
+
+        if not np_ok and not legacy_ok:
+            verdict = "INSUFFICIENT_DATA"
+            sv_summary = (
+                "No benchmark has enough samples "
+                f"(need ≥{MIN_COMPARISON_N}) for comparison."
+            )
+        else:
+            np_wins     = np_ok     and v2_avg_r5 is not None and v2_avg_r5 > np_r5
+            legacy_wins = legacy_ok and v2_avg_r5 is not None and v2_avg_r5 > fire_r5
+
+            if np_ok and legacy_ok:
+                if np_wins and legacy_wins:
+                    verdict = "V2_OUTPERFORMS"
+                elif not np_wins and not legacy_wins:
+                    verdict = "V2_UNDERPERFORMS"
+                else:
+                    verdict = "V2_MIXED"
+            elif np_ok:
+                verdict = "V2_OUTPERFORMS" if np_wins else "V2_UNDERPERFORMS"
+            else:
+                verdict = "V2_OUTPERFORMS" if legacy_wins else "V2_UNDERPERFORMS"
+
+            parts = [f"v2 actionable {_fmt5(v2_avg_r5)} (n={v2_n})"]
+            if np_ok:
+                parts.append(f"NP BUY {_fmt5(np_r5)} (n={np_n})")
+            if legacy_ok:
+                parts.append(f"legacy FIRE {_fmt5(fire_r5)} (n={fire_n})")
+            sv_summary = " | ".join(parts) + f" → {verdict}"
+
+    return {
+        "v2_best_bucket":                 best_bucket,
+        "v2_actionable_avg_return_5d":    v2_avg_r5,
+        "v2_actionable_avg_max_gain_10d":  v2_avg_mg,
+        "v2_actionable_n":                v2_n,
+        "np_buy_candidate_avg_return_5d":  np_r5,
+        "legacy_fire_avg_return_5d":       fire_r5,
+        "v2_vs_np_delta":                 v2_vs_np,
+        "v2_vs_legacy_delta":             v2_vs_legacy,
+        "verdict":                        verdict,
+        "summary":                        sv_summary,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TASK 4b: RECOMMENDATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+
+
+def _build_recommendations(
+    checks:      list[dict],
+    questions:   list[dict],
+    regressions: list[dict],
+    verdict:     dict,
+) -> list[dict]:
+    """
+    Emit conditional, prioritized recommendations based on check / question /
+    regression outcomes.  Returns [{priority, recommendation, evidence}]
+    sorted HIGH → MEDIUM → LOW.
+    """
+    recs: list[dict] = []
+
+    def _add(priority: str, recommendation: str, evidence: str) -> None:
+        recs.append({"priority": priority, "recommendation": recommendation,
+                     "evidence": evidence})
+
+    chk = {c["id"]:          c for c in checks}
+    qst = {q["question_id"]: q for q in questions}
+
+    c02  = chk.get("C02",  {})
+    c04  = chk.get("C04",  {})
+    c04b = chk.get("C04b", {})
+    q02a = qst.get("Q02a", {})
+    q02b = qst.get("Q02b", {})
+    q03  = qst.get("Q03",  {})
+    q04  = qst.get("Q04",  {})
+    q06  = qst.get("Q06",  {})
+    q08  = qst.get("Q08",  {})
+
+    # HIGH: scanner_v2 UNKNOWN exceeds 5% — enrichment is broken
+    if not c02.get("passed", True):
+        _add(
+            "HIGH",
+            "Fix scanner v2 enrichment — UNKNOWN bucket exceeds 5%.",
+            f"C02 value={c02.get('value')}% (threshold ≤5%). "
+            "Re-run replay with current enrichment code.",
+        )
+
+    # HIGH: v2 underperforms both benchmarks
+    if verdict.get("verdict") == "V2_UNDERPERFORMS":
+        _add(
+            "HIGH",
+            "Scanner v2 underperforms NP and legacy benchmarks — investigate scoring.",
+            verdict.get("summary", ""),
+        )
+
+    # MEDIUM: priority tier hierarchy broken
+    if q03.get("verdict") == "FAIL":
+        _add(
+            "MEDIUM",
+            "Recalibrate priority_score — PRIORITY tiers are not ordered by return.",
+            q03.get("interpretation", ""),
+        )
+
+    # MEDIUM: WATCH_HIGH opportunity-rich by MFE but not by close-return
+    if q02a.get("verdict") == "FAIL" and q02b.get("verdict") == "PASS":
+        _add(
+            "MEDIUM",
+            "WATCH_HIGH suits MFE / momentum strategies — not better by close-return.",
+            (f"Q02a FAIL (close-return hierarchy broken), Q02b PASS (MFE hierarchy holds). "
+             "Consider separate MFE-based exit rules for WATCH_HIGH signals."),
+        )
+
+    # MEDIUM: D6_BEUP confluence adds measurable alpha → increase weighting
+    if q06.get("verdict") == "PASS":
+        _add(
+            "MEDIUM",
+            "Increase D6_BEUP weighting in priority_score — D6 confluence adds measurable alpha.",
+            q06.get("interpretation", ""),
+        )
+
+    # MEDIUM: RISK_OFF hurts actionable quality → add pre-filter
+    if q08.get("verdict") == "PASS":
+        _add(
+            "MEDIUM",
+            "Consider RISK_OFF macro pre-filter — actionable candidates underperform in RISK_OFF regimes.",
+            q08.get("interpretation", ""),
+        )
+
+    # MEDIUM: lottery profile confirmed → keep AVOID_LOTTERY separate from AVOID_RISK
+    if q04.get("verdict") == "PASS":
+        _add(
+            "MEDIUM",
+            "Keep AVOID_LOTTERY separate from AVOID_RISK — lottery profile confirmed.",
+            q04.get("interpretation", ""),
+        )
+
+    # LOW: sector or macro context coverage is zero
+    sec_missing  = not c04.get("passed",  True)
+    mac_missing  = not c04b.get("passed", True)
+    if sec_missing or mac_missing:
+        missing_ctx = " and ".join(
+            ([" sector"] if sec_missing else []) +
+            (["macro"]   if mac_missing else [])
+        ).strip()
+        _add(
+            "LOW",
+            f"Expand {missing_ctx} context coverage — currently 0%.",
+            (f"C04 passed={c04.get('passed')}, C04b passed={c04b.get('passed')}. "
+             "Ensure enrich_np_candidates populates context fields."),
+        )
+
+    recs.sort(key=lambda r: _PRIORITY_ORDER.get(r["priority"], 99))
+    return recs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_scanner_v2_findings(
@@ -940,10 +1170,24 @@ def build_scanner_v2_findings(
         logger.warning(f"[FINDINGS] regressions failed: {exc}")
         regressions = []
 
+    try:
+        statistical_verdict = _build_statistical_verdict(validation, summary)
+    except Exception as exc:
+        logger.warning(f"[FINDINGS] statistical_verdict failed: {exc}")
+        statistical_verdict = {"verdict": "ERROR", "summary": str(exc)}
+
+    try:
+        recommendations = _build_recommendations(
+            acceptance_checks, validation_questions, regressions, statistical_verdict,
+        )
+    except Exception as exc:
+        logger.warning(f"[FINDINGS] recommendations failed: {exc}")
+        recommendations = []
+
     return {
         "acceptance_checks":    acceptance_checks,
         "validation_questions": validation_questions,
         "regressions":          regressions,
-        "statistical_verdict":  {"verdict": "PENDING", "summary": "not yet implemented"},
-        "recommendations":      [],
+        "statistical_verdict":  statistical_verdict,
+        "recommendations":      recommendations,
     }
