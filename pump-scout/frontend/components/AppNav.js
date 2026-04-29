@@ -8,6 +8,7 @@ import { useRouter } from 'next/router';
 const NAV_LINKS = [
   { href: '/',             label: 'Scanner' },
   { href: '/new-pump',       label: 'New Pump' },
+  { href: '/scanner-v2',     label: 'Scanner v2' },
   { href: '/signal-anatomy', label: 'Signal Anatomy' },
   { href: '/sectors',      label: 'Sectors' },
   { href: '/journal',      label: 'Journal' },
