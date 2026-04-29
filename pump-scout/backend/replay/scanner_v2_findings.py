@@ -449,6 +449,123 @@ def _build_validation_questions(validation: dict, summary: dict) -> list[dict]:
         q3_d, q3_v, q3_int,
     ))
 
+    # ── Q04: AVOID_LOTTERY profile (high MFE + high giveback) ────────────────
+    # Lottery profile is confirmed if EITHER:
+    #   (a) avg_max_gain_10d_pct > 15 AND avg_giveback_10d_pct > 8
+    #   (b) avg_max_gain_10d_pct − avg_return_10d > 10  (high spike, weak close)
+    al_mfe   = _safe_row(mfe_v2, "AVOID_LOTTERY")
+    al_perf  = _safe_row(perf_v2, "AVOID_LOTTERY")
+    al_mg    = al_mfe.get("avg_max_gain_10d_pct")
+    al_gb    = al_mfe.get("avg_giveback_10d_pct")
+    al_r10   = al_mfe.get("avg_return_10d")
+    al_mn    = al_mfe.get("mfe_n")  or 0
+    al_n     = al_perf.get("count") or 0
+    if al_mn < MIN_BUCKET_N:
+        q4_v   = "INSUFFICIENT_DATA"
+        q4_d   = None
+        q4_int = (
+            f"INSUFFICIENT_DATA: AVOID_LOTTERY mfe_n={al_mn} "
+            f"(need ≥{MIN_BUCKET_N}); count={al_n}"
+        )
+    else:
+        lottery_a = (al_mg is not None and al_mg > 15.0 and
+                     al_gb is not None and al_gb > 8.0)
+        lottery_b = (al_mg is not None and al_r10 is not None and
+                     (al_mg - al_r10) > 10.0)
+        q4_v = "PASS" if (lottery_a or lottery_b) else "FAIL"
+        q4_d = _delta(al_mg, al_r10)
+        q4_int = (
+            f"AVOID_LOTTERY: max_gain10d {_fmt5(al_mg)}, "
+            f"giveback10d {_fmt5(al_gb)}, return10d {_fmt5(al_r10)} "
+            f"(mfe_n={al_mn})"
+        )
+        if q4_v == "PASS":
+            reasons = []
+            if lottery_a: reasons.append("high MFE + high giveback")
+            if lottery_b: reasons.append("MFE-vs-return10d spread > 10")
+            q4_int += f" — lottery profile confirmed ({', '.join(reasons)})."
+        else:
+            q4_int += " — lottery profile NOT confirmed."
+    questions.append(_new_question(
+        "Q04",
+        "Does AVOID_LOTTERY show high MFE + high giveback (lottery profile)?",
+        q4_d, q4_v, q4_int,
+    ))
+
+    # ── Q05: AVOID_DEAD low MFE (avg_max_gain_10d_pct < 5) ───────────────────
+    ad_mfe = _safe_row(mfe_v2, "AVOID_DEAD")
+    ad_mg  = ad_mfe.get("avg_max_gain_10d_pct")
+    ad_mn  = ad_mfe.get("mfe_n") or 0
+    q5_v = _verdict_threshold(ad_mg, 5.0, n=ad_mn, direction="below")
+    if q5_v == "INSUFFICIENT_DATA":
+        q5_int = (
+            f"INSUFFICIENT_DATA: AVOID_DEAD mfe_n={ad_mn} "
+            f"(need ≥{MIN_BUCKET_N})"
+        )
+    else:
+        q5_int = (
+            f"AVOID_DEAD avg_max_gain10d {_fmt5(ad_mg)} (mfe_n={ad_mn}) — "
+            + ("low MFE confirmed (dead-money profile)."
+               if q5_v == "PASS"
+               else "MFE not low; check whether AVOID_DEAD routing is too lenient.")
+        )
+    questions.append(_new_question(
+        "Q05",
+        "Does AVOID_DEAD have low MFE (avg_max_gain_10d_pct < 5)?",
+        ad_mg, q5_v, q5_int,
+    ))
+
+    # ── Q06: D6_BEUP improves WATCH_HIGH / BUY_CANDIDATE_HIGH ────────────────
+    v2_dconf = validation.get("performance_by_scanner_v2_decision_d_confluence") or []
+
+    def _dconf_perf(v2_label: str, dconf_label: str):
+        bucket = f"{v2_label}|{dconf_label}"
+        row = _safe_row(v2_dconf, bucket)
+        return row.get("avg_return_5d"), row.get("count") or 0
+
+    wh_d6_5, wh_d6_n = _dconf_perf("WATCH_HIGH",         "D6_BEUP")
+    wh_no_5, wh_no_n = _dconf_perf("WATCH_HIGH",         "NONE")
+    bh_d6_5, bh_d6_n = _dconf_perf("BUY_CANDIDATE_HIGH", "D6_BEUP")
+    bh_no_5, bh_no_n = _dconf_perf("BUY_CANDIDATE_HIGH", "NONE")
+
+    # MIN_DW_BUCKET_N is the higher bar for D/WLNBB cross-tabs.
+    def _d6_check(v2_label: str, d6_5, d6_n, no_5, no_n) -> tuple[str, str]:
+        if d6_n < MIN_DW_BUCKET_N or no_n < MIN_DW_BUCKET_N:
+            return ("INSUFFICIENT_DATA",
+                    f"{v2_label}: D6_BEUP n={d6_n}, NONE n={no_n} "
+                    f"(need ≥{MIN_DW_BUCKET_N} each)")
+        if d6_5 is None or no_5 is None:
+            return ("INSUFFICIENT_DATA",
+                    f"{v2_label}: D6_BEUP {_fmt5(d6_5)} vs NONE {_fmt5(no_5)} (missing values)")
+        verdict = "PASS" if d6_5 > no_5 else "FAIL"
+        return (verdict, f"{v2_label}: D6_BEUP {_fmt5(d6_5)} (n={d6_n}) vs "
+                          f"NONE {_fmt5(no_5)} (n={no_n}) → {verdict}")
+
+    wh_v, wh_evidence = _d6_check("WATCH_HIGH",         wh_d6_5, wh_d6_n, wh_no_5, wh_no_n)
+    bh_v, bh_evidence = _d6_check("BUY_CANDIDATE_HIGH", bh_d6_5, bh_d6_n, bh_no_5, bh_no_n)
+
+    if wh_v == "INSUFFICIENT_DATA" and bh_v == "INSUFFICIENT_DATA":
+        q6_v = "INSUFFICIENT_DATA"
+    elif "PASS" in (wh_v, bh_v):
+        q6_v = "PASS"
+    else:
+        q6_v = "FAIL"
+
+    # Pick the dominant delta as the headline (whichever has data)
+    if wh_d6_5 is not None and wh_no_5 is not None:
+        q6_d = _delta(wh_d6_5, wh_no_5)
+    elif bh_d6_5 is not None and bh_no_5 is not None:
+        q6_d = _delta(bh_d6_5, bh_no_5)
+    else:
+        q6_d = None
+
+    q6_int = " | ".join([wh_evidence, bh_evidence])
+    questions.append(_new_question(
+        "Q06",
+        "Does D6_BEUP confluence improve performance for WATCH_HIGH and BUY_CANDIDATE_HIGH?",
+        q6_d, q6_v, q6_int,
+    ))
+
     return questions
 
 
