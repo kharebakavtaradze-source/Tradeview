@@ -135,7 +135,20 @@ async def run_new_pump_scan(
                 logger.warning(f"[NpRunner] ETF exclusion fetch failed (non-fatal): {_exc}")
 
             _shortlist = shortlist_from_snapshot(_snap, etf_exclusions=etf_symbols)
-            candidates = [c["symbol"] for c in _shortlist]
+            # Apply UniverseCache positive filter to snapshot candidates (in-memory, no API call)
+            from scanner.massive_reference import get_cached_ticker as _get_cached_ticker
+            from scanner.stock_universe_filter import is_common_stock as _is_common_stock
+            _filtered: list = []
+            for _c in _shortlist:
+                _sym = _c["symbol"]
+                _meta = _get_cached_ticker(_sym)
+                if _meta is not None and not _is_common_stock(_meta):
+                    excluded_non_common_stock_count += 1
+                    if len(excluded_non_common_stock_examples) < 20:
+                        excluded_non_common_stock_examples.append(_sym)
+                else:
+                    _filtered.append(_c)
+            candidates = [c["symbol"] for c in _filtered]
             logger.info(f"[NpRunner] Snapshot universe: {len(_snap)} → {len(candidates)} after prefilter")
         else:
             # EOD mode: yesterday's grouped daily bars as universe
@@ -153,13 +166,25 @@ async def run_new_pump_scan(
             except Exception as _exc:
                 logger.warning(f"[NpRunner] ETF exclusion fetch failed (non-fatal): {_exc}")
 
+            from scanner.massive_reference import get_cached_ticker as _get_cached_ticker
+            from scanner.stock_universe_filter import is_common_stock as _is_common_stock
+
             candidates = []
             total_symbols_before_filter = 0
             for sym, bar in all_bars.items():
                 total_symbols_before_filter += 1
                 if not sym.isalpha() or len(sym) > 5:
                     continue
-                if sym.upper() in etf_symbols:
+                # Tier 1: UniverseCache positive filter — authoritative, no API call
+                _meta = _get_cached_ticker(sym)
+                if _meta is not None:
+                    if not _is_common_stock(_meta):
+                        excluded_non_common_stock_count += 1
+                        if len(excluded_non_common_stock_examples) < 20:
+                            excluded_non_common_stock_examples.append(sym)
+                        continue
+                elif sym.upper() in etf_symbols:
+                    # Tier 2: cache miss — fall back to bulk ETF exclusion set
                     excluded_non_common_stock_count += 1
                     if len(excluded_non_common_stock_examples) < 20:
                         excluded_non_common_stock_examples.append(sym)
@@ -174,7 +199,7 @@ async def run_new_pump_scan(
 
             logger.info(
                 f"[NpRunner] Filter summary: total={total_symbols_before_filter} "
-                f"excluded_etf_fund={excluded_non_common_stock_count} "
+                f"excluded_non_cs={excluded_non_common_stock_count} "
                 f"examples={excluded_non_common_stock_examples[:5]} "
                 f"candidates={len(candidates)}"
             )

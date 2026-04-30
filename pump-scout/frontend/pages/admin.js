@@ -47,8 +47,11 @@ export default function AdminPage() {
   const [replayRunId, setReplayRunId] = useState('');
   const [recalcResult, setRecalcResult] = useState(null);
   const [rebuildResult, setRebuildResult] = useState(null);
+  const [refreshSectorResult, setRefreshSectorResult] = useState(null);
+  const [refreshSectorStatus, setRefreshSectorStatus] = useState(null);
   const pollRef = useRef(null);
   const npPollRef = useRef(null);
+  const sectorRefreshPollRef = useRef(null);
 
   // Poll /api/admin/universe-scan/status every 5s
   const startPolling = () => {
@@ -82,6 +85,21 @@ export default function AdminPage() {
     if (npPollRef.current) { clearInterval(npPollRef.current); npPollRef.current = null; }
   };
 
+  const startSectorRefreshPolling = () => {
+    if (sectorRefreshPollRef.current) return;
+    sectorRefreshPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/refresh-sector-data/status`);
+        const data = await res.json();
+        setRefreshSectorStatus(data);
+        if (!data.running) {
+          clearInterval(sectorRefreshPollRef.current);
+          sectorRefreshPollRef.current = null;
+        }
+      } catch (_) {}
+    }, 4000);
+  };
+
   // Fetch status once on mount, start polling if already running
   useEffect(() => {
     fetch(`${API_URL}/api/admin/universe-scan/status`)
@@ -102,15 +120,23 @@ export default function AdminPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function call(key, url) {
+  async function call(key, url, method = 'GET') {
     setLoading(l => ({ ...l, [key]: true }));
     setError(e => ({ ...e, [key]: null }));
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, method !== 'GET' ? { method } : undefined);
       const data = await res.json();
-      if (key === 'massive')  setMassiveResult(data);
-      if (key === 'enrich')   setEnrichResult(data);
-      if (key === 'regime')   setRegimeResult(data);
+      if (key === 'massive')        setMassiveResult(data);
+      if (key === 'enrich')         setEnrichResult(data);
+      if (key === 'regime')         setRegimeResult(data);
+      if (key === 'refresh_sector') {
+        setRefreshSectorResult(data);
+        setTimeout(() => {
+          fetch(`${API_URL}/api/admin/refresh-sector-data/status`)
+            .then(r => r.json()).then(d => { setRefreshSectorStatus(d); if (d.running) startSectorRefreshPolling(); })
+            .catch(() => {});
+        }, 1000);
+      }
       if (key === 'universe') {
         setUniverseResult(data);
         // Begin polling status after triggering
@@ -483,6 +509,42 @@ export default function AdminPage() {
           )}
         </div>
 
+        {/* ── Refresh & Apply All Sector Data ── */}
+        <div style={card}>
+          <p style={label}>Refresh &amp; Apply All Sector Data</p>
+          <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
+            Two-step sector refresh:<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>1. Universe cache sync</strong> — pulls fresh type / SIC code / SIC description from Massive for all CS/ADR/ADRC tickers.<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>2. GICS normalization</strong> — converts raw SIC descriptions in SectorCache to proper GICS sector names using the sector resolver.<br />
+            Runs in background. Use after initial setup or when sector column shows raw SIC text.
+          </p>
+          <button
+            onClick={() => call('refresh_sector', `${API_URL}/api/admin/refresh-sector-data`, 'POST')}
+            disabled={loading.refresh_sector || refreshSectorStatus?.running}
+            style={{ background: 'rgba(255,160,50,0.12)', border: '1px solid rgba(255,160,50,0.4)', borderRadius: 4, padding: '7px 18px', color: '#ffa030', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (loading.refresh_sector || refreshSectorStatus?.running) ? 0.6 : 1 }}
+          >
+            {(loading.refresh_sector || refreshSectorStatus?.running) ? '⏳ Running…' : '🗂 Refresh & Apply Sectors'}
+          </button>
+          {error.refresh_sector && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.refresh_sector}</div>}
+          {refreshSectorStatus && refreshSectorStatus.phase !== 'idle' && (
+            <div style={{ marginTop: 10, fontSize: 11, color: 'rgba(255,255,255,0.55)', lineHeight: 1.8 }}>
+              <div>Phase: <strong style={{ color: '#ffa030' }}>{refreshSectorStatus.phase}</strong>{refreshSectorStatus.running ? ' ⏳' : ''}</div>
+              {refreshSectorStatus.universe_synced > 0 && <div>Universe synced: <strong style={{ color: '#eaeaf6' }}>{refreshSectorStatus.universe_synced}</strong> tickers</div>}
+              {refreshSectorStatus.phase === 'done' && (
+                <>
+                  <div>GICS normalized: <strong style={{ color: '#44ff64' }}>{refreshSectorStatus.normalized}</strong> sectors updated</div>
+                  <div>Already GICS: <strong style={{ color: '#56567a' }}>{refreshSectorStatus.already_gics}</strong> unchanged</div>
+                </>
+              )}
+              {refreshSectorStatus.last_error && <div style={{ color: '#ff6b6b' }}>Error: {refreshSectorStatus.last_error}</div>}
+              {refreshSectorStatus.finished_at && <div style={{ color: '#56567a' }}>Finished: {refreshSectorStatus.finished_at}</div>}
+            </div>
+          )}
+          {refreshSectorResult && refreshSectorResult.error && (
+            <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>{refreshSectorResult.error}</div>
+          )}
+        </div>
+
         {/* ── Refresh Market Regime ── */}
         <div style={card}>
           <p style={label}>Refresh Market Regime &amp; ETF Data</p>
@@ -560,7 +622,8 @@ export default function AdminPage() {
               ['/api/admin/test-massive?symbol=' + symbol, 'Test Massive connection'],
               ['/api/admin/run-universe-scan', 'Trigger universe scan (background)'],
               ['/api/admin/universe-scan/status', 'Live scan progress'],
-              ['/api/admin/enrich-sectors', 'Trigger sector enrichment'],
+              ['/api/admin/enrich-sectors', 'Trigger sector enrichment (missing only)'],
+              ['/api/admin/refresh-sector-data/status', 'Sector refresh status'],
               ['/api/market-regime/refresh', 'Refresh ETF / market regime (background)'],
               ['/api/market-regime', 'Latest market regime'],
               ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
