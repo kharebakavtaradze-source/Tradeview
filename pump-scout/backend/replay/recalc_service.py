@@ -233,21 +233,32 @@ async def recalculate_priority_and_v2(run_id: int) -> dict:
             skipped += 1
             continue
 
+        _conf = v2.get("confirmation") or {}
+        _np_blk = v2.get("new_pump") or {}
         fields = {
-            "priority_score":       np_row.get("priority_score"),
-            "priority_label":       np_row.get("priority_label"),
-            "priority_flags":       np_row.get("priority_flags") or [],
-            "priority_reason":      np_row.get("priority_reason"),
-            "scanner_v2_decision":  v2.get("scanner_v2_decision"),
-            "scanner_v2_score":     v2.get("scanner_v2_score"),
-            "scanner_v2_reason":    v2.get("scanner_v2_reason"),
-            "scanner_v2_flags":     v2.get("scanner_v2_flags") or [],
-            "subsector":            v2.get("subsector"),
-            "sector_context":       np_row.get("sector_context"),
-            "macro_context":        np_row.get("macro_context"),
-            "news_hype_context":    np_row.get("news_hype_context"),
-            "sympathy_context":     np_row.get("sympathy_context"),
-            "decision_flags":       np_row.get("decision_flags") or [],
+            "priority_score":        np_row.get("priority_score"),
+            "priority_label":        np_row.get("priority_label"),
+            "priority_flags":        np_row.get("priority_flags") or [],
+            "priority_reason":       np_row.get("priority_reason"),
+            "scanner_v2_decision":   v2.get("scanner_v2_decision"),
+            "scanner_v2_score":      v2.get("scanner_v2_score"),
+            "scanner_v2_reason":     v2.get("scanner_v2_reason"),
+            "scanner_v2_flags":      v2.get("scanner_v2_flags") or [],
+            "scanner_v2_rank":       v2.get("scanner_v2_rank"),
+            "subsector":             v2.get("subsector"),
+            "suggested_action":      v2.get("suggested_action"),
+            "sector_context":        np_row.get("sector_context"),
+            "macro_context":         np_row.get("macro_context"),
+            "news_hype_context":     np_row.get("news_hype_context"),
+            "sympathy_context":      np_row.get("sympathy_context"),
+            "legacy_context":        np_row.get("legacy_context"),
+            "decision_flags":        np_row.get("decision_flags") or [],
+            "d_confluence_family":   _conf.get("d_confluence_family"),
+            "d_confluence_timing":   _conf.get("d_confluence_timing"),
+            "window_explanation":    _conf.get("window_explanation"),
+            "structure_score_bucket": _np_blk.get("structure_score_bucket"),
+            "np_structure_phase":    np_row.get("structure_phase"),
+            "np_structure_score":    np_row.get("structure_score"),
         }
         ok = await update_replay_candidate_v2(c["id"], fields)
         if ok:

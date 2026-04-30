@@ -641,28 +641,49 @@ async def _enrich_replay_candidates(candidates: list[dict]) -> None:
         # Scanner v2 row
         try:
             v2 = build_v2_row(np_row, rank=idx + 1)
-            c["scanner_v2_decision"] = v2.get("scanner_v2_decision")
-            c["scanner_v2_score"]    = v2.get("scanner_v2_score")
-            c["scanner_v2_reason"]   = v2.get("scanner_v2_reason")
-            c["scanner_v2_flags"]    = v2.get("scanner_v2_flags") or []
-            c["subsector"]           = v2.get("subsector")
+            c["scanner_v2_decision"]  = v2.get("scanner_v2_decision")
+            c["scanner_v2_score"]     = v2.get("scanner_v2_score")
+            c["scanner_v2_reason"]    = v2.get("scanner_v2_reason")
+            c["scanner_v2_flags"]     = v2.get("scanner_v2_flags") or []
+            c["scanner_v2_rank"]      = v2.get("scanner_v2_rank")
+            c["subsector"]            = v2.get("subsector")
+            c["suggested_action"]     = v2.get("suggested_action")
+            # Confirmation block — d_confluence_family/timing are only computed in build_v2_row
+            _conf = v2.get("confirmation") or {}
+            c["d_confluence_family"]  = _conf.get("d_confluence_family")
+            c["d_confluence_timing"]  = _conf.get("d_confluence_timing")
+            c["window_explanation"]   = _conf.get("window_explanation")
+            # Structure bucket from new_pump block
+            _np_blk = v2.get("new_pump") or {}
+            c["structure_score_bucket"] = _np_blk.get("structure_score_bucket")
         except Exception as exc:
             logger.debug(f"[REPLAY] build_v2_row failed for {sym}: {exc}")
-            c["scanner_v2_decision"] = None
-            c["scanner_v2_score"]    = None
-            c["scanner_v2_reason"]   = f"build_error: {exc}"
-            c["scanner_v2_flags"]    = ["build_error"]
+            c["scanner_v2_decision"]  = None
+            c["scanner_v2_score"]     = None
+            c["scanner_v2_reason"]    = f"build_error: {exc}"
+            c["scanner_v2_flags"]     = ["build_error"]
+            c["scanner_v2_rank"]      = None
+            c["d_confluence_family"]  = None
+            c["d_confluence_timing"]  = None
 
         # Decision flags from NP engine — needed by validation resolver
         c["decision_flags"] = np_row.get("decision_flags") or []
+
+        # Structure phase/score from np_row — expose as queryable top-level fields
+        c["np_structure_phase"] = np_row.get("structure_phase")
+        c["np_structure_score"] = np_row.get("structure_score")
 
         # Mirror into snapshot blob so they survive DB persistence and the
         # research bundle's _cget snapshot path picks them up
         snap = c.setdefault("snapshot", {})
         for k in ("priority_score", "priority_label", "priority_flags", "priority_reason",
                   "sector_context", "macro_context", "news_hype_context", "sympathy_context",
+                  "legacy_context",
                   "scanner_v2_decision", "scanner_v2_score", "scanner_v2_reason", "scanner_v2_flags",
-                  "subsector", "decision_flags"):
+                  "scanner_v2_rank", "suggested_action",
+                  "subsector", "decision_flags",
+                  "d_confluence_family", "d_confluence_timing", "window_explanation",
+                  "structure_score_bucket"):
             v = c.get(k)
             if isinstance(v, (int, float, str, bool, type(None), list, dict)):
                 snap[k] = v
