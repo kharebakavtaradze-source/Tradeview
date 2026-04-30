@@ -406,6 +406,29 @@ class MacroEventBias(Base):
     is_active        = Column(Boolean, default=True)         # still within time_horizon
 
 
+class UniverseCache(Base):
+    """
+    Nightly Massive reference snapshot — one row per active US common stock.
+    Populated by scanner.massive_reference.sync_universe_cache().
+    Provides SIC codes and company metadata for sector resolution fallback.
+    """
+    __tablename__ = "universe_cache"
+
+    symbol                      = Column(String(10),  primary_key=True, index=True)
+    name                        = Column(String(200), nullable=True)
+    active                      = Column(Boolean,     default=True, nullable=False)
+    market                      = Column(String(20),  nullable=True)
+    type                        = Column(String(20),  nullable=True)   # CS / ADR / ADRC
+    primary_exchange            = Column(String(20),  nullable=True)
+    cik                         = Column(String(20),  nullable=True)
+    sic_code                    = Column(Integer,     nullable=True, index=True)
+    sic_description             = Column(String(200), nullable=True)
+    market_cap                  = Column(BigInteger,  nullable=True)
+    list_date                   = Column(String(10),  nullable=True)
+    shares_outstanding          = Column(BigInteger,  nullable=True)
+    weighted_shares_outstanding = Column(BigInteger,  nullable=True)
+    last_synced_at              = Column(DateTime,    nullable=True, index=True)
+
 
 _SCAN_CANDIDATE_MIGRATIONS = [
     ("vol_score",       "FLOAT"),
@@ -542,6 +565,10 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("scanner_v2_score",               "FLOAT"),
 ]
 
+_UNIVERSE_CACHE_MIGRATIONS: list[tuple[str, str]] = []
+# universe_cache is created fresh by create_all — no ALTER needed on new columns.
+# Add tuples here if columns are added post-initial-deployment.
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -629,6 +656,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE replay_signal_candidates ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for col, coltype in _UNIVERSE_CACHE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE universe_cache ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -694,6 +726,14 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration replay_signal_candidates.{col} failed (non-fatal): {e}")
+
+        for col, coltype in _UNIVERSE_CACHE_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE universe_cache ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration universe_cache.{col} failed (non-fatal): {e}")
 
         # MFE columns on replay_outcomes
         for col, coltype in _REPLAY_OUTCOME_MIGRATIONS:

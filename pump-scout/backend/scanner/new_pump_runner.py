@@ -41,8 +41,16 @@ MIN_PRICE    = 1.00
 MAX_PRICE    = 500.0
 MIN_VOLUME   = 50_000     # was 100K — replay: 6 strong movers blocked by vol gate
 MIN_CANDLES  = 60         # bars required to run engine
-CANDLES_DAYS = 200        # lookback depth (EMA200 + RSI + z-score + all signals)
+CANDLES_DAYS = 200        # default lookback depth (EMA200 + all signals)
 BATCH_SIZE   = 20         # concurrent Massive candle calls
+
+# ── Two-tier bar depths for snapshot / live mode ──────────────────────────────
+# FAST_SCAN_BARS: first-pass depth for all snapshot candidates
+# DEEP_SCAN_BARS: re-fetch depth for shortlisted BUY / WATCH_HIGH / strong D
+# MIN_LONG_CONTEXT: minimum bars required to keep a deep-pass result
+FAST_SCAN_BARS  = 90
+DEEP_SCAN_BARS  = 240
+MIN_LONG_CONTEXT = 220
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -61,16 +69,32 @@ def get_progress() -> dict:
 
 # ── Main runner ────────────────────────────────────────────────────────────────
 
-async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
+async def run_new_pump_scan(
+    max_tickers:  int | None = None,
+    use_snapshot: bool       = False,
+) -> dict:
     """
     Standalone New Pump scan using Massive/Polygon exclusively.
-    1. Universe via fetch_grouped_daily()
-    2. Neutral prefilters (price, volume, ticker shape) — NO ranking cut
-    3. Candles via fetch_candles_massive() (200 bars, 20 concurrent)
-    4. new_pump_engine.analyze() per ticker — per-symbol failures are skipped
-    5. Sort by new_pump_score descending (AFTER analysis, not before)
-    max_tickers: explicit safety cap (None = unlimited, use a number only as
-                 an operational override — not as the normal universe restriction).
+
+    Modes
+    -----
+    use_snapshot=False (default):
+        1. Universe via fetch_grouped_daily() — yesterday's EOD bars for all US stocks
+        2. Neutral prefilters (price, volume, ticker shape)
+        3. Candles via fetch_candles_massive() — CANDLES_DAYS=200 bars
+        4. new_pump_engine.analyze() per ticker
+        5. Sort by new_pump_score DESC
+
+    use_snapshot=True (live / intraday):
+        1. Universe via fetch_market_snapshot() — real-time prices for all US stocks
+        2. Prefilter via shortlist_from_snapshot() — price, vol, dollar-vol, change_pct
+        3. Two-tier candle fetch:
+             First pass  — FAST_SCAN_BARS=90   for all snapshot candidates
+             Second pass — DEEP_SCAN_BARS=240   for BUY / WATCH_HIGH / strong-D tickers
+        4. new_pump_engine.analyze() — shallow pass then re-run deep pass on shortlist
+        5. Sort by new_pump_score DESC
+
+    max_tickers: operational safety cap (None = unlimited).
     Updates _latest and _np_progress; returns _latest.
     """
     global _latest, _running, _np_progress
@@ -92,51 +116,70 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
         from scanner.massive_data import fetch_grouped_daily, fetch_candles_massive
 
         # ── Step 1: Universe ─────────────────────────────────────────────────
-        logger.info("[NpRunner] Fetching grouped daily universe from Massive…")
-        all_bars = await fetch_grouped_daily()
-
-        # ── Step 2: Neutral prefilters (incl. ETF/fund exclusion) ───────────────
-        _np_progress["phase"] = "filtering"
-
-        # Pre-fetch ETF/fund exclusion set (cached 7 days — fast on repeated calls).
-        # Covers: ETF, ETN, ETV, FUND, CEF types + hardcoded leveraged/inverse/crypto list.
-        etf_symbols: set[str] = set()
-        try:
-            from scanner.massive_data import get_us_etf_symbols
-            etf_symbols = await get_us_etf_symbols()
-            logger.info(f"[NpRunner] ETF exclusion set loaded: {len(etf_symbols)} symbols")
-        except Exception as _exc:
-            logger.warning(f"[NpRunner] ETF exclusion fetch failed (non-fatal): {_exc}")
-
-        candidates = []
-        total_symbols_before_filter   = 0
-        excluded_non_common_stock_count = 0
+        excluded_non_common_stock_count    = 0
         excluded_non_common_stock_examples: list[str] = []
 
-        for sym, bar in all_bars.items():
-            total_symbols_before_filter += 1
-            if not sym.isalpha() or len(sym) > 5:
-                continue
-            # ETF / fund / leveraged-product exclusion
-            if sym.upper() in etf_symbols:
-                excluded_non_common_stock_count += 1
-                if len(excluded_non_common_stock_examples) < 20:
-                    excluded_non_common_stock_examples.append(sym)
-                continue
-            price  = bar.get("close") or bar.get("c") or 0
-            volume = bar.get("volume") or bar.get("v") or 0
-            if not (MIN_PRICE <= price <= MAX_PRICE):
-                continue
-            if volume < MIN_VOLUME:
-                continue
-            candidates.append(sym)
+        if use_snapshot:
+            # Live mode: real-time snapshot as universe (no grouped_daily call)
+            logger.info("[NpRunner] Fetching live market snapshot universe…")
+            from scanner.massive_snapshot import (
+                fetch_market_snapshot, shortlist_from_snapshot,
+            )
+            _snap = await fetch_market_snapshot()
+            # Pre-fetch ETF exclusion set for snapshot filtering
+            etf_symbols: set[str] = set()
+            try:
+                from scanner.massive_data import get_us_etf_symbols
+                etf_symbols = await get_us_etf_symbols()
+            except Exception as _exc:
+                logger.warning(f"[NpRunner] ETF exclusion fetch failed (non-fatal): {_exc}")
 
-        logger.info(
-            f"[NpRunner] Filter summary: total={total_symbols_before_filter} "
-            f"excluded_etf_fund={excluded_non_common_stock_count} "
-            f"examples={excluded_non_common_stock_examples[:5]} "
-            f"candidates={len(candidates)}"
-        )
+            _shortlist = shortlist_from_snapshot(_snap, etf_exclusions=etf_symbols)
+            candidates = [c["symbol"] for c in _shortlist]
+            logger.info(f"[NpRunner] Snapshot universe: {len(_snap)} → {len(candidates)} after prefilter")
+        else:
+            # EOD mode: yesterday's grouped daily bars as universe
+            logger.info("[NpRunner] Fetching grouped daily universe from Massive…")
+            all_bars = await fetch_grouped_daily()
+
+            # ── Step 2: Neutral prefilters (incl. ETF/fund exclusion) ───────────
+            _np_progress["phase"] = "filtering"
+
+            etf_symbols = set()
+            try:
+                from scanner.massive_data import get_us_etf_symbols
+                etf_symbols = await get_us_etf_symbols()
+                logger.info(f"[NpRunner] ETF exclusion set loaded: {len(etf_symbols)} symbols")
+            except Exception as _exc:
+                logger.warning(f"[NpRunner] ETF exclusion fetch failed (non-fatal): {_exc}")
+
+            candidates = []
+            total_symbols_before_filter = 0
+            for sym, bar in all_bars.items():
+                total_symbols_before_filter += 1
+                if not sym.isalpha() or len(sym) > 5:
+                    continue
+                if sym.upper() in etf_symbols:
+                    excluded_non_common_stock_count += 1
+                    if len(excluded_non_common_stock_examples) < 20:
+                        excluded_non_common_stock_examples.append(sym)
+                    continue
+                price  = bar.get("close") or bar.get("c") or 0
+                volume = bar.get("volume") or bar.get("v") or 0
+                if not (MIN_PRICE <= price <= MAX_PRICE):
+                    continue
+                if volume < MIN_VOLUME:
+                    continue
+                candidates.append(sym)
+
+            logger.info(
+                f"[NpRunner] Filter summary: total={total_symbols_before_filter} "
+                f"excluded_etf_fund={excluded_non_common_stock_count} "
+                f"examples={excluded_non_common_stock_examples[:5]} "
+                f"candidates={len(candidates)}"
+            )
+
+        _np_progress["phase"] = "filtering"
 
         # Optional hard cap — only for operational override, not normal use
         if max_tickers is not None:
@@ -149,9 +192,12 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
         _np_progress["phase"] = "fetching_candles"
         all_candles: dict[str, list] = {}
 
-        async def _fetch_one(sym: str) -> None:
+        # Snapshot mode uses FAST_SCAN_BARS for first pass; EOD uses full depth.
+        first_pass_days = FAST_SCAN_BARS if use_snapshot else CANDLES_DAYS
+
+        async def _fetch_one(sym: str, days: int = first_pass_days) -> None:
             try:
-                bars = await fetch_candles_massive(sym, days=CANDLES_DAYS)
+                bars = await fetch_candles_massive(sym, days=days)
                 if bars and len(bars) >= MIN_CANDLES:
                     all_candles[sym] = bars
             except Exception as exc:
@@ -301,6 +347,81 @@ async def run_new_pump_scan(max_tickers: int | None = None) -> dict:
             _np_progress["analyzed_count"] = len(results)
 
         _np_progress["skipped_count"] = skipped
+
+        # ── Step 4b: Deep-bar pass (snapshot mode only) ───────────────────────
+        # Re-fetch DEEP_SCAN_BARS=240 for BUY / strong-D candidates and re-analyze.
+        # Replaces the shallow result in-place when deep bars are long enough.
+        if use_snapshot and results:
+            _DEEP_LABELS = {"NEW_PUMP_FIRE", "NEW_PUMP_STRONG"}
+            deep_syms = [
+                r["symbol"] for r in results
+                if (r.get("new_pump_label") in _DEEP_LABELS)
+                or (r.get("has_g4") and (r.get("has_l34") or r.get("has_fri34")))
+            ]
+            if deep_syms:
+                logger.info(f"[NpRunner] Deep-bar pass: {len(deep_syms)} candidates @ {DEEP_SCAN_BARS} bars")
+                deep_candles: dict[str, list] = {}
+
+                async def _fetch_deep(sym: str) -> None:
+                    try:
+                        bars = await fetch_candles_massive(sym, days=DEEP_SCAN_BARS)
+                        if bars and len(bars) >= MIN_LONG_CONTEXT:
+                            deep_candles[sym] = bars
+                    except Exception as _exc:
+                        logger.debug(f"[NpRunner] deep fetch failed {sym}: {_exc}")
+
+                for i in range(0, len(deep_syms), BATCH_SIZE):
+                    await asyncio.gather(*[_fetch_deep(s) for s in deep_syms[i:i + BATCH_SIZE]])
+                    await asyncio.sleep(0.5)
+
+                # Re-analyze and replace shallow results
+                _result_idx = {r["symbol"]: idx for idx, r in enumerate(results)}
+                for sym, deep_bars_raw in deep_candles.items():
+                    try:
+                        deep_bars = [
+                            {"open": c["o"], "high": c["h"], "low": c["l"],
+                             "close": c["c"], "volume": c["v"]}
+                            for c in deep_bars_raw
+                        ]
+                        _dw2: dict = {}
+                        try:
+                            from scanner.manual_d_wlnbb_features import compute_d_wlnbb_confluence
+                            _dw2 = compute_d_wlnbb_confluence(deep_bars)
+                        except Exception:
+                            pass
+                        np2 = np_analyze(
+                            deep_bars,
+                            d_combo_type=_dw2.get("d_confluence_type_v2") or "NONE",
+                            has_triple_d_l34_beup=bool(_dw2.get("has_triple_d_l34_beup")),
+                        )
+                        idx = _result_idx.get(sym)
+                        if idx is not None:
+                            r = results[idx]
+                            # Overwrite NP engine fields with deep-bar values
+                            for _k in (
+                                "new_pump_score", "new_pump_label", "new_pump_sequence_label",
+                                "new_pump_setup_score", "new_pump_trigger_score",
+                                "new_pump_confirm_score", "new_pump_modifier_score",
+                                "has_l34", "has_fri34", "has_g4", "has_b2",
+                                "age_l34", "age_fri34", "age_g4", "age_b2",
+                                "state", "engine_path", "missing_piece", "main_risk",
+                                "impulse_score", "impulse_label",
+                                "base_quality_score", "sustain_proxy_score", "sustain_profile",
+                                "fake_trigger_risk",
+                                "compression_expansion_state", "compression_expansion_score",
+                                "compression_expansion_label", "expansion_timing_risk",
+                                "decision", "decision_reason", "decision_flags",
+                                "decision_authority", "legacy_label_role",
+                                "structure_phase", "structure_score", "structure_advisory",
+                            ):
+                                r[_k] = np2.get(_k, r.get(_k))
+                            r.update(_dw2)
+                            lbl2 = r["new_pump_label"] or "NEW_PUMP_NONE"
+                            r["new_pump_label"] = lbl2
+                    except Exception as _exc:
+                        logger.debug(f"[NpRunner] deep re-analyze failed {sym}: {_exc}")
+
+                logger.info(f"[NpRunner] Deep pass complete: {len(deep_candles)}/{len(deep_syms)} upgraded")
 
         # ── Step 5: Sort ─────────────────────────────────────────────────────
         _LABEL_ORDER = {
