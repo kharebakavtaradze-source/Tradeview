@@ -171,6 +171,13 @@ def _map_v2_decision(
             return ("WATCH_HIGH", "WATCH + PRIORITY_HIGH", ["np_watch", "priority_high"])
         if priority_label == "PRIORITY_MEDIUM":
             return ("WATCH_MEDIUM", "WATCH + PRIORITY_MEDIUM", ["np_watch", "priority_medium"])
+        # LOW/RISKY + HIGH expansion risk = overextended with no structure = lottery profile
+        if exp_risk == "HIGH":
+            return (
+                "AVOID_LOTTERY",
+                f"WATCH priority={priority_label} + exp_risk=HIGH — lottery profile",
+                ["np_watch", "expansion_risk_high", "lottery_profile"],
+            )
         return ("WATCH_LOW", f"WATCH priority={priority_label}", ["np_watch"])
 
     # ── AVOID tier (AVOID + IMPULSE_RISK) ────────────────────────────────────
