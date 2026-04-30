@@ -1543,6 +1543,115 @@ async def admin_enrich_sectors(background_tasks: BackgroundTasks):
     }
 
 
+_sector_refresh_status: dict = {
+    "running": False, "phase": "idle",
+    "started_at": None, "finished_at": None,
+    "universe_synced": 0, "normalized": 0, "already_gics": 0, "last_error": None,
+}
+
+
+async def _normalize_sector_cache_gics() -> tuple[int, int]:
+    """
+    Scan SectorCache for entries with raw SIC descriptions (not GICS names) and
+    apply resolve_sector() to convert them to proper GICS names in-place.
+    Returns (updated_count, already_gics_count).
+    """
+    from database import get_session_factory, SectorCache, save_sector_to_db
+    from scanner.sector_resolver import resolve_sector
+    from sqlalchemy import select as _sa_select
+
+    _GICS = frozenset({
+        "Information Technology", "Health Care", "Financials",
+        "Consumer Discretionary", "Consumer Staples", "Energy",
+        "Industrials", "Materials", "Real Estate",
+        "Communication Services", "Utilities",
+    })
+
+    async with get_session_factory()() as _sess:
+        rows = (await _sess.execute(_sa_select(SectorCache))).scalars().all()
+        snapshot = [(r.symbol, r.sector or "", r.industry or "") for r in rows]
+
+    already_gics = 0
+    pending: list[tuple[str, str, str]] = []
+    for sym, sector, industry in snapshot:
+        if sector in _GICS:
+            already_gics += 1
+        elif sector and sector not in ("Unknown", "UNKNOWN"):
+            pending.append((sym, sector, industry))
+
+    updated = 0
+    for sym, sector, industry in pending:
+        try:
+            resolved_sector, resolved_industry, _ = resolve_sector(
+                symbol=sym,
+                raw_sector=sector,
+                raw_industry=industry or sector,
+                sic_code=None,
+                sic_description=sector,
+            )
+            if resolved_sector and resolved_sector not in ("Unknown", "UNKNOWN"):
+                await save_sector_to_db(
+                    sym,
+                    sector=resolved_sector,
+                    industry=resolved_industry or industry or "",
+                    massive_fetched=True,
+                )
+                updated += 1
+        except Exception as _exc:
+            logger.debug(f"[SectorNorm] {sym}: {_exc}")
+
+    return updated, already_gics
+
+
+@app.post("/api/admin/refresh-sector-data")
+async def admin_refresh_sector_data(background_tasks: BackgroundTasks):
+    """
+    Refresh and apply all sector info in two steps:
+      1. sync_universe_cache() — pull fresh type/sic_code/sic_description from Massive
+      2. Normalize SectorCache — apply resolve_sector() to convert raw SIC → GICS names
+    Runs in background. Poll /api/admin/refresh-sector-data/status for progress.
+    """
+    global _sector_refresh_status
+    if _sector_refresh_status.get("running"):
+        return {"status": "already_running", "phase": _sector_refresh_status.get("phase")}
+
+    from scanner.massive_data import MASSIVE_API_KEY
+    if not MASSIVE_API_KEY:
+        return {"error": "MASSIVE_API_KEY not set — cannot sync universe cache"}
+
+    async def _run():
+        global _sector_refresh_status
+        _sector_refresh_status.update({
+            "running": True, "phase": "syncing_universe",
+            "started_at": datetime.utcnow().isoformat(), "finished_at": None,
+            "universe_synced": 0, "normalized": 0, "already_gics": 0, "last_error": None,
+        })
+        try:
+            from scanner.massive_reference import sync_universe_cache
+            count = await sync_universe_cache(save_to_db=True)
+            _sector_refresh_status["universe_synced"] = count
+
+            _sector_refresh_status["phase"] = "normalizing"
+            normalized, already_gics = await _normalize_sector_cache_gics()
+            _sector_refresh_status.update({
+                "normalized": normalized, "already_gics": already_gics, "phase": "done",
+            })
+        except Exception as exc:
+            _sector_refresh_status.update({"phase": "error", "last_error": str(exc)})
+            logger.error(f"[RefreshSectors] {exc}", exc_info=True)
+        finally:
+            _sector_refresh_status["running"] = False
+            _sector_refresh_status["finished_at"] = datetime.utcnow().isoformat()
+
+    background_tasks.add_task(_run)
+    return {"status": "started", "message": "Universe cache sync + sector normalization running in background"}
+
+
+@app.get("/api/admin/refresh-sector-data/status")
+async def admin_refresh_sector_data_status():
+    return dict(_sector_refresh_status)
+
+
 @app.get("/api/admin/run-universe-scan")
 async def admin_run_universe_scan(background_tasks: BackgroundTasks, date: str = None):
     """
