@@ -563,6 +563,12 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("priority_label",                 "VARCHAR(20)"),
     ("scanner_v2_decision",            "VARCHAR(25)"),
     ("scanner_v2_score",               "FLOAT"),
+    # Scanner v2 enrichment gap-fill: structure + d_confluence + rank
+    ("np_structure_phase",             "VARCHAR(30)"),
+    ("np_structure_score",             "FLOAT"),
+    ("d_confluence_family",            "VARCHAR(20)"),
+    ("d_confluence_timing",            "VARCHAR(20)"),
+    ("scanner_v2_rank",                "INTEGER"),
 ]
 
 _UNIVERSE_CACHE_MIGRATIONS: list[tuple[str, str]] = []
@@ -2750,6 +2756,11 @@ class ReplaySignalCandidate(Base):
     priority_label        = Column(String(20), nullable=True)            # PRIORITY_HIGH/MEDIUM/LOW/RISKY
     scanner_v2_decision   = Column(String(25), nullable=True)            # BUY_CANDIDATE_HIGH/NORMAL/WATCH_HIGH/MED/LOW/AVOID_*
     scanner_v2_score      = Column(Float,      nullable=True)            # 0–100
+    np_structure_phase    = Column(String(30), nullable=True)            # CONFIRMED_STRUCTURE/EARLY_STRUCTURE/TRUE_NONE
+    np_structure_score    = Column(Float,      nullable=True)            # 0–100 from new_pump_engine
+    d_confluence_family   = Column(String(20), nullable=True)            # D6/D4/D3/SECONDARY/NONE — from scanner_v2
+    d_confluence_timing   = Column(String(20), nullable=True)            # SAME_BAR/LAGGED/NONE — from scanner_v2
+    scanner_v2_rank       = Column(Integer,    nullable=True)            # rank within scan batch
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -2982,6 +2993,11 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 priority_label                 = c.get("priority_label"),
                 scanner_v2_decision            = c.get("scanner_v2_decision"),
                 scanner_v2_score               = c.get("scanner_v2_score"),
+                np_structure_phase             = c.get("np_structure_phase"),
+                np_structure_score             = c.get("np_structure_score"),
+                d_confluence_family            = c.get("d_confluence_family"),
+                d_confluence_timing            = c.get("d_confluence_timing"),
+                scanner_v2_rank                = c.get("scanner_v2_rank"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -3031,10 +3047,15 @@ async def update_replay_candidate_v2(candidate_id: int, fields: dict) -> bool:
             return False
 
         # Direct columns
-        if "priority_score" in fields:      row.priority_score      = fields["priority_score"]
-        if "priority_label" in fields:      row.priority_label      = fields["priority_label"]
-        if "scanner_v2_decision" in fields: row.scanner_v2_decision = fields["scanner_v2_decision"]
-        if "scanner_v2_score" in fields:    row.scanner_v2_score    = fields["scanner_v2_score"]
+        if "priority_score" in fields:       row.priority_score      = fields["priority_score"]
+        if "priority_label" in fields:       row.priority_label      = fields["priority_label"]
+        if "scanner_v2_decision" in fields:  row.scanner_v2_decision = fields["scanner_v2_decision"]
+        if "scanner_v2_score" in fields:     row.scanner_v2_score    = fields["scanner_v2_score"]
+        if "np_structure_phase" in fields:   row.np_structure_phase  = fields["np_structure_phase"]
+        if "np_structure_score" in fields:   row.np_structure_score  = fields["np_structure_score"]
+        if "d_confluence_family" in fields:  row.d_confluence_family = fields["d_confluence_family"]
+        if "d_confluence_timing" in fields:  row.d_confluence_timing = fields["d_confluence_timing"]
+        if "scanner_v2_rank" in fields:      row.scanner_v2_rank     = fields["scanner_v2_rank"]
 
         # Snapshot-blob extras
         try:
@@ -3045,7 +3066,9 @@ async def update_replay_candidate_v2(candidate_id: int, fields: dict) -> bool:
                   "scanner_v2_flags", "scanner_v2_reason",
                   "sector_context", "macro_context",
                   "news_hype_context", "sympathy_context",
-                  "decision_flags", "subsector",
+                  "legacy_context", "decision_flags", "subsector",
+                  "d_confluence_family", "d_confluence_timing", "window_explanation",
+                  "structure_score_bucket", "suggested_action", "scanner_v2_rank",
                   "priority_score", "priority_label",
                   "scanner_v2_decision", "scanner_v2_score"):
             if k in fields and isinstance(
@@ -3255,6 +3278,11 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "priority_label":                 r.priority_label,
         "scanner_v2_decision":            r.scanner_v2_decision,
         "scanner_v2_score":               r.scanner_v2_score,
+        "np_structure_phase":             r.np_structure_phase,
+        "np_structure_score":             r.np_structure_score,
+        "d_confluence_family":            r.d_confluence_family,
+        "d_confluence_timing":            r.d_confluence_timing,
+        "scanner_v2_rank":                r.scanner_v2_rank,
         "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":              r.created_at.isoformat() if r.created_at else None,
     }
