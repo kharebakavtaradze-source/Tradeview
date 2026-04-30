@@ -101,11 +101,13 @@ def _inner(row: dict) -> dict:
     flags: list[str] = []
 
     # ── Structure phase ───────────────────────────────────────────────────────
+    # Bonus reduced from +10/+3: structure_score already encodes phase quality;
+    # the full +10 caused double-counting that pushed BUY rows to 100 uniformly.
     if phase in ("CONFIRMED_STRUCTURE", "TRIGGERED_STRUCTURE"):
-        score += 10
+        score += 5
         flags.append("strong_phase")
     elif phase == "EARLY_STRUCTURE":
-        score += 3
+        score += 2
 
     # ── Compression / expansion state ─────────────────────────────────────────
     if ce_state == "ACCUMULATION_READY":

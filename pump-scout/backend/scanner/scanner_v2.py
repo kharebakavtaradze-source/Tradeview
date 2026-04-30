@@ -136,6 +136,7 @@ def _ss_bucket(ss: Optional[float]) -> str:
 def _map_v2_decision(
     np_decision: str,
     priority_label: str,
+    priority_score: float,
     priority_flags: list[str],
     exp_risk: str,
 ) -> tuple[str, str, list[str]]:
@@ -146,20 +147,25 @@ def _map_v2_decision(
       BUY_CANDIDATE → BUY tier
       WATCH         → WATCH tier
       AVOID / IMPULSE_RISK → AVOID tier (no upgrade possible)
+
+    BUY_CANDIDATE_HIGH requires priority_score >= 85 (not just PRIORITY_HIGH >= 80).
+    This ensures BUY_NORMAL is populated and avoids all-HIGH inflation.
     """
     pf_set   = set(priority_flags or [])
     has_risk = bool(pf_set & _HIGH_RISK_FLAGS)
 
     # ── BUY tier ──────────────────────────────────────────────────────────────
     if np_decision == "BUY_CANDIDATE":
-        if priority_label == "PRIORITY_HIGH" and exp_risk != "HIGH":
+        if (priority_label == "PRIORITY_HIGH"
+                and priority_score >= 85
+                and exp_risk != "HIGH"):
             return (
                 "BUY_CANDIDATE_HIGH",
-                f"BUY_CANDIDATE + PRIORITY_HIGH (exp_risk={exp_risk})",
+                f"BUY_CANDIDATE + PRIORITY_HIGH score={priority_score:.0f} (exp_risk={exp_risk})",
                 ["np_buy", "priority_high"],
             )
         flags = ["np_buy"]
-        parts = [f"BUY_CANDIDATE priority={priority_label}"]
+        parts = [f"BUY_CANDIDATE priority={priority_label} score={priority_score:.0f}"]
         if exp_risk == "HIGH":
             flags.append("expansion_risk_high")
             parts.append("HIGH expansion risk demoted to NORMAL")
@@ -265,7 +271,7 @@ def _build_inner(row: dict, rank: int) -> dict:
     d_timing = _dconf_timing(row)
 
     v2_decision, v2_reason, v2_flags = _map_v2_decision(
-        np_decision, p_label, p_flags, exp_risk
+        np_decision, p_label, p_score, p_flags, exp_risk
     )
     v2_score = _v2_score(p_score, v2_decision)
 
@@ -284,7 +290,10 @@ def _build_inner(row: dict, rank: int) -> dict:
         "company_name": row.get("company_name"),
         "price":        row.get("price"),
         "volume":       row.get("volume_today"),
-        "sector":       row.get("sector") or sc.get("sector"),
+        # Prefer normalized GICS name from sector_context over raw SectorCache value.
+        # row["sector"] is already promoted to GICS by enrich_np_candidates after
+        # sector_context is built; sc.get("sector") is the same but is the safe fallback.
+        "sector":       sc.get("sector") or row.get("sector"),
         "subsector":    sc.get("subsector"),
 
         # ── New Pump structural block ─────────────────────────────────────────
@@ -374,6 +383,61 @@ def decision_counts(v2_rows: list[dict]) -> dict[str, int]:
         d = r.get("scanner_v2_decision") or "UNKNOWN"
         counts[d] = counts.get(d, 0) + 1
     return counts
+
+
+# Known normalized GICS sector names (used for coverage check)
+_GICS_SECTORS: frozenset[str] = frozenset({
+    "Information Technology", "Health Care", "Financials",
+    "Consumer Discretionary", "Consumer Staples", "Energy",
+    "Industrials", "Materials", "Real Estate",
+    "Communication Services", "Utilities",
+})
+
+
+def sector_coverage_stats(v2_rows: list[dict]) -> dict:
+    """
+    Compute sector/subsector coverage over a batch of v2 rows.
+
+    Returns
+    -------
+    {
+      sector_known_pct          : float  — rows with a normalized GICS sector (%)
+      subsector_known_pct       : float  — rows with a non-None subsector (%)
+      raw_industry_as_sector_count : int — rows where raw_sector_input was resolved
+      total                     : int
+    }
+    """
+    n = len(v2_rows)
+    if n == 0:
+        return {
+            "sector_known_pct":              0.0,
+            "subsector_known_pct":           0.0,
+            "raw_industry_as_sector_count":  0,
+            "total":                         0,
+        }
+
+    sector_known   = 0
+    subsector_known = 0
+    raw_resolved   = 0
+
+    for r in v2_rows:
+        sector = r.get("sector") or ""
+        if sector in _GICS_SECTORS:
+            sector_known += 1
+
+        if r.get("subsector"):
+            subsector_known += 1
+
+        sc = (r.get("context") or {}).get("sector_context") or {}
+        if sc.get("raw_sector_input"):
+            raw_resolved += 1
+
+    return {
+        "sector_known_pct":              round(sector_known   / n * 100, 1),
+        "subsector_known_pct":           round(subsector_known / n * 100, 1),
+        "raw_industry_as_sector_count":  raw_resolved,
+        "total":                         n,
+    }
 
 
 def np_decision_counts(v2_rows: list[dict]) -> dict[str, int]:
