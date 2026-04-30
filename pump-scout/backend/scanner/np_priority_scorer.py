@@ -117,7 +117,7 @@ def _inner(row: dict) -> dict:
 
     # ── D/WLNBB confluence ────────────────────────────────────────────────────
     if d_conf in _D_HIGH:
-        score += 8
+        score += 12
         flags.append("d6_beup")
     elif d_conf in _D_MED_BP:
         score += 5
@@ -211,7 +211,7 @@ def _inner(row: dict) -> dict:
     score = round(max(0.0, min(100.0, score)), 1)
 
     # ── Priority label ────────────────────────────────────────────────────────
-    if score >= 75:
+    if score >= 80:
         label = "PRIORITY_HIGH"
     elif score >= 55:
         label = "PRIORITY_MEDIUM"

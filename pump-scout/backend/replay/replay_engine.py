@@ -334,10 +334,12 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
     except Exception:
         NON_STOCK_SECURITIES = set()
 
-    # Try to get cached sector info (best-effort; does not affect leakage)
+    # Try to get cached sector info (best-effort; does not affect leakage).
+    # get_sector_full_from_db returns a dict regardless of cache age — correct
+    # for replay where any cached sector data is acceptable.
     try:
-        from database import get_sector_from_db
-        _get_sector = get_sector_from_db
+        from database import get_sector_full_from_db
+        _get_sector = get_sector_full_from_db
     except Exception:
         _get_sector = None
 
@@ -475,12 +477,17 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
 
             np_is_isolated_trigger = np_has_g4 and not np_has_l34 and not np_has_fri34
 
-            # Sector from cache (best-effort, not time-sensitive for training)
-            sector = None
+            # Sector + industry from cache (best-effort, not time-sensitive for training)
+            sector   = None
+            industry = None
             if _get_sector:
                 try:
                     s = await _get_sector(sym)
-                    sector = s.get("sector") if s else None
+                    if isinstance(s, dict):
+                        sector   = s.get("sector")
+                        industry = s.get("industry")
+                    elif isinstance(s, str):
+                        sector = s
                 except Exception:
                     pass
 
@@ -499,7 +506,8 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 "tier":                    tier,
                 "total_score":             scored.get("total_score", 0),
                 "wyckoff_state":            wyckoff.get("state", ""),
-                "sector":                   sector,
+                "sector":                  sector,
+                "industry":                industry,
                 "new_pump_score":           new_pump_result.get("new_pump_score"),
                 "new_pump_label":           new_pump_result.get("new_pump_label"),
                 "new_pump_sequence_label":  new_pump_result.get("new_pump_sequence_label"),
@@ -585,7 +593,7 @@ async def _enrich_replay_candidates(candidates: list[dict]) -> None:
         np_row = {
             "symbol":                  c.get("symbol"),
             "sector":                  c.get("sector"),
-            "industry":                c.get("snapshot", {}).get("industry"),
+            "industry":                c.get("industry") or c.get("snapshot", {}).get("industry"),
             "price":                   c.get("price"),
             "volume_today":            c.get("snapshot", {}).get("volume"),
             # NP engine outputs (live runner gets these from analyze())
