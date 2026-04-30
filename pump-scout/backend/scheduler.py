@@ -158,6 +158,21 @@ async def _run_trump_news_refresh():
         logger.error(f"Trump news refresh failed: {e}", exc_info=True)
 
 
+async def _run_universe_cache_sync():
+    """
+    Nightly Massive reference sync — builds UniverseCache (CS / ADR / ADRC).
+    Runs at 21:00 ET, one hour before EOD universe scan (22:00 ET), so that
+    sector_resolver fallback and ETF-exclusion lists are fresh for the scan.
+    """
+    try:
+        logger.info("Universe cache sync (Massive reference) starting…")
+        from scanner.massive_reference import sync_universe_cache
+        count = await sync_universe_cache(save_to_db=True)
+        logger.info(f"Universe cache sync complete — {count} tickers cached")
+    except Exception as e:
+        logger.error(f"Universe cache sync failed: {e}", exc_info=True)
+
+
 async def _run_universe_scan():
     """
     Run the Massive EOD universe scan and persist results.
@@ -385,6 +400,17 @@ def start_scheduler():
 
     # ── NIGHT ──────────────────────────────────────────────────────────────────
 
+    # 21:00 ET (05:00 GMT+4 next day) — Universe Cache Sync (Massive reference)
+    # Must run before EOD scan (22:00 ET) so sector_resolver and ETF exclusion are fresh.
+    scheduler.add_job(
+        _run_universe_cache_sync,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=21, minute=0, timezone=EASTERN_TZ),
+        id="universe_cache_sync",
+        name="Universe Cache Sync — Massive Reference (21:00 ET / 05:00 GMT+4)",
+        replace_existing=True,
+        misfire_grace_time=1800,
+    )
+
     # 22:00 ET (06:00 GMT+4 next day) — Massive EOD Universe Scan
     # Sector/Industry Enrichment is triggered automatically on scan success (not a parallel cron)
     scheduler.add_job(
@@ -423,7 +449,7 @@ def start_scheduler():
     scheduler.start()
     logger.info(
         "Scheduler started (all times GMT+4) — "
-        "PIPELINE 1: Universe scan 06:00 GMT+4 + enrichment on success | "
+        "PIPELINE 1: Universe cache sync 05:00 GMT+4 → EOD scan 06:00 GMT+4 + enrichment | "
         "PIPELINE 2: Intraday scans 16:00, 17:30, 20:00 GMT+4 | "
         "Hype: 17:10, 20:10, 23:20 GMT+4 | "
         "AI decisions 17:15 GMT+4 (pre-open) | "

@@ -109,6 +109,30 @@ def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None =
     symbol   = (row.get("symbol") or "").upper()
     sector   = row.get("sector") or ""
     industry = row.get("industry") or ""
+
+    # SIC-based sector fallback: when sector is missing, try to resolve it from
+    # the UniverseCache in-memory snapshot (populated nightly by sync_universe_cache).
+    # This directly fixes SECTOR_UNKNOWN=100% when SectorCache is sparse.
+    if not sector:
+        try:
+            from scanner.massive_reference import get_cached_ticker as _get_ref
+            from scanner.sector_resolver import resolve_sector as _resolve
+            _meta = _get_ref(symbol)
+            if _meta:
+                _resolved, _resolved_industry, _ = _resolve(
+                    symbol          = symbol,
+                    raw_sector      = None,
+                    raw_industry    = _meta.get("sic_description"),
+                    sic_code        = _meta.get("sic_code"),
+                    sic_description = _meta.get("sic_description"),
+                )
+                if _resolved and _resolved != "Unknown":
+                    sector = _resolved
+                    if not industry and _resolved_industry:
+                        industry = _resolved_industry
+        except Exception:
+            pass
+
     etf      = _GICS_TO_ETF.get(sector, "")
 
     sector_data: dict = {}
