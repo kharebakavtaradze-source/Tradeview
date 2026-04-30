@@ -41,6 +41,40 @@ _GICS_TO_ETF: dict[str, str] = {
     "Utilities":               "XLU",
 }
 
+# Known normalized GICS sector names (whitelist)
+_GICS_SECTORS: frozenset[str] = frozenset(_GICS_TO_ETF.keys())
+
+# ── Regime-specific sector alignment ────────────────────────────────────────
+# Authoritative per-regime sector lists used for macro tailwind/headwind.
+# Ignores the Finviz broad enrichment (>0.5% threshold) which can flag 7–8
+# sectors on a green day and produce false tailwinds for unrelated tickers.
+_REGIME_STRONG: dict[str, frozenset[str]] = {
+    "RISK_ON":            frozenset({"Information Technology", "Communication Services",
+                                     "Consumer Discretionary", "Financials", "Industrials"}),
+    "ROTATION_ENERGY":    frozenset({"Energy"}),
+    "ROTATION_DEFENSIVE": frozenset({"Health Care", "Consumer Staples", "Utilities"}),
+    "RISK_OFF":           frozenset({"Utilities", "Health Care", "Consumer Staples"}),
+    "FEAR":               frozenset({"Materials", "Utilities", "Health Care"}),
+    "STAGFLATION":        frozenset({"Energy", "Materials"}),
+    "LATE_CYCLE":         frozenset({"Energy", "Materials", "Industrials"}),
+    "SMALL_CAP_RISK_ON":  frozenset({"Information Technology", "Consumer Discretionary",
+                                     "Financials", "Industrials"}),
+    "GROWTH_ROTATION":    frozenset({"Information Technology", "Communication Services",
+                                     "Consumer Discretionary"}),
+}
+_REGIME_WEAK: dict[str, frozenset[str]] = {
+    "RISK_ON":            frozenset({"Utilities", "Consumer Staples"}),
+    "ROTATION_ENERGY":    frozenset({"Information Technology", "Consumer Discretionary"}),
+    "ROTATION_DEFENSIVE": frozenset({"Information Technology", "Communication Services",
+                                     "Consumer Discretionary"}),
+    "RISK_OFF":           frozenset({"Information Technology", "Communication Services",
+                                     "Consumer Discretionary"}),
+    "FEAR":               frozenset({"Information Technology", "Consumer Discretionary",
+                                     "Financials"}),
+    "STAGFLATION":        frozenset({"Information Technology", "Communication Services"}),
+    "LATE_CYCLE":         frozenset({"Information Technology", "Consumer Discretionary"}),
+}
+
 # Sectors that are growth-oriented (positive in RISK_ON)
 _GROWTH_SECTORS: set[str] = {
     "Information Technology", "Communication Services",
@@ -109,10 +143,31 @@ def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None =
     symbol   = (row.get("symbol") or "").upper()
     sector   = row.get("sector") or ""
     industry = row.get("industry") or ""
+    raw_sector_input: str | None = None   # original raw value before normalization
 
-    # SIC-based sector fallback: when sector is missing, try to resolve it from
-    # the UniverseCache in-memory snapshot (populated nightly by sync_universe_cache).
-    # This directly fixes SECTOR_UNKNOWN=100% when SectorCache is sparse.
+    # ── Sector normalization ─────────────────────────────────────────────────
+    # SectorCache often stores raw SIC descriptions ("SERVICES-COMPUTER PROCESSING...")
+    # instead of normalized GICS names ("Information Technology").
+    # Run sector_resolver when sector is non-empty but not a known GICS name.
+    if sector and sector not in _GICS_SECTORS:
+        raw_sector_input = sector           # preserve for UI drawer
+        try:
+            from scanner.sector_resolver import resolve_sector as _resolve
+            _resolved, _resolved_industry, _ = _resolve(
+                symbol          = symbol,
+                raw_sector      = sector,   # let FINVIZ_TO_GICS handle clean provider names
+                raw_industry    = industry or sector,
+                sic_code        = None,
+                sic_description = sector,   # treat raw SIC text as sic_description for keyword match
+            )
+            if _resolved and _resolved != "Unknown":
+                sector = _resolved
+                if not industry and _resolved_industry:
+                    industry = _resolved_industry
+        except Exception:
+            pass
+
+    # ── UniverseCache fallback when sector is still missing ──────────────────
     if not sector:
         try:
             from scanner.massive_reference import get_cached_ticker as _get_ref
@@ -185,11 +240,17 @@ def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None =
         sector_strength    = "SECTOR_UNKNOWN"
         subsector_strength = "SUBSECTOR_UNKNOWN"
 
+    # Subsector fallback: use resolved industry as subsector hint when static map has no entry.
+    # Populates column with values like "IT Services", "Banks", "Oil & Gas" instead of blank.
+    if not subsector and industry:
+        subsector = industry
+
     return {
         "sector":              sector   or None,
         "sector_etf":          etf      or None,
         "subsector":           subsector,
         "industry":            industry or None,
+        "raw_sector_input":    raw_sector_input,   # original raw value before normalization (drawer only)
         "sector_strength":     sector_strength,
         "subsector_strength":  subsector_strength,
         "sector_trend":        trend_label,
@@ -206,6 +267,12 @@ def _build_macro_context(row: dict, regime: dict) -> dict:
     """
     macro_context fields derived from market_regime snapshot.
     Never raises.
+
+    macro_tailwind / macro_headwind use authoritative per-regime sector sets
+    (_REGIME_STRONG / _REGIME_WEAK), NOT the Finviz-enriched strong_sectors list.
+    The Finviz list uses a >0.5% threshold that flags 5–8 sectors on a green day
+    and produces false tailwinds for unrelated tickers.
+    Sector matching is exact GICS name membership (no substring matching).
     """
     if not regime:
         return {
@@ -221,39 +288,40 @@ def _build_macro_context(row: dict, regime: dict) -> dict:
 
     market_regime  = regime.get("regime")  or "NEUTRAL"
     risk_mode      = regime.get("risk_mode") or market_regime
+    # Keep Finviz-enriched lists for UI display only (do NOT use for tailwind matching)
     strong_sectors = regime.get("strong_sectors") or []
     weak_sectors   = regime.get("weak_sectors")   or []
 
+    # Use normalized GICS sector from sector_context when available;
+    # fall back to top-level row["sector"] (already promoted by enrich_np_candidates).
     sector = row.get("sector") or ""
 
-    # Tailwind: ticker's sector is in the regime's strong list
-    macro_tailwind = bool(sector and any(
-        s.lower() in sector.lower() or sector.lower() in s.lower()
-        for s in strong_sectors
-    ))
-    # Headwind: ticker's sector is in the regime's weak list
-    macro_headwind = bool(sector and any(
-        s.lower() in sector.lower() or sector.lower() in s.lower()
-        for s in weak_sectors
-    ))
+    # Authoritative regime-specific sector sets for tailwind/headwind
+    regime_strong = _REGIME_STRONG.get(market_regime, frozenset())
+    regime_weak   = _REGIME_WEAK.get(market_regime, frozenset())
 
-    # Human-readable reason
+    # Exact GICS membership — prevents raw SIC substring false-matches
+    macro_tailwind = bool(sector and sector in regime_strong)
+    macro_headwind = bool(sector and sector in regime_weak)
+
     if macro_tailwind:
-        macro_reason = f"Sector '{sector}' in regime tailwind ({market_regime})"
+        macro_reason = f"Sector '{sector}' aligned with {market_regime} regime"
     elif macro_headwind:
-        macro_reason = f"Sector '{sector}' faces regime headwind ({market_regime})"
+        macro_reason = f"Sector '{sector}' faces {market_regime} headwind"
     else:
         macro_reason = f"Neutral in {market_regime} regime"
 
     return {
         "market_regime":    market_regime,
         "risk_mode":        risk_mode,
-        "strong_sectors":   strong_sectors,
-        "weak_sectors":     weak_sectors,
+        "strong_sectors":   strong_sectors,      # Finviz-enriched (for display only)
+        "weak_sectors":     weak_sectors,         # Finviz-enriched (for display only)
+        "regime_strong_sectors": sorted(regime_strong),  # authoritative (used for tailwind)
+        "regime_weak_sectors":   sorted(regime_weak),    # authoritative (used for headwind)
         "macro_tailwind":   macro_tailwind,
         "macro_headwind":   macro_headwind,
         "macro_reason":     macro_reason,
-        "macro_context_source": "live" if regime else "unavailable",
+        "macro_context_source": "live",
     }
 
 
@@ -460,16 +528,27 @@ async def enrich_np_candidates(results: list[dict]) -> list[dict]:
 
     for row in results:
         try:
-            row["sector_context"]    = _build_sector_context(row, snapshot, results)
+            row["sector_context"] = _build_sector_context(row, snapshot, results)
         except Exception as exc:
             logger.debug(f"[NpEnricher] sector_context failed {row.get('symbol')}: {exc}")
-            row["sector_context"]    = {"sector_context_source": "error"}
+            row["sector_context"] = {"sector_context_source": "error"}
+
+        # Promote normalized GICS sector/industry to top-level so that
+        # _build_macro_context and _build_sympathy_context see the resolved name.
+        # This ensures exact GICS matching works correctly for tailwind/headwind.
+        _sc_out = row.get("sector_context") or {}
+        _resolved_sector   = _sc_out.get("sector")
+        _resolved_industry = _sc_out.get("industry")
+        if _resolved_sector and _resolved_sector not in ("Unknown", "UNKNOWN"):
+            row["sector"] = _resolved_sector
+        if _resolved_industry and not row.get("industry"):
+            row["industry"] = _resolved_industry
 
         try:
-            row["macro_context"]     = _build_macro_context(row, regime)
+            row["macro_context"] = _build_macro_context(row, regime)
         except Exception as exc:
             logger.debug(f"[NpEnricher] macro_context failed {row.get('symbol')}: {exc}")
-            row["macro_context"]     = {"macro_context_source": "error"}
+            row["macro_context"] = {"macro_context_source": "error"}
 
         try:
             row["news_hype_context"] = _build_news_hype_context(row, hype_map)
