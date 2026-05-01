@@ -1504,7 +1504,8 @@ async def update_portfolio_value_from_positions() -> None:
     state = await get_portfolio_state()
     invested = sum(p.get("current_value") or p.get("invested_usd") or 0 for p in positions)
     total_value = state["cash"] + invested
-    total_pnl_pct = round((total_value - 2000) / 2000 * 100, 2)
+    baseline = state.get("baseline_value") or 2000.0
+    total_pnl_pct = round((total_value - baseline) / baseline * 100, 2) if baseline else 0.0
     await update_portfolio_state(
         cash=state["cash"],
         total_value=total_value,
