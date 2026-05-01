@@ -68,6 +68,50 @@ def snapshot_age_hours() -> float:
     return round((time.time() - _snapshot_ts) / 3600, 1)
 
 
+async def load_from_db() -> int:
+    """
+    Bootstrap _universe_snapshot from the UniverseCache DB table at startup.
+    Prevents SIC-based sector resolution from failing after server restart
+    (nightly sync at 21:00 ET repopulates from API; this bridges the gap).
+    Returns count of tickers loaded.  Non-fatal.
+    """
+    global _universe_snapshot, _snapshot_ts
+    if _universe_snapshot:
+        return len(_universe_snapshot)  # already loaded (in-memory sync ran)
+    try:
+        from database import get_session_factory, UniverseCache as _UC
+        from sqlalchemy import select as _sa_select
+        async with get_session_factory()() as session:
+            result = await session.execute(_sa_select(_UC))
+            rows = result.scalars().all()
+        if rows:
+            _universe_snapshot = {
+                r.symbol: {
+                    "name":             r.name,
+                    "active":           r.active,
+                    "market":           r.market,
+                    "type":             r.type,
+                    "primary_exchange": r.primary_exchange,
+                    "cik":              r.cik,
+                    "sic_code":         r.sic_code,
+                    "sic_description":  r.sic_description,
+                    "market_cap":       r.market_cap,
+                    "list_date":        r.list_date,
+                    "shares_outstanding":           r.shares_outstanding,
+                    "weighted_shares_outstanding":  r.weighted_shares_outstanding,
+                }
+                for r in rows
+            }
+            _snapshot_ts = time.time()
+            logger.info(f"[UniverseCache] Loaded {len(_universe_snapshot)} tickers from DB (startup bootstrap)")
+            return len(_universe_snapshot)
+        logger.info("[UniverseCache] DB empty — will be populated after nightly sync")
+        return 0
+    except Exception as exc:
+        logger.warning(f"[UniverseCache] load_from_db failed (non-fatal): {exc}")
+        return 0
+
+
 # ── Type-code allowlist / blocklist ───────────────────────────────────────────
 
 # Type codes that represent common equity (from /v3/reference/tickers/types)
