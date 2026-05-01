@@ -320,10 +320,12 @@ export default function AIPortfolio() {
   const closedPositions = allPositions.filter(p => p.status === 'CLOSED').slice(0, 15);
   const portfolioHistory = history.history || [];
 
-  const totalValue = state?.total_value || 2000;
-  const baseline = state?.baseline_value || 2000;
+  const totalValue = Number(state?.total_value) || 2000;
+  const baseline = Number(state?.baseline_value) || 2000;
   // Always compute P&L from live values so it's correct regardless of stored total_pnl_pct
-  const totalPnl = totalValue > 0 ? parseFloat(((totalValue - baseline) / baseline * 100).toFixed(2)) : 0;
+  const totalPnl = totalValue > 0 && baseline > 0
+    ? parseFloat(((totalValue - baseline) / baseline * 100).toFixed(2))
+    : 0;
   const cash = state?.cash || 0;
   const invested = state?.invested || 0;
 
@@ -439,7 +441,7 @@ export default function AIPortfolio() {
                 <span>Realized <b style={{ color: realizedPnlUsd >= 0 ? 'var(--lime)' : 'var(--red)' }}>{realizedPnlUsd >= 0 ? '+' : ''}${realizedPnlUsd.toFixed(0)}</b></span>
               )}
               <span style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 16 }}>
-                <b>{positions.length}/5</b> open · <b>{closedPositions.length}</b> closed
+                <b>{positions.length}/10</b> open · <b>{closedPositions.length}</b> closed
               </span>
             </div>
             {/* Cash/deployed bar */}
@@ -520,26 +522,30 @@ export default function AIPortfolio() {
         )}
 
         {/* AI decision reasoning */}
-        {state?.decisions && (state.decisions.portfolio_note || state.decisions.risk_assessment) && (
-          <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 6, padding: '10px 14px', marginBottom: 12, fontSize: 11, lineHeight: 1.6 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 5 }}>🤖 LAST AI DECISION</div>
-            {state.decisions.risk_assessment && (
-              <div style={{ color: '#ffa500', marginBottom: 4 }}>⚖️ {state.decisions.risk_assessment}</div>
-            )}
-            {state.decisions.portfolio_note && (
-              <div style={{ color: 'rgba(255,255,255,0.75)' }}>{state.decisions.portfolio_note}</div>
-            )}
-            {state.decisions.no_trade_reason && (
-              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>
-                Причина: {state.decisions.no_trade_reason}
-              </div>
-            )}
-          </div>
-        )}
+        {(() => {
+          const dec = state?.decisions_json;
+          if (!dec || (!dec.portfolio_note && !dec.risk_assessment)) return null;
+          return (
+            <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 6, padding: '10px 14px', marginBottom: 12, fontSize: 11, lineHeight: 1.6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 5 }}>🤖 LAST AI DECISION</div>
+              {dec.risk_assessment && (
+                <div style={{ color: '#ffa500', marginBottom: 4 }}>⚖️ {dec.risk_assessment}</div>
+              )}
+              {dec.portfolio_note && (
+                <div style={{ color: 'rgba(255,255,255,0.75)' }}>{dec.portfolio_note}</div>
+              )}
+              {dec.no_trade_reason && (
+                <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>
+                  Причина: {dec.no_trade_reason}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Open positions */}
         <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.05em' }}>
-          OPEN POSITIONS ({positions.length}/5)
+          OPEN POSITIONS ({positions.length}/10)
         </div>
         {positions.length === 0 && !loading && (
           <div className={styles.empty} style={{ marginBottom: 16 }}>

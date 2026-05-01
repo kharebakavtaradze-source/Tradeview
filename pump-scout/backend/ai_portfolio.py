@@ -818,7 +818,7 @@ RESEARCH PRIORS (broad evidence-based biases from Replay + Raw Pattern):
 RISK FLAGS:
 - Near stop (within 3%): {[p['symbol'] for p in near_stop_positions] or 'none'}
 - Losing >3%: {[p['symbol'] for p in losing_positions] or 'none'}
-- Slots used: {len(open_positions)}/5
+- Slots used: {len(open_positions)}/10
 
 STRICT RULES (not negotiable):
 1. Scanner candidates: FIRE tier or ARM with CMF > 70%ile (pre-filtered)
@@ -827,7 +827,7 @@ STRICT RULES (not negotiable):
 4. Two-target exits: TP1 = entry + ATR×3.75 (sell 50%), TP2 = entry + ATR×7.5 (sell rest)
    Stop: entry - ATR×1.5. For NP candidates without ATR use price-based estimate.
 5. Risk 2% of portfolio per trade via ATR sizing (min $50, max $600)
-6. Max 5 positions — prefer cash in RISK_OFF/FEAR regime
+6. Max 10 positions — prefer cash in RISK_OFF/FEAR regime
 7. SELL if: held > 14d without 10% gain, hype > 70, dist_to_stop < 3%, Wyckoff→DISTRIBUTION,
    or the NP signal that triggered entry is now flagged AVOID/np_engine_avoid_flagged
 8. Never chase: skip if moved >5% today, sector in weak_sectors list
@@ -949,7 +949,7 @@ Respond in Russian. Return JSON only:
             price = d.get("price", 0)
             if not price:
                 price = await _fetch_price(symbol) or 0
-            if price <= 0 or len(open_positions) >= 5:
+            if price <= 0 or len(open_positions) >= 10:
                 continue
             # Prevent same-session sell→buy round-trip (creates 0% trades)
             if symbol in sold_in_session:
