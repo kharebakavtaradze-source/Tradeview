@@ -809,7 +809,7 @@ function S13_Context({ rowData, payload }) {
       )}
 
       {/* ── Macro ── */}
-      {mc && mc.macro_context_source !== 'unavailable' && (
+      {mc && mc.market_regime && (
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
             Macro / Regime

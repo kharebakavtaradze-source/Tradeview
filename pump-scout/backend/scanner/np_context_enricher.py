@@ -167,8 +167,10 @@ def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None =
         except Exception:
             pass
 
-    # ── UniverseCache fallback when sector is still missing ──────────────────
-    if not sector:
+    # ── UniverseCache fallback when sector is still missing or unresolvable ─
+    # Also retries when sector="Unknown" (stored in SectorCache for unenriched tickers)
+    # since "Unknown" is truthy and would otherwise skip this fallback.
+    if not sector or sector not in _GICS_SECTORS:
         try:
             from scanner.massive_reference import get_cached_ticker as _get_ref
             from scanner.sector_resolver import resolve_sector as _resolve
@@ -214,7 +216,7 @@ def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None =
     strong_sector = bool(sector and sector in strong_secs)
     weak_sector   = bool(sector and sector in weak_secs)
 
-    source_status = "live" if sector_data else ("static" if sector else "unavailable")
+    source_status = "live" if sector_data else ("static" if (sector and sector in _GICS_SECTORS) else "unavailable")
 
     # ── Subsector + strength labels ───────────────────────────────────────────
     try:

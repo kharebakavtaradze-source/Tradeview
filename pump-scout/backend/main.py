@@ -102,6 +102,11 @@ async def lifespan(app: FastAPI):
     """Startup: init DB + start scheduler. Shutdown: stop scheduler."""
     logger.info("Starting up Pump Scout backend...")
     await init_db()
+    try:
+        from scanner.massive_reference import load_from_db as _load_universe
+        await _load_universe()
+    except Exception as _exc:
+        logger.warning(f"Universe snapshot bootstrap failed (non-fatal): {_exc}")
     start_scheduler()
     yield
     stop_scheduler()
