@@ -13,7 +13,9 @@ CRITICAL RULES — read before modifying:
   2. No WATCH_HIGH without np_decision == WATCH.
   3. HYPE / SYMPATHY / sector / macro CANNOT create BUY alone.
   4. HIGH expansion_timing_risk CANNOT produce BUY_CANDIDATE_HIGH.
-  5. AVOID cannot be upgraded to BUY or WATCH regardless of context.
+  5. AVOID cannot be upgraded to BUY/WATCH_HIGH/WATCH_MEDIUM.
+     Exception: AVOID_DEAD + strong D confluence (D4/D6 BEUP or D4/D3 L34) + non-impulse
+     phase → WATCH_LOW (data-driven: these combos avg +2–4% 5d with 60-73% win rate).
   6. Missing context is neutral — never fatal.
   7. D/WLNBB confluence can improve classification only within allowed np_decision boundaries.
 """
@@ -33,6 +35,12 @@ V2_LABELS = frozenset({
     "AVOID_LOTTERY",
     "AVOID_DEAD",
 })
+
+# ── D confluence labels that allow AVOID_DEAD → WATCH_LOW upgrade ────────────
+# Data from run_id=30 (2343 candidates, 85 days):
+#   D4_BEUP avg +4.31% 5d 60% win; D6_BEUP avg +3.8% 63% win
+#   D4_L34  avg +2.1% 65% win;     D3_L34  avg +2.9% 73% win
+_AVOID_UPGRADE_DCONF = frozenset({"D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34"})
 
 # ── Negative priority flags that signal meaningful risk ───────────────────────
 _HIGH_RISK_FLAGS = frozenset({
@@ -139,6 +147,8 @@ def _map_v2_decision(
     priority_score: float,
     priority_flags: list[str],
     exp_risk: str,
+    d_conf: str = "NONE",
+    structure_phase: str = "NONE",
 ) -> tuple[str, str, list[str]]:
     """
     Map np_decision + priority context → (v2_decision, reason, v2_flags).
@@ -204,6 +214,17 @@ def _map_v2_decision(
             ["np_avoid", "has_risk"] + top,
         )
 
+    # AVOID_DEAD upgrade: strong D confluence + non-impulse phase → WATCH_LOW
+    # Excluded: IMPULSE_ONLY, BROKEN_STRUCTURE (data shows catastrophic returns)
+    if (d_conf in _AVOID_UPGRADE_DCONF
+            and structure_phase not in {"IMPULSE_ONLY", "BROKEN_STRUCTURE"}
+            and exp_risk != "HIGH"):
+        return (
+            "WATCH_LOW",
+            f"AVOID (no risk) + {d_conf} + {structure_phase} → WATCH_LOW",
+            ["np_avoid", "d_conf_upgrade"],
+        )
+
     return (
         "AVOID_DEAD",
         "AVOID — no meaningful structure or opportunity signal",
@@ -266,12 +287,13 @@ def _build_inner(row: dict, rank: int) -> dict:
     ss             = row.get("structure_score")
     sc             = row.get("sector_context") or {}
 
-    d_conf   = _resolve_dconf(row)
-    d_family = _dconf_family(d_conf)
-    d_timing = _dconf_timing(row)
+    d_conf         = _resolve_dconf(row)
+    d_family       = _dconf_family(d_conf)
+    d_timing       = _dconf_timing(row)
+    structure_phase = row.get("structure_phase") or "NONE"
 
     v2_decision, v2_reason, v2_flags = _map_v2_decision(
-        np_decision, p_label, p_score, p_flags, exp_risk
+        np_decision, p_label, p_score, p_flags, exp_risk, d_conf, structure_phase
     )
     v2_score = _v2_score(p_score, v2_decision)
 
