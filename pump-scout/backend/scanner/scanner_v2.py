@@ -14,8 +14,11 @@ CRITICAL RULES — read before modifying:
   3. HYPE / SYMPATHY / sector / macro CANNOT create BUY alone.
   4. HIGH expansion_timing_risk CANNOT produce BUY_CANDIDATE_HIGH.
   5. AVOID cannot be upgraded to BUY/WATCH_HIGH/WATCH_MEDIUM.
-     Exception: AVOID_DEAD + strong D confluence (D4/D6 BEUP or D4/D3 L34) + non-impulse
+     Exception 1: AVOID_DEAD + strong D confluence (D4/D6 BEUP or D4/D3 L34) + non-impulse
      phase → WATCH_LOW (data-driven: these combos avg +2–4% 5d with 60-73% win rate).
+     Exception 2: AVOID_RISK (soft risk only — no expansion_risk_high/overheated) + strong
+     D confluence + non-impulse phase → WATCH_LOW (rescues 16.4% routing-miss leakage;
+     run_id=30: 128/781 AVOID_RISK stocks moved ≥10% 5d with avg +44.18%).
   6. Missing context is neutral — never fatal.
   7. D/WLNBB confluence can improve classification only within allowed np_decision boundaries.
 """
@@ -53,6 +56,12 @@ _HIGH_RISK_FLAGS = frozenset({
     "d3_beup_weak",
     "d6_l34_poor",
 })
+
+# Flags that block D-confluence rescue from AVOID_RISK → WATCH_LOW.
+# expansion_risk_high / overheated = price already extended; D-conf can't fix that.
+# Soft flags (macro_headwind, sector_lagging, hype_late, …) can be overridden by
+# strong structural alignment (D4/D6 BEUP or D4/D3 L34).
+_HARD_RISK_FLAGS = frozenset({"expansion_risk_high", "overheated"})
 
 # ── Suggested actions per v2 label ───────────────────────────────────────────
 _ACTIONS: dict[str, str] = {
@@ -208,6 +217,18 @@ def _map_v2_decision(
     # AVOID: bucket by risk level
     if has_risk:
         top = [f for f in (priority_flags or []) if f in _HIGH_RISK_FLAGS][:3]
+        # D-confluence rescue: strong structural alignment overrides soft risk flags.
+        # Hard risks (expansion_risk_high, overheated) block this — price already extended.
+        hard_risk = bool(pf_set & _HARD_RISK_FLAGS)
+        if (not hard_risk
+                and d_conf in _AVOID_UPGRADE_DCONF
+                and structure_phase not in {"IMPULSE_ONLY", "BROKEN_STRUCTURE"}
+                and exp_risk != "HIGH"):
+            return (
+                "WATCH_LOW",
+                f"AVOID+risk({'+'.join(top) or 'soft'}) rescued by {d_conf} → WATCH_LOW",
+                ["np_avoid", "has_risk", "d_conf_upgrade"] + top,
+            )
         return (
             "AVOID_RISK",
             f"AVOID with risk signals: {'+'.join(top) if top else 'risk_flags'}",
