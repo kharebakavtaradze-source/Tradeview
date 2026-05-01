@@ -22,17 +22,21 @@ logger = logging.getLogger(__name__)
 
 # ── D/WLNBB confluence groups ────────────────────────────────────────────────
 _D_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME"})
-_D_MED_BP = frozenset({"D4_BEUP", "D4_BEUP_SAME"})
+# D4_THEN_BEUP_5B: run_id=30 data avg +4.31% 5d — promoted from WEAK to MED_BP
+_D_MED_BP = frozenset({"D4_BEUP", "D4_BEUP_SAME", "D4_THEN_BEUP_5B"})
+# SECONDARY_D_CONFLUENCE: avg +4.78% 5d — promoted from SOLO (-5) to MED_L (+5)
 _D_MED_L  = frozenset({
     "D4_L34", "D4_L34_SAME",
     "D3_L34", "D3_L34_SAME",
     "L34_THEN_D4_3B", "L34_THEN_D3_3B",
+    "SECONDARY_D_CONFLUENCE",
 })
-_D_WEAK   = frozenset({"D3_BEUP", "D3_BEUP_SAME"})
-_D_POOR   = frozenset({"D6_L34", "D6_L34_SAME"})
+# D3_THEN_BEUP_5B: avg -1.26% 5d — grouped with D3_BEUP weak
+_D_WEAK   = frozenset({"D3_BEUP", "D3_BEUP_SAME", "D3_THEN_BEUP_5B"})
+# D6_THEN_BEUP_5B: avg -4.06% 5d; SECONDARY_D_WINDOW: avg -3.53% 5d
+_D_POOR   = frozenset({"D6_L34", "D6_L34_SAME", "D6_THEN_BEUP_5B", "SECONDARY_D_WINDOW"})
 _D_SOLO   = frozenset({
     "D9", "D11",
-    "SECONDARY_D_CONFLUENCE",
     "SECONDARY_D_BEUP_SAME", "SECONDARY_D_L34_SAME", "SECONDARY_D_L43_SAME",
 })
 
@@ -141,6 +145,10 @@ def _inner(row: dict) -> dict:
     if seq == "SETUP_ONLY_L34":
         score -= 8
         flags.append("setup_only_l34")
+    # CONFIRM_AFTER_G4: run_id=30 avg -2.12% 5d / -2.42% alpha (n=20 in BUY bucket)
+    elif seq == "CONFIRM_AFTER_G4":
+        score -= 10
+        flags.append("confirm_after_g4_late")
 
     # ── Sector / subsector ────────────────────────────────────────────────────
     ss_str  = sc.get("sector_strength")    or "SECTOR_UNKNOWN"
