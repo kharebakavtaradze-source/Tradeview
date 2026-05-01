@@ -723,6 +723,33 @@ def _build_validation_questions(validation: dict, summary: dict) -> list[dict]:
         unk_pct, q10_v, q10_int,
     ))
 
+    # ── Q11: Routing-miss rate for AVOID buckets ──────────────────────────────
+    # Routing miss = AVOID candidate that moved >= 10% anyway.
+    # Threshold: < 8% routing-miss rate for AVOID_DEAD (expected to be inert).
+    missed_v2_data = validation.get("missed_movers_by_scanner_v2_decision") or {}
+    if missed_v2_data.get("available"):
+        by_dec = {r["bucket"]: r for r in (missed_v2_data.get("by_decision") or [])}
+        ad_row = by_dec.get("AVOID_DEAD", {})
+        ad_rate = ad_row.get("strong_mover_rate")
+        ad_n    = ad_row.get("with_5d_data") or 0
+        ad_sm   = ad_row.get("strong_mover_count") or 0
+        routing_total = missed_v2_data.get("routing_miss_total", 0)
+        if ad_rate is not None and ad_n >= MIN_COMPARISON_N:
+            q11_v = _verdict_threshold(ad_rate, 8.0, direction="below")
+            q11_int = (
+                f"AVOID_DEAD routing-miss rate = {ad_rate}% "
+                f"({ad_sm}/{ad_n} moved ≥10% 5d); "
+                f"all-AVOID routing misses = {routing_total}"
+            )
+        else:
+            q11_v = "INSUFFICIENT_DATA"
+            q11_int = f"AVOID_DEAD n={ad_n} (need ≥{MIN_COMPARISON_N} with 5d data)"
+        questions.append(_new_question(
+            "Q11",
+            "Is AVOID_DEAD routing-miss rate < 8% (correctly discarding weak candidates)?",
+            ad_rate, q11_v, q11_int,
+        ))
+
     return questions
 
 
@@ -903,6 +930,29 @@ def _detect_regressions(validation: dict, summary: dict) -> list[dict]:
             note="Expand date range / universe, or lower the priority_score "
                  "HIGH threshold from 75." if triggered else "",
         ))
+
+    # ── R08: AVOID_DEAD routing-miss rate > 12% ───────────────────────────────
+    # If >12% of AVOID_DEAD candidates moved >=10%, the AVOID gate is too
+    # aggressive — needs AVOID→WATCH upgrade criteria review.
+    missed_v2_data = validation.get("missed_movers_by_scanner_v2_decision") or {}
+    if missed_v2_data.get("available"):
+        by_dec = {r["bucket"]: r for r in (missed_v2_data.get("by_decision") or [])}
+        ad_row  = by_dec.get("AVOID_DEAD", {})
+        ad_rate = ad_row.get("strong_mover_rate")
+        ad_n    = ad_row.get("with_5d_data") or 0
+        if ad_rate is not None and ad_n >= MIN_BUCKET_N:
+            triggered = ad_rate > 12.0
+            regressions.append(_new_regression(
+                "R08",
+                "AVOID_DEAD routing-miss rate > 12% (discarding too many strong movers)",
+                "MEDIUM",
+                f"AVOID_DEAD routing-miss rate = {ad_rate}% (n={ad_n})",
+                triggered,
+                note=(
+                    "Review AVOID→WATCH_LOW upgrade criteria or D-confluence "
+                    "thresholds to rescue more legitimate setups."
+                ) if triggered else "",
+            ))
 
     return regressions
 

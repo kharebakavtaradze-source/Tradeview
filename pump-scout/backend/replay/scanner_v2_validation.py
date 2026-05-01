@@ -432,16 +432,69 @@ def build_scanner_v2_validation(
         return f"{r['scanner_v2_decision']}|{macro_regime(r['candidate'])}"
     perf_v2_macro = _section(cand_ids_for(v2_x_macro), bs)
 
+
     # ── 11. missed_movers_by_scanner_v2_decision ─────────────────────────────
-    # Missed movers are not part of `candidates`/`outcomes` — they live in the
-    # missed_movers table.  Without scanner_v2 fields persisted on missed rows,
-    # attribution is impossible.
-    missed_v2_note = (
-        "scanner_v2 missed mover attribution unavailable until scanner_v2 "
-        "fields are persisted on the missed_movers table.  Use "
-        "missed_movers section for raw missed-mover data."
-    )
-    missed_v2 = {"available": False, "note": missed_v2_note}
+    # "Routing miss" = candidate we scanned, routed to an AVOID/WATCH bucket,
+    # but it moved >= STRONG_MOVER_THRESHOLD anyway.
+    # Computable entirely from candidates + outcome_map — no missed_movers table needed.
+    STRONG_MOVER_THRESHOLD = 10.0  # mirrors outcome_engine._MISSED_THRESHOLD_5D
+    AVOID_BUCKETS = frozenset({"AVOID_DEAD", "AVOID_RISK", "AVOID_LOTTERY"})
+    WATCH_BUCKETS = frozenset({"WATCH_LOW", "WATCH_MEDIUM", "WATCH_HIGH"})
+
+    missed_by_v2: dict[str, dict] = {}
+    for r in resolved:
+        dec = r["scanner_v2_decision"]
+        ret5 = (outcome_map.get(r["id"], {}).get("5d") or {}).get("return_pct")
+        bucket = missed_by_v2.setdefault(dec, {
+            "bucket": dec,
+            "count": 0,
+            "with_5d_data": 0,
+            "strong_mover_count": 0,   # moved >= threshold
+            "strong_mover_returns": [],
+        })
+        bucket["count"] += 1
+        if ret5 is not None:
+            bucket["with_5d_data"] += 1
+            if ret5 >= STRONG_MOVER_THRESHOLD:
+                bucket["strong_mover_count"] += 1
+                bucket["strong_mover_returns"].append(ret5)
+
+    missed_v2_rows = []
+    for dec in V2_LABEL_ORDER:
+        if dec not in missed_by_v2:
+            continue
+        b = missed_by_v2[dec]
+        n_with = b["with_5d_data"]
+        n_strong = b["strong_mover_count"]
+        rets = b["strong_mover_returns"]
+        is_routing_miss = dec in AVOID_BUCKETS
+        missed_v2_rows.append({
+            "bucket":               dec,
+            "count":                b["count"],
+            "with_5d_data":         n_with,
+            "strong_mover_count":   n_strong,
+            "strong_mover_rate":    round(n_strong / n_with * 100, 1) if n_with else None,
+            "avg_return_5d_strong": _avg(rets),
+            "is_routing_miss":      is_routing_miss,  # True for AVOID buckets
+        })
+
+    missed_v2 = {
+        "available":          True,
+        "threshold_5d_pct":   STRONG_MOVER_THRESHOLD,
+        "by_decision":        missed_v2_rows,
+        "routing_miss_total": sum(
+            r["strong_mover_count"] for r in missed_v2_rows
+            if r["bucket"] in AVOID_BUCKETS
+        ),
+        "routing_miss_in_watch": sum(
+            r["strong_mover_count"] for r in missed_v2_rows
+            if r["bucket"] in WATCH_BUCKETS
+        ),
+        "note": (
+            "routing_miss = AVOID candidate that moved >= threshold; "
+            "routing_miss_in_watch = WATCH candidate that moved >= threshold"
+        ),
+    }
 
     return {
         "performance_by_scanner_v2_decision":           perf_v2,
