@@ -670,7 +670,7 @@ def _fake_trigger_risk(seq_lbl, base_quality_score, avg_ema_spread, volume_z):
         elif avg_ema_spread > 55: risk += 1
 
     if volume_z is not None and volume_z > 4.0:
-        risk += 2   # chaotic spike = suspicious trigger
+        risk -= 1   # high volume spike confirms real breakout (run_id=30: HIGH ftr avg +5.84% 5d)
 
     # FULL sequences with weak base are the most dangerous false positives
     if seq_lbl in ("FULL_L34_G4_B2", "FULL_FRI34_G4_B2") and base_quality_score < 40:
