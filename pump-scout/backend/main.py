@@ -3031,7 +3031,13 @@ async def _build_research_context_text(run_id: int) -> str:
                 tag = "WEIGHT HIGHER" if vt in ("BOOST", "INCREASE") else "WEIGHT LOWER"
                 lines.append(f"{tag} ({vt}): {', '.join(feats[:7])}")
 
-        timing_keys = {"days_in_base", "pre_days", "pump_days"}
+        timing_keys = {
+            "days_in_base",
+            "days_from_breakout_to_peak",
+            "compression_days_pre",
+            "days_from_first_abnormal_volume_to_breakout",
+            "dryup_day_count_pre",
+        }
         timing_4x: dict[str, float] = {}
         for c in comps:
             fn = c.get("feature_name")

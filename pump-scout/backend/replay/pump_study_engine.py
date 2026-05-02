@@ -1601,6 +1601,8 @@ async def build_raw_pattern_episode_features_timing(
             "group_type":   episode_group.get(episode_id),
             "pump_multiple": ep.get("pump_multiple"),
             "pump_type":    ep.get("pump_type"),
+            "sector":       ep.get("sector"),
+            "industry":     ep.get("industry"),
             # Timing
             "pre_days":                                   pre_days  or None,
             "pump_days":                                  pump_days or None,

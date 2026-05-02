@@ -512,6 +512,8 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("valid_trigger_days_pre",               "INTEGER"),
     ("valid_confirm_days_pre",               "INTEGER"),
     ("valid_full_sequence_days_pre",         "INTEGER"),
+    ("sector",                               "VARCHAR(50)"),
+    ("industry",                             "VARCHAR(100)"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -3801,6 +3803,8 @@ class RawPatternEpisodeFeatures(Base):
     valid_full_sequence_days_pre  = Column(Integer,    nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    sector     = Column(String(50),  nullable=True)
+    industry   = Column(String(100), nullable=True)
 
 
 class RawPatternComparison(Base):
