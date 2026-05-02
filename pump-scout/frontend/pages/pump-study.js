@@ -99,6 +99,54 @@ function PhaseTag({ phase }) {
   );
 }
 
+// ── NP structural badges ──────────────────────────────────────────────────────
+
+const NP_PHASE_COLOR = {
+  CONFIRMED_STRUCTURE: '#86efac',
+  TRIGGERED_STRUCTURE: '#22d3ee',
+  EARLY_STRUCTURE:     '#60a5fa',
+  SETUP_PHASE:         '#a8a29e',
+  IMPULSE_ONLY:        '#6b7280',
+  DEGRADED:            '#fbbf24',
+  BROKEN_STRUCTURE:    '#fb7185',
+};
+const NP_PHASE_SHORT = {
+  CONFIRMED_STRUCTURE: 'CONFIRMED',
+  TRIGGERED_STRUCTURE: 'TRIGGERED',
+  EARLY_STRUCTURE:     'EARLY',
+  SETUP_PHASE:         'SETUP',
+  IMPULSE_ONLY:        'IMPULSE',
+  DEGRADED:            'DEGRADED',
+  BROKEN_STRUCTURE:    'BROKEN',
+};
+function NPPhaseBadge({ phase }) {
+  if (!phase) return <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>—</span>;
+  const color = NP_PHASE_COLOR[phase] || '#6b7280';
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.04em',
+      padding: '2px 6px', borderRadius: 'var(--r-pill)',
+      background: `${color}1a`, border: `1px solid ${color}44`,
+      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)',
+    }}>{NP_PHASE_SHORT[phase] || phase}</span>
+  );
+}
+
+const NP_DECISION_COLOR = { BUY_CANDIDATE: '#86efac', WATCH: '#22d3ee', AVOID: '#fbbf24' };
+const NP_DECISION_SHORT = { BUY_CANDIDATE: 'BUY', WATCH: 'WATCH', AVOID: 'AVOID' };
+function NPDecisionBadge({ decision }) {
+  if (!decision) return <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>—</span>;
+  const color = NP_DECISION_COLOR[decision] || '#6b7280';
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.04em',
+      padding: '2px 6px', borderRadius: 'var(--r-pill)',
+      background: `${color}1a`, border: `1px solid ${color}44`,
+      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)',
+    }}>{NP_DECISION_SHORT[decision] || decision}</span>
+  );
+}
+
 // ── Event type config ─────────────────────────────────────────────────────────
 
 const EVENT_CFG = {
@@ -328,6 +376,10 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                   <th title="Sequence type">Seq</th>
                   <th title="Structural bias">Bias</th>
                   <th title="Toxicity score">Tox</th>
+                  <th title="Scanner v2 structure phase">NP Phase</th>
+                  <th title="NP structure score">Sc</th>
+                  <th title="Compression / expansion state">CE</th>
+                  <th title="NP decision">Decision</th>
                 </tr>
               </thead>
               <tbody>
@@ -337,10 +389,23 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                   const dayNum  = s.relative_day_from_start;
                   const peakNum = s.relative_day_from_peak;
                   // Extended fields — try direct first, then snapshot sub-dict
-                  const sd      = s.snapshot_data || s.snapshot || {};
-                  const seqType = s.sequence_type   ?? sd.regime?.sequence_type    ?? '—';
-                  const bias    = s.structural_bias ?? sd.regime?.structural_bias  ?? '—';
-                  const tox     = s.toxicity_score  ?? sd.toxicity?.toxicity_score ?? null;
+                  const sd        = s.snapshot_data || s.snapshot || {};
+                  const seqType   = s.sequence_type   ?? sd.regime?.sequence_type    ?? '—';
+                  const bias      = s.structural_bias ?? sd.regime?.structural_bias  ?? '—';
+                  const tox       = s.toxicity_score  ?? sd.toxicity?.toxicity_score ?? null;
+                  const np        = sd.new_pump || {};
+                  const npPhase   = np.structure_phase   ?? null;
+                  const npScore   = np.structure_score   ?? null;
+                  const ceRaw     = np.compression_expansion_state ?? null;
+                  const ceShort   = ceRaw === 'accumulation_ready'   ? 'ACC'
+                                  : ceRaw === 'expansion_start'      ? 'EXP'
+                                  : ceRaw === 'overheated_expansion'  ? 'OVR'
+                                  : ceRaw ? String(ceRaw).slice(0, 5) : null;
+                  const ceColor   = ceRaw === 'accumulation_ready'   ? '#86efac'
+                                  : ceRaw === 'expansion_start'      ? '#22d3ee'
+                                  : ceRaw === 'overheated_expansion'  ? '#fb7185'
+                                  : 'var(--text-muted)';
+                  const npDecision = np.decision ?? null;
                   return (
                     <tr key={i} className={styles.snapRow} style={{ background: bg }}>
                       <td><PhaseTag phase={s.window_phase} /></td>
@@ -385,6 +450,15 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                                    color: tox >= 45 ? 'var(--red)' : tox >= 20 ? 'var(--amber)' : 'var(--text-muted)' }}>
                         {tox != null ? tox : '—'}
                       </td>
+                      <td><NPPhaseBadge phase={npPhase} /></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9,
+                                   color: npScore != null ? (npScore >= 70 ? '#86efac' : npScore >= 40 ? '#22d3ee' : 'var(--text-dim)') : 'var(--text-muted)' }}>
+                        {npScore ?? '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: ceShort ? 700 : 400, color: ceColor }}>
+                        {ceShort ?? '—'}
+                      </td>
+                      <td><NPDecisionBadge decision={npDecision} /></td>
                     </tr>
                   );
                 })}
@@ -565,11 +639,18 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                 <th title="Highest Wyckoff state reached in PRE window">Wyckoff</th>
                 <th title="Largest gap up % in PRE+PUMP window">Max Gap</th>
                 <th title="Max volume vs 20-day average">Max Vol</th>
+                <th title="Scanner v2 structure phase at pump start">NP Phase</th>
+                <th title="New Pump signal label">NP Label</th>
               </tr>
             </thead>
             <tbody>
               {episodes.map(ep => {
                 const caught = ep.caught_by_scanner;
+                const npLabel = ep.new_pump_label;
+                const npLabelColor = npLabel === 'FIRE'   ? 'var(--lime)'
+                                   : npLabel === 'STRONG' ? 'var(--cyan)'
+                                   : npLabel === 'WATCH'  ? 'var(--amber)'
+                                   : 'var(--text-muted)';
                 return (
                   <tr
                     key={ep.id}
@@ -612,6 +693,10 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                     <td style={{ fontFamily: 'var(--font-mono)',
                                  color: ep.max_volume_anomaly >= 3 ? 'var(--amber)' : 'var(--text-dim)' }}>
                       {ep.max_volume_anomaly != null ? `${Number(ep.max_volume_anomaly).toFixed(1)}×` : '—'}
+                    </td>
+                    <td><NPPhaseBadge phase={ep.np_structure_phase} /></td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: npLabel ? 700 : 400, color: npLabelColor }}>
+                      {npLabel || '—'}
                     </td>
                   </tr>
                 );
