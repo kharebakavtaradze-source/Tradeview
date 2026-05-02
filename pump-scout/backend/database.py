@@ -562,6 +562,50 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("split_artifact_reason",                "TEXT"),
     ("split_adjusted_move_estimate",         "FLOAT"),
     ("raw_move_pct",                         "FLOAT"),
+    # Scanner v2 / NP structural fields (Phase 2B-7)
+    # Structure phase
+    ("dominant_structure_phase_pre",         "VARCHAR(30)"),
+    ("best_structure_phase_pre",             "VARCHAR(30)"),
+    ("max_structure_score_pre",              "INTEGER"),
+    ("avg_structure_score_pre",              "FLOAT"),
+    ("had_confirmed_structure_pre",          "BOOLEAN"),
+    ("had_triggered_structure_pre",          "BOOLEAN"),
+    ("had_early_structure_pre",              "BOOLEAN"),
+    ("had_setup_phase_pre",                  "BOOLEAN"),
+    ("had_impulse_only_pre",                 "BOOLEAN"),
+    ("had_degraded_pre",                     "BOOLEAN"),
+    # Compression / expansion
+    ("had_accumulation_ready_pre",           "BOOLEAN"),
+    ("had_expansion_start_pre",              "BOOLEAN"),
+    ("had_overheated_expansion_pre",         "BOOLEAN"),
+    ("max_expansion_timing_risk_pre",        "VARCHAR(10)"),
+    ("high_expansion_risk_day_count_pre",    "INTEGER"),
+    # D/WLNBB confluence
+    ("had_d_confluence_pre",                 "BOOLEAN"),
+    ("had_core_d_beup_pre",                  "BOOLEAN"),
+    ("had_core_d_l34_pre",                   "BOOLEAN"),
+    ("had_d6_beup_pre",                      "BOOLEAN"),
+    ("had_d4_beup_pre",                      "BOOLEAN"),
+    ("had_d3_beup_pre",                      "BOOLEAN"),
+    ("had_l34_then_d4_3b_pre",               "BOOLEAN"),
+    ("had_d4_then_beup_5b_pre",              "BOOLEAN"),
+    ("had_d3_beup_toxic_pre",                "BOOLEAN"),
+    ("dominant_d_confluence_type_pre",       "VARCHAR(30)"),
+    ("dominant_d_confluence_family_pre",     "VARCHAR(30)"),
+    ("d_confluence_day_count_pre",           "INTEGER"),
+    ("d_confluence_best_type_pre",           "VARCHAR(30)"),
+    # Decision / routing
+    ("had_np_buy_candidate_pre",             "BOOLEAN"),
+    ("had_np_watch_pre",                     "BOOLEAN"),
+    ("had_np_avoid_pre",                     "BOOLEAN"),
+    ("max_np_structure_score_pre",           "INTEGER"),
+    ("buy_candidate_day_count_pre",          "INTEGER"),
+    ("watch_day_count_pre",                  "INTEGER"),
+    ("avoid_day_count_pre",                  "INTEGER"),
+    # NP flags
+    ("had_late_confirm_sequence_pre",        "BOOLEAN"),
+    ("had_expansion_risk_flag_pre",          "BOOLEAN"),
+    ("had_setup_only_l34_mid_avoid_pre",     "BOOLEAN"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -3879,6 +3923,51 @@ class RawPatternEpisodeFeatures(Base):
     split_artifact_reason            = Column(Text,       nullable=True)
     split_adjusted_move_estimate     = Column(Float,      nullable=True)
     raw_move_pct                     = Column(Float,      nullable=True)
+
+    # ── Scanner v2 / NP structural fields (Phase 2B-7) ────────────────────────
+    # Structure phase aggregates
+    dominant_structure_phase_pre      = Column(String(30), nullable=True)
+    best_structure_phase_pre          = Column(String(30), nullable=True)
+    max_structure_score_pre           = Column(Integer,    nullable=True)
+    avg_structure_score_pre           = Column(Float,      nullable=True)
+    had_confirmed_structure_pre       = Column(Boolean,    nullable=True)
+    had_triggered_structure_pre       = Column(Boolean,    nullable=True)
+    had_early_structure_pre           = Column(Boolean,    nullable=True)
+    had_setup_phase_pre               = Column(Boolean,    nullable=True)
+    had_impulse_only_pre              = Column(Boolean,    nullable=True)
+    had_degraded_pre                  = Column(Boolean,    nullable=True)
+    # Compression / expansion
+    had_accumulation_ready_pre        = Column(Boolean,    nullable=True)
+    had_expansion_start_pre           = Column(Boolean,    nullable=True)
+    had_overheated_expansion_pre      = Column(Boolean,    nullable=True)
+    max_expansion_timing_risk_pre     = Column(String(10), nullable=True)
+    high_expansion_risk_day_count_pre = Column(Integer,    nullable=True)
+    # D/WLNBB confluence
+    had_d_confluence_pre              = Column(Boolean,    nullable=True)
+    had_core_d_beup_pre               = Column(Boolean,    nullable=True)
+    had_core_d_l34_pre                = Column(Boolean,    nullable=True)
+    had_d6_beup_pre                   = Column(Boolean,    nullable=True)
+    had_d4_beup_pre                   = Column(Boolean,    nullable=True)
+    had_d3_beup_pre                   = Column(Boolean,    nullable=True)
+    had_l34_then_d4_3b_pre            = Column(Boolean,    nullable=True)
+    had_d4_then_beup_5b_pre           = Column(Boolean,    nullable=True)
+    had_d3_beup_toxic_pre             = Column(Boolean,    nullable=True)
+    dominant_d_confluence_type_pre    = Column(String(30), nullable=True)
+    dominant_d_confluence_family_pre  = Column(String(30), nullable=True)
+    d_confluence_day_count_pre        = Column(Integer,    nullable=True)
+    d_confluence_best_type_pre        = Column(String(30), nullable=True)
+    # Decision / routing
+    had_np_buy_candidate_pre          = Column(Boolean,    nullable=True)
+    had_np_watch_pre                  = Column(Boolean,    nullable=True)
+    had_np_avoid_pre                  = Column(Boolean,    nullable=True)
+    max_np_structure_score_pre        = Column(Integer,    nullable=True)
+    buy_candidate_day_count_pre       = Column(Integer,    nullable=True)
+    watch_day_count_pre               = Column(Integer,    nullable=True)
+    avoid_day_count_pre               = Column(Integer,    nullable=True)
+    # NP flags
+    had_late_confirm_sequence_pre     = Column(Boolean,    nullable=True)
+    had_expansion_risk_flag_pre       = Column(Boolean,    nullable=True)
+    had_setup_only_l34_mid_avoid_pre  = Column(Boolean,    nullable=True)
 
 
 class RawPatternComparison(Base):

@@ -248,6 +248,14 @@ const EP_COLS = [
   { key: 'avg_body_pct_pre',                        label: 'AvgBody',         mono: true,  fmt: v => v != null ? `${(v * 100).toFixed(0)}%` : '—' },
   { key: 'bullish_engulfing_count_pre',             label: 'BullEng',         mono: true  },
   { key: 'reclaim_bar_count_pre',                   label: 'Reclaim',         mono: true  },
+  { key: 'split_context',                           label: 'SplitCtx',        mono: true,  fmt: v => v || '—', small: true },
+  { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠' : '—' },
+  { key: 'nearest_split_ratio',                     label: 'SplitRatio',      mono: true,  fmt: v => v != null ? `${Number(v).toFixed(2)}×` : '—' },
+  { key: 'nearest_split_days_from_breakout',        label: 'SplitΔBrk',      mono: true  },
+  { key: 'dominant_structure_phase_pre',            label: 'StrPhase',        mono: true,  fmt: v => v || '—', small: true },
+  { key: 'had_confirmed_structure_pre',             label: 'Confirmed?',      mono: true,  fmt: v => v ? '✓' : '—' },
+  { key: 'had_np_buy_candidate_pre',                label: 'NPBuy?',          mono: true,  fmt: v => v ? '✓' : '—' },
+  { key: 'd_confluence_best_type_pre',              label: 'DType',           mono: true,  fmt: v => v || '—', small: true },
 ];
 
 function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroupFilter }) {
@@ -400,6 +408,52 @@ const COMP_FEATURES = [
   'bearish_engulfing_count_pre',
   'inside_bar_count_pre',
   'outside_bar_count_pre',
+  // PRIMARY — Scanner v2 structural (Phase 2B-7)
+  'had_confirmed_structure_pre',
+  'had_triggered_structure_pre',
+  'max_structure_score_pre',
+  'avg_structure_score_pre',
+  'had_d_confluence_pre',
+  'had_core_d_beup_pre',
+  'had_core_d_l34_pre',
+  'd_confluence_day_count_pre',
+  'd_confluence_best_type_pre',
+  'had_np_buy_candidate_pre',
+  'buy_candidate_day_count_pre',
+  'watch_day_count_pre',
+  // SECONDARY — structural detail
+  'dominant_structure_phase_pre',
+  'best_structure_phase_pre',
+  'had_early_structure_pre',
+  'had_setup_phase_pre',
+  'had_impulse_only_pre',
+  'had_degraded_pre',
+  'had_accumulation_ready_pre',
+  'had_expansion_start_pre',
+  'had_overheated_expansion_pre',
+  'max_expansion_timing_risk_pre',
+  'high_expansion_risk_day_count_pre',
+  'had_d6_beup_pre',
+  'had_d4_beup_pre',
+  'had_d3_beup_pre',
+  'had_l34_then_d4_3b_pre',
+  'had_d4_then_beup_5b_pre',
+  'had_d3_beup_toxic_pre',
+  'dominant_d_confluence_type_pre',
+  'dominant_d_confluence_family_pre',
+  'had_np_watch_pre',
+  'had_np_avoid_pre',
+  'max_np_structure_score_pre',
+  'avoid_day_count_pre',
+  'had_late_confirm_sequence_pre',
+  'had_expansion_risk_flag_pre',
+  'had_setup_only_l34_mid_avoid_pre',
+  // SECONDARY — split context
+  'has_split_near_episode',
+  'has_reverse_split_near_episode',
+  'split_artifact_risk',
+  'reverse_split_event_count',
+  'nearest_split_days_from_breakout',
 ];
 
 // Used to derive badge when stats_json priority is absent (legacy runs)
@@ -471,6 +525,51 @@ const FEATURE_PRIORITY = {
   bearish_engulfing_count_pre:                 'LOW_SIGNAL',
   inside_bar_count_pre:                        'LOW_SIGNAL',
   outside_bar_count_pre:                       'LOW_SIGNAL',
+  // Scanner v2 structural (Phase 2B-7)
+  had_confirmed_structure_pre:                 'PRIMARY',
+  had_triggered_structure_pre:                 'PRIMARY',
+  max_structure_score_pre:                     'PRIMARY',
+  avg_structure_score_pre:                     'PRIMARY',
+  had_d_confluence_pre:                        'PRIMARY',
+  had_core_d_beup_pre:                         'PRIMARY',
+  had_core_d_l34_pre:                          'PRIMARY',
+  d_confluence_day_count_pre:                  'PRIMARY',
+  d_confluence_best_type_pre:                  'PRIMARY',
+  had_np_buy_candidate_pre:                    'PRIMARY',
+  buy_candidate_day_count_pre:                 'PRIMARY',
+  watch_day_count_pre:                         'PRIMARY',
+  dominant_structure_phase_pre:                'SECONDARY',
+  best_structure_phase_pre:                    'SECONDARY',
+  had_early_structure_pre:                     'SECONDARY',
+  had_setup_phase_pre:                         'SECONDARY',
+  had_impulse_only_pre:                        'SECONDARY',
+  had_degraded_pre:                            'SECONDARY',
+  had_accumulation_ready_pre:                  'SECONDARY',
+  had_expansion_start_pre:                     'SECONDARY',
+  had_overheated_expansion_pre:                'SECONDARY',
+  max_expansion_timing_risk_pre:               'SECONDARY',
+  high_expansion_risk_day_count_pre:           'SECONDARY',
+  had_d6_beup_pre:                             'SECONDARY',
+  had_d4_beup_pre:                             'SECONDARY',
+  had_d3_beup_pre:                             'SECONDARY',
+  had_l34_then_d4_3b_pre:                      'SECONDARY',
+  had_d4_then_beup_5b_pre:                     'SECONDARY',
+  had_d3_beup_toxic_pre:                       'SECONDARY',
+  dominant_d_confluence_type_pre:              'SECONDARY',
+  dominant_d_confluence_family_pre:            'SECONDARY',
+  had_np_watch_pre:                            'SECONDARY',
+  had_np_avoid_pre:                            'SECONDARY',
+  max_np_structure_score_pre:                  'SECONDARY',
+  avoid_day_count_pre:                         'SECONDARY',
+  had_late_confirm_sequence_pre:               'SECONDARY',
+  had_expansion_risk_flag_pre:                 'SECONDARY',
+  had_setup_only_l34_mid_avoid_pre:            'SECONDARY',
+  // Split context
+  has_split_near_episode:                      'SECONDARY',
+  has_reverse_split_near_episode:              'SECONDARY',
+  split_artifact_risk:                         'SECONDARY',
+  reverse_split_event_count:                   'SECONDARY',
+  nearest_split_days_from_breakout:            'SECONDARY',
 };
 
 const TIER_ORDER = { PRIMARY: 0, SECONDARY: 1, LOW_SIGNAL: 2 };
@@ -1211,6 +1310,182 @@ function NPBundlePanel({ runId }) {
   );
 }
 
+// ── Split Impact Panel ────────────────────────────────────────────────────────
+
+const SPLIT_CTX_COLOR = {
+  NO_SPLIT:              'var(--text-muted)',
+  FORWARD_SPLIT:         'var(--blue,  #60a5fa)',
+  RECENT_REVERSE_SPLIT:  'var(--amber, #fbbf24)',
+  OLD_REVERSE_SPLIT:     'var(--text-dim)',
+  SPLIT_DURING_PUMP:     'var(--orange, #fb923c)',
+  SPLIT_ARTIFACT_RISK:   'var(--rose,  #fb7185)',
+};
+
+function SplitImpactPanel({ runId }) {
+  const [data,    setData]    = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [err,     setErr]     = React.useState('');
+
+  React.useEffect(() => {
+    setLoading(true); setErr(''); setData(null);
+    fetch(`/api/replay/raw-pattern-study/${runId}/split-impact`)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => setData(d))
+      .catch(e => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, [runId]);
+
+  if (loading) return <div className={styles.statusMsg}>Loading split impact…</div>;
+  if (err)     return <div className={styles.errorMsg}>Split impact error: {err}</div>;
+  if (!data)   return null;
+
+  const byCtx    = data.performance_by_split_context    || {};
+  const byTiming = data.performance_by_reverse_split_timing || {};
+  const artifacts = data.split_artifact_candidates      || [];
+  const summary  = data.split_impact_summary            || {};
+  const recs     = data.scanner_v2_split_patch_recommendations || [];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+      {/* Summary bar */}
+      <div className={styles.tableCard} style={{ padding: '8px 12px', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {Object.entries(summary).map(([k, v]) => (
+          <span key={k} style={{ fontSize: 11 }}>
+            <span style={{ color: 'var(--text-muted)' }}>{k}:</span>{' '}
+            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{String(v)}</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Performance by split context */}
+      {Object.keys(byCtx).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Performance by Split Context</span>
+          </div>
+          <div className={styles.tableScroll}>
+            <table className={styles.dataTable}>
+              <thead>
+                <tr>
+                  <th className={styles.dataHead}>Context</th>
+                  <th className={styles.dataHead}>N</th>
+                  <th className={styles.dataHead}>4x%</th>
+                  <th className={styles.dataHead}>FP%</th>
+                  <th className={styles.dataHead}>Med Mult</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(byCtx).map(([ctx, row]) => (
+                  <tr key={ctx} className={styles.dataRow}>
+                    <td className={styles.dataCell} style={{ color: SPLIT_CTX_COLOR[ctx] || 'var(--text)', fontWeight: 600, fontSize: 11 }}>{ctx}</td>
+                    <td className={styles.dataCell}>{row.count ?? '—'}</td>
+                    <td className={styles.dataCell}>{row['4x_pump_pct'] != null ? `${Number(row['4x_pump_pct']).toFixed(1)}%` : '—'}</td>
+                    <td className={styles.dataCell}>{row['false_positive_pct'] != null ? `${Number(row['false_positive_pct']).toFixed(1)}%` : '—'}</td>
+                    <td className={styles.dataCell}>{row['median_pump_multiple'] != null ? `${Number(row['median_pump_multiple']).toFixed(2)}×` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Performance by reverse-split timing */}
+      {Object.keys(byTiming).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Performance by Reverse-Split Timing Bucket</span>
+          </div>
+          <div className={styles.tableScroll}>
+            <table className={styles.dataTable}>
+              <thead>
+                <tr>
+                  <th className={styles.dataHead}>Timing bucket</th>
+                  <th className={styles.dataHead}>N</th>
+                  <th className={styles.dataHead}>4x%</th>
+                  <th className={styles.dataHead}>FP%</th>
+                  <th className={styles.dataHead}>Med Mult</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(byTiming).map(([bucket, row]) => (
+                  <tr key={bucket} className={styles.dataRow}>
+                    <td className={styles.dataCell} style={{ fontSize: 11, color: 'var(--amber, #fbbf24)' }}>{bucket}</td>
+                    <td className={styles.dataCell}>{row.count ?? '—'}</td>
+                    <td className={styles.dataCell}>{row['4x_pump_pct'] != null ? `${Number(row['4x_pump_pct']).toFixed(1)}%` : '—'}</td>
+                    <td className={styles.dataCell}>{row['false_positive_pct'] != null ? `${Number(row['false_positive_pct']).toFixed(1)}%` : '—'}</td>
+                    <td className={styles.dataCell}>{row['median_pump_multiple'] != null ? `${Number(row['median_pump_multiple']).toFixed(2)}×` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Split artifact candidates */}
+      {artifacts.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle} style={{ color: 'var(--rose, #fb7185)' }}>
+              Split Artifact Candidates ({artifacts.length})
+            </span>
+            <span className={styles.tableHint}>price jump ≈ split ratio · exclude from scoring</span>
+          </div>
+          <div className={styles.tableScroll}>
+            <table className={styles.dataTable}>
+              <thead>
+                <tr>
+                  <th className={styles.dataHead}>Symbol</th>
+                  <th className={styles.dataHead}>Group</th>
+                  <th className={styles.dataHead}>Mult</th>
+                  <th className={styles.dataHead}>Split Ratio</th>
+                  <th className={styles.dataHead}>Δ Brk</th>
+                  <th className={styles.dataHead}>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {artifacts.map((a, i) => (
+                  <tr key={i} className={styles.dataRow}>
+                    <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)' }}>{a.symbol}</td>
+                    <td className={styles.dataCell}><GroupBadge type={a.group_type} /></td>
+                    <td className={styles.dataCell}>{a.pump_multiple != null ? `${Number(a.pump_multiple).toFixed(2)}×` : '—'}</td>
+                    <td className={styles.dataCell}>{a.nearest_split_ratio != null ? `${Number(a.nearest_split_ratio).toFixed(2)}×` : '—'}</td>
+                    <td className={styles.dataCell}>{a.nearest_split_days_from_breakout ?? '—'}</td>
+                    <td className={styles.dataCell} style={{ fontSize: 10, color: 'var(--text-dim)', maxWidth: 240 }}>{a.split_artifact_reason || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Scanner v2 patch recommendations */}
+      {recs.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Scanner v2 Split Patch Recommendations</span>
+          </div>
+          <ul style={{ margin: '8px 12px 10px', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {recs.map((r, i) => (
+              <li key={i} style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, paddingLeft: 14, position: 'relative' }}>
+                <span style={{ position: 'absolute', left: 0, color: 'var(--amber, #fbbf24)' }}>·</span>
+                {r}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {Object.keys(byCtx).length === 0 && artifacts.length === 0 && recs.length === 0 && (
+        <div className={styles.statusMsg}>No split impact data for this run — splits phase may not have run yet.</div>
+      )}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RawPatternStudy() {
@@ -1541,9 +1816,10 @@ export default function RawPatternStudy() {
                     { id: 'schemes',     label: 'Top Schemes' },
                     { id: 'episodes',    label: `Episodes (${episodes.length})` },
                     { id: 'comparisons', label: 'Comparisons' },
-                    { id: 'np-bundle',   label: 'NP Bundle' },
-                    { id: 'ai',          label: 'AI Summary' },
-                    { id: 'patch-plan',  label: 'Engine Plan' },
+                    { id: 'np-bundle',     label: 'NP Bundle' },
+                    { id: 'split-impact', label: 'Split Impact' },
+                    { id: 'ai',           label: 'AI Summary' },
+                    { id: 'patch-plan',   label: 'Engine Plan' },
                   ].map(({ id, label }) => (
                     <button
                       key={id}
@@ -1595,6 +1871,13 @@ export default function RawPatternStudy() {
                   run.status !== 'complete'
                     ? <div className={styles.statusMsg}>NP bundle available after run completes.</div>
                     : <NPBundlePanel key={selectedId} runId={selectedId} />
+                )}
+
+                {/* Split Impact tab */}
+                {activeTab === 'split-impact' && (
+                  run.status !== 'complete'
+                    ? <div className={styles.statusMsg}>Split impact available after run completes.</div>
+                    : <SplitImpactPanel key={selectedId} runId={selectedId} />
                 )}
 
                 {/* AI tab */}

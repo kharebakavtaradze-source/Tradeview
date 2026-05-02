@@ -2001,6 +2001,40 @@ _COMPARISON_FEATURES = [
     "split_during_pump_window",
     "split_after_peak_30d",
     "split_artifact_risk",
+    # ── PRIMARY: Scanner v2 / NP structure phase ──
+    "had_confirmed_structure_pre",
+    "had_triggered_structure_pre",
+    "max_structure_score_pre",
+    "avg_structure_score_pre",
+    "had_accumulation_ready_pre",
+    "had_overheated_expansion_pre",
+    "high_expansion_risk_day_count_pre",
+    "had_d6_beup_pre",
+    "had_d4_beup_pre",
+    "d_confluence_day_count_pre",
+    "had_np_buy_candidate_pre",
+    "buy_candidate_day_count_pre",
+    # ── SECONDARY: structure detail ──
+    "had_early_structure_pre",
+    "had_setup_phase_pre",
+    "had_impulse_only_pre",
+    "had_degraded_pre",
+    "had_expansion_start_pre",
+    "had_d_confluence_pre",
+    "had_core_d_beup_pre",
+    "had_core_d_l34_pre",
+    "had_l34_then_d4_3b_pre",
+    "had_d4_then_beup_5b_pre",
+    "had_d3_beup_pre",
+    "had_d3_beup_toxic_pre",
+    "had_np_watch_pre",
+    "had_np_avoid_pre",
+    "watch_day_count_pre",
+    "avoid_day_count_pre",
+    "max_np_structure_score_pre",
+    "had_late_confirm_sequence_pre",
+    "had_expansion_risk_flag_pre",
+    "had_setup_only_l34_mid_avoid_pre",
 ]
 
 # Priority tier for each feature.  Used to populate stats_json["priority"]
@@ -2099,6 +2133,40 @@ _FEATURE_PRIORITY: dict[str, str] = {
     "split_during_pump_window":             "SECONDARY",
     "split_after_peak_30d":                "SECONDARY",
     "split_artifact_risk":                  "SECONDARY",
+    # PRIMARY — structure phase
+    "had_confirmed_structure_pre":         "PRIMARY",
+    "had_triggered_structure_pre":         "PRIMARY",
+    "max_structure_score_pre":             "PRIMARY",
+    "avg_structure_score_pre":             "PRIMARY",
+    "had_accumulation_ready_pre":          "PRIMARY",
+    "had_overheated_expansion_pre":        "PRIMARY",
+    "high_expansion_risk_day_count_pre":   "PRIMARY",
+    "had_d6_beup_pre":                     "PRIMARY",
+    "had_d4_beup_pre":                     "PRIMARY",
+    "d_confluence_day_count_pre":          "PRIMARY",
+    "had_np_buy_candidate_pre":            "PRIMARY",
+    "buy_candidate_day_count_pre":         "PRIMARY",
+    # SECONDARY — structure detail
+    "had_early_structure_pre":             "SECONDARY",
+    "had_setup_phase_pre":                 "SECONDARY",
+    "had_impulse_only_pre":                "SECONDARY",
+    "had_degraded_pre":                    "SECONDARY",
+    "had_expansion_start_pre":             "SECONDARY",
+    "had_d_confluence_pre":                "SECONDARY",
+    "had_core_d_beup_pre":                 "SECONDARY",
+    "had_core_d_l34_pre":                  "SECONDARY",
+    "had_l34_then_d4_3b_pre":              "SECONDARY",
+    "had_d4_then_beup_5b_pre":             "SECONDARY",
+    "had_d3_beup_pre":                     "SECONDARY",
+    "had_d3_beup_toxic_pre":               "SECONDARY",
+    "had_np_watch_pre":                    "SECONDARY",
+    "had_np_avoid_pre":                    "SECONDARY",
+    "watch_day_count_pre":                 "SECONDARY",
+    "avoid_day_count_pre":                 "SECONDARY",
+    "max_np_structure_score_pre":          "SECONDARY",
+    "had_late_confirm_sequence_pre":       "SECONDARY",
+    "had_expansion_risk_flag_pre":         "SECONDARY",
+    "had_setup_only_l34_mid_avoid_pre":    "SECONDARY",
 }
 
 # Binary features where always_on_flag is meaningful
@@ -2112,6 +2180,17 @@ _BINARY_FEATURES = {
     "reverse_split_0_5d_before_breakout", "reverse_split_6_15d_before_breakout",
     "reverse_split_16_30d_before_breakout", "reverse_split_31_60d_before_breakout",
     "split_during_pump_window", "split_after_peak_30d", "split_artifact_risk",
+    "had_confirmed_structure_pre", "had_triggered_structure_pre",
+    "had_early_structure_pre", "had_setup_phase_pre",
+    "had_impulse_only_pre", "had_degraded_pre",
+    "had_accumulation_ready_pre", "had_expansion_start_pre",
+    "had_overheated_expansion_pre",
+    "had_d_confluence_pre", "had_core_d_beup_pre", "had_core_d_l34_pre",
+    "had_d6_beup_pre", "had_d4_beup_pre", "had_d3_beup_pre",
+    "had_l34_then_d4_3b_pre", "had_d4_then_beup_5b_pre", "had_d3_beup_toxic_pre",
+    "had_np_buy_candidate_pre", "had_np_watch_pre", "had_np_avoid_pre",
+    "had_late_confirm_sequence_pre", "had_expansion_risk_flag_pre",
+    "had_setup_only_l34_mid_avoid_pre",
 }
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
@@ -2595,6 +2674,259 @@ async def build_split_impact_analysis(run_id: int) -> dict:
         "split_impact_summary":               summary_lines,
         "scanner_v2_split_patch_recommendations": scanner_v2_recs,
     }
+
+
+# ── Structure phase rank maps ─────────────────────────────────────────────────
+
+_STRUCTURE_PHASE_RANK = {
+    "CONFIRMED_STRUCTURE": 0,
+    "TRIGGERED_STRUCTURE": 1,
+    "EARLY_STRUCTURE":     2,
+    "SETUP_PHASE":         3,
+    "IMPULSE_ONLY":        4,
+    "DEGRADED":            5,
+    "BROKEN_STRUCTURE":    6,
+    "UNKNOWN":             7,
+    "NONE":                8,
+}
+
+_EXPANSION_RISK_RANK = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3, "NONE": 4}
+
+_D_BEST_TYPE_RANK = {
+    "D6_BEUP":                0,
+    "L34_THEN_D4_3B":         1,
+    "D4_BEUP":                2,
+    "D4_L34":                 3,
+    "D3_L34":                 4,
+    "D4_THEN_BEUP_5B":        5,
+    "D3_BEUP":                6,
+    "D6_L34":                 7,
+    "SECONDARY_D_CONFLUENCE": 8,
+    "NONE":                   9,
+}
+
+
+async def build_raw_pattern_episode_features_structural_v2(
+    raw_run_id: int,
+    pump_study_run_id: int,
+    lookback_days: int = 200,
+) -> int:
+    """
+    Phase 2B-7: Extract Scanner v2 / NP structural fields from PRE-window
+    pump_episode_snapshots.new_pump and per-day D/WLNBB confluence computation.
+
+    Structure fields: from snapshot.new_pump (structure_phase, structure_score,
+        compression_expansion_state, expansion_timing_risk, decision, decision_flags)
+    D/WLNBB fields: computed per PRE day via compute_d_wlnbb_confluence on
+        fetched candle history.
+
+    Returns number of episodes patched.
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        get_run_snapshots,
+        get_pump_episode_events,
+        update_raw_pattern_episode_features,
+    )
+
+    try:
+        from scanner.manual_d_wlnbb_features import compute_d_wlnbb_confluence
+        _dw_available = True
+    except ImportError:
+        _dw_available = False
+        logger.warning("[StructV2] manual_d_wlnbb_features not importable — D/WLNBB fields skipped")
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    def _mode(vals: list) -> Optional[str]:
+        """Most frequent non-None/NONE/UNKNOWN value."""
+        from collections import Counter
+        filtered = [v for v in vals if v and v not in ("NONE", "UNKNOWN")]
+        if not filtered:
+            return None
+        return Counter(filtered).most_common(1)[0][0]
+
+    def _mean_int(vals: list) -> Optional[float]:
+        cleaned = [v for v in vals if v is not None]
+        return round(sum(cleaned) / len(cleaned), 2) if cleaned else None
+
+    for ep in episodes:
+        episode_id = ep["id"]
+        symbol     = (ep.get("symbol") or "").upper()
+        pump_start = ep.get("pump_start_date")
+        if not symbol or not pump_start:
+            continue
+
+        # ── Read PRE snapshots for structure / decision fields ────────────────
+        pre_snaps = await get_run_snapshots(
+            run_id=pump_study_run_id, episode_id=episode_id, phase="PRE"
+        )
+
+        structure_phases:  list[str]   = []
+        structure_scores:  list[int]   = []
+        ce_states:         list[str]   = []
+        exp_risks:         list[str]   = []
+        decisions:         list[str]   = []
+        all_flags:         list[str]   = []
+
+        for snap in pre_snaps:
+            np = (snap.get("snapshot") or {}).get("new_pump") or {}
+            sp  = np.get("structure_phase")
+            ss  = np.get("structure_score")
+            ce  = np.get("compression_expansion_state")
+            er  = np.get("expansion_timing_risk")
+            dec = np.get("decision")
+            dfl = np.get("decision_flags") or []
+
+            if sp:  structure_phases.append(sp)
+            if ss is not None: structure_scores.append(ss)
+            if ce:  ce_states.append(ce)
+            if er:  exp_risks.append(er)
+            if dec: decisions.append(dec)
+            if isinstance(dfl, list):
+                all_flags.extend(dfl)
+
+        # Structure aggregates
+        dom_sp   = _mode(structure_phases)
+        best_sp  = None
+        for phase_name, _ in sorted(_STRUCTURE_PHASE_RANK.items(), key=lambda x: x[1]):
+            if phase_name in structure_phases:
+                best_sp = phase_name
+                break
+
+        max_ss   = max(structure_scores)  if structure_scores else None
+        avg_ss   = _mean_int(structure_scores)
+
+        # Expansion risk — worst seen
+        best_er  = None
+        for er_name, _ in sorted(_EXPANSION_RISK_RANK.items(), key=lambda x: x[1]):
+            if er_name in exp_risks:
+                best_er = er_name
+                break
+        high_er_count = sum(1 for r in exp_risks if r == "HIGH")
+
+        # Decision counts
+        buy_count   = sum(1 for d in decisions if d and d.startswith("BUY_CANDIDATE"))
+        watch_count = sum(1 for d in decisions if d and d.startswith("WATCH"))
+        avoid_count = sum(1 for d in decisions if d and d.startswith("AVOID"))
+        max_ss_in_buy = None
+        if buy_count > 0:
+            buy_indices = [i for i, d in enumerate(decisions) if d and d.startswith("BUY_CANDIDATE")]
+            buy_scores  = [structure_scores[i] for i in buy_indices if i < len(structure_scores)]
+            max_ss_in_buy = max(buy_scores) if buy_scores else None
+
+        # ── D/WLNBB fields from candle re-fetch ──────────────────────────────
+        d_types:    list[str] = []
+        d_families: list[str] = []
+
+        if _dw_available:
+            try:
+                start_fetch = str(date.fromisoformat(pump_start) - timedelta(days=lookback_days * 2))
+            except (ValueError, TypeError):
+                start_fetch = None
+
+            if start_fetch:
+                all_candles = await _fetch_candles_range(symbol, start_fetch, pump_start)
+                if len(all_candles) >= 10:
+                    # Build date index
+                    candle_date_idx = {c["date"]: i for i, c in enumerate(all_candles) if c.get("date")}
+                    sorted_pre = sorted(pre_snaps, key=lambda s: s.get("date") or "")
+
+                    for snap in sorted_pre:
+                        row_date = snap.get("date") or ""
+                        cidx = candle_date_idx.get(row_date)
+                        if cidx is None:
+                            continue
+                        window = all_candles[max(0, cidx - 199): cidx + 1]
+                        if len(window) < 10:
+                            continue
+                        try:
+                            dw = compute_d_wlnbb_confluence(window)
+                        except Exception:
+                            continue
+                        dt = dw.get("d_confluence_type_v2") or dw.get("d_confluence_type") or "NONE"
+                        df = dw.get("d_confluence_family") or "NONE"
+                        if dt and dt != "NONE":
+                            d_types.append(dt)
+                        if df and df != "NONE":
+                            d_families.append(df)
+
+        # D/WLNBB aggregates
+        dom_dt    = _mode(d_types)
+        dom_df    = _mode(d_families)
+        d_day_cnt = len(d_types)  # days with any confluence
+        best_dt   = None
+        for dtype, _ in sorted(_D_BEST_TYPE_RANK.items(), key=lambda x: x[1]):
+            if dtype in d_types:
+                best_dt = dtype
+                break
+
+        # ── Build patch dict ──────────────────────────────────────────────────
+        patch = {
+            # Structure
+            "dominant_structure_phase_pre":      dom_sp,
+            "best_structure_phase_pre":          best_sp,
+            "max_structure_score_pre":           max_ss,
+            "avg_structure_score_pre":           avg_ss,
+            "had_confirmed_structure_pre":       "CONFIRMED_STRUCTURE" in structure_phases or None,
+            "had_triggered_structure_pre":       "TRIGGERED_STRUCTURE" in structure_phases or None,
+            "had_early_structure_pre":           "EARLY_STRUCTURE" in structure_phases or None,
+            "had_setup_phase_pre":               "SETUP_PHASE" in structure_phases or None,
+            "had_impulse_only_pre":              "IMPULSE_ONLY" in structure_phases or None,
+            "had_degraded_pre":                  "DEGRADED" in structure_phases or None,
+            # Compression / expansion
+            "had_accumulation_ready_pre":        "ACCUMULATION_READY" in ce_states or None,
+            "had_expansion_start_pre":           "EXPANSION_START" in ce_states or None,
+            "had_overheated_expansion_pre":      "OVERHEATED_EXPANSION" in ce_states or None,
+            "max_expansion_timing_risk_pre":     best_er,
+            "high_expansion_risk_day_count_pre": high_er_count or None,
+            # D/WLNBB
+            "had_d_confluence_pre":              bool(d_types) or None,
+            "had_core_d_beup_pre":               any("BEUP" in t for t in d_types) or None,
+            "had_core_d_l34_pre":                any("L34" in t for t in d_types) or None,
+            "had_d6_beup_pre":                   any(t in ("D6_BEUP", "D6_BEUP_SAME") for t in d_types) or None,
+            "had_d4_beup_pre":                   any(t in ("D4_BEUP", "D4_BEUP_SAME") for t in d_types) or None,
+            "had_d3_beup_pre":                   any(t in ("D3_BEUP", "D3_BEUP_SAME") for t in d_types) or None,
+            "had_l34_then_d4_3b_pre":            "L34_THEN_D4_3B" in d_types or None,
+            "had_d4_then_beup_5b_pre":           "D4_THEN_BEUP_5B" in d_types or None,
+            "had_d3_beup_toxic_pre":             any(t in ("D3_BEUP", "D3_BEUP_SAME", "D3_THEN_BEUP_5B") for t in d_types) or None,
+            "dominant_d_confluence_type_pre":    dom_dt,
+            "dominant_d_confluence_family_pre":  dom_df,
+            "d_confluence_day_count_pre":        d_day_cnt or None,
+            "d_confluence_best_type_pre":        best_dt,
+            # Decision / routing
+            "had_np_buy_candidate_pre":          bool(buy_count) or None,
+            "had_np_watch_pre":                  bool(watch_count) or None,
+            "had_np_avoid_pre":                  bool(avoid_count) or None,
+            "max_np_structure_score_pre":        max_ss_in_buy,
+            "buy_candidate_day_count_pre":       buy_count or None,
+            "watch_day_count_pre":               watch_count or None,
+            "avoid_day_count_pre":               avoid_count or None,
+            # Flags
+            "had_late_confirm_sequence_pre":     bool(
+                any(sp in ("CONFIRMED_STRUCTURE",) for sp in structure_phases)
+                and "CONFIRM_AFTER_G4" in str(all_flags)
+            ) or None,
+            "had_expansion_risk_flag_pre":       (
+                "expansion_timing_risk_high" in all_flags or "HIGH" in exp_risks
+            ) or None,
+            "had_setup_only_l34_mid_avoid_pre":  (
+                "l34_setup_only_mid_score_avoid" in all_flags
+            ) or None,
+        }
+
+        # Convert False booleans to None (keep True as True — meaningful signal)
+        for k, v in patch.items():
+            if v is False:
+                patch[k] = None
+
+        if any(v is not None for v in patch.values()):
+            await update_raw_pattern_episode_features(raw_run_id, episode_id, patch)
+            patched += 1
+
+    return patched
 
 
 async def build_raw_pattern_episode_features_ema(
