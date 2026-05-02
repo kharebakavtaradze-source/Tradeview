@@ -430,6 +430,29 @@ class UniverseCache(Base):
     last_synced_at              = Column(DateTime,    nullable=True, index=True)
 
 
+class StockSplitCache(Base):
+    """
+    Corporate action split history — persisted from Massive /v3/reference/splits.
+    Used by Raw Pattern Study split-impact analysis.
+    """
+    __tablename__ = "stock_split_cache"
+
+    id                = Column(Integer,  primary_key=True)
+    symbol            = Column(String(20), nullable=False, index=True)
+    execution_date    = Column(String(10), nullable=False, index=True)
+    split_from        = Column(Integer,  nullable=False)
+    split_to          = Column(Integer,  nullable=False)
+    ratio             = Column(Float,    nullable=True)   # split_to / split_from
+    split_type        = Column(String(30), nullable=True) # FORWARD_SPLIT / REVERSE_SPLIT / STOCK_DIVIDEND / UNKNOWN
+    adjustment_factor = Column(Float,    nullable=True)   # split_from / split_to
+    source            = Column(String(20), nullable=True)
+    synced_at         = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("symbol", "execution_date", name="uq_split_symbol_date"),
+    )
+
+
 _SCAN_CANDIDATE_MIGRATIONS = [
     ("vol_score",       "FLOAT"),
     ("accum_score",     "FLOAT"),
@@ -512,6 +535,33 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("valid_trigger_days_pre",               "INTEGER"),
     ("valid_confirm_days_pre",               "INTEGER"),
     ("valid_full_sequence_days_pre",         "INTEGER"),
+    ("sector",                               "VARCHAR(50)"),
+    ("industry",                             "VARCHAR(100)"),
+    # Split / corporate action episode features
+    ("has_split_near_episode",               "BOOLEAN"),
+    ("has_reverse_split_near_episode",       "BOOLEAN"),
+    ("has_forward_split_near_episode",       "BOOLEAN"),
+    ("split_event_count",                    "INTEGER"),
+    ("reverse_split_event_count",            "INTEGER"),
+    ("forward_split_event_count",            "INTEGER"),
+    ("nearest_split_date",                   "VARCHAR(10)"),
+    ("nearest_split_type",                   "VARCHAR(30)"),
+    ("nearest_split_ratio",                  "FLOAT"),
+    ("nearest_split_days_from_breakout",     "INTEGER"),
+    ("nearest_split_days_from_pump_start",   "INTEGER"),
+    ("nearest_split_days_from_peak",         "INTEGER"),
+    ("reverse_split_0_5d_before_breakout",   "BOOLEAN"),
+    ("reverse_split_6_15d_before_breakout",  "BOOLEAN"),
+    ("reverse_split_16_30d_before_breakout", "BOOLEAN"),
+    ("reverse_split_31_60d_before_breakout", "BOOLEAN"),
+    ("reverse_split_after_breakout",         "BOOLEAN"),
+    ("split_during_pump_window",             "BOOLEAN"),
+    ("split_after_peak_30d",                "BOOLEAN"),
+    ("split_context",                        "VARCHAR(30)"),
+    ("split_artifact_risk",                  "BOOLEAN"),
+    ("split_artifact_reason",                "TEXT"),
+    ("split_adjusted_move_estimate",         "FLOAT"),
+    ("raw_move_pct",                         "FLOAT"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -3801,6 +3851,34 @@ class RawPatternEpisodeFeatures(Base):
     valid_full_sequence_days_pre  = Column(Integer,    nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    sector     = Column(String(50),  nullable=True)
+    industry   = Column(String(100), nullable=True)
+
+    # ── Split / corporate action episode features ──────────────────────────────
+    has_split_near_episode           = Column(Boolean,    nullable=True)
+    has_reverse_split_near_episode   = Column(Boolean,    nullable=True)
+    has_forward_split_near_episode   = Column(Boolean,    nullable=True)
+    split_event_count                = Column(Integer,    nullable=True)
+    reverse_split_event_count        = Column(Integer,    nullable=True)
+    forward_split_event_count        = Column(Integer,    nullable=True)
+    nearest_split_date               = Column(String(10), nullable=True)
+    nearest_split_type               = Column(String(30), nullable=True)
+    nearest_split_ratio              = Column(Float,      nullable=True)
+    nearest_split_days_from_breakout = Column(Integer,    nullable=True)
+    nearest_split_days_from_pump_start = Column(Integer,  nullable=True)
+    nearest_split_days_from_peak     = Column(Integer,    nullable=True)
+    reverse_split_0_5d_before_breakout  = Column(Boolean, nullable=True)
+    reverse_split_6_15d_before_breakout = Column(Boolean, nullable=True)
+    reverse_split_16_30d_before_breakout = Column(Boolean, nullable=True)
+    reverse_split_31_60d_before_breakout = Column(Boolean, nullable=True)
+    reverse_split_after_breakout     = Column(Boolean,    nullable=True)
+    split_during_pump_window         = Column(Boolean,    nullable=True)
+    split_after_peak_30d             = Column(Boolean,    nullable=True)
+    split_context                    = Column(String(30), nullable=True)
+    split_artifact_risk              = Column(Boolean,    nullable=True)
+    split_artifact_reason            = Column(Text,       nullable=True)
+    split_adjusted_move_estimate     = Column(Float,      nullable=True)
+    raw_move_pct                     = Column(Float,      nullable=True)
 
 
 class RawPatternComparison(Base):
@@ -5071,3 +5149,83 @@ async def delete_raw_pattern_run(run_id: int) -> dict:
         counts["run"] = 1
         await session.commit()
         return counts
+
+
+# ── StockSplitCache CRUD ──────────────────────────────────────────────────────
+
+async def save_stock_splits(splits: list[dict]) -> int:
+    """
+    Upsert split records into StockSplitCache.
+    Each dict must have: symbol, execution_date, split_from, split_to, split_type,
+    ratio, adjustment_factor, source.
+    Returns count of rows inserted/updated.
+    """
+    if not splits:
+        return 0
+    now = datetime.utcnow()
+    async with get_session_factory()() as session:
+        count = 0
+        for s in splits:
+            existing = (await session.execute(
+                select(StockSplitCache).where(
+                    StockSplitCache.symbol == s["symbol"].upper(),
+                    StockSplitCache.execution_date == s["execution_date"],
+                )
+            )).scalar_one_or_none()
+            if existing:
+                existing.split_from        = s.get("split_from", existing.split_from)
+                existing.split_to          = s.get("split_to",   existing.split_to)
+                existing.ratio             = s.get("ratio")
+                existing.split_type        = s.get("split_type")
+                existing.adjustment_factor = s.get("adjustment_factor")
+                existing.source            = s.get("source", "massive")
+                existing.synced_at         = now
+            else:
+                session.add(StockSplitCache(
+                    symbol           = s["symbol"].upper(),
+                    execution_date   = s["execution_date"],
+                    split_from       = s.get("split_from", 1),
+                    split_to         = s.get("split_to",   1),
+                    ratio            = s.get("ratio"),
+                    split_type       = s.get("split_type"),
+                    adjustment_factor= s.get("adjustment_factor"),
+                    source           = s.get("source", "massive"),
+                    synced_at        = now,
+                ))
+                count += 1
+        await session.commit()
+        return count
+
+
+async def get_stock_splits_for_symbols(
+    symbols: list[str],
+    since:   str,
+    until:   str,
+) -> dict[str, list[dict]]:
+    """
+    Return cached splits for the given symbols within [since, until] (inclusive).
+    Returns dict[symbol_upper → list[split_dict]].
+    """
+    if not symbols:
+        return {}
+    upper = [s.upper() for s in symbols]
+    async with get_session_factory()() as session:
+        q = select(StockSplitCache).where(
+            StockSplitCache.symbol.in_(upper),
+            StockSplitCache.execution_date >= since,
+            StockSplitCache.execution_date <= until,
+        ).order_by(StockSplitCache.symbol, StockSplitCache.execution_date)
+        rows = (await session.execute(q)).scalars().all()
+        result: dict[str, list[dict]] = {s: [] for s in upper}
+        for r in rows:
+            result[r.symbol].append({
+                "symbol":           r.symbol,
+                "execution_date":   r.execution_date,
+                "split_from":       r.split_from,
+                "split_to":         r.split_to,
+                "ratio":            r.ratio,
+                "split_type":       r.split_type,
+                "adjustment_factor":r.adjustment_factor,
+                "source":           r.source,
+            })
+        return result
