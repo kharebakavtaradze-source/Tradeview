@@ -85,6 +85,37 @@ _DEFENSIVE_SECTORS: set[str] = {
     "Utilities", "Consumer Staples", "Health Care", "Real Estate",
 }
 
+# ── Sector rotation helpers ──────────────────────────────────────────────────
+
+# Previous RRG quadrant per ETF — populated when sector snapshot refreshes
+_prev_rrg_quadrants: dict[str, str] = {}
+
+# Heuristic macro themes per GICS sector (for display only; not used in scoring)
+_MACRO_THEMES_BY_SECTOR: dict[str, list[str]] = {
+    "Information Technology":  ["AI capex cycle", "rate sensitivity", "export controls"],
+    "Communication Services":  ["AI advertising", "streaming consolidation", "regulatory risk"],
+    "Financials":              ["rate environment", "credit cycle", "banking stress"],
+    "Consumer Discretionary":  ["consumer confidence", "China tariffs", "employment trends"],
+    "Consumer Staples":        ["inflation pass-through", "defensive rotation"],
+    "Energy":                  ["oil supply/demand", "energy transition", "geopolitical risk"],
+    "Industrials":             ["defense spending", "infrastructure buildout", "reshoring"],
+    "Materials":               ["commodity cycle", "tariffs", "construction activity"],
+    "Real Estate":             ["rate sensitivity", "commercial RE stress"],
+    "Utilities":               ["rate sensitivity", "energy transition", "defensive bid"],
+    "Health Care":             ["drug pricing regulation", "defensive rotation", "M&A cycle"],
+}
+
+# Bias score from RRG quadrant position
+_QUADRANT_BIAS: dict[str, int] = {
+    "LEADING":   2,
+    "IMPROVING": 1,
+    "WEAKENING": -1,
+    "LAGGING":   -2,
+}
+
+_POSITIVE_TRANSITIONS = frozenset({("LAGGING", "IMPROVING"), ("IMPROVING", "LEADING")})
+_NEGATIVE_TRANSITIONS = frozenset({("LEADING", "WEAKENING"), ("WEAKENING", "LAGGING")})
+
 
 # ── Snapshot helpers ─────────────────────────────────────────────────────────
 
@@ -97,7 +128,11 @@ async def _get_sector_snapshot() -> dict:
     try:
         from sectors.sector_engine import get_sector_snapshot
         snap = await get_sector_snapshot()
-        _sector_snapshot = snap or {}
+        new_snap = snap or {}
+        # Snapshot prev quadrants before replacing (enables transition detection)
+        if _sector_snapshot:
+            _capture_prev_quadrants(_sector_snapshot)
+        _sector_snapshot = new_snap
         _sector_snapshot_ts = now
         return _sector_snapshot
     except Exception as exc:
@@ -130,6 +165,74 @@ def _get_hype_map() -> dict[str, dict]:
         return {r["ticker"].upper(): r for r in results if r.get("ticker")}
     except Exception:
         return {}
+
+
+def _capture_prev_quadrants(snapshot: dict) -> None:
+    """Store current ETF RRG quadrants before snapshot is replaced (for transition detection)."""
+    global _prev_rrg_quadrants
+    for etf, data in snapshot.get("sectors", {}).items():
+        q = data.get("rrg_quadrant")
+        if q:
+            _prev_rrg_quadrants[etf] = q
+
+
+def _compute_sector_forward_bias(
+    rrg_quadrant: str | None,
+    strong_sector: bool,
+    weak_sector: bool,
+    risk_mode: str | None,
+    rotation_direction: str,
+) -> tuple[str, str, str]:
+    """
+    Returns (bias, confidence, interpretation).
+    bias: BULLISH | MILDLY_BULLISH | NEUTRAL | MILDLY_BEARISH | BEARISH
+    confidence: HIGH | MEDIUM | LOW
+    """
+    pts = _QUADRANT_BIAS.get(rrg_quadrant or "", 0)
+
+    if strong_sector:
+        pts += 1
+    elif weak_sector:
+        pts -= 1
+
+    if (risk_mode or "") in ("RISK_OFF", "FEAR"):
+        pts -= 1
+
+    abs_pts = abs(pts)
+    dir_boost = 1 if rotation_direction == "UPGRADING" else (-1 if rotation_direction == "DOWNGRADING" else 0)
+    confidence = "HIGH" if abs_pts + abs(dir_boost) >= 3 else ("MEDIUM" if abs_pts >= 1 else "LOW")
+
+    if pts >= 2:
+        bias = "BULLISH"
+    elif pts == 1:
+        bias = "MILDLY_BULLISH"
+    elif pts <= -2:
+        bias = "BEARISH"
+    elif pts == -1:
+        bias = "MILDLY_BEARISH"
+    else:
+        bias = "NEUTRAL"
+
+    q = rrg_quadrant or "UNKNOWN"
+    if bias == "BULLISH":
+        interp = f"{q} quadrant with regime tailwind — bullish sector backdrop"
+    elif bias == "MILDLY_BULLISH":
+        interp = f"Sector in {q} quadrant — mild bullish lean"
+    elif bias == "BEARISH":
+        interp = f"{q} quadrant with regime headwind — bearish sector backdrop"
+    elif bias == "MILDLY_BEARISH":
+        interp = f"Sector in {q} quadrant — mild bearish lean"
+    elif q != "UNKNOWN":
+        interp = f"Sector in {q} quadrant — neutral backdrop"
+    else:
+        interp = "Sector rotation data unavailable"
+
+    if rotation_direction == "UPGRADING":
+        interp += " (rotation improving)"
+    elif rotation_direction == "DOWNGRADING":
+        interp += " (rotation deteriorating)"
+
+    return bias, confidence, interp
 
 
 # ── Per-field builders ───────────────────────────────────────────────────────
@@ -216,6 +319,28 @@ def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None =
     strong_sector = bool(sector and sector in strong_secs)
     weak_sector   = bool(sector and sector in weak_secs)
 
+    # ── Sector rotation context ───────────────────────────────────────────────
+    prev_quadrant = _prev_rrg_quadrants.get(etf) if etf else None
+    rotation_transition = None
+    rotation_direction  = "STABLE"
+
+    if prev_quadrant and rrg_quadrant and prev_quadrant != rrg_quadrant:
+        rotation_transition = f"{prev_quadrant}→{rrg_quadrant}"
+        pair = (prev_quadrant, rrg_quadrant)
+        if pair in _POSITIVE_TRANSITIONS:
+            rotation_direction = "UPGRADING"
+        elif pair in _NEGATIVE_TRANSITIONS:
+            rotation_direction = "DOWNGRADING"
+        else:
+            rotation_direction = "SHIFTING"
+
+    sector_forward_bias, sector_forward_confidence, sector_rotation_interpretation = \
+        _compute_sector_forward_bias(
+            rrg_quadrant, strong_sector, weak_sector, risk_mode, rotation_direction
+        )
+
+    macro_themes = _MACRO_THEMES_BY_SECTOR.get(sector, [])
+
     source_status = "live" if sector_data else ("static" if (sector and sector in _GICS_SECTORS) else "unavailable")
 
     # ── Subsector + strength labels ───────────────────────────────────────────
@@ -262,6 +387,14 @@ def _build_sector_context(row: dict, snapshot: dict, scan_results: list | None =
         "strong_sector":       strong_sector,
         "weak_sector":         weak_sector,
         "sector_context_source": source_status,
+        # Sector rotation layer
+        "sector_rotation_prev_quadrant":     prev_quadrant,
+        "sector_rotation_transition":        rotation_transition,
+        "sector_rotation_direction":         rotation_direction,
+        "sector_forward_bias":               sector_forward_bias,
+        "sector_forward_confidence":         sector_forward_confidence,
+        "sector_macro_themes":               macro_themes,
+        "sector_rotation_interpretation":    sector_rotation_interpretation,
     }
 
 

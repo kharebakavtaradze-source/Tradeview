@@ -177,6 +177,22 @@ def _inner(row: dict) -> dict:
         score -= 5
         flags.append("risk_off_regime")
 
+    # ── Sector rotation / forward bias ────────────────────────────────────────
+    fwd_bias = sc.get("sector_forward_bias") or "NEUTRAL"
+    fwd_conf = sc.get("sector_forward_confidence") or "LOW"
+    if fwd_bias == "BULLISH":
+        score += 3 if fwd_conf == "HIGH" else 2
+        flags.append("sector_rotation_bullish")
+    elif fwd_bias == "MILDLY_BULLISH" and fwd_conf != "LOW":
+        score += 1
+        flags.append("sector_rotation_mild_bull")
+    elif fwd_bias == "BEARISH":
+        score -= 3 if fwd_conf == "HIGH" else 2
+        flags.append("sector_rotation_bearish")
+    elif fwd_bias == "MILDLY_BEARISH" and fwd_conf != "LOW":
+        score -= 1
+        flags.append("sector_rotation_mild_bear")
+
     # ── Sympathy ──────────────────────────────────────────────────────────────
     sym_score = syc.get("sympathy_score") or 0
     sym_align = syc.get("candidate_alignment") or ""
