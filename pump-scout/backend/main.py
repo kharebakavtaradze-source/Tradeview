@@ -3048,6 +3048,36 @@ async def _build_research_context_text(run_id: int) -> str:
                 f"{k}={v:.0f}d" for k, v in timing_4x.items()
             ))
 
+        # Structural v2 context — aggregate across all episodes
+        sv2_fields = [
+            ("had_confirmed_structure_pre",  "confirmed_structure"),
+            ("had_triggered_structure_pre",  "triggered_structure"),
+            ("had_np_buy_candidate_pre",     "np_buy_candidate"),
+            ("had_d6_beup_pre",              "d6_beup"),
+            ("had_d4_beup_pre",              "d4_beup"),
+        ]
+        total = len(episodes) or 1
+        sv2_pcts: list[str] = []
+        for field, label in sv2_fields:
+            cnt = sum(1 for ep in episodes if ep.get(field) is True)
+            if cnt:
+                sv2_pcts.append(f"{label}={cnt/total*100:.0f}%")
+        if sv2_pcts:
+            lines.append("\nNP STRUCTURAL PRE-PUMP (%episodes): " + ", ".join(sv2_pcts))
+
+        # Split context
+        split_ctx_counts: dict[str, int] = {}
+        for ep in episodes:
+            sc = ep.get("split_context") or "NO_SPLIT"
+            split_ctx_counts[sc] = split_ctx_counts.get(sc, 0) + 1
+        artifact_n = sum(1 for ep in episodes if ep.get("split_artifact_risk") is True)
+        if any(k != "NO_SPLIT" for k in split_ctx_counts):
+            lines.append(
+                "SPLIT CONTEXT: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(split_ctx_counts.items()))
+                + (f" | artifact_risk={artifact_n}" if artifact_n else "")
+            )
+
         cached_ai = await get_raw_pattern_ai_summary(run_id)
         if cached_ai and not cached_ai.get("parse_failed"):
             rec = (cached_ai.get("analysis") or {}).get("recommendation") or cached_ai.get("recommendation") or ""
@@ -3442,6 +3472,8 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             build_raw_pattern_episode_features_structure,
             build_raw_pattern_episode_features_ema,
             build_raw_pattern_episode_features_new_pump,
+            build_raw_pattern_episode_features_structural_v2,
+            build_raw_pattern_episode_features_splits,
             build_raw_pattern_comparisons,
         )
         try:
@@ -3454,6 +3486,8 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_ema(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_new_pump(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_structural_v2(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_splits(raw_run_id, pump_study_run_id)
             await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
             await _upd(raw_run_id, {"status": "complete",
                                     "finished_at": datetime.utcnow()})
@@ -4091,3 +4125,30 @@ async def raw_pattern_np_count_bundle(run_id: int, fmt: str = "json"):
     if fmt == "markdown":
         return PlainTextResponse(render_raw_pattern_bundle_markdown(bundle))
     return bundle
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/split-impact")
+async def raw_pattern_split_impact(run_id: int):
+    """
+    Split / reverse-split impact analysis for a completed Raw Pattern Study run.
+
+    Returns performance_by_split_context, performance_by_reverse_split_timing,
+    split_artifact_candidates, split_impact_summary, and
+    scanner_v2_split_patch_recommendations.
+    """
+    from database import get_raw_pattern_run
+    from replay.pump_study_engine import build_split_impact_analysis
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run must be complete to analyse split impact.")
+
+    try:
+        result = await build_split_impact_analysis(run_id)
+    except Exception as exc:
+        logger.exception("split_impact run_id=%s failed", run_id)
+        raise HTTPException(500, detail=str(exc))
+
+    return result
