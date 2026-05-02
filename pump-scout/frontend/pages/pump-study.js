@@ -958,7 +958,7 @@ function AISummarySection({ runId, runStatus }) {
       {/* Recommendation badge */}
       {a.recommendation && (
         <div>
-          <div className={styles.bundleSectionTitle} style={{ marginBottom: 8 }}>ENGINE RECOMMENDATION</div>
+          <div className={styles.bundleSectionTitle} style={{ marginBottom: 8 }}>SCANNER V2 RECOMMENDATION</div>
           <div className={styles.aiRecommendationBadge}>
             {a.recommendation}
           </div>
@@ -967,10 +967,10 @@ function AISummarySection({ runId, runStatus }) {
               {a.recommendation_rationale}
             </div>
           )}
-          {a.closest_existing_engine && (
+          {(a.scanner_v2_component || a.closest_existing_engine) && (
             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-              Closest existing engine: <span style={{ color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                {a.closest_existing_engine}
+              Scanner v2 component: <span style={{ color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                {a.scanner_v2_component || a.closest_existing_engine}
               </span>
             </div>
           )}
