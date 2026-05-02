@@ -643,6 +643,21 @@ const PRIORITY_CFG = {
   PRIORITY_RISKY:  { color: '#ff5252', label: 'RISKY', bg: 'rgba(255,82,82,0.10)'  },
 };
 
+const BIAS_COLOR = {
+  BULLISH:        { color: '#00e676', bg: 'rgba(0,230,118,0.10)' },
+  MILDLY_BULLISH: { color: '#69f0ae', bg: 'rgba(105,240,174,0.08)' },
+  NEUTRAL:        { color: '#607d8b', bg: 'rgba(96,125,139,0.08)' },
+  MILDLY_BEARISH: { color: '#ff9800', bg: 'rgba(255,152,0,0.08)' },
+  BEARISH:        { color: '#f44336', bg: 'rgba(244,67,54,0.10)' },
+};
+
+const ROTATION_ARROW = {
+  UPGRADING:   '↗',
+  DOWNGRADING: '↘',
+  SHIFTING:    '→',
+  STABLE:      '',
+};
+
 function S14_Priority({ rowData, payload }) {
   const ps = rowData?.priority_score ?? payload?.priority_score;
   const pl = rowData?.priority_label ?? payload?.priority_label;
@@ -805,6 +820,62 @@ function S13_Context({ rowData, payload }) {
       {sc?.sector_context_source === 'unavailable' && (
         <div style={{ fontSize: 10, color: '#444', marginBottom: 8, fontStyle: 'italic' }}>
           Sector data unavailable
+        </div>
+      )}
+
+      {/* ── Sector Rotation ── */}
+      {sc && sc.sector_rrg_quadrant && sc.sector_rrg_quadrant !== 'UNKNOWN' && (
+        <div style={{ marginBottom: 10, borderTop: '1px solid #1e1e1e', paddingTop: 8 }}>
+          <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
+            Sector Rotation
+          </div>
+
+          <CtxRow label="RRG Quadrant">
+            <Chip
+              label={sc.sector_rrg_quadrant}
+              color={(TREND_LABEL_COLOR[sc.sector_rrg_quadrant] || '#888')}
+            />
+            {sc.sector_rotation_transition && (
+              <span style={{ fontSize: 10, color: '#555', marginLeft: 4 }}>
+                {ROTATION_ARROW[sc.sector_rotation_direction] || '→'}{' '}
+                <span style={{ color: '#444' }}>was {sc.sector_rotation_prev_quadrant}</span>
+              </span>
+            )}
+          </CtxRow>
+
+          {sc.sector_forward_bias && sc.sector_forward_bias !== 'NEUTRAL' && (() => {
+            const bc = BIAS_COLOR[sc.sector_forward_bias] || BIAS_COLOR.NEUTRAL;
+            return (
+              <CtxRow label="Forward Bias">
+                <Chip
+                  label={sc.sector_forward_bias.replace(/_/g, ' ')}
+                  color={bc.color}
+                  bg={bc.bg}
+                />
+                {sc.sector_forward_confidence && sc.sector_forward_confidence !== 'LOW' && (
+                  <span style={{ fontSize: 9, color: '#444', marginLeft: 4 }}>
+                    {sc.sector_forward_confidence.toLowerCase()} conf
+                  </span>
+                )}
+              </CtxRow>
+            );
+          })()}
+
+          {sc.sector_rotation_interpretation && (
+            <div style={{ fontSize: 10, color: '#555', marginTop: 3, fontStyle: 'italic', lineHeight: 1.5 }}>
+              {sc.sector_rotation_interpretation}
+            </div>
+          )}
+
+          {sc.sector_macro_themes?.length > 0 && (
+            <CtxRow label="Key Themes">
+              <span style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                {sc.sector_macro_themes.map(t => (
+                  <Chip key={t} label={t} color="#546e7a" bg="rgba(84,110,122,0.10)" />
+                ))}
+              </span>
+            </CtxRow>
+          )}
         </div>
       )}
 
