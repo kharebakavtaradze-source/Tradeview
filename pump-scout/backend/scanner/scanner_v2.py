@@ -43,7 +43,8 @@ V2_LABELS = frozenset({
 # Data from run_id=30 (2343 candidates, 85 days):
 #   D4_BEUP avg +4.31% 5d 60% win; D6_BEUP avg +3.8% 63% win
 #   D4_L34  avg +2.1% 65% win;     D3_L34  avg +2.9% 73% win
-_AVOID_UPGRADE_DCONF = frozenset({"D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34"})
+#   L34_THEN_D4_3B: run_id=32 avg +5.13% 5d, alpha +4.97%, FP 8.5%
+_AVOID_UPGRADE_DCONF = frozenset({"D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34", "L34_THEN_D4_3B"})
 
 # ── Negative priority flags that signal meaningful risk ───────────────────────
 _HIGH_RISK_FLAGS = frozenset({
