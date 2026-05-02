@@ -3247,15 +3247,16 @@ async def pump_study_ai_summary(run_id: int, raw_pattern_run_id: Optional[int] =
         "Q2: Earliest signals (reference event types).\n"
         "Q3: 4x_pump vs false_positive (cite group_stats numbers).\n"
         "Q4: 4x_pump vs normal_winner (cite group_stats numbers).\n"
-        "Q5: Closest existing engine — one of: "
-        "Pump Engine|Ignition Engine|Ribbon Engine|Base Scanner.\n"
-        "Q6: Engine to build next — EXACTLY one of: "
-        "Build Catalyst Ignition Engine|"
-        "Build Low-Float Velocity Engine|"
-        "Build Post-Compression Expansion Engine|"
-        "Build Sector Sympathy Engine|"
-        "Build Hybrid Pump Engine|"
-        "Improve existing Pump Engine with specific changes.\n\n"
+        "Q5: Which Scanner v2 structural signal is most predictive for this pump type — "
+        "one of: d_confluence_signal|structure_phase_scoring|compression_expansion_gate|"
+        "expansion_timing_risk|new_pump_l34_sequence|priority_score_threshold.\n"
+        "Q6: Scanner v2 improvement needed — EXACTLY one of: "
+        "Boost d_confluence weights|"
+        "Tighten structure_score thresholds|"
+        "Add compression_expansion gate|"
+        "Improve AVOID routing|"
+        "Extend sympathy context|"
+        "Tune expansion_timing_risk filter.\n\n"
         "Rules: no invented catalysts. Note data limitations. "
         "If group_stats empty, say insufficient data.\n\n"
         "Output ONLY this JSON object — no markdown, no prose, no code fences:\n"
@@ -3263,7 +3264,7 @@ async def pump_study_ai_summary(run_id: int, raw_pattern_run_id: Optional[int] =
         '"earliest_signals":["..."],'
         '"true_vs_false_positive":["..."],'
         '"true_vs_normal_winner":["..."],'
-        '"closest_existing_engine":"...",'
+        '"scanner_v2_component":"...",'
         '"recommendation":"EXACT option",'
         '"recommendation_rationale":"1 sentence",'
         '"limitations":["..."]}'
@@ -3802,15 +3803,16 @@ async def raw_pattern_study_ai_summary(run_id: int):
         "Q4 (noisy_features): Which features are low-signal — low variance, near-identical "
         "medians across groups, always-on binary, or extreme outlier distortion? "
         "Do NOT list peak_day/fade_day/dump_day as noisy — they are excluded by design.\n"
-        "Q5 (pump_engine_changes): List 3–5 specific changes to improve the current Pump "
-        "Engine scoring: sequence-duration weights, compression persistence, "
-        "accumulation/reclaim bonuses, volume sweet-spot, reduce body/wick noise reliance.\n\n"
+        "Q5 (scanner_v2_changes): List 3–5 specific changes to improve Scanner v2 based on "
+        "the raw pattern data: d_confluence weights, structure_score thresholds, "
+        "compression_expansion_state gates, expansion_timing_risk calibration, "
+        "priority_score flag adjustments, or AVOID routing improvements.\n\n"
         "Output ONLY this JSON — no markdown, no prose, no code fences:\n"
         '{"repeated_patterns":["..."],'
         '"separators_vs_normal_winner":["..."],'
         '"separators_vs_false_positive":["..."],'
         '"noisy_features":["..."],'
-        '"pump_engine_changes":["..."],'
+        '"scanner_v2_changes":["..."],'
         '"recommendation":"one sentence",'
         '"limitations":["..."]}'
     )
@@ -3985,19 +3987,18 @@ async def raw_pattern_study_top_schemes(run_id: int):
 @app.get("/api/replay/raw-pattern-study/{run_id}/engine-patch-plan")
 async def raw_pattern_study_engine_patch_plan(run_id: int):
     """
-    Deterministic Pump Engine patch plan derived from comparison medians.
+    Deterministic Scanner v2 patch plan derived from raw pattern comparison medians.
 
     Classifies each comparison feature as BOOST / INCREASE / PENALIZE / REDUCE / IGNORE
     based on the separation ratio between 4x_pump and false_positive (or normal_winner
     when false_positive is absent).
 
-    Also returns 7 domain-area recommendations covering:
+    Returns 7 domain-area recommendations covering:
       sequence_duration_weights, compression_persistence, volume_sweet_spot,
       accumulation_spring_reclaim, ema_ribbon_quality, body_wick_noise_reduction,
-      toxicity_penalty.
+      scanner_v2_structural (NP signal chain: L34/G4/B2, d_confluence, structure_phase).
 
     Purely deterministic — no AI, no external calls.
-    Delta bonuses are excluded (delta not yet available in pipeline).
     """
     from database import get_raw_pattern_run, get_raw_pattern_comparisons
     from replay.pump_study_engine import generate_engine_patch_plan

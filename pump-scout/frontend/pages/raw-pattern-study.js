@@ -727,7 +727,7 @@ const AI_SECTIONS = [
   { key: 'separators_vs_normal_winner', label: '4× pump vs normal winner' },
   { key: 'separators_vs_false_positive',label: '4× pump vs false positive' },
   { key: 'noisy_features',              label: 'Noisy / low-signal features' },
-  { key: 'pump_engine_changes',         label: 'Pump Engine improvements' },
+  { key: 'scanner_v2_changes',          label: 'Scanner v2 improvements' },
 ];
 
 function AISummaryCard({ runId }) {
@@ -870,7 +870,7 @@ const REC_AREA_LABEL = {
   accumulation_spring_reclaim:'Accumulation / Spring / Reclaim',
   ema_ribbon_quality:         'EMA Structure Quality',
   body_wick_noise_reduction:  'Body / Wick Noise Reduction',
-  toxicity_penalty:           'Toxicity Penalty',
+  scanner_v2_structural:      'Scanner v2 — NP Signal Chain',
 };
 
 function EnginePatchPlan({ runId }) {
@@ -912,7 +912,7 @@ function EnginePatchPlan({ runId }) {
       {/* Summary row */}
       <div className={styles.tableCard} style={{ marginBottom: 12 }}>
         <div className={styles.tableHeader}>
-          <span className={styles.tableTitle}>Pump Engine Patch Plan</span>
+          <span className={styles.tableTitle}>Scanner v2 Patch Plan</span>
           <span className={styles.tableHint}>deterministic · based on comparison medians · no AI</span>
         </div>
         <div style={{ display: 'flex', gap: 16, padding: '8px 12px', flexWrap: 'wrap' }}>
