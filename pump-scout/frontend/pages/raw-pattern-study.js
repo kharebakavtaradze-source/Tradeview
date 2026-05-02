@@ -229,6 +229,70 @@ function GroupBadge({ type }) {
   );
 }
 
+// ── Split context badge ───────────────────────────────────────────────────────
+
+const SPLIT_CTX_BADGE_COLOR = {
+  NO_SPLIT:             '#6b7280',
+  FORWARD_SPLIT:        '#60a5fa',
+  RECENT_REVERSE_SPLIT: '#fbbf24',
+  OLD_REVERSE_SPLIT:    '#9ca3af',
+  SPLIT_DURING_PUMP:    '#fb923c',
+  SPLIT_ARTIFACT_RISK:  '#fb7185',
+};
+const SPLIT_CTX_SHORT = {
+  NO_SPLIT:             'NO SPLIT',
+  FORWARD_SPLIT:        'FWD',
+  RECENT_REVERSE_SPLIT: 'REC RS',
+  OLD_REVERSE_SPLIT:    'OLD RS',
+  SPLIT_DURING_PUMP:    'PUMP',
+  SPLIT_ARTIFACT_RISK:  '⚠ ARTIFACT',
+};
+function SplitContextBadge({ ctx }) {
+  if (!ctx || ctx === 'NO_SPLIT') return <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>—</span>;
+  const color = SPLIT_CTX_BADGE_COLOR[ctx] || '#6b7280';
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.04em',
+      padding: '2px 6px', borderRadius: 'var(--r-pill)',
+      background: `${color}1a`, border: `1px solid ${color}44`,
+      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)',
+    }}>{SPLIT_CTX_SHORT[ctx] || ctx}</span>
+  );
+}
+
+// ── Structure phase badge ─────────────────────────────────────────────────────
+
+const STRUCTURE_PHASE_COLOR = {
+  CONFIRMED_STRUCTURE: '#86efac',
+  TRIGGERED_STRUCTURE: '#22d3ee',
+  EARLY_STRUCTURE:     '#60a5fa',
+  SETUP_PHASE:         '#a8a29e',
+  IMPULSE_ONLY:        '#6b7280',
+  DEGRADED:            '#fbbf24',
+  BROKEN_STRUCTURE:    '#fb7185',
+};
+const STRUCTURE_PHASE_SHORT = {
+  CONFIRMED_STRUCTURE: 'CONFIRMED',
+  TRIGGERED_STRUCTURE: 'TRIGGERED',
+  EARLY_STRUCTURE:     'EARLY',
+  SETUP_PHASE:         'SETUP',
+  IMPULSE_ONLY:        'IMPULSE',
+  DEGRADED:            'DEGRADED',
+  BROKEN_STRUCTURE:    'BROKEN',
+};
+function StructurePhaseBadge({ phase }) {
+  if (!phase) return <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>—</span>;
+  const color = STRUCTURE_PHASE_COLOR[phase] || '#6b7280';
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.04em',
+      padding: '2px 6px', borderRadius: 'var(--r-pill)',
+      background: `${color}1a`, border: `1px solid ${color}44`,
+      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)',
+    }}>{STRUCTURE_PHASE_SHORT[phase] || phase}</span>
+  );
+}
+
 // ── Episode table ─────────────────────────────────────────────────────────────
 
 const EP_COLS = [
@@ -248,22 +312,27 @@ const EP_COLS = [
   { key: 'avg_body_pct_pre',                        label: 'AvgBody',         mono: true,  fmt: v => v != null ? `${(v * 100).toFixed(0)}%` : '—' },
   { key: 'bullish_engulfing_count_pre',             label: 'BullEng',         mono: true  },
   { key: 'reclaim_bar_count_pre',                   label: 'Reclaim',         mono: true  },
-  { key: 'split_context',                           label: 'SplitCtx',        mono: true,  fmt: v => v || '—', small: true },
-  { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠' : '—' },
+  { key: 'split_context',                           label: 'SplitCtx',        mono: false },
+  { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠ YES' : '—', colorFn: v => v ? '#fb7185' : undefined },
   { key: 'nearest_split_ratio',                     label: 'SplitRatio',      mono: true,  fmt: v => v != null ? `${Number(v).toFixed(2)}×` : '—' },
   { key: 'nearest_split_days_from_breakout',        label: 'SplitΔBrk',      mono: true  },
-  { key: 'dominant_structure_phase_pre',            label: 'StrPhase',        mono: true,  fmt: v => v || '—', small: true },
-  { key: 'had_confirmed_structure_pre',             label: 'Confirmed?',      mono: true,  fmt: v => v ? '✓' : '—' },
-  { key: 'had_np_buy_candidate_pre',                label: 'NPBuy?',          mono: true,  fmt: v => v ? '✓' : '—' },
+  { key: 'dominant_structure_phase_pre',            label: 'StrPhase',        mono: false },
+  { key: 'had_confirmed_structure_pre',             label: 'Confirmed?',      mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
+  { key: 'had_np_buy_candidate_pre',                label: 'NPBuy?',          mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
   { key: 'd_confluence_best_type_pre',              label: 'DType',           mono: true,  fmt: v => v || '—', small: true },
 ];
 
 function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroupFilter }) {
+  const [hideArtifacts, setHideArtifacts] = useState(false);
+
   const filtered = episodes.filter(ep => {
-    if (symFilter   && !ep.symbol?.toLowerCase().includes(symFilter.toLowerCase())) return false;
-    if (groupFilter && ep.group_type !== groupFilter) return false;
+    if (symFilter    && !ep.symbol?.toLowerCase().includes(symFilter.toLowerCase())) return false;
+    if (groupFilter  && ep.group_type !== groupFilter) return false;
+    if (hideArtifacts && ep.split_artifact_risk === true) return false;
     return true;
   });
+
+  const artifactCount = episodes.filter(ep => ep.split_artifact_risk === true).length;
 
   return (
     <div className={styles.tableCard}>
@@ -284,6 +353,21 @@ function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroup
             <option value="">All groups</option>
             {GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
           </select>
+          {artifactCount > 0 && (
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              fontSize: 10, color: hideArtifacts ? '#fb7185' : 'var(--text-muted)',
+              cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+            }}>
+              <input
+                type="checkbox"
+                checked={hideArtifacts}
+                onChange={e => setHideArtifacts(e.target.checked)}
+                style={{ margin: 0 }}
+              />
+              Hide artifacts ({artifactCount})
+            </label>
+          )}
         </div>
       </div>
 
@@ -300,29 +384,49 @@ function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroup
               </tr>
             </thead>
             <tbody>
-              {filtered.map((ep, i) => (
-                <tr key={ep.episode_id ?? i} className={styles.dataRow}>
-                  {EP_COLS.map(c => {
-                    const raw = ep[c.key];
-                    const val = c.fmt ? c.fmt(raw) : (raw ?? '—');
-                    if (c.key === 'group_type') return (
-                      <td key={c.key} className={styles.dataCell}>
-                        <GroupBadge type={raw} />
-                      </td>
-                    );
-                    return (
-                      <td key={c.key} className={styles.dataCell}
-                        style={{
-                          fontFamily: c.mono ? 'var(--font-mono)' : undefined,
-                          fontSize: c.small ? 9 : undefined,
-                          color: val === '—' ? 'var(--text-muted)' : undefined,
-                        }}>
-                        {val}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+              {filtered.map((ep, i) => {
+                const isArtifact = ep.split_artifact_risk === true;
+                return (
+                  <tr key={ep.episode_id ?? i} className={styles.dataRow}
+                    style={isArtifact ? { background: 'rgba(251,113,133,0.06)' } : undefined}>
+                    {EP_COLS.map(c => {
+                      const raw = ep[c.key];
+                      const val = c.fmt ? c.fmt(raw) : (raw ?? '—');
+
+                      if (c.key === 'group_type') return (
+                        <td key={c.key} className={styles.dataCell}>
+                          <GroupBadge type={raw} />
+                        </td>
+                      );
+                      if (c.key === 'split_context') return (
+                        <td key={c.key} className={styles.dataCell}>
+                          <SplitContextBadge ctx={raw} />
+                        </td>
+                      );
+                      if (c.key === 'dominant_structure_phase_pre') return (
+                        <td key={c.key} className={styles.dataCell}>
+                          <StructurePhaseBadge phase={raw} />
+                        </td>
+                      );
+
+                      const color = c.colorFn
+                        ? (c.colorFn(raw) ?? (val === '—' ? 'var(--text-muted)' : undefined))
+                        : (val === '—' ? 'var(--text-muted)' : undefined);
+                      return (
+                        <td key={c.key} className={styles.dataCell}
+                          style={{
+                            fontFamily: c.mono ? 'var(--font-mono)' : undefined,
+                            fontSize:   c.small ? 9 : undefined,
+                            color,
+                            fontWeight: c.colorFn && c.colorFn(raw) ? 700 : undefined,
+                          }}>
+                          {val}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1322,13 +1426,13 @@ const SPLIT_CTX_COLOR = {
 };
 
 function SplitImpactPanel({ runId }) {
-  const [data,    setData]    = React.useState(null);
-  const [loading, setLoading] = React.useState(false);
-  const [err,     setErr]     = React.useState('');
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err,     setErr]     = useState('');
 
-  React.useEffect(() => {
+  useEffect(() => {
     setLoading(true); setErr(''); setData(null);
-    fetch(`/api/replay/raw-pattern-study/${runId}/split-impact`)
+    fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/split-impact`)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(d => setData(d))
       .catch(e => setErr(e.message))
