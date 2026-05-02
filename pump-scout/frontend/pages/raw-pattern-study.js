@@ -327,6 +327,34 @@ function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroup
 
 // Must match _COMPARISON_FEATURES order in pump_study_engine.py
 const COMP_FEATURES = [
+  // PRIMARY — NP signal presence & timing (Scanner v2 structural core)
+  'had_valid_recent_setup',
+  'had_valid_recent_trigger',
+  'had_valid_recent_confirm',
+  'had_valid_full_sequence',
+  'best_new_pump_label_rank',
+  'days_from_last_setup_to_breakout',
+  'days_from_last_trigger_to_breakout',
+  'days_from_g4_to_b2',
+  // PRIMARY — NP count-based PRE-window aggregates
+  'l34_count_pre',
+  'fri34_count_pre',
+  'g4_count_pre',
+  'b2_count_pre',
+  'isolated_g4_count_pre',
+  'isolated_b2_count_pre',
+  'full_fri34_g4_b2_count_pre',
+  'valid_setup_days_pre',
+  'valid_full_sequence_days_pre',
+  // SECONDARY — NP count details
+  'setup_only_l34_count_pre',
+  'setup_only_fri34_count_pre',
+  'trigger_after_l34_count_pre',
+  'trigger_after_fri34_count_pre',
+  'full_l34_g4_b2_count_pre',
+  'confirm_after_g4_count_pre',
+  'valid_trigger_days_pre',
+  'valid_confirm_days_pre',
   // PRIMARY — sequence / duration
   'days_from_breakout_to_peak',
   'compression_days_pre',
@@ -376,6 +404,35 @@ const COMP_FEATURES = [
 
 // Used to derive badge when stats_json priority is absent (legacy runs)
 const FEATURE_PRIORITY = {
+  // NP signal presence & counts (Scanner v2 structural core)
+  had_valid_recent_setup:            'PRIMARY',
+  had_valid_recent_trigger:          'PRIMARY',
+  had_valid_recent_confirm:          'PRIMARY',
+  had_valid_full_sequence:           'PRIMARY',
+  best_new_pump_label_rank:          'PRIMARY',
+  days_from_last_setup_to_breakout:  'PRIMARY',
+  days_from_last_trigger_to_breakout:'PRIMARY',
+  days_from_g4_to_b2:                'PRIMARY',
+  l34_count_pre:                     'PRIMARY',
+  fri34_count_pre:                   'PRIMARY',
+  g4_count_pre:                      'PRIMARY',
+  b2_count_pre:                      'PRIMARY',
+  isolated_g4_count_pre:             'PRIMARY',
+  isolated_b2_count_pre:             'PRIMARY',
+  full_fri34_g4_b2_count_pre:        'PRIMARY',
+  valid_setup_days_pre:              'PRIMARY',
+  valid_full_sequence_days_pre:      'PRIMARY',
+  setup_only_l34_count_pre:          'SECONDARY',
+  setup_only_fri34_count_pre:        'SECONDARY',
+  trigger_after_l34_count_pre:       'SECONDARY',
+  trigger_after_fri34_count_pre:     'SECONDARY',
+  full_l34_g4_b2_count_pre:          'SECONDARY',
+  confirm_after_g4_count_pre:        'SECONDARY',
+  valid_trigger_days_pre:            'SECONDARY',
+  valid_confirm_days_pre:            'SECONDARY',
+  max_bull_stack_days_pre:           'PRIMARY',
+  extreme_anomaly_day_count_pre:     'SECONDARY',
+  median_dollar_volume_pre:          'SECONDARY',
   days_from_breakout_to_peak:                  'PRIMARY',
   compression_days_pre:                        'PRIMARY',
   days_from_first_compression_to_breakout:     'PRIMARY',
@@ -1022,6 +1079,138 @@ function EnginePatchPlan({ runId }) {
   );
 }
 
+// ── NP Bundle Panel ───────────────────────────────────────────────────────────
+
+const NP_GROUP_COLOR = {
+  '4x_pump':       '#22d3ee',
+  'normal_winner': '#86efac',
+  'false_positive':'#fca5a5',
+  'missed_mover':  '#fde68a',
+};
+
+function NPBundlePanel({ runId }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(''); setData(null);
+    fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/np-count-bundle`)
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (cancelled) return;
+        if (!ok) throw new Error(d.detail || `HTTP error`);
+        setData(d);
+      })
+      .catch(e => { if (!cancelled) setError(String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [runId]);
+
+  if (loading) return <div className={styles.statusMsg}>Loading NP bundle…</div>;
+  if (error)   return <div className={styles.errorMsg}>{error.replace('TypeError: ', '').replace('Error: ', '')}</div>;
+  if (!data)   return null;
+
+  const analysis       = data.np_count_analysis || {};
+  const groupCounts    = data.group_counts || {};
+  const patternReview  = analysis.count_pattern_review || [];
+  const sepSummary     = analysis.separation_summary || [];
+  const setupAnalysis  = analysis.setup_analysis || [];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+      {/* Group counts */}
+      <div className={styles.tableCard}>
+        <div className={styles.tableHeader}>
+          <span className={styles.tableTitle}>Group Counts</span>
+          <span className={styles.tableHint}>total episodes: {data.total_episodes ?? '—'}</span>
+        </div>
+        <div style={{ display: 'flex', gap: 20, padding: '10px 12px', flexWrap: 'wrap' }}>
+          {Object.entries(groupCounts).map(([g, n]) => (
+            <span key={g} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: NP_GROUP_COLOR[g] || '#888', display: 'inline-block' }} />
+              <span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: 10 }}>{g.replace(/_/g, ' ')}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--text)' }}>{n}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Count pattern review */}
+      {patternReview.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Count Pattern Review</span>
+          </div>
+          <ul style={{ margin: '8px 12px 10px', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {patternReview.map((item, i) => (
+              <li key={i} style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, paddingLeft: 14, position: 'relative' }}>
+                <span style={{ position: 'absolute', left: 0, color: 'var(--cyan, #22d3ee)' }}>·</span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Separation summary table */}
+      {sepSummary.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Separation Summary</span>
+            <span className={styles.tableHint}>NP count metrics vs group medians</span>
+          </div>
+          <div className={styles.tableScroll}>
+            <table className={styles.dataTable}>
+              <thead>
+                <tr>
+                  {Object.keys(sepSummary[0]).map(k => (
+                    <th key={k} className={styles.dataHead}>{k.replace(/_/g, ' ')}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sepSummary.map((row, i) => (
+                  <tr key={i} className={styles.dataRow}>
+                    {Object.entries(row).map(([k, v]) => (
+                      <td key={k} className={styles.dataCell}>
+                        {v == null ? '—' : typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(v)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Setup analysis */}
+      {setupAnalysis.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Setup Analysis</span>
+          </div>
+          <ul style={{ margin: '8px 12px 10px', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {setupAnalysis.map((item, i) => (
+              <li key={i} style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, paddingLeft: 14, position: 'relative' }}>
+                <span style={{ position: 'absolute', left: 0, color: 'var(--lime, #86efac)' }}>·</span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {patternReview.length === 0 && sepSummary.length === 0 && setupAnalysis.length === 0 && (
+        <div className={styles.statusMsg}>No NP bundle analysis available for this run.</div>
+      )}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RawPatternStudy() {
@@ -1352,6 +1541,7 @@ export default function RawPatternStudy() {
                     { id: 'schemes',     label: 'Top Schemes' },
                     { id: 'episodes',    label: `Episodes (${episodes.length})` },
                     { id: 'comparisons', label: 'Comparisons' },
+                    { id: 'np-bundle',   label: 'NP Bundle' },
                     { id: 'ai',          label: 'AI Summary' },
                     { id: 'patch-plan',  label: 'Engine Plan' },
                   ].map(({ id, label }) => (
@@ -1398,6 +1588,13 @@ export default function RawPatternStudy() {
                       : run.status !== 'complete'
                         ? <div className={styles.statusMsg}>Comparisons available after run completes.</div>
                         : <ComparisonGrid comparisons={comparisons} />
+                )}
+
+                {/* NP Bundle tab */}
+                {activeTab === 'np-bundle' && (
+                  run.status !== 'complete'
+                    ? <div className={styles.statusMsg}>NP bundle available after run completes.</div>
+                    : <NPBundlePanel key={selectedId} runId={selectedId} />
                 )}
 
                 {/* AI tab */}

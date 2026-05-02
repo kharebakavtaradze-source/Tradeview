@@ -1601,6 +1601,8 @@ async def build_raw_pattern_episode_features_timing(
             "group_type":   episode_group.get(episode_id),
             "pump_multiple": ep.get("pump_multiple"),
             "pump_type":    ep.get("pump_type"),
+            "sector":       ep.get("sector"),
+            "industry":     ep.get("industry"),
             # Timing
             "pre_days":                                   pre_days  or None,
             "pump_days":                                  pump_days or None,
@@ -1985,6 +1987,20 @@ _COMPARISON_FEATURES = [
     "bearish_engulfing_count_pre",
     "inside_bar_count_pre",
     "outside_bar_count_pre",
+    # ── SECONDARY: split / corporate action context ──
+    "has_split_near_episode",
+    "has_reverse_split_near_episode",
+    "split_event_count",
+    "reverse_split_event_count",
+    "nearest_split_ratio",
+    "nearest_split_days_from_breakout",
+    "reverse_split_0_5d_before_breakout",
+    "reverse_split_6_15d_before_breakout",
+    "reverse_split_16_30d_before_breakout",
+    "reverse_split_31_60d_before_breakout",
+    "split_during_pump_window",
+    "split_after_peak_30d",
+    "split_artifact_risk",
 ]
 
 # Priority tier for each feature.  Used to populate stats_json["priority"]
@@ -2069,6 +2085,20 @@ _FEATURE_PRIORITY: dict[str, str] = {
     "bearish_engulfing_count_pre":                 "LOW_SIGNAL",
     "inside_bar_count_pre":                        "LOW_SIGNAL",
     "outside_bar_count_pre":                       "LOW_SIGNAL",
+    # SECONDARY — split context
+    "has_split_near_episode":               "SECONDARY",
+    "has_reverse_split_near_episode":       "SECONDARY",
+    "split_event_count":                    "SECONDARY",
+    "reverse_split_event_count":            "SECONDARY",
+    "nearest_split_ratio":                  "SECONDARY",
+    "nearest_split_days_from_breakout":     "SECONDARY",
+    "reverse_split_0_5d_before_breakout":   "SECONDARY",
+    "reverse_split_6_15d_before_breakout":  "SECONDARY",
+    "reverse_split_16_30d_before_breakout": "SECONDARY",
+    "reverse_split_31_60d_before_breakout": "SECONDARY",
+    "split_during_pump_window":             "SECONDARY",
+    "split_after_peak_30d":                "SECONDARY",
+    "split_artifact_risk":                  "SECONDARY",
 }
 
 # Binary features where always_on_flag is meaningful
@@ -2078,9 +2108,493 @@ _BINARY_FEATURES = {
     "had_bull_stack_pre",
     "had_valid_recent_setup", "had_valid_recent_trigger",
     "had_valid_recent_confirm", "had_valid_full_sequence",
+    "has_split_near_episode", "has_reverse_split_near_episode",
+    "reverse_split_0_5d_before_breakout", "reverse_split_6_15d_before_breakout",
+    "reverse_split_16_30d_before_breakout", "reverse_split_31_60d_before_breakout",
+    "split_during_pump_window", "split_after_peak_30d", "split_artifact_risk",
 }
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+
+
+# ── Split context helpers ─────────────────────────────────────────────────────
+
+_SPLIT_CONTEXT_PRIORITY = [
+    "SPLIT_ARTIFACT_RISK",
+    "SPLIT_DURING_PUMP",
+    "RECENT_REVERSE_SPLIT",
+    "OLD_REVERSE_SPLIT",
+    "FORWARD_SPLIT",
+    "NO_SPLIT",
+]
+
+
+def _classify_split_context(
+    episode_splits: list[dict],
+    pump_start_date: Optional[str],
+    pump_peak_date:  Optional[str],
+    breakout_date:   Optional[str],
+    split_artifact_risk: bool,
+) -> str:
+    if not episode_splits:
+        return "NO_SPLIT"
+    if split_artifact_risk:
+        return "SPLIT_ARTIFACT_RISK"
+    has_during_pump = any(
+        s.get("split_type") in ("REVERSE_SPLIT", "FORWARD_SPLIT")
+        and pump_start_date and pump_peak_date
+        and pump_start_date <= (s.get("execution_date") or "") <= pump_peak_date
+        for s in episode_splits
+    )
+    if has_during_pump:
+        return "SPLIT_DURING_PUMP"
+    if breakout_date:
+        for s in episode_splits:
+            if s.get("split_type") != "REVERSE_SPLIT":
+                continue
+            ed = s.get("execution_date") or ""
+            d = (date.fromisoformat(breakout_date) - date.fromisoformat(ed)).days if ed else None
+            if d is not None and 0 <= d <= 30:
+                return "RECENT_REVERSE_SPLIT"
+            if d is not None and 31 <= d <= 90:
+                return "OLD_REVERSE_SPLIT"
+    has_forward = any(s.get("split_type") == "FORWARD_SPLIT" for s in episode_splits)
+    if has_forward:
+        return "FORWARD_SPLIT"
+    has_reverse = any(s.get("split_type") == "REVERSE_SPLIT" for s in episode_splits)
+    if has_reverse:
+        return "OLD_REVERSE_SPLIT"
+    return "NO_SPLIT"
+
+
+async def build_raw_pattern_episode_features_splits(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    Phase 2B-8: fetch split/corporate-action history for each episode symbol,
+    compute split context and artifact-risk fields, and patch episode feature rows.
+
+    Fields populated:
+        has_split_near_episode, has_reverse_split_near_episode,
+        has_forward_split_near_episode, split_event_count,
+        reverse_split_event_count, forward_split_event_count,
+        nearest_split_date, nearest_split_type, nearest_split_ratio,
+        nearest_split_days_from_breakout, nearest_split_days_from_pump_start,
+        nearest_split_days_from_peak,
+        reverse_split_0_5d_before_breakout, reverse_split_6_15d_before_breakout,
+        reverse_split_16_30d_before_breakout, reverse_split_31_60d_before_breakout,
+        reverse_split_after_breakout, split_during_pump_window, split_after_peak_30d,
+        split_context, split_artifact_risk, split_artifact_reason,
+        split_adjusted_move_estimate, raw_move_pct
+    """
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        get_pump_episode_events,
+        get_stock_splits_for_symbols,
+        update_raw_pattern_episode_features,
+    )
+    from scanner.massive_reference import fetch_and_cache_splits_batch
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    if not episodes:
+        return 0
+
+    # ── Compute per-episode date windows ──────────────────────────────────────
+    # window = [earliest PRE date - 90d,  latest POST date + 30d]
+    ep_windows: dict[int, tuple[str, str]] = {}
+    ep_breakout: dict[int, Optional[str]] = {}
+    for ep in episodes:
+        eid = ep["id"]
+        daily = await get_raw_pattern_daily_features(raw_run_id, episode_id=eid, limit=2000)
+        if not daily:
+            continue
+        all_dates = sorted(r.get("date") or "" for r in daily if r.get("date"))
+        if not all_dates:
+            continue
+        win_start = (date.fromisoformat(all_dates[0]) - timedelta(days=90)).isoformat()
+        win_end   = (date.fromisoformat(all_dates[-1]) + timedelta(days=30)).isoformat()
+        ep_windows[eid] = (win_start, win_end)
+
+        # breakout date from events
+        evs = await get_pump_episode_events(eid)
+        breakout_date: Optional[str] = None
+        for ev in evs:
+            if ev.get("event_type") == "breakout_day" and breakout_date is None:
+                breakout_date = str(ev["event_date"]) if ev.get("event_date") else None
+        ep_breakout[eid] = breakout_date
+
+    # ── Batch-fetch splits for all symbols in widest combined window ──────────
+    symbol_to_ep: dict[str, list[int]] = {}
+    for ep in episodes:
+        eid = ep["id"]
+        if eid not in ep_windows:
+            continue
+        sym = (ep.get("symbol") or "").upper()
+        symbol_to_ep.setdefault(sym, []).append(eid)
+
+    # Compute widest window per symbol
+    symbol_windows: dict[str, tuple[str, str]] = {}
+    for sym, eids in symbol_to_ep.items():
+        all_starts = [ep_windows[e][0] for e in eids if e in ep_windows]
+        all_ends   = [ep_windows[e][1] for e in eids if e in ep_windows]
+        if not all_starts:
+            continue
+        symbol_windows[sym] = (min(all_starts), max(all_ends))
+
+    # Fetch and cache splits; fall back to DB cache if API fails
+    global_since = min(v[0] for v in symbol_windows.values()) if symbol_windows else date.today().isoformat()
+    global_until = max(v[1] for v in symbol_windows.values()) if symbol_windows else date.today().isoformat()
+
+    try:
+        cached_splits = await fetch_and_cache_splits_batch(
+            list(symbol_windows.keys()), since=global_since, until=global_until
+        )
+    except Exception:
+        cached_splits = {}
+
+    # Fallback: read from DB for any symbols not fetched
+    missing = [s for s in symbol_windows if s not in cached_splits or not cached_splits[s]]
+    if missing:
+        try:
+            db_splits = await get_stock_splits_for_symbols(missing, since=global_since, until=global_until)
+            for sym, rows in db_splits.items():
+                if rows:
+                    cached_splits[sym] = rows
+        except Exception:
+            pass
+
+    # ── Patch each episode ────────────────────────────────────────────────────
+    patched = 0
+    ep_by_id = {ep["id"]: ep for ep in episodes}
+
+    for eid, (win_start, win_end) in ep_windows.items():
+        ep        = ep_by_id.get(eid)
+        if not ep:
+            continue
+        sym       = (ep.get("symbol") or "").upper()
+        all_splits = cached_splits.get(sym, [])
+
+        # Filter to this episode's window
+        ep_splits = [
+            s for s in all_splits
+            if win_start <= (s.get("execution_date") or "") <= win_end
+        ]
+
+        pump_start = ep.get("pump_start_date") or ""
+        pump_peak  = ep.get("pump_peak_date")  or ""
+        breakout   = ep_breakout.get(eid)
+        pump_mult  = ep.get("pump_multiple") or 1.0
+
+        # Counts
+        rev_splits = [s for s in ep_splits if s.get("split_type") == "REVERSE_SPLIT"]
+        fwd_splits = [s for s in ep_splits if s.get("split_type") == "FORWARD_SPLIT"]
+
+        # Nearest split (by proximity to breakout, else pump_start)
+        ref_date = breakout or pump_start
+        nearest: Optional[dict] = None
+        if ep_splits and ref_date:
+            def _dist(s: dict) -> int:
+                ed = s.get("execution_date") or ""
+                try:
+                    return abs((date.fromisoformat(ref_date) - date.fromisoformat(ed)).days)
+                except Exception:
+                    return 9999
+            nearest = min(ep_splits, key=_dist)
+        elif ep_splits:
+            nearest = ep_splits[-1]
+
+        nearest_date  = nearest["execution_date"] if nearest else None
+        nearest_type  = nearest.get("split_type") if nearest else None
+        nearest_ratio = nearest.get("ratio") if nearest else None
+
+        def _delta(d1: Optional[str], d2: Optional[str]) -> Optional[int]:
+            if not d1 or not d2:
+                return None
+            try:
+                return (date.fromisoformat(d2) - date.fromisoformat(d1)).days
+            except Exception:
+                return None
+
+        nd_from_breakout    = _delta(nearest_date, breakout)    if nearest_date else None
+        nd_from_pump_start  = _delta(nearest_date, pump_start)  if nearest_date else None
+        nd_from_peak        = _delta(nearest_date, pump_peak)   if nearest_date else None
+
+        # Reverse-split timing buckets (days_before_breakout = positive means before breakout)
+        rs_0_5   = any(
+            breakout and (0 <= (_delta(s["execution_date"], breakout) or -1) <= 5)
+            for s in rev_splits if s.get("execution_date")
+        )
+        rs_6_15  = any(
+            breakout and (6 <= (_delta(s["execution_date"], breakout) or -1) <= 15)
+            for s in rev_splits if s.get("execution_date")
+        )
+        rs_16_30 = any(
+            breakout and (16 <= (_delta(s["execution_date"], breakout) or -1) <= 30)
+            for s in rev_splits if s.get("execution_date")
+        )
+        rs_31_60 = any(
+            breakout and (31 <= (_delta(s["execution_date"], breakout) or -1) <= 60)
+            for s in rev_splits if s.get("execution_date")
+        )
+        rs_after = any(
+            breakout and ((_delta(s["execution_date"], breakout) or 1) < 0)
+            for s in rev_splits if s.get("execution_date")
+        )
+        split_during = any(
+            pump_start and pump_peak
+            and pump_start <= (s.get("execution_date") or "") <= pump_peak
+            for s in ep_splits
+        )
+        split_after_30 = any(
+            pump_peak and ((_delta(pump_peak, s["execution_date"]) or -1) >= 0)
+            and ((_delta(pump_peak, s["execution_date"]) or -1) <= 30)
+            for s in ep_splits if s.get("execution_date")
+        )
+
+        # Artifact risk: reverse split within ±2 days of pump window AND ratio ≈ pump_multiple
+        artifact_risk   = False
+        artifact_reason = None
+        for rs in rev_splits:
+            ed    = rs.get("execution_date") or ""
+            ratio = rs.get("ratio") or 1.0
+            adj   = rs.get("adjustment_factor") or ratio
+            # price-adjustment = split_from/split_to; for 1-for-10 RS: adj=10
+            price_jump_from_split = adj if adj > 1 else (1 / ratio if ratio < 1 else 1.0)
+            in_window = (
+                pump_start and pump_peak
+                and (date.fromisoformat(pump_start) - timedelta(days=2)).isoformat() <= ed
+                <= (date.fromisoformat(pump_peak) + timedelta(days=2)).isoformat()
+            )
+            ratio_match = price_jump_from_split > 1 and abs(price_jump_from_split - pump_mult) / pump_mult < 0.35
+            if in_window and ratio_match:
+                artifact_risk   = True
+                artifact_reason = (
+                    f"Reverse split {rs.get('split_from')}-for-{rs.get('split_to')} "
+                    f"({price_jump_from_split:.1f}× price adjust) on {ed} within pump window "
+                    f"matches observed {pump_mult:.1f}× move"
+                )
+                break
+            if in_window and not ratio_match:
+                artifact_risk   = True
+                artifact_reason = (
+                    f"Reverse split {rs.get('split_from')}-for-{rs.get('split_to')} on {ed} "
+                    f"occurred inside pump window (pump={pump_mult:.1f}×, split adj={price_jump_from_split:.1f}×)"
+                )
+
+        raw_move  = round((pump_mult - 1) * 100, 1) if pump_mult else None
+        adj_est   = None
+        if artifact_risk and nearest_ratio and nearest_ratio < 1:
+            price_jump = (1 / nearest_ratio)
+            adj_est = round(raw_move / price_jump, 1) if raw_move else None
+
+        split_ctx = _classify_split_context(ep_splits, pump_start, pump_peak, breakout, artifact_risk)
+
+        patch = {
+            "has_split_near_episode":           bool(ep_splits),
+            "has_reverse_split_near_episode":   bool(rev_splits),
+            "has_forward_split_near_episode":   bool(fwd_splits),
+            "split_event_count":                len(ep_splits),
+            "reverse_split_event_count":        len(rev_splits),
+            "forward_split_event_count":        len(fwd_splits),
+            "nearest_split_date":               nearest_date,
+            "nearest_split_type":               nearest_type,
+            "nearest_split_ratio":              nearest_ratio,
+            "nearest_split_days_from_breakout": nd_from_breakout,
+            "nearest_split_days_from_pump_start": nd_from_pump_start,
+            "nearest_split_days_from_peak":     nd_from_peak,
+            "reverse_split_0_5d_before_breakout":   rs_0_5,
+            "reverse_split_6_15d_before_breakout":  rs_6_15,
+            "reverse_split_16_30d_before_breakout":  rs_16_30,
+            "reverse_split_31_60d_before_breakout":  rs_31_60,
+            "reverse_split_after_breakout":         rs_after,
+            "split_during_pump_window":             split_during,
+            "split_after_peak_30d":                split_after_30,
+            "split_context":                        split_ctx,
+            "split_artifact_risk":                  artifact_risk,
+            "split_artifact_reason":                artifact_reason,
+            "split_adjusted_move_estimate":         adj_est,
+            "raw_move_pct":                         raw_move,
+        }
+        await update_raw_pattern_episode_features(raw_run_id, eid, patch)
+        patched += 1
+
+    return patched
+
+
+async def build_split_impact_analysis(run_id: int) -> dict:
+    """
+    Aggregate split-impact stats from completed raw_pattern_episode_features.
+
+    Returns:
+        performance_by_split_context: breakdown by split_context bucket
+        performance_by_reverse_split_timing: breakdown by RS timing bucket
+        split_artifact_candidates: list of high-risk episodes
+        split_impact_summary: narrative findings
+    """
+    from database import get_raw_pattern_episode_features, get_raw_pattern_run, get_pump_episodes
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise ValueError(f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise ValueError(f"Run {run_id} not complete")
+
+    episodes = await get_raw_pattern_episode_features(run_id, limit=5000)
+    ps_run_id = run.get("pump_study_run_id")
+
+    # Load pump episode performance data (pump_multiple, return_pct, days_to_peak)
+    pump_eps: dict[int, dict] = {}
+    if ps_run_id:
+        try:
+            raw_pump = await get_pump_episodes(ps_run_id, limit=10_000)
+            pump_eps = {ep["id"]: ep for ep in raw_pump}
+        except Exception:
+            pass
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _group_stats(group: list[dict]) -> dict:
+        count = len(group)
+        if count == 0:
+            return {"episode_count": 0}
+        g4     = sum(1 for e in group if e.get("group_type") == "4x_pump")
+        nw     = sum(1 for e in group if e.get("group_type") == "normal_winner")
+        fp     = sum(1 for e in group if e.get("group_type") == "false_positive")
+        mm     = sum(1 for e in group if e.get("group_type") == "missed_mover")
+        total_classified = g4 + nw + fp + mm
+        fp_rate = round(fp / total_classified, 3) if total_classified else None
+
+        returns = [
+            pump_eps[e["episode_id"]].get("pump_return_pct")
+            for e in group
+            if e.get("episode_id") and e["episode_id"] in pump_eps
+            and pump_eps[e["episode_id"]].get("pump_return_pct") is not None
+        ]
+        days_list = [
+            pump_eps[e["episode_id"]].get("days_to_peak")
+            for e in group
+            if e.get("episode_id") and e["episode_id"] in pump_eps
+            and pump_eps[e["episode_id"]].get("days_to_peak") is not None
+        ]
+        avg_ret  = round(sum(returns) / len(returns), 1)  if returns  else None
+        med_ret  = round(sorted(returns)[len(returns) // 2], 1) if returns else None
+        avg_days = round(sum(days_list) / len(days_list), 1) if days_list else None
+
+        return {
+            "episode_count":     count,
+            "4x_pump_count":     g4,
+            "normal_winner_count": nw,
+            "false_positive_count": fp,
+            "missed_mover_count":  mm,
+            "false_positive_rate": fp_rate,
+            "avg_pump_return_pct": avg_ret,
+            "median_pump_return_pct": med_ret,
+            "avg_days_to_peak":    avg_days,
+        }
+
+    # ── performance_by_split_context ─────────────────────────────────────────
+    ctx_groups: dict[str, list[dict]] = {}
+    for e in episodes:
+        ctx = e.get("split_context") or "NO_SPLIT"
+        ctx_groups.setdefault(ctx, []).append(e)
+
+    perf_by_ctx = {}
+    for ctx in ["NO_SPLIT", "RECENT_REVERSE_SPLIT", "OLD_REVERSE_SPLIT",
+                "FORWARD_SPLIT", "SPLIT_DURING_PUMP", "SPLIT_ARTIFACT_RISK"]:
+        perf_by_ctx[ctx] = _group_stats(ctx_groups.get(ctx, []))
+
+    # ── performance_by_reverse_split_timing ──────────────────────────────────
+    def _timing_bucket(e: dict) -> str:
+        if e.get("reverse_split_0_5d_before_breakout"):   return "RS_0_5D_BEFORE_BREAKOUT"
+        if e.get("reverse_split_6_15d_before_breakout"):  return "RS_6_15D_BEFORE_BREAKOUT"
+        if e.get("reverse_split_16_30d_before_breakout"): return "RS_16_30D_BEFORE_BREAKOUT"
+        if e.get("reverse_split_31_60d_before_breakout"): return "RS_31_60D_BEFORE_BREAKOUT"
+        if e.get("reverse_split_after_breakout"):          return "RS_AFTER_BREAKOUT"
+        if e.get("split_during_pump_window") and e.get("has_reverse_split_near_episode"): return "RS_DURING_PUMP"
+        return "NO_REVERSE_SPLIT"
+
+    timing_groups: dict[str, list[dict]] = {}
+    for e in episodes:
+        bkt = _timing_bucket(e)
+        timing_groups.setdefault(bkt, []).append(e)
+
+    perf_by_timing = {}
+    for bkt in ["NO_REVERSE_SPLIT", "RS_0_5D_BEFORE_BREAKOUT", "RS_6_15D_BEFORE_BREAKOUT",
+                "RS_16_30D_BEFORE_BREAKOUT", "RS_31_60D_BEFORE_BREAKOUT",
+                "RS_AFTER_BREAKOUT", "RS_DURING_PUMP"]:
+        perf_by_timing[bkt] = _group_stats(timing_groups.get(bkt, []))
+
+    # ── split_artifact_candidates ─────────────────────────────────────────────
+    artifacts = [e for e in episodes if e.get("split_artifact_risk")]
+    artifact_candidates = []
+    for e in sorted(artifacts, key=lambda x: -(x.get("raw_move_pct") or 0))[:30]:
+        pep = pump_eps.get(e.get("episode_id") or -1) or {}
+        artifact_candidates.append({
+            "symbol":                    e.get("symbol"),
+            "group_type":                e.get("group_type"),
+            "pump_start":                pep.get("pump_start_date"),
+            "peak_date":                 pep.get("pump_peak_date"),
+            "raw_move_pct":              e.get("raw_move_pct"),
+            "split_date":                e.get("nearest_split_date"),
+            "split_type":                e.get("nearest_split_type"),
+            "split_ratio":               e.get("nearest_split_ratio"),
+            "split_artifact_reason":     e.get("split_artifact_reason"),
+            "split_adjusted_move_estimate": e.get("split_adjusted_move_estimate"),
+        })
+
+    # ── split_impact_summary ──────────────────────────────────────────────────
+    total = len(episodes)
+    total_4x  = sum(1 for e in episodes if e.get("group_type") == "4x_pump")
+    total_fp  = sum(1 for e in episodes if e.get("group_type") == "false_positive")
+
+    rs_4x     = sum(1 for e in episodes if e.get("has_reverse_split_near_episode") and e.get("group_type") == "4x_pump")
+    rs_fp     = sum(1 for e in episodes if e.get("has_reverse_split_near_episode") and e.get("group_type") == "false_positive")
+    artifacts_total = sum(1 for e in episodes if e.get("split_artifact_risk"))
+    rs_overrep = (rs_fp / total_fp > rs_4x / total_4x * 1.5) if total_4x > 0 and total_fp > 0 else False
+
+    summary_lines = [
+        f"Total episodes: {total} | 4x_pump: {total_4x} | false_positive: {total_fp}",
+        f"Reverse split near episode: {rs_4x}/{total_4x} 4x_pumps, {rs_fp}/{total_fp} false_positives",
+        f"Split artifact risk: {artifacts_total} episodes flagged",
+        f"RS overrepresented in false_positives vs 4x_pumps: {'YES' if rs_overrep else 'NO'}",
+    ]
+    if len(ctx_groups.get("RECENT_REVERSE_SPLIT", [])) > 0:
+        rs_rec = ctx_groups["RECENT_REVERSE_SPLIT"]
+        rs_rec_fp_rate = perf_by_ctx["RECENT_REVERSE_SPLIT"].get("false_positive_rate")
+        summary_lines.append(
+            f"Recent RS (0-30d before breakout): {len(rs_rec)} episodes, "
+            f"fp_rate={rs_rec_fp_rate}" if rs_rec_fp_rate is not None else
+            f"Recent RS (0-30d before breakout): {len(rs_rec)} episodes"
+        )
+    scanner_v2_recs = []
+    if rs_overrep:
+        scanner_v2_recs.append({
+            "suggested_flag": "reverse_split_risk",
+            "suggested_score_delta": -15,
+            "evidence": f"RS {rs_fp}/{total_fp} ({100*rs_fp//total_fp if total_fp else 0}%) in false_positives vs {rs_4x}/{total_4x} ({100*rs_4x//total_4x if total_4x else 0}%) in 4x_pumps",
+            "sample_size": total,
+            "confidence": "MEDIUM" if total > 50 else "LOW",
+        })
+    if artifacts_total > 0:
+        scanner_v2_recs.append({
+            "suggested_flag": "split_artifact_exclusion",
+            "suggested_score_delta": None,
+            "evidence": f"{artifacts_total} episodes flagged as potential split artifacts — exclude from calibration",
+            "sample_size": artifacts_total,
+            "confidence": "HIGH" if artifacts_total > 5 else "MEDIUM",
+        })
+
+    return {
+        "ok":          True,
+        "run_id":      run_id,
+        "total_episodes": total,
+        "performance_by_split_context":       perf_by_ctx,
+        "performance_by_reverse_split_timing": perf_by_timing,
+        "split_artifact_candidates":          artifact_candidates,
+        "split_impact_summary":               summary_lines,
+        "scanner_v2_split_patch_recommendations": scanner_v2_recs,
+    }
 
 
 async def build_raw_pattern_episode_features_ema(

@@ -390,3 +390,69 @@ async def has_recent_reverse_split(symbol: str, days: int = 90) -> bool:
     since = (date.today() - timedelta(days=days)).isoformat()
     splits = await fetch_ticker_splits(symbol, since=since)
     return any(s["reverse_split_risk"] for s in splits)
+
+
+async def fetch_and_cache_splits_batch(
+    symbols: list[str],
+    since:   str,
+    until:   Optional[str] = None,
+) -> dict[str, list[dict]]:
+    """
+    Batch-fetch splits for multiple symbols and persist to StockSplitCache.
+
+    For each symbol, calls /v3/reference/splits (via fetch_ticker_splits), normalizes:
+      - split_type: FORWARD_SPLIT / REVERSE_SPLIT / STOCK_DIVIDEND / UNKNOWN
+      - ratio = split_to / split_from
+      - adjustment_factor = split_from / split_to
+
+    Saves to DB and returns dict[symbol → list[normalized_split]].
+    Returns {} on total failure (non-fatal).
+    """
+    if not symbols:
+        return {}
+
+    from database import save_stock_splits
+
+    result: dict[str, list[dict]] = {}
+
+    for sym in symbols:
+        raw_splits = await fetch_ticker_splits(sym, since=since)
+        normalized: list[dict] = []
+        for s in raw_splits:
+            exec_date = s.get("execution_date") or ""
+            if until and exec_date > until:
+                continue
+            sf   = s.get("split_from", 1) or 1
+            st   = s.get("split_to",   1) or 1
+            ratio = st / sf
+            adj   = sf / st if st else None
+
+            if st < sf:
+                stype = "REVERSE_SPLIT"
+            elif st > sf and not (sf == 1 and 1 < st <= 1.5):
+                stype = "FORWARD_SPLIT"
+            elif sf == 1 and 1 < st <= 1.5:
+                stype = "STOCK_DIVIDEND"
+            else:
+                stype = "UNKNOWN"
+
+            normalized.append({
+                "symbol":           sym.upper(),
+                "execution_date":   exec_date,
+                "split_from":       sf,
+                "split_to":         st,
+                "ratio":            round(ratio, 6),
+                "split_type":       stype,
+                "adjustment_factor":round(adj, 6) if adj else None,
+                "source":           "massive",
+            })
+
+        if normalized:
+            try:
+                await save_stock_splits(normalized)
+            except Exception as exc:
+                logger.debug(f"[Splits] save_stock_splits({sym}): {exc}")
+
+        result[sym.upper()] = sorted(normalized, key=lambda x: x["execution_date"])
+
+    return result
