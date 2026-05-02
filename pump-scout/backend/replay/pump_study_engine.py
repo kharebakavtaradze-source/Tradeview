@@ -460,7 +460,7 @@ def _build_snapshots(
       4. Call classify_ribbon()→ ribbon class
       5. Call calc_ignition()  → ignition bucket
       6. Call score_toxicity() → toxicity score / level
-      7. Call score_pump()     → pump_bucket
+      7. Call new_pump_engine.analyze() → structural NP signal state
 
     Fields that do not exist in the current codebase
     (sequence_type, structural_bias, retest_*, bearish_state, bearish_quality,
@@ -486,7 +486,6 @@ def _build_snapshots(
     from scanner.ribbon_engine import classify_ribbon
     from scanner.early_ignition import calc_ignition
     from scanner.toxic_filter  import score_toxicity
-    from scanner.pump_engine   import score_pump
     try:
         from scanner.new_pump_engine import analyze as _np_analyze
         _np_available = True
@@ -585,7 +584,6 @@ def _build_snapshots(
         ribbon_class:    Optional[str] = None
         ignition:        dict = {}
         toxicity:        dict = {}
-        pump_result:     dict = {}
 
         n_trailing = len(trailing_sc)
 
@@ -605,11 +603,6 @@ def _build_snapshots(
                 toxicity = score_toxicity(indicators, price=c_price or 0.0) or {}
             except Exception:
                 toxicity = {}
-
-            try:
-                pump_result = score_pump(indicators, price=c_price or 0.0) or {}
-            except Exception:
-                pump_result = {}
 
         if n_trailing >= _MIN_CANDLES_REGIME:
             try:
@@ -649,7 +642,6 @@ def _build_snapshots(
             "regime":        regime,
             "ignition":      ignition,
             "toxicity":      toxicity,
-            "pump":          pump_result,
             "new_pump":      new_pump_result,
         }
 
@@ -2935,7 +2927,7 @@ def extract_top_schemes(episodes: list[dict]) -> dict:
 
 def generate_engine_patch_plan(comparisons: list[dict]) -> dict:
     """
-    Deterministic patch-plan for the existing Pump Engine.
+    Deterministic Scanner v2 patch-plan derived from raw pattern comparison medians.
 
     Reads comparison medians (group × feature) and classifies each feature:
         BOOST    — 4x_pump median >= 1.4× false_positive median
@@ -3151,19 +3143,33 @@ def generate_engine_patch_plan(comparisons: list[dict]) -> dict:
             "reduce":    noise_r or noise_feats,
             "rationale": (
                 "Single-bar candle anatomy (body_pct, wick_pct) rarely separates 4x_pump from "
-                "sub-4x winners. Zero-weight or heavily discount these in scoring. "
+                "sub-4x winners. Scanner v2 priority_scorer already excludes these. "
                 + (f"Confirmed low-signal: {noise_r}." if noise_r else "")
             ),
         },
         {
-            "area":      "toxicity_penalty",
+            "area":      "scanner_v2_structural",
             "priority":  7,
-            "action":    "PENALIZE",
-            "boost":     [],
-            "reduce":    ["max_toxicity_score", "avg_toxicity_score"],
+            "action":    "BOOST" if (
+                any(f in boost_set | increase_set for f in [
+                    "had_valid_recent_setup", "had_valid_recent_trigger",
+                    "full_fri34_g4_b2_count_pre", "l34_count_pre", "g4_count_pre",
+                ])
+            ) else "NEUTRAL",
+            "boost":     [f for f in [
+                "had_valid_recent_setup", "had_valid_recent_trigger",
+                "had_valid_full_sequence", "full_fri34_g4_b2_count_pre",
+                "l34_count_pre", "g4_count_pre", "b2_count_pre",
+            ] if f in boost_set | increase_set],
+            "reduce":    [f for f in [
+                "setup_only_l34_count_pre", "confirm_after_g4_count_pre",
+                "isolated_g4_count_pre", "isolated_b2_count_pre",
+            ] if f in penalize_set | reduce_set],
             "rationale": (
-                "High pre-pump toxicity score correlates with false_positive. "
-                "Apply negative score multiplier when avg_toxicity_score exceeds calibrated threshold."
+                "Scanner v2 structural signals (L34 setup, G4 trigger, B2 confirm, "
+                "d_confluence type, structure_phase, compression_expansion_state). "
+                "Promote features that separate 4x_pump from false_positive in the NP "
+                "signal chain. Confirm_after_g4 and isolated signals are late/noisy — reduce."
             ),
         },
     ]
@@ -3181,8 +3187,9 @@ def generate_engine_patch_plan(comparisons: list[dict]) -> dict:
             "delta_available":    False,
             "note": (
                 "Deterministic plan — no AI. Based on comparison medians only. "
-                "Validate counts per group before applying to Pump Engine. "
-                "Delta bonuses deferred until delta field extraction is in the pipeline."
+                "Validate counts per group before applying to Scanner v2. "
+                "Targets: d_confluence weights, structure_score thresholds, "
+                "compression_expansion_state gates, expansion_timing_risk filters."
             ),
         },
     }
