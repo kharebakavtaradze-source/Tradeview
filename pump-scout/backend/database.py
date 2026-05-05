@@ -677,6 +677,10 @@ _UNIVERSE_CACHE_MIGRATIONS: list[tuple[str, str]] = []
 # universe_cache is created fresh by create_all — no ALTER needed on new columns.
 # Add tuples here if columns are added post-initial-deployment.
 
+_DISCOVERED_PATTERN_MIGRATIONS: list[tuple[str, str]] = [
+    ("source_type", "VARCHAR(30)"),
+]
+
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
     ("updated_at",      "TIMESTAMP"),
@@ -769,6 +773,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE universe_cache ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for col, coltype in _DISCOVERED_PATTERN_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE discovered_patterns ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -842,6 +851,14 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration universe_cache.{col} failed (non-fatal): {e}")
+
+        for col, coltype in _DISCOVERED_PATTERN_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE discovered_patterns ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration discovered_patterns.{col} failed (non-fatal): {e}")
 
         # MFE columns on replay_outcomes
         for col, coltype in _REPLAY_OUTCOME_MIGRATIONS:
@@ -4058,6 +4075,7 @@ class DiscoveredPattern(Base):
     id                     = Column(Integer,  primary_key=True)
     run_id                 = Column(Integer,  nullable=False, index=True)
     signal_id              = Column(String(60), nullable=False, index=True)
+    source_type            = Column(String(30), nullable=True)
     family                 = Column(String(10), nullable=True)
     status                 = Column(String(30), nullable=True)
     intended_use           = Column(String(30), nullable=True)
@@ -5394,7 +5412,7 @@ async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
 
             if existing:
                 for col in [
-                    "family", "status", "intended_use", "description",
+                    "source_type", "family", "status", "intended_use", "description",
                     "count_missed_4x", "count_detected_4x", "count_all_4x",
                     "count_false_positive", "count_normal_winner", "count_split_artifact",
                     "lift_vs_false_positive", "lift_vs_normal_winner",
@@ -5409,6 +5427,7 @@ async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
                 session.add(DiscoveredPattern(
                     run_id                  = run_id,
                     signal_id               = signal_id,
+                    source_type             = d.get("source_type"),
                     family                  = d.get("family"),
                     status                  = d.get("status"),
                     intended_use            = d.get("intended_use"),
@@ -5435,6 +5454,25 @@ async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
         return count
 
 
+def _infer_source_type(signal_id: str, stored: Optional[str] = None) -> str:
+    """Infer source_type from signal_id when the stored column is null."""
+    if stored:
+        return stored
+    if not signal_id:
+        return "EPISODE_AGGREGATE"
+    _PREFIXES = [
+        ("DISC_BAR_TEN_BAR_CONTEXT_",     "TEN_BAR_CONTEXT"),
+        ("DISC_BAR_THREE_BAR_SEQUENCE_",  "THREE_BAR_SEQUENCE"),
+        ("DISC_BAR_TWO_BAR_SEQUENCE_",    "TWO_BAR_SEQUENCE"),
+        ("DISC_BAR_FIVE_BAR_SEQUENCE_",   "FIVE_BAR_SEQUENCE"),
+        ("DISC_BAR_SINGLE_BAR_",          "SINGLE_BAR"),
+    ]
+    for prefix, st in _PREFIXES:
+        if signal_id.startswith(prefix):
+            return st
+    return "EPISODE_AGGREGATE"
+
+
 async def get_discovered_patterns(run_id: int) -> list[dict]:
     """Return all discovered patterns for a run, sorted by lift_vs_false_positive desc."""
     async with get_session_factory()() as session:
@@ -5449,6 +5487,7 @@ async def get_discovered_patterns(run_id: int) -> list[dict]:
                 "id":                    r.id,
                 "run_id":                r.run_id,
                 "signal_id":             r.signal_id,
+                "source_type":           _infer_source_type(r.signal_id, getattr(r, "source_type", None)),
                 "family":                r.family,
                 "status":                r.status,
                 "intended_use":          r.intended_use,
