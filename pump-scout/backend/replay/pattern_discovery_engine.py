@@ -1237,6 +1237,20 @@ async def build_discovery_export(
             flow_working + combined_working
         )
 
+    # FLOW / Diagnostic replay impact analysis (research-only, Part 7)
+    flow_scored_episodes: list = []
+    flow_replay_analysis: dict = {}
+    if episodes:
+        try:
+            from replay.flow_impact_analyzer import score_episodes_flow, build_flow_impact_report
+            flow_scored_episodes = score_episodes_flow(episodes)
+            flow_replay_analysis = build_flow_impact_report(
+                flow_scored_episodes, flow_working + combined_working
+            )
+        except Exception as _fia_err:
+            logger.warning("flow_impact_analyzer failed: %s", _fia_err)
+            flow_scored_episodes = episodes
+
     top_flow_by_clean_reliability = _top(
         [p for p in flow_working
          if (p.get("split_artifact_exposure") or 0) <= 0.50
@@ -1305,31 +1319,33 @@ async def build_discovery_export(
     )[:n]
 
     # ── Sample episodes for compact section ───────────────────────────────────
+    # Use flow_scored_episodes so per-episode flow fields are available
+    _ep_src = flow_scored_episodes if flow_scored_episodes else episodes
     sample_episodes: dict = {}
     split_summary: dict = {}
-    if episodes:
+    if _ep_src:
         sample_episodes = {
             "pump_watch_high": sorted(
-                (ep for ep in episodes if ep.get("pump_watch_label") == "PUMP_WATCH_HIGH"),
+                (ep for ep in _ep_src if ep.get("pump_watch_label") == "PUMP_WATCH_HIGH"),
                 key=lambda x: -(x.get("pump_watch_score") or 0),
             )[:25],
             "missed_4x": [
-                ep for ep in episodes
+                ep for ep in _ep_src
                 if ep.get("group_type") == "4x_pump" and not ep.get("had_np_buy_candidate_pre")
             ][:25],
             "false_positive_high_score": sorted(
-                (ep for ep in episodes if ep.get("group_type") == "false_positive"),
+                (ep for ep in _ep_src if ep.get("group_type") == "false_positive"),
                 key=lambda x: -(x.get("pump_watch_score") or 0),
             )[:25],
             "split_artifacts": [
-                ep for ep in episodes if ep.get("split_artifact_risk")
+                ep for ep in _ep_src if ep.get("split_artifact_risk")
             ][:25],
         }
         split_summary = {
-            "split_artifact_count":      sum(1 for ep in episodes if ep.get("split_artifact_risk")),
-            "recent_reverse_split_count": sum(1 for ep in episodes if ep.get("split_context") == "RECENT_REVERSE_SPLIT"),
-            "old_reverse_split_count":   sum(1 for ep in episodes if ep.get("split_context") == "OLD_REVERSE_SPLIT"),
-            "no_split_count":            sum(1 for ep in episodes if not ep.get("split_context") or ep.get("split_context") == "NO_SPLIT"),
+            "split_artifact_count":      sum(1 for ep in _ep_src if ep.get("split_artifact_risk")),
+            "recent_reverse_split_count": sum(1 for ep in _ep_src if ep.get("split_context") == "RECENT_REVERSE_SPLIT"),
+            "old_reverse_split_count":   sum(1 for ep in _ep_src if ep.get("split_context") == "OLD_REVERSE_SPLIT"),
+            "no_split_count":            sum(1 for ep in _ep_src if not ep.get("split_context") or ep.get("split_context") == "NO_SPLIT"),
         }
 
     exported_at = datetime.now(tz=timezone.utc).isoformat()
@@ -1355,6 +1371,7 @@ async def build_discovery_export(
             "flow_subtype_counts": flow_subtype_counts,
             "split_contamination_summary": split_contamination_summary,
             "bar_sequence_summary": bar_sequence_summary,
+            "flow_replay_analysis": flow_replay_analysis,
             "ranking_formula_version": _RANKING_FORMULA_VERSION,
             "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(),
@@ -1448,7 +1465,7 @@ async def build_discovery_export(
             "exported_at": exported_at,
             "run_id": run_id,
             "run": run,
-            "episodes": episodes,
+            "episodes": _ep_src or episodes,
             "pump_watch_summary": pw_dist,
             "split_summary": split_summary,
             "notes": _notes(),
@@ -1512,6 +1529,7 @@ async def build_discovery_export(
             "top_combined_by_missed_4x":         top_combined_by_missed_4x,
             "split_contamination_summary":       split_contamination_summary,
             "sample_episodes":                   sample_episodes,
+            "flow_replay_analysis":              flow_replay_analysis,
             "registry_snapshot":                 registry,
             "ranking_formula_version":           _RANKING_FORMULA_VERSION,
             "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
@@ -1536,7 +1554,7 @@ async def build_discovery_export(
         "debug": debug,
         "flow_debug": flow_debug,
         "summary": summary_obj,
-        "episodes": episodes,
+        "episodes": _ep_src or episodes,
         "comparisons": comps,
         "pump_watch_summary": pw_dist,
         "pump_watch_calibration": pw_calibration,
@@ -1565,6 +1583,7 @@ async def build_discovery_export(
         "top_combined_by_missed_4x":             top_combined_by_missed_4x,
         "split_contamination":                   split_contamination_full,
         "bar_sequence_summary":                  bar_sequence_summary,
+        "flow_replay_analysis":                  flow_replay_analysis,
         "registry_snapshot":                     registry,
         "ranking_formula_version":               _RANKING_FORMULA_VERSION,
         "reliability_score_legend":              _RELIABILITY_SCORE_LEGEND,
