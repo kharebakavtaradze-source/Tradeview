@@ -1285,8 +1285,16 @@ def build_bar_feature_snapshots_for_episode(
 
         snap["tags"]          = bars_to_tags(snap)
         snap["tag_signature"] = "+".join(snap["tags"])
+        # Flow tags initialised as empty — populated by build_bar_flow_features()
+        snap["flow_tags"]              = [TAG_FLAT]
+        snap["flow_tag_signature"]     = TAG_FLAT
+        snap["combined_tags"]          = snap["tags"][:]
+        snap["combined_tag_signature"] = snap["tag_signature"]
 
         snapshots.append(snap)
+
+    # Compute V1C flow features across the full sequence
+    build_bar_flow_features(snapshots)
 
     return snapshots
 
@@ -1296,6 +1304,7 @@ def build_bar_feature_snapshots_for_episode(
 def build_bar_sequences(
     bar_snapshots: list[dict],
     windows: tuple = (1, 2, 3, 5, 10),
+    tag_mode: str = "price",
 ) -> list[dict]:
     """
     Build rolling-window sequence features from bar snapshots for one episode.
@@ -1310,6 +1319,9 @@ def build_bar_sequences(
     bar_snapshots : list from build_bar_feature_snapshots_for_episode(),
                     sorted oldest→newest (days_to_breakout descending).
     windows       : window sizes to generate sequences for.
+    tag_mode      : "price"    — V1B price-action tags only
+                    "flow"     — V1C flow/delta tags only
+                    "combined" — V1B + V1C combined tags
 
     Returns
     -------
@@ -1324,6 +1336,14 @@ def build_bar_sequences(
     symbol     = bar_snapshots[0].get("symbol") or ""
     group_type = bar_snapshots[0].get("group_type") or ""
 
+    # Choose which tag field to use for signatures
+    if tag_mode == "flow":
+        sig_key = "flow_tag_signature"
+    elif tag_mode == "combined":
+        sig_key = "combined_tag_signature"
+    else:
+        sig_key = "tag_signature"
+
     sequences: list[dict] = []
 
     for w in windows:
@@ -1332,20 +1352,28 @@ def build_bar_sequences(
 
         for start_i in range(len(bar_snapshots) - w + 1):
             window_bars = bar_snapshots[start_i: start_i + w]
-            bar_tags    = [b["tags"] for b in window_bars]
+            bar_tags    = [b.get(sig_key.replace("_signature", "s"), b.get("tags", [TAG_FLAT]))
+                          for b in window_bars]
+            # Resolve tags list for each bar based on tag_mode
+            if tag_mode == "flow":
+                bar_tags = [b.get("flow_tags") or [TAG_FLAT] for b in window_bars]
+            elif tag_mode == "combined":
+                bar_tags = [b.get("combined_tags") or [TAG_FLAT] for b in window_bars]
+            else:
+                bar_tags = [b.get("tags") or [TAG_FLAT] for b in window_bars]
+
             start_date  = window_bars[0].get("date") or ""
             end_date    = window_bars[-1].get("date") or ""
             days_start  = window_bars[0].get("days_to_breakout") or 0
             days_end    = window_bars[-1].get("days_to_breakout") or 0
 
             # Sequence signature
+            bar_sigs = ["+".join(sorted(set(bt))) if bt else TAG_FLAT for bt in bar_tags]
             if w == 1:
-                sig = window_bars[0]["tag_signature"]
+                sig = bar_sigs[0]
             elif w <= 3:
-                # Ordered: each bar's tag_signature separated by →
-                sig = "→".join(b["tag_signature"] for b in window_bars)
+                sig = "→".join(bar_sigs)
             else:
-                # Unordered bag-of-tags across the window
                 all_tags = sorted(set(t for bt in bar_tags for t in bt))
                 sig = "+".join(all_tags) if all_tags else TAG_FLAT
 
@@ -1367,6 +1395,352 @@ def build_bar_sequences(
                 "sequence_signature":     sig,
                 "bar_tags":               bar_tags,
                 "tag_counts":             tag_counts,
+                "tag_mode":               tag_mode,
             })
 
     return sequences
+
+
+# ── V1C: Flow / Delta proxy feature engine ────────────────────────────────────
+#
+# All features derived from OHLCV only — NOT true bid/ask delta.
+# Values approximate accumulation/distribution pressure using:
+#   CLV (close location value), signed volume proxy, OBV, ADL, CMF.
+# Anti-leakage: uses only bars in the pre-window sequence (oldest→newest).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# V1C flow tag constants
+TAG_CLOSE_HIGH             = "CLOSE_HIGH"
+TAG_CLOSE_LOW              = "CLOSE_LOW"
+TAG_BUY_PRESSURE_HIGH      = "BUY_PRESSURE_HIGH"
+TAG_BUY_PRESSURE_LOW       = "BUY_PRESSURE_LOW"
+TAG_LOWER_WICK_ABSORPTION  = "LOWER_WICK_ABSORPTION"
+TAG_UPPER_WICK_SUPPLY      = "UPPER_WICK_SUPPLY"
+TAG_HIGH_EFFORT_LOW_RESULT = "HIGH_EFFORT_LOW_RESULT"
+TAG_LOW_EFFORT_HIGH_RESULT = "LOW_EFFORT_HIGH_RESULT"
+TAG_EFFORT_RESULT_BULL     = "EFFORT_RESULT_BULL"
+TAG_EFFORT_RESULT_BEAR     = "EFFORT_RESULT_BEAR"
+TAG_OBV_ACCUM_3D           = "OBV_ACCUM_3D"
+TAG_OBV_DISTRIB_3D         = "OBV_DISTRIB_3D"
+TAG_ADL_ACCUM_3D           = "ADL_ACCUM_3D"
+TAG_ADL_DISTRIB_3D         = "ADL_DISTRIB_3D"
+TAG_CMF_POSITIVE           = "CMF_POSITIVE"
+TAG_CMF_NEGATIVE           = "CMF_NEGATIVE"
+TAG_CMF_TURN_UP            = "CMF_TURN_UP"
+TAG_CMF_TURN_DOWN          = "CMF_TURN_DOWN"
+TAG_GAP_DOWN_RECLAIM_FLOW  = "GAP_DOWN_RECLAIM_FLOW"
+TAG_GAP_UP_HOLD_FLOW       = "GAP_UP_HOLD_FLOW"
+TAG_GAP_UP_FADE_FLOW       = "GAP_UP_FADE_FLOW"
+TAG_GAP_DOWN_FAIL_FLOW     = "GAP_DOWN_FAIL_FLOW"
+TAG_DELTA_PROXY_BULL       = "DELTA_PROXY_BULL"
+TAG_DELTA_PROXY_BEAR       = "DELTA_PROXY_BEAR"
+TAG_DELTA_PROXY_ABSORPTION = "DELTA_PROXY_ABSORPTION"
+
+ALL_FLOW_TAGS = [
+    TAG_CLOSE_HIGH, TAG_CLOSE_LOW,
+    TAG_BUY_PRESSURE_HIGH, TAG_BUY_PRESSURE_LOW,
+    TAG_LOWER_WICK_ABSORPTION, TAG_UPPER_WICK_SUPPLY,
+    TAG_HIGH_EFFORT_LOW_RESULT, TAG_LOW_EFFORT_HIGH_RESULT,
+    TAG_EFFORT_RESULT_BULL, TAG_EFFORT_RESULT_BEAR,
+    TAG_OBV_ACCUM_3D, TAG_OBV_DISTRIB_3D,
+    TAG_ADL_ACCUM_3D, TAG_ADL_DISTRIB_3D,
+    TAG_CMF_POSITIVE, TAG_CMF_NEGATIVE, TAG_CMF_TURN_UP, TAG_CMF_TURN_DOWN,
+    TAG_GAP_DOWN_RECLAIM_FLOW, TAG_GAP_UP_HOLD_FLOW,
+    TAG_GAP_UP_FADE_FLOW, TAG_GAP_DOWN_FAIL_FLOW,
+    TAG_DELTA_PROXY_BULL, TAG_DELTA_PROXY_BEAR, TAG_DELTA_PROXY_ABSORPTION,
+]
+
+
+def _slope(series: list[float], n: int) -> Optional[float]:
+    """Linear slope of the last n values (positive = upward)."""
+    if len(series) < n:
+        return None
+    seg = series[-n:]
+    if len(seg) < 2:
+        return None
+    xs = list(range(len(seg)))
+    xm = sum(xs) / len(xs)
+    ym = sum(seg) / len(seg)
+    denom = sum((x - xm) ** 2 for x in xs)
+    if denom < _TINY:
+        return 0.0
+    return sum((xs[i] - xm) * (seg[i] - ym) for i in range(len(seg))) / denom
+
+
+def _z_score(series: list[float], current: float) -> float:
+    if len(series) < 3:
+        return 0.0
+    m = sum(series) / len(series)
+    sd = _stdev_pop(series)
+    return (current - m) / max(sd, _TINY)
+
+
+def build_bar_flow_features(snapshots: list[dict]) -> list[dict]:
+    """
+    Augment bar snapshots (oldest→newest) with V1C flow/delta proxy features.
+
+    This function processes the full sorted pre-window sequence in one pass
+    so that rolling series (OBV, ADL, CMF) are computed correctly without
+    future leakage. Each snapshot dict is augmented in-place and returned.
+
+    Inputs required per snapshot (from build_bar_feature_snapshots_for_episode):
+      open, high, low, close, volume, gap_pct, lower_wick_pct, upper_wick_pct,
+      relative_volume_20d (or volume_z), close_position_in_range.
+
+    IMPORTANT: All features are OHLCV-derived proxies, NOT true bid/ask delta.
+    """
+    if not snapshots:
+        return snapshots
+
+    # Running cumulative series
+    obv_series: list[float] = []
+    adl_series: list[float] = []
+    clv_vol_series: list[float] = []   # for CMF numerator
+    vol_series: list[float] = []       # for CMF denominator
+
+    prev_close: Optional[float] = None
+    prev_cmf_5_local: Optional[float] = None  # carried across iterations for turn detection
+
+    for i, snap in enumerate(snapshots):
+        h = float(snap.get("high")   or 0)
+        l = float(snap.get("low")    or 0)
+        c = float(snap.get("close")  or 0)
+        o = float(snap.get("open")   or c)
+        v = float(snap.get("volume") or 0)
+        pc = prev_close if prev_close is not None else c
+
+        bar_range = max(h - l, _TINY)
+
+        # ── 1. CLV (Close Location Value) ─────────────────────────────────────
+        clv = ((c - l) - (h - c)) / bar_range  # range -1..+1
+
+        if clv >= 0.5:
+            close_location_bucket = "CLOSE_HIGH"
+        elif clv <= -0.5:
+            close_location_bucket = "CLOSE_LOW"
+        else:
+            close_location_bucket = "CLOSE_MID"
+
+        # ── 2. Buy pressure ratio (0..1) ──────────────────────────────────────
+        buy_pressure_ratio = (c - l) / bar_range  # same as close_position_in_range
+
+        if buy_pressure_ratio >= 0.70:
+            buy_pressure_bucket = "BUY_PRESSURE_HIGH"
+        elif buy_pressure_ratio <= 0.30:
+            buy_pressure_bucket = "BUY_PRESSURE_LOW"
+        else:
+            buy_pressure_bucket = "BUY_PRESSURE_NEUTRAL"
+
+        # ── 3. Money flow volume proxy ────────────────────────────────────────
+        money_flow_volume = clv * v  # signed; positive = buying pressure
+
+        # ── 4. Signed volume proxy (volume * CLV) ────────────────────────────
+        signed_volume_proxy = v * clv  # equivalent to money_flow_volume
+
+        # ── 5. OBV delta ──────────────────────────────────────────────────────
+        if c > pc:
+            obv_delta = v
+        elif c < pc:
+            obv_delta = -v
+        else:
+            obv_delta = 0.0
+
+        obv_cumsum = (obv_series[-1] if obv_series else 0.0) + obv_delta
+        obv_series.append(obv_cumsum)
+
+        # ── 6. ADL delta ──────────────────────────────────────────────────────
+        adl_delta  = clv * v
+        adl_cumsum = (adl_series[-1] if adl_series else 0.0) + adl_delta
+        adl_series.append(adl_cumsum)
+
+        # ── 7. CMF components ─────────────────────────────────────────────────
+        clv_vol_series.append(clv * v)
+        vol_series.append(v)
+
+        def _cmf(n: int) -> Optional[float]:
+            if len(clv_vol_series) < n:
+                return None
+            denom = sum(vol_series[-n:])
+            if denom < _TINY:
+                return None
+            return sum(clv_vol_series[-n:]) / denom
+
+        cmf_5  = _cmf(5)
+        cmf_10 = _cmf(10)
+
+        # CMF turn detection (vs previous bar's CMF via local variable)
+        cmf_turn_up   = False
+        cmf_turn_down = False
+        if prev_cmf_5_local is not None and cmf_5 is not None:
+            cmf_turn_up   = prev_cmf_5_local <= 0 < cmf_5
+            cmf_turn_down = prev_cmf_5_local >= 0 > cmf_5
+
+        # OBV and ADL slopes
+        obv_slope_3  = _slope(obv_series, 3)
+        obv_slope_5  = _slope(obv_series, 5)
+        adl_slope_3  = _slope(adl_series, 3)
+        adl_slope_5  = _slope(adl_series, 5)
+
+        # Z-scores for signed_volume_proxy
+        hist_svp = [s.get("signed_volume_proxy", 0.0) for s in snapshots[:i]]
+        svp_z = _z_score(hist_svp, signed_volume_proxy) if len(hist_svp) >= 3 else 0.0
+
+        # ── 8. Effort vs result ───────────────────────────────────────────────
+        rel_vol = float(snap.get("relative_volume_20d") or snap.get("volume_vs_avg20") or 1.0)
+        close_return_pct = (c / max(pc, _TINY) - 1) * 100
+        intraday_return_pct = (c / max(o, _TINY) - 1) * 100
+        gap_pct = float(snap.get("gap_pct") or 0.0)
+
+        lw = float(snap.get("lower_wick_pct") or 0.0)
+        uw = float(snap.get("upper_wick_pct") or 0.0)
+        lower_wick_dominance = lw - uw
+        upper_wick_dominance = uw - lw
+
+        # ── Assign flow features to snapshot ─────────────────────────────────
+        snap.update({
+            # CLV / pressure
+            "clv":                    round(clv, 4),
+            "close_location_bucket":  close_location_bucket,
+            "buy_pressure_ratio":     round(buy_pressure_ratio, 4),
+            "buy_pressure_bucket":    buy_pressure_bucket,
+            # Money flow
+            "money_flow_volume_proxy": round(money_flow_volume, 1),
+            # OBV
+            "obv_delta":              round(obv_delta, 1),
+            "obv_cumsum":             round(obv_cumsum, 1),
+            "obv_slope_3":            round(obv_slope_3, 2) if obv_slope_3 is not None else None,
+            "obv_slope_5":            round(obv_slope_5, 2) if obv_slope_5 is not None else None,
+            # ADL
+            "adl_delta":              round(adl_delta, 1),
+            "adl_cumsum":             round(adl_cumsum, 1),
+            "adl_slope_3":            round(adl_slope_3, 2) if adl_slope_3 is not None else None,
+            "adl_slope_5":            round(adl_slope_5, 2) if adl_slope_5 is not None else None,
+            # CMF
+            "cmf_5":                  round(cmf_5, 4) if cmf_5 is not None else None,
+            "cmf_10":                 round(cmf_10, 4) if cmf_10 is not None else None,
+            "cmf_turn_up":            cmf_turn_up,
+            "cmf_turn_down":          cmf_turn_down,
+            # Signed volume proxy (OHLCV-derived, NOT true bid/ask delta)
+            "signed_volume_proxy":    round(signed_volume_proxy, 1),
+            "signed_volume_z":        round(svp_z, 3),
+            # Effort vs result
+            "close_return_pct":       round(close_return_pct, 3),
+            "intraday_return_pct":    round(intraday_return_pct, 3),
+            "lower_wick_dominance":   round(lower_wick_dominance, 4),
+            "upper_wick_dominance":   round(upper_wick_dominance, 4),
+        })
+
+        prev_close = c
+        prev_cmf_5_local = cmf_5  # carry forward for next iteration's turn detection
+
+    # Second pass: compute flow tags (needs all flow fields to be present)
+    for snap in snapshots:
+        flow_tags = bars_to_flow_tags(snap)
+        price_tags = snap.get("tags") or [TAG_FLAT]
+        combined_tags = sorted(set(price_tags + flow_tags))
+        if not combined_tags:
+            combined_tags = [TAG_FLAT]
+
+        snap["flow_tags"]              = flow_tags
+        snap["flow_tag_signature"]     = "+".join(flow_tags) if flow_tags else TAG_FLAT
+        snap["combined_tags"]          = combined_tags
+        snap["combined_tag_signature"] = "+".join(combined_tags)
+
+    return snapshots
+
+
+def bars_to_flow_tags(snap: dict) -> list[str]:
+    """
+    Convert a snapshot (augmented by build_bar_flow_features) to V1C flow tags.
+
+    Returns sorted list of flow tag strings; [TAG_FLAT] when no tags apply.
+    IMPORTANT: All tags are derived from OHLCV proxies, NOT true bid/ask delta.
+    """
+    tags: list[str] = []
+
+    clv           = snap.get("clv", 0.0) or 0.0
+    bpr           = snap.get("buy_pressure_ratio", 0.5) or 0.5
+    lw            = snap.get("lower_wick_pct", 0.0) or 0.0
+    uw            = snap.get("upper_wick_pct", 0.0) or 0.0
+    rel_vol       = snap.get("relative_volume_20d") or snap.get("volume_vs_avg20") or 1.0
+    close_ret     = snap.get("close_return_pct", 0.0) or 0.0
+    intraday_ret  = snap.get("intraday_return_pct", 0.0) or 0.0
+    gap_pct       = snap.get("gap_pct", 0.0) or 0.0
+    svp_z         = snap.get("signed_volume_z", 0.0) or 0.0
+    obv_slope_3   = snap.get("obv_slope_3")
+    adl_slope_3   = snap.get("adl_slope_3")
+    cmf_5         = snap.get("cmf_5")
+    cmf_turn_up   = snap.get("cmf_turn_up", False)
+    cmf_turn_down = snap.get("cmf_turn_down", False)
+
+    # CLV / close location
+    if clv >= 0.5:
+        tags.append(TAG_CLOSE_HIGH)
+    if clv <= -0.5:
+        tags.append(TAG_CLOSE_LOW)
+
+    # Buy pressure
+    if bpr >= 0.70:
+        tags.append(TAG_BUY_PRESSURE_HIGH)
+    if bpr <= 0.30:
+        tags.append(TAG_BUY_PRESSURE_LOW)
+
+    # Wick pressure
+    if lw >= 0.35 and clv >= 0:
+        tags.append(TAG_LOWER_WICK_ABSORPTION)
+    if uw >= 0.35 and clv <= 0:
+        tags.append(TAG_UPPER_WICK_SUPPLY)
+
+    # Effort vs result
+    if rel_vol >= 2.0 and abs(close_ret) <= 3.0:
+        tags.append(TAG_HIGH_EFFORT_LOW_RESULT)
+    if rel_vol <= 0.8 and abs(close_ret) >= 5.0:
+        tags.append(TAG_LOW_EFFORT_HIGH_RESULT)
+    if rel_vol >= 1.5 and close_ret > 3.0 and clv >= 0.5:
+        tags.append(TAG_EFFORT_RESULT_BULL)
+    if rel_vol >= 1.5 and close_ret < -3.0 and clv <= -0.5:
+        tags.append(TAG_EFFORT_RESULT_BEAR)
+
+    # OBV
+    if obv_slope_3 is not None and obv_slope_3 > 0:
+        tags.append(TAG_OBV_ACCUM_3D)
+    if obv_slope_3 is not None and obv_slope_3 < 0:
+        tags.append(TAG_OBV_DISTRIB_3D)
+
+    # ADL
+    if adl_slope_3 is not None and adl_slope_3 > 0:
+        tags.append(TAG_ADL_ACCUM_3D)
+    if adl_slope_3 is not None and adl_slope_3 < 0:
+        tags.append(TAG_ADL_DISTRIB_3D)
+
+    # CMF
+    if cmf_5 is not None:
+        if cmf_5 > 0.15:
+            tags.append(TAG_CMF_POSITIVE)
+        if cmf_5 < -0.15:
+            tags.append(TAG_CMF_NEGATIVE)
+    if cmf_turn_up:
+        tags.append(TAG_CMF_TURN_UP)
+    if cmf_turn_down:
+        tags.append(TAG_CMF_TURN_DOWN)
+
+    # Gap-adjusted flow tags
+    if gap_pct <= -3 and intraday_ret > 3 and clv >= 0.5 and bpr >= 0.7:
+        tags.append(TAG_GAP_DOWN_RECLAIM_FLOW)
+    if gap_pct >= 3 and intraday_ret >= -2 and clv >= 0.3:
+        tags.append(TAG_GAP_UP_HOLD_FLOW)
+    if gap_pct >= 3 and intraday_ret < -3 and clv <= -0.3:
+        tags.append(TAG_GAP_UP_FADE_FLOW)
+    if gap_pct <= -3 and intraday_ret < -2 and clv <= -0.3:
+        tags.append(TAG_GAP_DOWN_FAIL_FLOW)
+
+    # Delta proxy (OHLCV-derived signed volume, NOT true bid/ask delta)
+    if svp_z >= 1.5 and clv >= 0.4:
+        tags.append(TAG_DELTA_PROXY_BULL)
+    if svp_z <= -1.5 and clv <= -0.4:
+        tags.append(TAG_DELTA_PROXY_BEAR)
+    if svp_z >= 1.0 and lw >= 0.35 and clv >= 0:
+        tags.append(TAG_DELTA_PROXY_ABSORPTION)
+
+    result = sorted(set(tags))
+    return result if result else [TAG_FLAT]

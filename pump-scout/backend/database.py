@@ -678,7 +678,8 @@ _UNIVERSE_CACHE_MIGRATIONS: list[tuple[str, str]] = []
 # Add tuples here if columns are added post-initial-deployment.
 
 _DISCOVERED_PATTERN_MIGRATIONS: list[tuple[str, str]] = [
-    ("source_type", "VARCHAR(30)"),
+    ("source_type",    "VARCHAR(30)"),
+    ("feature_family", "VARCHAR(30)"),
 ]
 
 _JOURNAL_MIGRATIONS = [
@@ -4076,6 +4077,7 @@ class DiscoveredPattern(Base):
     run_id                 = Column(Integer,  nullable=False, index=True)
     signal_id              = Column(String(60), nullable=False, index=True)
     source_type            = Column(String(30), nullable=True)
+    feature_family         = Column(String(30), nullable=True)
     family                 = Column(String(10), nullable=True)
     status                 = Column(String(30), nullable=True)
     intended_use           = Column(String(30), nullable=True)
@@ -5412,8 +5414,8 @@ async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
 
             if existing:
                 for col in [
-                    "source_type", "family", "status", "intended_use", "description",
-                    "count_missed_4x", "count_detected_4x", "count_all_4x",
+                    "source_type", "feature_family", "family", "status", "intended_use",
+                    "description", "count_missed_4x", "count_detected_4x", "count_all_4x",
                     "count_false_positive", "count_normal_winner", "count_split_artifact",
                     "lift_vs_false_positive", "lift_vs_normal_winner",
                     "precision_estimate", "recall_all_4x", "false_positive_rate",
@@ -5428,6 +5430,7 @@ async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
                     run_id                  = run_id,
                     signal_id               = signal_id,
                     source_type             = d.get("source_type"),
+                    feature_family          = d.get("feature_family"),
                     family                  = d.get("family"),
                     status                  = d.get("status"),
                     intended_use            = d.get("intended_use"),
@@ -5461,15 +5464,40 @@ def _infer_source_type(signal_id: str, stored: Optional[str] = None) -> str:
     if not signal_id:
         return "EPISODE_AGGREGATE"
     _PREFIXES = [
-        ("DISC_BAR_TEN_BAR_CONTEXT_",     "TEN_BAR_CONTEXT"),
-        ("DISC_BAR_THREE_BAR_SEQUENCE_",  "THREE_BAR_SEQUENCE"),
-        ("DISC_BAR_TWO_BAR_SEQUENCE_",    "TWO_BAR_SEQUENCE"),
-        ("DISC_BAR_FIVE_BAR_SEQUENCE_",   "FIVE_BAR_SEQUENCE"),
-        ("DISC_BAR_SINGLE_BAR_",          "SINGLE_BAR"),
+        ("DISC_BAR_TEN_BAR_CONTEXT_",        "TEN_BAR_CONTEXT"),
+        ("DISC_BAR_THREE_BAR_SEQUENCE_",      "THREE_BAR_SEQUENCE"),
+        ("DISC_BAR_TWO_BAR_SEQUENCE_",        "TWO_BAR_SEQUENCE"),
+        ("DISC_BAR_FIVE_BAR_SEQUENCE_",       "FIVE_BAR_SEQUENCE"),
+        ("DISC_BAR_SINGLE_BAR_",              "SINGLE_BAR"),
+        ("DISC_FLOW_TEN_BAR_CONTEXT_",        "TEN_BAR_CONTEXT"),
+        ("DISC_FLOW_THREE_BAR_SEQUENCE_",     "THREE_BAR_SEQUENCE"),
+        ("DISC_FLOW_TWO_BAR_SEQUENCE_",       "TWO_BAR_SEQUENCE"),
+        ("DISC_FLOW_FIVE_BAR_SEQUENCE_",      "FIVE_BAR_SEQUENCE"),
+        ("DISC_FLOW_SINGLE_BAR_",             "SINGLE_BAR"),
+        ("DISC_COMBINED_TEN_BAR_CONTEXT_",    "TEN_BAR_CONTEXT"),
+        ("DISC_COMBINED_THREE_BAR_SEQUENCE_", "THREE_BAR_SEQUENCE"),
+        ("DISC_COMBINED_TWO_BAR_SEQUENCE_",   "TWO_BAR_SEQUENCE"),
+        ("DISC_COMBINED_FIVE_BAR_SEQUENCE_",  "FIVE_BAR_SEQUENCE"),
+        ("DISC_COMBINED_SINGLE_BAR_",         "SINGLE_BAR"),
     ]
     for prefix, st in _PREFIXES:
         if signal_id.startswith(prefix):
             return st
+    return "EPISODE_AGGREGATE"
+
+
+def _infer_feature_family(signal_id: str, stored: Optional[str] = None) -> str:
+    """Infer feature_family from signal_id prefix when the stored column is null."""
+    if stored:
+        return stored
+    if not signal_id:
+        return "EPISODE_AGGREGATE"
+    if signal_id.startswith("DISC_FLOW_"):
+        return "FLOW"
+    if signal_id.startswith("DISC_COMBINED_"):
+        return "COMBINED"
+    if signal_id.startswith("DISC_BAR_"):
+        return "PRICE_ACTION"
     return "EPISODE_AGGREGATE"
 
 
@@ -5488,6 +5516,7 @@ async def get_discovered_patterns(run_id: int) -> list[dict]:
                 "run_id":                r.run_id,
                 "signal_id":             r.signal_id,
                 "source_type":           _infer_source_type(r.signal_id, getattr(r, "source_type", None)),
+                "feature_family":        _infer_feature_family(r.signal_id, getattr(r, "feature_family", None)),
                 "family":                r.family,
                 "status":                r.status,
                 "intended_use":          r.intended_use,
