@@ -1714,8 +1714,12 @@ const STATUS_COLOR = {
 function fmtPct(v) { return v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`; }
 function fmtLift(v) { return v == null ? '—' : `${Number(v).toFixed(2)}×`; }
 
+const FF_COLOR = { FLOW: 'var(--blue)', COMBINED: 'var(--purple, #a855f7)' };
+
 function PatternRow({ p }) {
   const st = normalizeSourceType(p.source_type, p.signal_id);
+  const ff = p.feature_family;
+  const showFfBadge = ff === 'FLOW' || ff === 'COMBINED';
   return (
     <tr>
       <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 9 }}>
@@ -1726,6 +1730,12 @@ function PatternRow({ p }) {
                        fontSize: 8, color: 'var(--text-muted)' }}>
           {SOURCE_TYPE_LABELS[st] || st}
         </span>
+        {showFfBadge && (
+          <span style={{ marginLeft: 4, border: `1px solid ${FF_COLOR[ff]}`, borderRadius: 3,
+                         padding: '1px 4px', fontSize: 8, color: FF_COLOR[ff] }}>
+            {ff}
+          </span>
+        )}
       </td>
       <td className={styles.dataCell}>
         <span style={{ fontSize: 9, fontWeight: 600, color: STATUS_COLOR[p.status] || 'inherit' }}>
@@ -1864,6 +1874,15 @@ function PatternDiscoveryPanel({ runId }) {
     (bySourceType[st] = bySourceType[st] || []).push(p);
   }
 
+  // feature_family breakdown
+  const byFamily = {};
+  for (const p of patterns) {
+    const ff = p.feature_family || 'EPISODE_AGGREGATE';
+    (byFamily[ff] = byFamily[ff] || []).push(p);
+  }
+  const flowPatterns     = byFamily['FLOW']     || [];
+  const combinedPatterns = byFamily['COMBINED'] || [];
+
   // Top by lift
   const topByLift = [...patterns]
     .filter(p => p.lift_vs_false_positive != null)
@@ -1876,22 +1895,36 @@ function PatternDiscoveryPanel({ runId }) {
     .sort((a, b) => (b.count_missed_4x || 0) - (a.count_missed_4x || 0))
     .slice(0, 10);
 
+  // Top flow patterns by lift
+  const topFlowByLift = [...flowPatterns]
+    .filter(p => p.lift_vs_false_positive != null)
+    .sort((a, b) => (b.lift_vs_false_positive || 0) - (a.lift_vs_false_positive || 0))
+    .slice(0, 10);
+
+  // Top combined patterns by lift
+  const topCombinedByLift = [...combinedPatterns]
+    .filter(p => p.lift_vs_false_positive != null)
+    .sort((a, b) => (b.lift_vs_false_positive || 0) - (a.lift_vs_false_positive || 0))
+    .slice(0, 10);
+
   // Contamination warnings
   const contaminated = patterns.filter(p => (p.split_artifact_exposure || 0) > 0.5);
 
   const PHASE_LABEL = {
-    LOADING_DATASET:    'Loading episodes…',
-    PATTERN_MINING_V1A: 'Mining episode patterns (V1A)…',
-    LOADING_BAR_FEATURES: 'Loading bar features…',
-    BUILDING_BAR_SEQUENCES: 'Building bar sequences…',
-    MINING_BAR_PATTERNS: 'Mining bar patterns (V1B)…',
-    PUMP_WATCH_SCORING: 'Scoring Pump Watch…',
-    PERSISTING_SCORES:  'Persisting scores…',
-    PERSISTING_PATTERNS: 'Persisting patterns…',
-    UPDATING_REGISTRY:  'Updating registry…',
-    BUILDING_REPORT:    'Building report…',
-    COMPLETE:           'Complete',
-    ERROR:              'Error',
+    LOADING_DATASET:         'Loading episodes…',
+    PATTERN_MINING_V1A:      'Mining episode patterns (V1A)…',
+    LOADING_BAR_FEATURES:    'Loading bar features…',
+    BUILDING_BAR_SEQUENCES:  'Building bar sequences…',
+    MINING_BAR_PATTERNS:     'Mining bar patterns (V1B)…',
+    MINING_FLOW_PATTERNS:    'Mining flow patterns (V1C)…',
+    MINING_COMBINED_PATTERNS:'Mining combined patterns (V1C)…',
+    PUMP_WATCH_SCORING:      'Scoring Pump Watch…',
+    PERSISTING_SCORES:       'Persisting scores…',
+    PERSISTING_PATTERNS:     'Persisting patterns…',
+    UPDATING_REGISTRY:       'Updating registry…',
+    BUILDING_REPORT:         'Building report…',
+    COMPLETE:                'Complete',
+    ERROR:                   'Error',
   };
 
   return (
@@ -1916,6 +1949,9 @@ function PatternDiscoveryPanel({ runId }) {
               <option value="both">Both (V1A + V1B)</option>
               <option value="episode_aggregate">Episode Aggregate only (V1A, fast)</option>
               <option value="bar_sequence">Bar Sequence only (V1B)</option>
+              <option value="flow">Flow Only (V1C — OHLCV proxy)</option>
+              <option value="combined">Combined Price+Flow (V1B+V1C)</option>
+              <option value="all">All (V1A + V1B + V1C)</option>
             </select>
           </div>
 
@@ -1929,7 +1965,7 @@ function PatternDiscoveryPanel({ runId }) {
                     type="checkbox"
                     checked={windows.includes(w)}
                     onChange={() => toggleWindow(w)}
-                    disabled={isRunning || launching || mode === 'episode_aggregate'}
+                    disabled={isRunning || launching || mode === 'episode_aggregate' || mode === 'flow'}
                   />
                   {WINDOW_LABELS[w]}
                 </label>
@@ -2043,7 +2079,11 @@ function PatternDiscoveryPanel({ runId }) {
             </span>
             {status.episodes > 0 && (
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                {status.episodes} episodes · {status.episodes_scored} scored · {status.patterns_evaluated} ep-patterns · {status.bar_patterns_evaluated} bar-patterns · {status.patterns_saved} saved
+                {status.episodes} episodes · {status.episodes_scored} scored ·{' '}
+                {status.patterns_evaluated} ep-patterns · {status.bar_patterns_evaluated} bar ·{' '}
+                {status.flow_patterns_evaluated > 0 ? `${status.flow_patterns_evaluated} flow · ` : ''}
+                {status.combined_patterns_evaluated > 0 ? `${status.combined_patterns_evaluated} combined · ` : ''}
+                {status.patterns_saved} saved
               </span>
             )}
           </div>
@@ -2060,7 +2100,13 @@ function PatternDiscoveryPanel({ runId }) {
                   <span style={{ color: 'var(--border)' }}>|</span>
                   <span>daily_rows={status.pre_daily_rows_loaded}</span>
                   <span>snapshots={status.bar_snapshots_created}</span>
-                  <span>sequences={status.bar_sequences_created}</span>
+                  <span>price_seqs={status.bar_sequences_created}</span>
+                  {status.flow_sequences_created > 0 && (
+                    <span style={{ color: 'var(--blue)' }}>flow_seqs={status.flow_sequences_created}</span>
+                  )}
+                  {status.combined_sequences_created > 0 && (
+                    <span style={{ color: 'var(--blue)' }}>comb_seqs={status.combined_sequences_created}</span>
+                  )}
                 </>
               )}
             </div>
@@ -2081,15 +2127,21 @@ function PatternDiscoveryPanel({ runId }) {
           <div className={styles.discoverySummary}>
             {[
               { label: 'Total Patterns',    value: patterns.length },
-              { label: 'Episode Agg',       value: (bySourceType['EPISODE_AGGREGATE'] || []).length },
+              { label: 'Episode Agg',       value: (byFamily['EPISODE_AGGREGATE'] || []).length },
+              { label: 'Price Action',      value: (byFamily['PRICE_ACTION'] || []).length },
+              { label: 'Flow (V1C)',        value: flowPatterns.length,     highlight: flowPatterns.length > 0 },
+              { label: 'Combined (V1C)',    value: combinedPatterns.length,  highlight: combinedPatterns.length > 0 },
               { label: 'Single Bar',        value: (bySourceType['SINGLE_BAR'] || []).length },
               { label: 'Two-Bar Seq',       value: (bySourceType['TWO_BAR_SEQUENCE'] || []).length },
               { label: 'Three-Bar Seq',     value: (bySourceType['THREE_BAR_SEQUENCE'] || []).length },
               { label: 'Five-Bar',          value: (bySourceType['FIVE_BAR_SEQUENCE'] || []).length },
-              { label: 'Ten-Bar Context',   value: (bySourceType['TEN_BAR_CONTEXT'] || []).length },
-            ].map(({ label, value }) => (
-              <div key={label} className={styles.discoverySummaryCard}>
-                <div className={styles.discoverySummaryVal}>{fmtNum(value)}</div>
+            ].map(({ label, value, highlight }) => (
+              <div key={label} className={styles.discoverySummaryCard}
+                style={highlight ? { borderColor: 'var(--blue)' } : {}}>
+                <div className={styles.discoverySummaryVal}
+                  style={highlight ? { color: 'var(--blue)' } : {}}>
+                  {fmtNum(value)}
+                </div>
                 <div className={styles.discoverySummaryLabel}>{label}</div>
               </div>
             ))}
@@ -2108,11 +2160,14 @@ function PatternDiscoveryPanel({ runId }) {
           {/* Sub-tabs */}
           <div className={styles.tabRow} style={{ marginTop: 12 }}>
             {[
-              { id: 'top-lift',   label: 'Top by Lift' },
-              { id: 'top-missed', label: 'Top by Missed 4x' },
-              { id: 'by-type',    label: 'By Source Type' },
-              { id: 'all',        label: `All (${patterns.length})` },
-            ].map(({ id, label }) => (
+              { id: 'top-lift',     label: 'Top by Lift' },
+              { id: 'top-missed',   label: 'Top Missed 4x' },
+              { id: 'top-flow',     label: `Top Flow (${flowPatterns.length})`,     hidden: flowPatterns.length === 0 },
+              { id: 'top-combined', label: `Top Combined (${combinedPatterns.length})`, hidden: combinedPatterns.length === 0 },
+              { id: 'by-family',    label: 'By Family' },
+              { id: 'by-type',      label: 'By Source Type' },
+              { id: 'all',          label: `All (${patterns.length})` },
+            ].filter(t => !t.hidden).map(({ id, label }) => (
               <button
                 key={id}
                 className={`${styles.tab}${resTab === id ? ' ' + styles.tabActive : ''}`}
@@ -2131,6 +2186,41 @@ function PatternDiscoveryPanel({ runId }) {
           {/* Top by missed 4x */}
           {resTab === 'top-missed' && (
             <PatternTable title="Top 10 Patterns Capturing Missed 4× Pumps" rows={topByMissed} />
+          )}
+
+          {/* Top flow patterns */}
+          {resTab === 'top-flow' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className={styles.discoveryNote} style={{ padding: '6px 10px', fontSize: 11 }}>
+                Flow features are OHLCV-derived proxies (CLV, OBV, ADL, CMF, signed_volume_proxy).
+                NOT true bid/ask delta.
+              </div>
+              <PatternTable
+                title={`Top Flow Patterns by Lift (${Math.min(topFlowByLift.length, 10)} shown)`}
+                rows={topFlowByLift}
+              />
+            </div>
+          )}
+
+          {/* Top combined patterns */}
+          {resTab === 'top-combined' && (
+            <PatternTable
+              title={`Top Combined (Price+Flow) Patterns by Lift (${Math.min(topCombinedByLift.length, 10)} shown)`}
+              rows={topCombinedByLift}
+            />
+          )}
+
+          {/* By feature family */}
+          {resTab === 'by-family' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {Object.entries(byFamily).map(([ff, pats]) => (
+                <PatternTable
+                  key={ff}
+                  title={`${ff} (${pats.length})`}
+                  rows={[...pats].sort((a,b)=>((b.lift_vs_false_positive||0)-(a.lift_vs_false_positive||0))).slice(0, 15)}
+                />
+              ))}
+            </div>
           )}
 
           {/* By source type */}
