@@ -617,30 +617,62 @@ export default function AdminPage() {
         {/* ── Quick Links ── */}
         <div style={card}>
           <p style={label}>Direct Backend Links</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {[
-              ['/api/admin/test-massive?symbol=' + symbol, 'Test Massive connection'],
-              ['/api/admin/run-universe-scan', 'Trigger universe scan (background)'],
-              ['/api/admin/universe-scan/status', 'Live scan progress'],
-              ['/api/admin/enrich-sectors', 'Trigger sector enrichment (missing only)'],
-              ['/api/admin/refresh-sector-data/status', 'Sector refresh status'],
-              ['/api/market-regime/refresh', 'Refresh ETF / market regime (background)'],
-              ['/api/market-regime', 'Latest market regime'],
-              ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
-              ['/api/scan/intraday/latest', 'Latest intraday scan results'],
-              ['/api/scan/latest', 'Latest scan (any type)'],
-              ['/api/replay/history', 'Replay run history'],
-              ['/health', 'Health check'],
-            ].map(([path, desc]) => (
-              <div key={path} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
-                <a href={`${API_URL}${path}`} target="_blank" rel="noreferrer"
-                  style={{ fontSize: 10, color: '#00d4f5', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                  {path}
-                </a>
-                <span style={{ fontSize: 10, color: '#56567a' }}>— {desc}</span>
+          {[
+            {
+              group: 'Admin / Scanner',
+              links: [
+                ['/api/admin/test-massive?symbol=' + symbol, 'Test Massive connection'],
+                ['/api/admin/run-universe-scan', 'Trigger universe scan (background)'],
+                ['/api/admin/universe-scan/status', 'Live scan progress'],
+                ['/api/admin/enrich-sectors', 'Trigger sector enrichment (missing only)'],
+                ['/api/admin/refresh-sector-data/status', 'Sector refresh status'],
+                ['/api/market-regime/refresh', 'Refresh ETF / market regime (background)'],
+                ['/api/market-regime', 'Latest market regime'],
+                ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
+                ['/api/scan/intraday/latest', 'Latest intraday scan results'],
+                ['/api/scan/latest', 'Latest scan (any type)'],
+                ['/api/replay/history', 'Replay run history'],
+                ['/health', 'Health check'],
+              ],
+            },
+            {
+              group: 'Raw Pattern Study',
+              links: [
+                ['/api/replay/raw-pattern-study/runs', 'List all raw-pattern-study runs'],
+                ['/api/replay/pump-study/runs', 'List all pump-study runs'],
+                ['/api/replay/raw-pattern-study/100', 'Run 100 detail (change ID in URL)'],
+                ['/api/replay/raw-pattern-study/100/episodes', 'Run 100 — episode features'],
+                ['/api/replay/raw-pattern-study/100/daily-features', 'Run 100 — daily bar features (PRE/POST)'],
+                ['/api/replay/raw-pattern-study/100/comparisons', 'Run 100 — ticker comparisons'],
+              ],
+            },
+            {
+              group: 'Pattern Discovery',
+              links: [
+                ['/api/replay/raw-pattern-study/100/discover/status', 'Discovery progress for run 100'],
+                ['/api/replay/raw-pattern-study/100/discover/results', 'Discovered patterns for run 100'],
+                ['/api/replay/raw-pattern-study/100/pump-watch', 'Pump Watch scores for run 100'],
+                ['/api/replay/signal-registry', 'Discovered signal registry (JSON)'],
+              ],
+            },
+          ].map(({ group, links }) => (
+            <div key={group} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', color: '#56567a', marginBottom: 6, textTransform: 'uppercase' }}>
+                {group}
               </div>
-            ))}
-          </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {links.map(([path, desc]) => (
+                  <div key={path} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+                    <a href={`${API_URL}${path}`} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 10, color: '#00d4f5', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                      {path}
+                    </a>
+                    <span style={{ fontSize: 10, color: '#56567a' }}>— {desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
 
         </div>

@@ -5384,10 +5384,11 @@ async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
     async with get_session_factory()() as session:
         count = 0
         for d in rows:
+            signal_id = (d.get("signal_id") or "")[:60]
             existing = (await session.execute(
                 select(DiscoveredPattern).where(
                     DiscoveredPattern.run_id    == run_id,
-                    DiscoveredPattern.signal_id == d.get("signal_id"),
+                    DiscoveredPattern.signal_id == signal_id,
                 )
             )).scalar_one_or_none()
 
@@ -5403,10 +5404,11 @@ async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
                 ]:
                     if col in d:
                         setattr(existing, col, d[col])
+                count += 1
             else:
                 session.add(DiscoveredPattern(
                     run_id                  = run_id,
-                    signal_id               = d.get("signal_id"),
+                    signal_id               = signal_id,
                     family                  = d.get("family"),
                     status                  = d.get("status"),
                     intended_use            = d.get("intended_use"),
