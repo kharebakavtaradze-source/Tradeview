@@ -1681,6 +1681,430 @@ function SplitImpactPanel({ runId }) {
   );
 }
 
+// ── Pattern Discovery Panel ───────────────────────────────────────────────────
+
+const WINDOWS_ALL = [1, 2, 3, 5, 10];
+const WINDOW_LABELS = { 1: '1 (single bar)', 2: '2 (two-bar seq)', 3: '3 (three-bar seq)', 5: '5 (five-bar)', 10: '10 (context)' };
+const SOURCE_TYPE_LABELS = {
+  SINGLE_BAR:         'Single Bar',
+  TWO_BAR_SEQUENCE:   'Two-Bar Seq',
+  THREE_BAR_SEQUENCE: 'Three-Bar Seq',
+  FIVE_BAR_SEQUENCE:  'Five-Bar',
+  TEN_BAR_CONTEXT:    'Ten-Bar Context',
+  EPISODE_AGGREGATE:  'Episode Agg',
+};
+const STATUS_COLOR = {
+  EXPERIMENTAL:      'var(--lime)',
+  EXPERIMENTAL_RARE: 'var(--cyan)',
+  RESEARCH_ONLY:     'var(--amber)',
+  REJECT:            'var(--red)',
+};
+
+function fmtPct(v) { return v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`; }
+function fmtLift(v) { return v == null ? '—' : `${Number(v).toFixed(2)}×`; }
+
+function PatternRow({ p }) {
+  const st = p.source_type || 'EPISODE_AGGREGATE';
+  return (
+    <tr>
+      <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 9 }}>
+        {p.signal_id}
+      </td>
+      <td className={styles.dataCell} style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+        <span style={{ border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px',
+                       fontSize: 8, color: 'var(--text-muted)' }}>
+          {SOURCE_TYPE_LABELS[st] || st}
+        </span>
+      </td>
+      <td className={styles.dataCell}>
+        <span style={{ fontSize: 9, fontWeight: 600, color: STATUS_COLOR[p.status] || 'inherit' }}>
+          {p.status}
+        </span>
+      </td>
+      <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10,
+                                               color: 'var(--lime)' }}>
+        {fmtLift(p.lift_vs_false_positive)}
+      </td>
+      <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+        {p.count_all_4x ?? '—'}
+      </td>
+      <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+        {p.count_missed_4x ?? '—'}
+      </td>
+      <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10,
+                                               color: 'var(--red)' }}>
+        {fmtPct(p.false_positive_rate)}
+      </td>
+      <td className={styles.dataCell} style={{ fontSize: 10, maxWidth: 260,
+                                               color: 'var(--text-dim)' }}>
+        {p.description || p.sequence_signature || '—'}
+      </td>
+    </tr>
+  );
+}
+
+function PatternDiscoveryPanel({ runId }) {
+  // Controls
+  const [mode,        setMode]        = useState('both');
+  const [windows,     setWindows]     = useState([1, 2, 3, 5, 10]);
+  const [excludeSplit, setExcludeSplit] = useState(true);
+
+  // Launch state
+  const [launching,   setLaunching]   = useState(false);
+  const [launchErr,   setLaunchErr]   = useState('');
+
+  // Status polling
+  const [status,      setStatus]      = useState(null);   // null | progress dict
+  const [polling,     setPolling]     = useState(false);
+  const pollRef = useRef(null);
+
+  // Results
+  const [results,     setResults]     = useState(null);
+  const [loadingRes,  setLoadingRes]  = useState(false);
+  const [resErr,      setResErr]      = useState('');
+
+  // Sub-tab inside results
+  const [resTab, setResTab] = useState('top-lift');
+
+  const stopPoll = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    setPolling(false);
+  };
+
+  const fetchStatus = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/status`);
+      if (!r.ok) return;
+      const d = await r.json();
+      setStatus(d);
+      if (!d.running && d.phase === 'COMPLETE') {
+        stopPoll();
+        fetchResults();
+      } else if (!d.running && d.phase === 'ERROR') {
+        stopPoll();
+      }
+    } catch { /* ignore */ }
+  };
+
+  const fetchResults = async () => {
+    setLoadingRes(true);
+    setResErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/results`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
+      const d = await r.json();
+      setResults(d);
+    } catch (e) {
+      setResErr(String(e));
+    } finally {
+      setLoadingRes(false);
+    }
+  };
+
+  // On mount, fetch current status (to detect a prior run)
+  useEffect(() => {
+    fetchStatus();
+    return () => stopPoll();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId]);
+
+  const toggleWindow = (w) => {
+    setWindows(prev => prev.includes(w) ? prev.filter(x => x !== w) : [...prev, w].sort((a,b)=>a-b));
+  };
+
+  const handleLaunch = async () => {
+    if (windows.length === 0) { setLaunchErr('Select at least one window size.'); return; }
+    setLaunching(true);
+    setLaunchErr('');
+    setResults(null);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/discover`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mode, windows, exclude_split_artifacts: excludeSplit }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      if (d.status === 'ALREADY_RUNNING') {
+        setLaunchErr('Discovery is already running for this run.');
+      } else {
+        // Start polling
+        setPolling(true);
+        pollRef.current = setInterval(fetchStatus, 2500);
+      }
+    } catch (e) {
+      setLaunchErr(String(e));
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  // Derive status label
+  const isRunning = status?.running;
+  const phase     = status?.phase;
+  const hasError  = phase === 'ERROR';
+  const isComplete = phase === 'COMPLETE';
+
+  // Parse patterns out of results
+  const patterns = results?.patterns || [];
+  const bySourceType = {};
+  for (const p of patterns) {
+    const st = p.source_type || 'EPISODE_AGGREGATE';
+    (bySourceType[st] = bySourceType[st] || []).push(p);
+  }
+
+  // Top by lift
+  const topByLift = [...patterns]
+    .filter(p => p.lift_vs_false_positive != null)
+    .sort((a, b) => (b.lift_vs_false_positive || 0) - (a.lift_vs_false_positive || 0))
+    .slice(0, 10);
+
+  // Top by missed_4x catch
+  const topByMissed = [...patterns]
+    .filter(p => p.count_missed_4x != null)
+    .sort((a, b) => (b.count_missed_4x || 0) - (a.count_missed_4x || 0))
+    .slice(0, 10);
+
+  // Contamination warnings
+  const contaminated = patterns.filter(p => (p.split_artifact_exposure || 0) > 0.5);
+
+  const PHASE_LABEL = {
+    LOADING_DATASET:    'Loading episodes…',
+    PATTERN_MINING_V1A: 'Mining episode patterns (V1A)…',
+    LOADING_BAR_FEATURES: 'Loading bar features…',
+    BUILDING_BAR_SEQUENCES: 'Building bar sequences…',
+    MINING_BAR_PATTERNS: 'Mining bar patterns (V1B)…',
+    PUMP_WATCH_SCORING: 'Scoring Pump Watch…',
+    PERSISTING_SCORES:  'Persisting scores…',
+    PERSISTING_PATTERNS: 'Persisting patterns…',
+    UPDATING_REGISTRY:  'Updating registry…',
+    BUILDING_REPORT:    'Building report…',
+    COMPLETE:           'Complete',
+    ERROR:              'Error',
+  };
+
+  return (
+    <div className={styles.discoveryPanel}>
+      {/* ── Controls ─────────────────────────────────────────────────────── */}
+      <div className={styles.discoveryControls}>
+        <div className={styles.discoveryControlsTitle}>Pattern Discovery</div>
+        <div className={styles.discoveryNote}>
+          Mines pre-breakout bar patterns from completed run data. Does NOT modify Scanner V2 routing.
+        </div>
+
+        <div className={styles.discoveryRow}>
+          {/* Mode select */}
+          <div className={styles.discoveryField}>
+            <label className={styles.discoveryLabel}>Mode</label>
+            <select
+              className={styles.discoverySelect}
+              value={mode}
+              onChange={e => setMode(e.target.value)}
+              disabled={isRunning || launching}
+            >
+              <option value="both">Both (V1A + V1B)</option>
+              <option value="episode_aggregate">Episode Aggregate only (V1A, fast)</option>
+              <option value="bar_sequence">Bar Sequence only (V1B)</option>
+            </select>
+          </div>
+
+          {/* Windows multi-select */}
+          <div className={styles.discoveryField}>
+            <label className={styles.discoveryLabel}>Bar Windows</label>
+            <div className={styles.windowCheckboxes}>
+              {WINDOWS_ALL.map(w => (
+                <label key={w} className={styles.windowCheckLabel}>
+                  <input
+                    type="checkbox"
+                    checked={windows.includes(w)}
+                    onChange={() => toggleWindow(w)}
+                    disabled={isRunning || launching || mode === 'episode_aggregate'}
+                  />
+                  {WINDOW_LABELS[w]}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Exclude split artifacts */}
+          <div className={styles.discoveryField}>
+            <label className={styles.windowCheckLabel}>
+              <input
+                type="checkbox"
+                checked={excludeSplit}
+                onChange={e => setExcludeSplit(e.target.checked)}
+                disabled={isRunning || launching}
+              />
+              Exclude split artifacts from counts
+            </label>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+          <button
+            className={styles.runBtn}
+            onClick={handleLaunch}
+            disabled={isRunning || launching}
+            style={{ minWidth: 160 }}
+          >
+            {launching ? 'Starting…' : isRunning ? 'Running…' : 'Run Pattern Discovery'}
+          </button>
+
+          {results && !isRunning && (
+            <button
+              className={styles.discoveryRefreshBtn}
+              onClick={fetchResults}
+              disabled={loadingRes}
+            >
+              {loadingRes ? '…' : '↻ Refresh Results'}
+            </button>
+          )}
+        </div>
+
+        {launchErr && <div className={styles.errorMsg} style={{ marginTop: 8 }}>{launchErr}</div>}
+      </div>
+
+      {/* ── Status banner ─────────────────────────────────────────────────── */}
+      {status && (
+        <div className={`${styles.discoveryStatus} ${
+          hasError    ? styles.discoveryStatusError    :
+          isRunning   ? styles.discoveryStatusRunning  :
+          isComplete  ? styles.discoveryStatusComplete : ''
+        }`}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {isRunning && <span className={styles.pulsingDot} />}
+            <span style={{ fontWeight: 600 }}>
+              {isRunning ? (PHASE_LABEL[phase] || phase) : isComplete ? 'Discovery complete' : hasError ? 'Discovery failed' : phase || 'idle'}
+            </span>
+            {isRunning && status.episodes > 0 && (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                {status.episodes} episodes · {status.episodes_scored} scored · {status.patterns_evaluated} episode patterns · {status.bar_patterns_evaluated} bar patterns
+              </span>
+            )}
+          </div>
+          {hasError && status.error && (
+            <div className={styles.errorMsg} style={{ marginTop: 6 }}>{status.error}</div>
+          )}
+        </div>
+      )}
+
+      {/* ── Results ───────────────────────────────────────────────────────── */}
+      {loadingRes && <div className={styles.statusMsg}>Loading results…</div>}
+      {resErr     && <div className={styles.errorMsg}>{resErr}</div>}
+
+      {results && !loadingRes && (
+        <>
+          {/* Summary cards */}
+          <div className={styles.discoverySummary}>
+            {[
+              { label: 'Total Patterns',    value: patterns.length },
+              { label: 'Episode Agg',       value: (bySourceType['EPISODE_AGGREGATE'] || []).length },
+              { label: 'Single Bar',        value: (bySourceType['SINGLE_BAR'] || []).length },
+              { label: 'Two-Bar Seq',       value: (bySourceType['TWO_BAR_SEQUENCE'] || []).length },
+              { label: 'Three-Bar Seq',     value: (bySourceType['THREE_BAR_SEQUENCE'] || []).length },
+              { label: 'Five-Bar',          value: (bySourceType['FIVE_BAR_SEQUENCE'] || []).length },
+              { label: 'Ten-Bar Context',   value: (bySourceType['TEN_BAR_CONTEXT'] || []).length },
+            ].map(({ label, value }) => (
+              <div key={label} className={styles.discoverySummaryCard}>
+                <div className={styles.discoverySummaryVal}>{fmtNum(value)}</div>
+                <div className={styles.discoverySummaryLabel}>{label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Contamination warnings */}
+          {contaminated.length > 0 && (
+            <div className={styles.discoveryWarning}>
+              <strong>Split artifact contamination:</strong>{' '}
+              {contaminated.length} pattern{contaminated.length > 1 ? 's' : ''} have &gt;50% split artifact
+              exposure — {contaminated.slice(0, 3).map(p => p.signal_id).join(', ')}.
+              Do not add these to Pump Watch without cleaning split episodes.
+            </div>
+          )}
+
+          {/* Sub-tabs */}
+          <div className={styles.tabRow} style={{ marginTop: 12 }}>
+            {[
+              { id: 'top-lift',   label: 'Top by Lift' },
+              { id: 'top-missed', label: 'Top by Missed 4x' },
+              { id: 'by-type',    label: 'By Source Type' },
+            ].map(({ id, label }) => (
+              <button
+                key={id}
+                className={`${styles.tab}${resTab === id ? ' ' + styles.tabActive : ''}`}
+                onClick={() => setResTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Top by lift */}
+          {resTab === 'top-lift' && (
+            <PatternTable title="Top 10 Patterns by Lift vs False-Positive" rows={topByLift} />
+          )}
+
+          {/* Top by missed 4x */}
+          {resTab === 'top-missed' && (
+            <PatternTable title="Top 10 Patterns Capturing Missed 4× Pumps" rows={topByMissed} />
+          )}
+
+          {/* By source type */}
+          {resTab === 'by-type' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {Object.entries(bySourceType).map(([st, pats]) => (
+                <PatternTable
+                  key={st}
+                  title={`${SOURCE_TYPE_LABELS[st] || st} (${pats.length})`}
+                  rows={[...pats].sort((a,b)=>((b.lift_vs_false_positive||0)-(a.lift_vs_false_positive||0))).slice(0, 15)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function PatternTable({ title, rows }) {
+  if (!rows || rows.length === 0) {
+    return (
+      <div className={styles.tableCard}>
+        <div className={styles.tableHeader}><span className={styles.tableTitle}>{title}</span></div>
+        <div className={styles.statusMsg}>No patterns to display.</div>
+      </div>
+    );
+  }
+  return (
+    <div className={styles.tableCard}>
+      <div className={styles.tableHeader}>
+        <span className={styles.tableTitle}>{title}</span>
+        <span className={styles.tableHint}>{rows.length} pattern{rows.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className={styles.historyTable} style={{ width: '100%' }}>
+          <thead>
+            <tr className={styles.historyHead}>
+              <th>Signal ID</th>
+              <th>Source</th>
+              <th>Status</th>
+              <th>Lift vs FP</th>
+              <th>4x Ep</th>
+              <th>Missed</th>
+              <th>FP Rate</th>
+              <th>Description / Signature</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p, i) => <PatternRow key={p.signal_id || i} p={p} />)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RawPatternStudy() {
@@ -2013,6 +2437,7 @@ export default function RawPatternStudy() {
                     { id: 'comparisons', label: 'Comparisons' },
                     { id: 'np-bundle',     label: 'NP Bundle' },
                     { id: 'split-impact', label: 'Split Impact' },
+                    { id: 'discovery',    label: 'Pattern Discovery' },
                     { id: 'ai',           label: 'AI Summary' },
                     { id: 'patch-plan',   label: 'Engine Plan' },
                   ].map(({ id, label }) => (
@@ -2073,6 +2498,13 @@ export default function RawPatternStudy() {
                   run.status !== 'complete'
                     ? <div className={styles.statusMsg}>Split impact available after run completes.</div>
                     : <SplitImpactPanel key={selectedId} runId={selectedId} />
+                )}
+
+                {/* Pattern Discovery tab */}
+                {activeTab === 'discovery' && (
+                  run.status !== 'complete'
+                    ? <div className={styles.statusMsg}>Pattern Discovery available after run completes.</div>
+                    : <PatternDiscoveryPanel key={selectedId} runId={selectedId} />
                 )}
 
                 {/* AI tab */}
