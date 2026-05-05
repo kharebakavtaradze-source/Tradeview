@@ -1787,9 +1787,30 @@ function PatternDiscoveryPanel({ runId }) {
   // Sub-tab inside results
   const [resTab, setResTab] = useState('top-lift');
 
+  // FLOW Impact tab — lazy-loaded from summary export
+  const [flowImpact,        setFlowImpact]        = useState(null);
+  const [loadingFlowImpact, setLoadingFlowImpact] = useState(false);
+  const [flowImpactErr,     setFlowImpactErr]     = useState('');
+
   const stopPoll = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     setPolling(false);
+  };
+
+  const fetchFlowImpact = async () => {
+    if (flowImpact || loadingFlowImpact) return;
+    setLoadingFlowImpact(true);
+    setFlowImpactErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=summary`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
+      const d = await r.json();
+      setFlowImpact(d.flow_replay_analysis || {});
+    } catch (e) {
+      setFlowImpactErr(String(e));
+    } finally {
+      setLoadingFlowImpact(false);
+    }
   };
 
   const fetchStatus = async () => {
@@ -2167,11 +2188,12 @@ function PatternDiscoveryPanel({ runId }) {
               { id: 'by-family',    label: 'By Family' },
               { id: 'by-type',      label: 'By Source Type' },
               { id: 'all',          label: `All (${patterns.length})` },
+              { id: 'flow-impact',  label: 'FLOW Impact' },
             ].filter(t => !t.hidden).map(({ id, label }) => (
               <button
                 key={id}
                 className={`${styles.tab}${resTab === id ? ' ' + styles.tabActive : ''}`}
-                onClick={() => setResTab(id)}
+                onClick={() => { setResTab(id); if (id === 'flow-impact') fetchFlowImpact(); }}
               >
                 {label}
               </button>
@@ -2240,7 +2262,367 @@ function PatternDiscoveryPanel({ runId }) {
           {resTab === 'all' && (
             <AllPatternsTable patterns={patterns} />
           )}
+
+          {/* FLOW Impact (research-only) */}
+          {resTab === 'flow-impact' && (
+            <FlowImpactTab
+              data={flowImpact}
+              loading={loadingFlowImpact}
+              error={flowImpactErr}
+            />
+          )}
         </>
+      )}
+    </div>
+  );
+}
+
+// ── FLOW Impact Tab ───────────────────────────────────────────────────────────
+
+function FlowImpactTab({ data, loading, error }) {
+  if (loading) return <div className={styles.statusMsg}>Loading FLOW impact analysis…</div>;
+  if (error)   return <div className={styles.errorMsg}>{error}</div>;
+  if (!data || Object.keys(data).length === 0)
+    return <div className={styles.statusMsg}>No FLOW impact data. Run discovery with flow/combined mode first.</div>;
+
+  const fmtPct = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+  const fmtN   = v => (v == null ? '—' : String(v));
+  const fmtScore = v => (v == null ? '—' : v.toFixed(2));
+
+  const bySubtype    = data.by_flow_subtype    || {};
+  const byDiag       = data.by_diagnostic_label || {};
+  const combos       = data.combo_analysis      || [];
+  const missed4x     = data.missed_4x_rescue_candidates || [];
+  const fpTraps      = data.false_positive_traps || [];
+  const scoreDist    = data.flow_replay_score_distribution || {};
+  const pwMatrix     = data.pump_watch_vs_flow_matrix || {};
+  const recs         = data.recommendations || [];
+
+  const SUBTYPE_LABELS = {
+    FLOW_DIVERGENCE:     'FLOW Divergence',
+    FLOW_ABSORPTION:     'FLOW Absorption',
+    FLOW_BEARISH_STRESS: 'Bearish Stress',
+    FLOW_BULLISH_ACCUM:  'Bullish Accum',
+    FLOW_MIXED_CONTEXT:  'Mixed Context',
+    FLOW_GAP_FADE:       'Gap Fade',
+    FLOW_GAP_RECLAIM:    'Gap Reclaim',
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Research-only banner */}
+      <div className={styles.discoveryWarning} style={{ borderColor: 'var(--blue)', background: 'rgba(59,130,246,0.08)' }}>
+        <strong>RESEARCH ONLY</strong> — scores and routing here do NOT affect Scanner V2.
+        No BUY promotions. No score boosts. Analysis only.
+      </div>
+
+      {/* A: By FLOW Subtype */}
+      {Object.keys(bySubtype).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>A: By FLOW Subtype</span>
+            <span className={styles.tableHint}>Episode-level outcomes grouped by inferred FLOW context</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Subtype</th>
+                  <th>Episodes</th>
+                  <th>4x Count</th>
+                  <th>FP Count</th>
+                  <th>4x Rate</th>
+                  <th>FP Rate</th>
+                  <th>Median Score</th>
+                  <th>Symbols (sample)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(bySubtype).map(([st, row]) => (
+                  <tr key={st} className={styles.historyRow}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                      {SUBTYPE_LABELS[st] || st}
+                    </td>
+                    <td>{fmtN(row.total)}</td>
+                    <td>{fmtN(row['4x_pump_count'])}</td>
+                    <td>{fmtN(row.false_positive_count)}</td>
+                    <td style={{ color: (row['4x_rate'] || 0) >= 0.45 ? 'var(--green)' : undefined }}>
+                      {fmtPct(row['4x_rate'])}
+                    </td>
+                    <td style={{ color: (row.false_positive_rate || 0) >= 0.35 ? 'var(--red)' : undefined }}>
+                      {fmtPct(row.false_positive_rate)}
+                    </td>
+                    <td>{fmtScore(row.median_pump_watch_score)}</td>
+                    <td style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      {(row.sample_symbols || []).slice(0, 5).join(', ')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* B: By Diagnostic Label */}
+      {Object.keys(byDiag).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>B: By Diagnostic Label</span>
+            <span className={styles.tableHint}>Pump Watch diagnostic badge outcomes</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Diagnostic Label</th>
+                  <th>Episodes</th>
+                  <th>4x Count</th>
+                  <th>FP Count</th>
+                  <th>4x Rate</th>
+                  <th>FP Rate</th>
+                  <th>Median Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(byDiag).map(([lbl, row]) => (
+                  <tr key={lbl} className={styles.historyRow}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>{lbl}</td>
+                    <td>{fmtN(row.total)}</td>
+                    <td>{fmtN(row['4x_pump_count'])}</td>
+                    <td>{fmtN(row.false_positive_count)}</td>
+                    <td style={{ color: (row['4x_rate'] || 0) >= 0.45 ? 'var(--green)' : undefined }}>
+                      {fmtPct(row['4x_rate'])}
+                    </td>
+                    <td style={{ color: (row.false_positive_rate || 0) >= 0.35 ? 'var(--red)' : undefined }}>
+                      {fmtPct(row.false_positive_rate)}
+                    </td>
+                    <td>{fmtScore(row.median_pump_watch_score)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* C: Combo Analysis */}
+      {combos.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>C: Combination Analysis ({combos.length})</span>
+            <span className={styles.tableHint}>FLOW + Diagnostic badge combinations; precision measurement</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Combo</th>
+                  <th>N</th>
+                  <th>4x Rate</th>
+                  <th>FP Rate</th>
+                  <th>Median Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {combos.map((c, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>{c.combo_label || c.label}</td>
+                    <td>{fmtN(c.total)}</td>
+                    <td style={{ color: (c['4x_rate'] || 0) >= 0.45 ? 'var(--green)' : undefined }}>
+                      {fmtPct(c['4x_rate'])}
+                    </td>
+                    <td style={{ color: (c.false_positive_rate || 0) >= 0.35 ? 'var(--red)' : undefined }}>
+                      {fmtPct(c.false_positive_rate)}
+                    </td>
+                    <td>{fmtScore(c.median_pump_watch_score)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Missed 4x Rescue Candidates */}
+      {missed4x.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Missed 4x Rescue Candidates</span>
+            <span className={styles.tableHint}>
+              4x pumps missed by scanner with STRONG rescue + PUMP_SPECULATIVE routing
+            </span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Symbol</th>
+                  <th>Flow Context</th>
+                  <th>PW Label</th>
+                  <th>PW Score</th>
+                  <th>Flow Score</th>
+                  <th>Diagnostics</th>
+                </tr>
+              </thead>
+              <tbody>
+                {missed4x.slice(0, 30).map((ep, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600 }}>{ep.symbol || ep.ticker}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                      {ep.flow_replay_context || ep.flow_context}
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                      {ep.pump_watch_label}
+                    </td>
+                    <td>{ep.pump_watch_score}</td>
+                    <td style={{ color: (ep.flow_replay_score || 0) >= 8 ? 'var(--green)' : undefined }}>
+                      {ep.flow_replay_score != null ? `${ep.flow_replay_score} (${ep.flow_replay_bucket || '—'})` : '—'}
+                    </td>
+                    <td style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      {(Array.isArray(ep.pump_watch_diagnostic_labels)
+                        ? ep.pump_watch_diagnostic_labels
+                        : []
+                      ).join(', ')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* False Positive Traps */}
+      {fpTraps.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>False Positive Traps</span>
+            <span className={styles.tableHint}>
+              High-score FPs with REVERSE_SPLIT + STRONG_RESCUE — caution candidates
+            </span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Symbol</th>
+                  <th>Flow Context</th>
+                  <th>PW Label</th>
+                  <th>PW Score</th>
+                  <th>Flow Score</th>
+                  <th>Diagnostics</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fpTraps.slice(0, 30).map((ep, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600, color: 'var(--red)' }}>{ep.symbol || ep.ticker}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                      {ep.flow_replay_context || ep.flow_context}
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                      {ep.pump_watch_label}
+                    </td>
+                    <td>{ep.pump_watch_score}</td>
+                    <td>{ep.flow_replay_score != null ? `${ep.flow_replay_score} (${ep.flow_replay_bucket || '—'})` : '—'}</td>
+                    <td style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      {(Array.isArray(ep.pump_watch_diagnostic_labels)
+                        ? ep.pump_watch_diagnostic_labels
+                        : []
+                      ).join(', ')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Flow Replay Score Distribution */}
+      {Object.keys(scoreDist).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Flow Replay Score Distribution</span>
+            <span className={styles.tableHint}>HIGH ≥8 · MEDIUM 5–7 · LOW 3–4 · IGNORE &lt;3 (research only)</span>
+          </div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '12px 16px' }}>
+            {['HIGH', 'MEDIUM', 'LOW', 'IGNORE'].map(bucket => {
+              const bd = scoreDist[bucket] || {};
+              const color = bucket === 'HIGH' ? 'var(--green)' : bucket === 'MEDIUM' ? 'var(--blue)' : bucket === 'LOW' ? 'var(--text-muted)' : 'var(--red)';
+              return (
+                <div key={bucket} className={styles.discoverySummaryCard} style={{ minWidth: 100 }}>
+                  <div className={styles.discoverySummaryVal} style={{ color }}>{fmtN(bd.total)}</div>
+                  <div className={styles.discoverySummaryLabel}>{bucket}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                    4x: {fmtPct(bd['4x_rate'])} · FP: {fmtPct(bd.false_positive_rate)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Pump Watch vs FLOW Matrix */}
+      {Object.keys(pwMatrix).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Pump Watch × FLOW Score Matrix</span>
+            <span className={styles.tableHint}>Rows = PW label, Columns = FLOW score bucket</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>PW Label</th>
+                  {['HIGH', 'MEDIUM', 'LOW', 'IGNORE'].map(b => (
+                    <th key={b}>{b} (n / 4x%)</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(pwMatrix).map(([label, buckets]) => (
+                  <tr key={label} className={styles.historyRow}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>{label}</td>
+                    {['HIGH', 'MEDIUM', 'LOW', 'IGNORE'].map(b => {
+                      const cell = (buckets || {})[b] || {};
+                      const rate = cell['4x_rate'];
+                      return (
+                        <td key={b} style={{ fontSize: 10 }}>
+                          {cell.total > 0
+                            ? <span style={{ color: rate >= 0.45 ? 'var(--green)' : rate >= 0.25 ? undefined : 'var(--text-muted)' }}>
+                                {cell.total} / {fmtPct(rate)}
+                              </span>
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>
+                          }
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Recommendations */}
+      {recs.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Recommendations</span>
+          </div>
+          <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {recs.map((rec, i) => (
+              <div key={i} style={{ fontSize: 12, display: 'flex', gap: 8 }}>
+                <span style={{ color: 'var(--blue)', flexShrink: 0 }}>▸</span>
+                <span>{typeof rec === 'string' ? rec : rec.text || JSON.stringify(rec)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
