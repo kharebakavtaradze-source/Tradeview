@@ -4152,3 +4152,152 @@ async def raw_pattern_split_impact(run_id: int):
         raise HTTPException(500, detail=str(exc))
 
     return result
+
+
+# ── Pattern Discovery endpoints ───────────────────────────────────────────────
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/discover")
+async def raw_pattern_discover(run_id: int, background_tasks: BackgroundTasks):
+    """
+    Launch the Pattern Discovery Engine for a completed raw-pattern run.
+
+    Runs the full pipeline asynchronously:
+      1. Load missed pump dataset from DB
+      2. Mine patterns (seed + composite)
+      3. Compute Pump Watch scores for all episodes
+      4. Persist pump_watch scores to raw_pattern_episode_features
+      5. Upsert discovered_patterns table
+      6. Update discovered_signal_registry.json
+      7. Build structured discovery report
+
+    Does NOT modify Scanner V2 BUY/WATCH/AVOID routing.
+    All outputs are EXPERIMENTAL or PUMP_WATCH only.
+    """
+    from database import get_raw_pattern_run
+    from replay.pattern_discovery_engine import run_pattern_discovery, get_discovery_progress
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run must be complete before running pattern discovery.")
+
+    progress = get_discovery_progress()
+    if progress.get("running"):
+        return {
+            "status": "ALREADY_RUNNING",
+            "run_id": progress.get("run_id"),
+            "phase":  progress.get("phase"),
+        }
+
+    background_tasks.add_task(run_pattern_discovery, run_id)
+    return {"status": "STARTED", "run_id": run_id}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/status")
+async def raw_pattern_discover_status(run_id: int):
+    """Return progress of a running (or recently completed) discovery run."""
+    from replay.pattern_discovery_engine import get_discovery_progress
+    return get_discovery_progress()
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/results")
+async def raw_pattern_discover_results(run_id: int):
+    """
+    Return pattern discovery results for a run:
+      - Discovered patterns with lift / FP rates
+      - Pump Watch distribution by group and label
+      - Registry contents
+    """
+    from database import get_raw_pattern_run
+    from replay.pattern_discovery_engine import get_discovery_results
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    try:
+        return await get_discovery_results(run_id)
+    except Exception as exc:
+        logger.exception("discover_results run_id=%s failed", run_id)
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/pump-watch")
+async def raw_pattern_pump_watch(
+    run_id: int,
+    label: str | None = None,
+    group_type: str | None = None,
+    limit: int = 200,
+):
+    """
+    Return episodes for a run filtered by pump_watch_label and/or group_type.
+    Useful for inspecting which episodes got PUMP_WATCH_HIGH vs PUMP_IGNORE.
+
+    This does NOT affect Scanner V2 routing — it is research-only output.
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_episode_features
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    episodes = await get_raw_pattern_episode_features(
+        run_id=run_id, group_type=group_type, limit=limit
+    )
+
+    if label:
+        episodes = [ep for ep in episodes if ep.get("pump_watch_label") == label]
+
+    return {
+        "run_id":          run_id,
+        "total":           len(episodes),
+        "label_filter":    label,
+        "group_type_filter": group_type,
+        "episodes":        episodes,
+    }
+
+
+@app.get("/api/replay/signal-registry")
+async def get_signal_registry():
+    """Return the current discovered_signal_registry.json content."""
+    from replay.pattern_discovery_engine import _load_registry
+    try:
+        registry = _load_registry()
+        return {"total": len(registry), "signals": registry}
+    except Exception as exc:
+        raise HTTPException(500, detail=str(exc))
+
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/pump-watch/score")
+async def raw_pattern_pump_watch_score_now(run_id: int):
+    """
+    Synchronously compute and persist Pump Watch scores for all episodes in a run.
+    Useful for quick rescoring without rerunning the full discovery pipeline.
+
+    Note: HIGH expansion_timing_risk does NOT reject Pump Watch scoring.
+    For Scanner V2 BUY routing, HIGH expansion risk remains a hard AVOID.
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_episode_features
+    from replay.pump_watch_scorer import score_episodes, summarize_pump_watch_distribution
+    from replay.pattern_discovery_engine import _persist_pump_watch_scores
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    episodes = await get_raw_pattern_episode_features(run_id=run_id, limit=10000)
+    if not episodes:
+        return {"status": "NO_EPISODES", "run_id": run_id}
+
+    scored = score_episodes(episodes)
+    updated = await _persist_pump_watch_scores(run_id, scored)
+    distribution = summarize_pump_watch_distribution(scored)
+
+    return {
+        "status":            "COMPLETE",
+        "run_id":            run_id,
+        "episodes_scored":   len(scored),
+        "episodes_updated":  updated,
+        "distribution":      distribution,
+    }
