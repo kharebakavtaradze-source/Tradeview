@@ -40,14 +40,16 @@ THRESHOLD_SPECULATIVE = 30
 
 # ── Diagnostic label IDs ──────────────────────────────────────────────────────
 
-DIAG_MISSING_STRUCTURE_RESCUE        = "PX_MISSING_STRUCTURE_RESCUE"
-DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE  = "PX_NO_SCANNER_RAW_STRENGTH_RESCUE"
-DIAG_REVERSE_SPLIT_REGIME            = "PX_REVERSE_SPLIT_REGIME"
-DIAG_SPLIT_ARTIFACT_EXCLUDED         = "SPLIT_ARTIFACT_EXCLUDED"
+DIAG_MISSING_STRUCTURE_RESCUE              = "PX_MISSING_STRUCTURE_RESCUE"
+DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_WEAK   = "PX_NO_SCANNER_RAW_STRENGTH_RESCUE_WEAK"
+DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_STRONG = "PX_NO_SCANNER_RAW_STRENGTH_RESCUE_STRONG"
+DIAG_REVERSE_SPLIT_REGIME                  = "PX_REVERSE_SPLIT_REGIME"
+DIAG_SPLIT_ARTIFACT_EXCLUDED               = "SPLIT_ARTIFACT_EXCLUDED"
 
 _ALL_DIAG_LABELS = [
     DIAG_MISSING_STRUCTURE_RESCUE,
-    DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE,
+    DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_WEAK,
+    DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_STRONG,
     DIAG_REVERSE_SPLIT_REGIME,
     DIAG_SPLIT_ARTIFACT_EXCLUDED,
 ]
@@ -157,10 +159,18 @@ def _apply_diagnostic_labels(ep: dict, label: str, score: int,
             and _rs_score >= 4
             and not ep.get("split_artifact_risk")
             and ep.get("pump_type") not in (None, "UNKNOWN")):
-        diag_labels.append(DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE)
-        if not pattern_id:
-            pattern_id = DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE
-            rescue_reason = "no_scanner_pressure_but_raw_strength"
+        # STRONG (>=6 criteria): eligible for PUMP_IGNORE → PUMP_SPECULATIVE rescue
+        # WEAK  (4-5 criteria):  label only, no routing upgrade
+        if _rs_score >= 6:
+            diag_labels.append(DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_STRONG)
+            if not pattern_id:
+                pattern_id = DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_STRONG
+                rescue_reason = "no_scanner_pressure_strong_raw_strength"
+        else:
+            diag_labels.append(DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_WEAK)
+            if not pattern_id:
+                pattern_id = DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_WEAK
+                rescue_reason = "no_scanner_pressure_weak_raw_strength"
 
     return {
         "pump_watch_diagnostic_labels": diag_labels,
@@ -402,11 +412,11 @@ def compute_pump_watch_score(ep: dict) -> dict:
         label = LABEL_SPECULATIVE
         risk_flags.append("structure_fields_missing")
 
-    # No-scanner raw strength rescue: PUMP_IGNORE → PUMP_SPECULATIVE (score >= 15)
-    if (DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE in diag["pump_watch_diagnostic_labels"]
+    # No-scanner raw strength rescue: STRONG only → PUMP_IGNORE → PUMP_SPECULATIVE (score >= 15)
+    if (DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE_STRONG in diag["pump_watch_diagnostic_labels"]
             and label == LABEL_IGNORE and score >= 15):
         label = LABEL_SPECULATIVE
-        risk_flags.append("no_scanner_pressure_but_raw_strength")
+        risk_flags.append("no_scanner_pressure_strong_raw_strength_rescue")
 
     # Reverse split regime: cap confidence at MEDIUM for recent splits
     split_ctx = ep.get("split_context") or ""
@@ -574,8 +584,32 @@ def compute_pump_watch_calibration(scored_episodes: list[dict]) -> dict:
             "Significant 4x pump events are being ignored — scoring may need recalibration."
         )
 
+    # Calibration by diagnostic label
+    by_diag_label: dict = {}
+    for diag_lbl in _ALL_DIAG_LABELS:
+        matching_diag = [
+            ep for ep in scored_episodes
+            if diag_lbl in _parse_diag_labels(ep.get("pump_watch_diagnostic_labels"))
+        ]
+        total_d = len(matching_diag)
+        if total_d == 0:
+            by_diag_label[diag_lbl] = {"total": 0}
+            continue
+        n_4x_d = sum(1 for ep in matching_diag if ep.get("group_type") == "4x_pump")
+        n_fp_d  = sum(1 for ep in matching_diag if ep.get("group_type") == "false_positive")
+        scores_d = sorted([ep.get("pump_watch_score") or 0 for ep in matching_diag])
+        by_diag_label[diag_lbl] = {
+            "total":               total_d,
+            "4x_pump_count":       n_4x_d,
+            "false_positive_count": n_fp_d,
+            "4x_rate":             round(n_4x_d / total_d, 3),
+            "false_positive_rate": round(n_fp_d / total_d, 3),
+            "median_score":        scores_d[len(scores_d) // 2],
+        }
+
     return {
         "by_label":                   by_label,
+        "by_diagnostic_label":        by_diag_label,
         "high_underperforms_medium":  high_underperforms_medium,
         "high_fp_rate_gt_4x_rate":    high_fp_rate_gt_4x_rate,
         "ignore_contains_many_4x":    ignore_contains_many_4x,

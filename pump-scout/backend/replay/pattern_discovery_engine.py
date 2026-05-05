@@ -781,6 +781,40 @@ def _infer_flow_subtype(p: dict) -> str:
     return "FLOW_MIXED_CONTEXT"
 
 
+def _compute_flow_subtype_calibration(patterns: list[dict]) -> dict:
+    """
+    Aggregate pattern-level stats by flow_subtype.
+    Uses count_all_4x / count_false_positive / reliability_score from each pattern.
+    Excludes 'N/A' (non-FLOW families).
+    """
+    by_st: dict[str, list] = {}
+    for p in patterns:
+        st = p.get("flow_subtype") or "N/A"
+        if st == "N/A":
+            continue
+        by_st.setdefault(st, []).append(p)
+
+    result: dict = {}
+    for st, pats in by_st.items():
+        total_4x = sum(p.get("count_all_4x") or 0 for p in pats)
+        total_fp = sum(p.get("count_false_positive") or 0 for p in pats)
+        denom = total_4x + total_fp
+        rs_list  = sorted(p["reliability_score"] for p in pats
+                          if p.get("reliability_score") is not None)
+        fpr_list = sorted(p["false_positive_rate"] for p in pats
+                          if p.get("false_positive_rate") is not None)
+        result[st] = {
+            "pattern_count":       len(pats),
+            "total_4x":            total_4x,
+            "total_fp":            total_fp,
+            "4x_rate":             round(total_4x / denom, 3) if denom > 0 else None,
+            "false_positive_rate": round(total_fp / denom, 3) if denom > 0 else None,
+            "median_reliability":  rs_list[len(rs_list) // 2]  if rs_list  else None,
+            "median_fpr":          fpr_list[len(fpr_list) // 2] if fpr_list else None,
+        }
+    return result
+
+
 def _reject_reason(p: dict) -> Optional[str]:
     if p.get("status") != "REJECT":
         return None
@@ -1013,8 +1047,8 @@ async def build_discovery_export(
     patterns = await get_discovered_patterns(run_id)
     prog     = get_discovery_progress()
 
-    # Only load episodes when needed (saves ~2–4 MB for summary/rankings sections)
-    need_episodes = section in ("full", "compact", "episodes")
+    # Load episodes for any section that outputs pump_watch_summary/calibration
+    need_episodes = section in ("full", "compact", "episodes", "summary")
     episodes = (
         await get_raw_pattern_episode_features(run_id, limit=10000)
         if need_episodes else []
@@ -1196,6 +1230,12 @@ async def build_discovery_export(
     # Flow-family rankings
     flow_working = [p for p in working if p.get("feature_family") == "FLOW"]
     combined_working = [p for p in working if p.get("feature_family") == "COMBINED"]
+
+    # Enrich calibration with pattern-level flow_subtype aggregation
+    if pw_calibration:
+        pw_calibration["by_flow_subtype"] = _compute_flow_subtype_calibration(
+            flow_working + combined_working
+        )
 
     top_flow_by_clean_reliability = _top(
         [p for p in flow_working
