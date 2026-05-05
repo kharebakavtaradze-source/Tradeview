@@ -4164,9 +4164,12 @@ class DiscoverRequest(BaseModel):
       episode_aggregate — mine only episode-level aggregate features (V1A, fast)
       bar_sequence      — mine only per-bar symbolic tag sequences (V1B)
       both              — run both V1A and V1B (default)
+      flow              — V1C: mine flow/delta proxy sequences only (OHLCV proxies)
+      combined          — V1C: mine combined price+flow sequences only
+      all               — run V1A + V1B + V1C flow + V1C combined
     """
     windows: list[int] = [1, 2, 3, 5, 10]
-    """Window sizes for bar-sequence mining. Only used when mode includes bar_sequence."""
+    """Window sizes for bar-sequence mining. Only used when mode includes bar_sequence, flow, or combined."""
     exclude_split_artifacts: bool = False
     """If True, exclude split_artifact episodes from episode-level mining counts."""
 
@@ -4187,6 +4190,9 @@ async def raw_pattern_discover(
       episode_aggregate — V1A: mine episode-level aggregate features (fast)
       bar_sequence      — V1B: mine per-bar symbolic tag sequences
       both              — run V1A then V1B (default)
+      flow              — V1C: mine OHLCV-derived flow proxy sequences (NOT true bid/ask delta)
+      combined          — V1C: mine combined price+flow sequences
+      all               — run V1A + V1B + V1C flow + V1C combined
 
     Runs the full pipeline asynchronously. Does NOT modify Scanner V2
     BUY/WATCH/AVOID routing. All outputs are EXPERIMENTAL or PUMP_WATCH only.
@@ -4194,7 +4200,7 @@ async def raw_pattern_discover(
     from database import get_raw_pattern_run
     from replay.pattern_discovery_engine import run_pattern_discovery, get_discovery_progress
 
-    valid_modes = {"episode_aggregate", "bar_sequence", "both"}
+    valid_modes = {"episode_aggregate", "bar_sequence", "both", "flow", "combined", "all"}
     if body.mode not in valid_modes:
         raise HTTPException(400, detail=f"Invalid mode '{body.mode}'. Must be one of: {valid_modes}")
 
