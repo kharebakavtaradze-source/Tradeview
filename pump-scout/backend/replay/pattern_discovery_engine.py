@@ -189,13 +189,16 @@ async def _persist_pump_watch_scores(run_id: int, scored_episodes: list[dict]) -
         if not ep_id:
             continue
         patch = {
-            "pump_watch_score":        ep.get("pump_watch_score"),
-            "pump_watch_label":        ep.get("pump_watch_label"),
-            "pump_watch_reasons":      json.dumps(ep.get("pump_watch_reasons") or []),
-            "pump_watch_risk_flags":   json.dumps(ep.get("pump_watch_risk_flags") or []),
-            "pump_watch_pattern_ids":  json.dumps(ep.get("pump_watch_pattern_ids") or []),
-            "pump_watch_split_context": ep.get("pump_watch_split_context"),
-            "pump_watch_confidence":   ep.get("pump_watch_confidence"),
+            "pump_watch_score":             ep.get("pump_watch_score"),
+            "pump_watch_label":             ep.get("pump_watch_label"),
+            "pump_watch_reasons":           json.dumps(ep.get("pump_watch_reasons") or []),
+            "pump_watch_risk_flags":        json.dumps(ep.get("pump_watch_risk_flags") or []),
+            "pump_watch_pattern_ids":       json.dumps(ep.get("pump_watch_pattern_ids") or []),
+            "pump_watch_split_context":     ep.get("pump_watch_split_context"),
+            "pump_watch_confidence":        ep.get("pump_watch_confidence"),
+            "pump_watch_diagnostic_labels": json.dumps(ep.get("pump_watch_diagnostic_labels") or []),
+            "pump_watch_pattern_id":        ep.get("pump_watch_pattern_id"),
+            "pump_watch_rescue_reason":     ep.get("pump_watch_rescue_reason"),
         }
         try:
             await update_raw_pattern_episode_features(run_id, ep_id, patch)
@@ -697,6 +700,87 @@ def _ff_from_signal_id(signal_id: str, stored: Optional[str] = None) -> str:
     return "EPISODE_AGGREGATE"
 
 
+# ── Flow subtype inference ────────────────────────────────────────────────────
+
+_FLOW_DIVERGENCE_PAIRS: list[set] = [
+    {"ADL_ACCUM_3D",  "OBV_DISTRIB_3D"},
+    {"ADL_DISTRIB_3D", "OBV_ACCUM_3D"},
+    {"CMF_NEGATIVE",  "BUY_PRESSURE_HIGH"},
+    {"CMF_POSITIVE",  "CLOSE_LOW"},
+]
+
+_FLOW_GAP_TAGS        = {"GAP_UP", "GAP_DOWN", "GAP_UP_WEAK", "GAP_DOWN_WEAK"}
+_FLOW_GAP_FADE_TAGS   = {"CLOSE_LOW", "GAP_FADE", "OBV_DISTRIB_3D", "CMF_NEGATIVE"}
+_FLOW_GAP_RECLAIM_TAGS = {"CLOSE_HIGH", "BUY_PRESSURE_HIGH", "OBV_ACCUM_3D", "ADL_ACCUM_3D"}
+_FLOW_ABSORPTION_TAGS  = {"CLV_POSITIVE", "SIGNED_VOL_POSITIVE", "ADL_ACCUM_3D"}
+_FLOW_BEARISH_TAGS     = {"ADL_DISTRIB_3D", "OBV_DISTRIB_3D", "CMF_NEGATIVE", "UPPER_WICK_SUPPLY", "CLOSE_LOW"}
+_FLOW_BULLISH_TAGS     = {"ADL_ACCUM_3D", "OBV_ACCUM_3D", "CMF_POSITIVE", "BUY_PRESSURE_HIGH", "CLOSE_HIGH"}
+
+
+def _extract_pattern_tags(p: dict) -> list[str]:
+    """Extract symbolic tags from machine_conditions signature= entry or description."""
+    mc = p.get("machine_conditions") or []
+    if isinstance(mc, str):
+        try:
+            mc = json.loads(mc)
+        except Exception:
+            mc = []
+    for entry in mc:
+        if isinstance(entry, str) and entry.startswith("signature="):
+            sig = entry[len("signature="):]
+            return [t.strip() for t in sig.split("+") if t.strip()]
+    # Fallback: "Bar <SOURCE_TYPE>: TAG1+TAG2+..."
+    desc = p.get("description") or ""
+    if ":" in desc:
+        sig_part = desc.split(":", 1)[1].strip()
+        return [t.strip() for t in sig_part.split("+") if t.strip()]
+    return []
+
+
+def _infer_flow_subtype(p: dict) -> str:
+    """
+    Infer FLOW subtype from pattern tags.
+    Priority: divergence > gap_fade > gap_reclaim > absorption > bearish > bullish > mixed.
+    Returns 'N/A' for non-FLOW/COMBINED families.
+    """
+    if p.get("feature_family") not in ("FLOW", "COMBINED"):
+        return "N/A"
+
+    tags = _extract_pattern_tags(p)
+    if not tags:
+        return "FLOW_MIXED_CONTEXT"
+
+    tag_set = set(tags)
+
+    # 1. Divergence — conflicting accumulation/distribution signals
+    for pair in _FLOW_DIVERGENCE_PAIRS:
+        if pair.issubset(tag_set):
+            return "FLOW_DIVERGENCE"
+
+    # 2. Gap fade/fail
+    has_gap = bool(tag_set & _FLOW_GAP_TAGS)
+    if has_gap and (tag_set & _FLOW_GAP_FADE_TAGS):
+        return "FLOW_GAP_FADE_OR_FAIL"
+
+    # 3. Gap reclaim/hold
+    if has_gap and (tag_set & _FLOW_GAP_RECLAIM_TAGS):
+        return "FLOW_GAP_RECLAIM_OR_HOLD"
+
+    # 4. Absorption — accumulation co-occurring with selling pressure
+    if (tag_set & _FLOW_ABSORPTION_TAGS) and (tag_set & _FLOW_BEARISH_TAGS):
+        return "FLOW_ABSORPTION"
+
+    # 5. Bearish stress — multiple distribution/supply tags
+    if len(tag_set & _FLOW_BEARISH_TAGS) >= 2:
+        return "FLOW_BEARISH_STRESS"
+
+    # 6. Bullish accumulation — multiple accumulation/demand tags
+    if len(tag_set & _FLOW_BULLISH_TAGS) >= 2:
+        return "FLOW_BULLISH_ACCUM"
+
+    return "FLOW_MIXED_CONTEXT"
+
+
 def _reject_reason(p: dict) -> Optional[str]:
     if p.get("status") != "REJECT":
         return None
@@ -910,7 +994,10 @@ async def build_discovery_export(
         get_raw_pattern_comparisons,
         get_discovered_patterns,
     )
-    from replay.pump_watch_scorer import summarize_pump_watch_distribution
+    from replay.pump_watch_scorer import (
+        summarize_pump_watch_distribution,
+        compute_pump_watch_calibration,
+    )
 
     if section not in _VALID_SECTIONS:
         section = "full"
@@ -944,6 +1031,7 @@ async def build_discovery_export(
         p["feature_family"]    = _ff_from_signal_id(p.get("signal_id"), p.get("feature_family"))
         p["reject_reason"]     = _reject_reason(p)
         p["reliability_score"] = _reliability_score(p)
+        p["flow_subtype"]      = _infer_flow_subtype(p)
 
     # ── Shared derived objects ────────────────────────────────────────────────
     accepted_all = [p for p in patterns if p.get("status") in _ACCEPTED_STATUSES]
@@ -967,7 +1055,8 @@ async def build_discovery_export(
     feature_family_counts = {ff: len(lst) for ff, lst in by_ff_all.items()}
 
     # Pump Watch summary (only when episodes were loaded)
-    pw_dist = summarize_pump_watch_distribution(episodes) if episodes else {}
+    pw_dist        = summarize_pump_watch_distribution(episodes) if episodes else {}
+    pw_calibration = compute_pump_watch_calibration(episodes)    if episodes else {}
     diagnostic_label_counts = pw_dist.get("diagnostic_label_counts", {}) if pw_dist else {}
 
     # Flow debug from in-memory progress
@@ -1132,6 +1221,41 @@ async def build_discovery_export(
          and (p.get("false_positive_rate") or 1.0) <= 0.35],
         lambda x: -(x["count_missed_4x"] or 0), min(100, n))
 
+    # Strict FLOW clean reliability: cnt>=8, fpr<=30%, exposure<=35%
+    top_flow_clean_reliability = _top(
+        [p for p in flow_working
+         if (p.get("count_all_4x") or 0) >= 8
+         and (p.get("false_positive_rate") or 1.0) <= 0.30
+         and (p.get("split_artifact_exposure") or 0) <= 0.35],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    # Strict COMBINED clean reliability: same gates
+    top_combined_clean_reliability = _top(
+        [p for p in combined_working
+         if (p.get("count_all_4x") or 0) >= 8
+         and (p.get("false_positive_rate") or 1.0) <= 0.30
+         and (p.get("split_artifact_exposure") or 0) <= 0.35],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    # Subtype-specific FLOW rankings (sorted by reliability_score)
+    top_flow_divergence = _top(
+        [p for p in flow_working if p.get("flow_subtype") == "FLOW_DIVERGENCE"],
+        lambda x: -(x["reliability_score"] or 0), min(50, n))
+
+    top_flow_stress = _top(
+        [p for p in flow_working if p.get("flow_subtype") == "FLOW_BEARISH_STRESS"],
+        lambda x: -(x["reliability_score"] or 0), min(50, n))
+
+    top_flow_absorption = _top(
+        [p for p in flow_working if p.get("flow_subtype") == "FLOW_ABSORPTION"],
+        lambda x: -(x["reliability_score"] or 0), min(50, n))
+
+    # flow_subtype distribution across FLOW + COMBINED patterns
+    flow_subtype_counts: dict[str, int] = {}
+    for p in flow_working + combined_working:
+        st = p.get("flow_subtype") or "N/A"
+        flow_subtype_counts[st] = flow_subtype_counts.get(st, 0) + 1
+
     # ── Accepted sorted for section output ────────────────────────────────────
     accepted_sorted = sorted(
         working,
@@ -1184,9 +1308,11 @@ async def build_discovery_export(
             "flow_debug": flow_debug,
             "summary": summary_obj,
             "pump_watch_summary": pw_dist,
+            "pump_watch_calibration": pw_calibration,
             "diagnostic_label_counts": diagnostic_label_counts,
             "patterns_by_source_type_counts": st_counts,
             "feature_family_counts": feature_family_counts,
+            "flow_subtype_counts": flow_subtype_counts,
             "split_contamination_summary": split_contamination_summary,
             "bar_sequence_summary": bar_sequence_summary,
             "ranking_formula_version": _RANKING_FORMULA_VERSION,
@@ -1218,14 +1344,20 @@ async def build_discovery_export(
             "top_by_source_type":               top_by_source_type,
             "top_flow_by_clean_reliability":     top_flow_by_clean_reliability,
             "top_combined_by_clean_reliability": top_combined_by_clean_reliability,
+            "top_flow_clean_reliability":        top_flow_clean_reliability,
+            "top_combined_clean_reliability":    top_combined_clean_reliability,
+            "top_flow_divergence":               top_flow_divergence,
+            "top_flow_stress":                   top_flow_stress,
+            "top_flow_absorption":               top_flow_absorption,
             "top_flow_by_missed_4x":             top_flow_by_missed_4x,
             "top_combined_by_missed_4x":         top_combined_by_missed_4x,
             "feature_family_counts":             feature_family_counts,
+            "flow_subtype_counts":               flow_subtype_counts,
             "ranking_formula_version":           _RANKING_FORMULA_VERSION,
             "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
                 "accepted_patterns sorted by reliability_score desc. "
-                "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+                "Use top_flow_clean_reliability (cnt>=8, fpr<=30%, exposure<=35%) for FLOW signal selection. "
                 "top_by_lift is research-only and unstable for zero-FP patterns. "
                 "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
                 "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
@@ -1248,15 +1380,22 @@ async def build_discovery_export(
             "top_by_source_type":                top_by_source_type,
             "top_flow_by_clean_reliability":     top_flow_by_clean_reliability,
             "top_combined_by_clean_reliability": top_combined_by_clean_reliability,
+            "top_flow_clean_reliability":        top_flow_clean_reliability,
+            "top_combined_clean_reliability":    top_combined_clean_reliability,
+            "top_flow_divergence":               top_flow_divergence,
+            "top_flow_stress":                   top_flow_stress,
+            "top_flow_absorption":               top_flow_absorption,
             "top_flow_by_missed_4x":             top_flow_by_missed_4x,
             "top_combined_by_missed_4x":         top_combined_by_missed_4x,
             "feature_family_counts":             feature_family_counts,
+            "flow_subtype_counts":               flow_subtype_counts,
             "split_contamination":               split_contamination_summary,
             "ranking_formula_version":           _RANKING_FORMULA_VERSION,
             "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
                 "IMPORTANT: top_by_lift is dominated by rare zero-FP patterns with low sample count. "
-                "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+                "Use top_flow_clean_reliability (cnt>=8, fpr<=30%, exposure<=35%) for FLOW signal selection. "
+                "top_flow_divergence/stress/absorption filter by flow_subtype. "
                 "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
                 "top_by_supported_edge requires count_all_4x>=8, lift>=1.5, fpr<=25%, exposure<=50%."
             ),
@@ -1310,9 +1449,11 @@ async def build_discovery_export(
             "debug": debug,
             "flow_debug": flow_debug,
             "pump_watch_summary": pw_dist,
+            "pump_watch_calibration": pw_calibration,
             "diagnostic_label_counts": diagnostic_label_counts,
             "patterns_by_source_type_counts": st_counts,
             "feature_family_counts":             feature_family_counts,
+            "flow_subtype_counts":               flow_subtype_counts,
             "accepted_patterns":                 accepted_sorted[:1000],
             "top_by_reliability":                top_by_reliability,
             "top_by_clean_reliability":          top_by_clean_reliability,
@@ -1322,6 +1463,11 @@ async def build_discovery_export(
             "top_by_source_type":               top_by_source_type,
             "top_flow_by_clean_reliability":     top_flow_by_clean_reliability,
             "top_combined_by_clean_reliability": top_combined_by_clean_reliability,
+            "top_flow_clean_reliability":        top_flow_clean_reliability,
+            "top_combined_clean_reliability":    top_combined_clean_reliability,
+            "top_flow_divergence":               top_flow_divergence,
+            "top_flow_stress":                   top_flow_stress,
+            "top_flow_absorption":               top_flow_absorption,
             "top_flow_by_missed_4x":             top_flow_by_missed_4x,
             "top_combined_by_missed_4x":         top_combined_by_missed_4x,
             "split_contamination_summary":       split_contamination_summary,
@@ -1332,7 +1478,7 @@ async def build_discovery_export(
             "notes": _notes(
                 "Compact export: accepted patterns only (max 1000), sample episodes (top 25 per group). "
                 "For all episodes use section=episodes. For rejected patterns use section=rejected. "
-                "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+                "Use top_flow_clean_reliability (cnt>=8, fpr<=30%, exposure<=35%) for FLOW signal selection. "
                 "top_by_lift is research-only — unstable for zero-FP patterns. "
                 "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
                 "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
@@ -1353,8 +1499,10 @@ async def build_discovery_export(
         "episodes": episodes,
         "comparisons": comps,
         "pump_watch_summary": pw_dist,
+        "pump_watch_calibration": pw_calibration,
         "diagnostic_label_counts": diagnostic_label_counts,
         "feature_family_counts":                 feature_family_counts,
+        "flow_subtype_counts":                   flow_subtype_counts,
         "discovered_patterns":                   patterns if include_rejected else accepted_all,
         "accepted_patterns":                     accepted_all,
         "rejected_patterns":                     rejected_all if include_rejected else [],
@@ -1368,6 +1516,11 @@ async def build_discovery_export(
         "top_by_source_type":                    top_by_source_type,
         "top_flow_by_clean_reliability":         top_flow_by_clean_reliability,
         "top_combined_by_clean_reliability":     top_combined_by_clean_reliability,
+        "top_flow_clean_reliability":            top_flow_clean_reliability,
+        "top_combined_clean_reliability":        top_combined_clean_reliability,
+        "top_flow_divergence":                   top_flow_divergence,
+        "top_flow_stress":                       top_flow_stress,
+        "top_flow_absorption":                   top_flow_absorption,
         "top_flow_by_missed_4x":                 top_flow_by_missed_4x,
         "top_combined_by_missed_4x":             top_combined_by_missed_4x,
         "split_contamination":                   split_contamination_full,
@@ -1377,7 +1530,7 @@ async def build_discovery_export(
         "reliability_score_legend":              _RELIABILITY_SCORE_LEGEND,
         "notes": _notes(
             "Full export includes all patterns (accepted + rejected), all episodes, comparisons. "
-            "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+            "Use top_flow_clean_reliability (cnt>=8, fpr<=30%, exposure<=35%) for FLOW signal selection. "
             "top_by_lift is research-only and unstable for small-sample zero-FP patterns. "
             "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
             "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
