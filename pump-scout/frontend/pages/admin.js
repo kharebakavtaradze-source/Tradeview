@@ -651,6 +651,7 @@ export default function AdminPage() {
               links: [
                 ['/api/replay/raw-pattern-study/100/discover/status', 'Discovery progress for run 100'],
                 ['/api/replay/raw-pattern-study/100/discover/results', 'Discovered patterns for run 100'],
+                ['/api/replay/raw-pattern-study/100/discover/export-full', 'Full discovery export JSON for run 100 (all patterns + episodes)'],
                 ['/api/replay/raw-pattern-study/100/pump-watch', 'Pump Watch scores for run 100'],
                 ['/api/replay/signal-registry', 'Discovered signal registry (JSON)'],
               ],
