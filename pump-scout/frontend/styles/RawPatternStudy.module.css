@@ -1177,6 +1177,32 @@
 .discoveryRefreshBtn:hover { color: var(--text); border-color: var(--accent-border); }
 .discoveryRefreshBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.discoveryExportBtn {
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--accent-border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+  display: inline-block;
+}
+.discoveryExportBtn:hover { background: var(--accent); color: var(--bg); }
+
+.discoveryExportBtnSm {
+  padding: 4px 9px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast);
+  display: inline-block;
+}
+.discoveryExportBtnSm:hover { color: var(--text); border-color: var(--accent-border); }
+
 .discoveryStatus {
   border-radius: var(--r-sm);
   border: 1px solid var(--border);

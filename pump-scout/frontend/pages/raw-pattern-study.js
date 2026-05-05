@@ -1972,14 +1972,57 @@ function PatternDiscoveryPanel({ runId }) {
           )}
 
           {results && !isRunning && (
-            <a
-              href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full`}
-              download={`raw-pattern-run-${runId}-discovery-full.json`}
-              className={styles.discoveryRefreshBtn}
-              style={{ textDecoration: 'none', display: 'inline-block' }}
-            >
-              ⬇ Full Discovery JSON
-            </a>
+            <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              <a
+                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=compact`}
+                download={`raw-pattern-run-${runId}-discovery-compact.json`}
+                className={styles.discoveryExportBtn}
+                style={{ textDecoration: 'none' }}
+              >
+                ⬇ Compact JSON
+              </a>
+              <a
+                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=summary`}
+                download={`raw-pattern-run-${runId}-discovery-summary.json`}
+                className={styles.discoveryExportBtnSm}
+                style={{ textDecoration: 'none' }}
+              >
+                Summary
+              </a>
+              <a
+                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=accepted`}
+                download={`raw-pattern-run-${runId}-discovery-accepted.json`}
+                className={styles.discoveryExportBtnSm}
+                style={{ textDecoration: 'none' }}
+              >
+                Accepted
+              </a>
+              <a
+                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=rankings`}
+                download={`raw-pattern-run-${runId}-discovery-rankings.json`}
+                className={styles.discoveryExportBtnSm}
+                style={{ textDecoration: 'none' }}
+              >
+                Rankings
+              </a>
+              <a
+                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=episodes`}
+                download={`raw-pattern-run-${runId}-discovery-episodes.json`}
+                className={styles.discoveryExportBtnSm}
+                style={{ textDecoration: 'none' }}
+              >
+                Episodes
+              </a>
+              <a
+                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=full`}
+                download={`raw-pattern-run-${runId}-discovery-full.json`}
+                className={styles.discoveryExportBtnSm}
+                style={{ textDecoration: 'none', opacity: 0.7 }}
+                title="Large file — may be slow"
+              >
+                Full (large)
+              </a>
+            </span>
           )}
         </div>
 
