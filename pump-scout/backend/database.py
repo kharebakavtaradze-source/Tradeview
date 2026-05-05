@@ -614,6 +614,9 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("pump_watch_pattern_ids",               "TEXT"),
     ("pump_watch_split_context",             "VARCHAR(30)"),
     ("pump_watch_confidence",                "VARCHAR(10)"),
+    ("pump_watch_diagnostic_labels",         "TEXT"),       # JSON list of diagnostic label IDs
+    ("pump_watch_pattern_id",                "VARCHAR(60)"), # primary diagnostic ID
+    ("pump_watch_rescue_reason",             "VARCHAR(80)"), # human-readable rescue note
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -4002,6 +4005,9 @@ class RawPatternEpisodeFeatures(Base):
     pump_watch_pattern_ids            = Column(Text,       nullable=True)   # JSON list
     pump_watch_split_context          = Column(String(30), nullable=True)
     pump_watch_confidence             = Column(String(10), nullable=True)
+    pump_watch_diagnostic_labels      = Column(Text,       nullable=True)   # JSON list
+    pump_watch_pattern_id             = Column(String(60), nullable=True)
+    pump_watch_rescue_reason          = Column(String(80), nullable=True)
 
 
 class RawPatternComparison(Base):

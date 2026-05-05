@@ -20,6 +20,7 @@ Input: pre_features dict from raw_pattern_episode_features row
 Output: {pump_watch_score, pump_watch_label, pump_watch_reasons, ...}
 """
 
+import json
 import logging
 from typing import Optional
 
@@ -39,9 +40,17 @@ THRESHOLD_SPECULATIVE = 30
 
 # ── Diagnostic label IDs ──────────────────────────────────────────────────────
 
-DIAG_MISSING_STRUCTURE_RESCUE = "PX_MISSING_STRUCTURE_RESCUE"
-DIAG_REVERSE_SPLIT_REGIME     = "PX_REVERSE_SPLIT_REGIME"
-DIAG_SPLIT_ARTIFACT_EXCLUDED  = "SPLIT_ARTIFACT_EXCLUDED"
+DIAG_MISSING_STRUCTURE_RESCUE        = "PX_MISSING_STRUCTURE_RESCUE"
+DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE  = "PX_NO_SCANNER_RAW_STRENGTH_RESCUE"
+DIAG_REVERSE_SPLIT_REGIME            = "PX_REVERSE_SPLIT_REGIME"
+DIAG_SPLIT_ARTIFACT_EXCLUDED         = "SPLIT_ARTIFACT_EXCLUDED"
+
+_ALL_DIAG_LABELS = [
+    DIAG_MISSING_STRUCTURE_RESCUE,
+    DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE,
+    DIAG_REVERSE_SPLIT_REGIME,
+    DIAG_SPLIT_ARTIFACT_EXCLUDED,
+]
 
 
 def _apply_diagnostic_labels(ep: dict, label: str, score: int,
@@ -115,6 +124,43 @@ def _apply_diagnostic_labels(ep: dict, label: str, score: int,
         if not pattern_id:
             pattern_id = DIAG_MISSING_STRUCTURE_RESCUE
             rescue_reason = "missing_structure_rescue_raw_strength"
+
+    # ── PX_NO_SCANNER_RAW_STRENGTH_RESCUE ─────────────────────────────────────
+    # Fires when: no scanner pressure despite strong raw pre-pump evidence.
+    # Structure may be present (unlike missing_structure rescue).
+    # Separate from PX_MISSING_STRUCTURE_RESCUE — avoids double-tagging.
+    _no_scanner = (
+        "no_scanner_pressure" in risk_flags
+        or (not ep.get("had_np_buy_candidate_pre")
+            and not ep.get("had_np_watch_pre"))
+    )
+    _rs_score = 0
+    if 8 <= (ep.get("dryup_day_count_pre") or 0) <= 30:
+        _rs_score += 1
+    if (ep.get("compression_days_pre") or 0) >= 6 or (ep.get("atr_contraction_days_pre") or 0) >= 10:
+        _rs_score += 1
+    if ep.get("had_spring_test_lps") or ep.get("had_accumulation_like"):
+        _rs_score += 1
+    _d_days2 = ep.get("d_confluence_day_count_pre") or 0
+    _d_best2  = ep.get("d_confluence_best_type_pre") or ep.get("d_confluence_best_type") or ""
+    if _d_days2 >= 4 or _d_best2 in _STRONG_D_TYPES:
+        _rs_score += 1
+    if (ep.get("accumulation_like_day_count") or 0) >= 10:
+        _rs_score += 1
+    if (ep.get("ema50_reclaim_count_pre") or 0) >= 2 or (ep.get("days_above_ema50_pre") or 0) >= 10:
+        _rs_score += 1
+    if (ep.get("valid_setup_days_pre") or 0) >= 10:
+        _rs_score += 1
+
+    if (DIAG_MISSING_STRUCTURE_RESCUE not in diag_labels
+            and _no_scanner
+            and _rs_score >= 4
+            and not ep.get("split_artifact_risk")
+            and ep.get("pump_type") not in (None, "UNKNOWN")):
+        diag_labels.append(DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE)
+        if not pattern_id:
+            pattern_id = DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE
+            rescue_reason = "no_scanner_pressure_but_raw_strength"
 
     return {
         "pump_watch_diagnostic_labels": diag_labels,
@@ -356,6 +402,12 @@ def compute_pump_watch_score(ep: dict) -> dict:
         label = LABEL_SPECULATIVE
         risk_flags.append("structure_fields_missing")
 
+    # No-scanner raw strength rescue: PUMP_IGNORE → PUMP_SPECULATIVE (score >= 15)
+    if (DIAG_NO_SCANNER_RAW_STRENGTH_RESCUE in diag["pump_watch_diagnostic_labels"]
+            and label == LABEL_IGNORE and score >= 15):
+        label = LABEL_SPECULATIVE
+        risk_flags.append("no_scanner_pressure_but_raw_strength")
+
     # Reverse split regime: cap confidence at MEDIUM for recent splits
     split_ctx = ep.get("split_context") or ""
     if DIAG_REVERSE_SPLIT_REGIME in diag["pump_watch_diagnostic_labels"]:
@@ -388,9 +440,23 @@ def score_episodes(episodes: list[dict]) -> list[dict]:
     return results
 
 
+def _parse_diag_labels(val) -> list:
+    """Normalize pump_watch_diagnostic_labels from DB (JSON str) or in-memory (list)."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    try:
+        result = json.loads(val)
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
 def summarize_pump_watch_distribution(scored_episodes: list[dict]) -> dict:
     """
     Build a summary of pump watch label distribution by group_type.
+    Handles both in-memory scored episodes (lists) and DB-loaded rows (JSON strings).
     """
     labels = [LABEL_HIGH, LABEL_MEDIUM, LABEL_SPECULATIVE, LABEL_IGNORE]
     group_types = ["4x_pump", "false_positive", "normal_winner"]
@@ -411,8 +477,8 @@ def summarize_pump_watch_distribution(scored_episodes: list[dict]) -> dict:
     for lbl in labels:
         matching = [ep for ep in scored_episodes if ep.get("pump_watch_label") == lbl]
         by_label[lbl] = {
-            "total":           len(matching),
-            "4x_pump_count":   sum(1 for ep in matching if ep.get("group_type") == "4x_pump"),
+            "total":                len(matching),
+            "4x_pump_count":        sum(1 for ep in matching if ep.get("group_type") == "4x_pump"),
             "false_positive_count": sum(1 for ep in matching if ep.get("group_type") == "false_positive"),
             "normal_winner_count":  sum(1 for ep in matching if ep.get("group_type") == "normal_winner"),
         }
@@ -424,18 +490,99 @@ def summarize_pump_watch_distribution(scored_episodes: list[dict]) -> dict:
                 by_label[lbl]["false_positive_count"] / by_label[lbl]["total"], 3
             )
 
-    all_diag_labels = [DIAG_MISSING_STRUCTURE_RESCUE, DIAG_REVERSE_SPLIT_REGIME,
-                       DIAG_SPLIT_ARTIFACT_EXCLUDED]
+    # Parse diagnostic labels from DB (JSON string) or in-memory (list)
     diagnostic_label_counts = {
-        lbl: sum(
+        diag_lbl: sum(
             1 for ep in scored_episodes
-            if lbl in (ep.get("pump_watch_diagnostic_labels") or [])
+            if diag_lbl in _parse_diag_labels(ep.get("pump_watch_diagnostic_labels"))
         )
-        for lbl in all_diag_labels
+        for diag_lbl in _ALL_DIAG_LABELS
     }
 
     return {
-        "by_group_type":          distribution,
-        "by_label":               by_label,
+        "by_group_type":           distribution,
+        "by_label":                by_label,
         "diagnostic_label_counts": diagnostic_label_counts,
+    }
+
+
+def compute_pump_watch_calibration(scored_episodes: list[dict]) -> dict:
+    """
+    Compute calibration metrics for pump watch labels.
+
+    Returns flags for known miscalibration patterns observed in run 137:
+      - high_underperforms_medium: HIGH label has lower 4x rate than MEDIUM
+      - high_fp_rate_gt_4x_rate:   HIGH false_positive_rate > HIGH 4x_rate
+      - ignore_contains_many_4x:   PUMP_IGNORE 4x_rate > 0.20
+
+    Does NOT change scoring. For diagnostic/reporting purposes only.
+    """
+    if not scored_episodes:
+        return {}
+
+    labels = [LABEL_HIGH, LABEL_MEDIUM, LABEL_SPECULATIVE, LABEL_IGNORE]
+    by_label: dict = {}
+    for lbl in labels:
+        matching = [ep for ep in scored_episodes if ep.get("pump_watch_label") == lbl]
+        total = len(matching)
+        if total == 0:
+            by_label[lbl] = {"total": 0}
+            continue
+        n_4x = sum(1 for ep in matching if ep.get("group_type") == "4x_pump")
+        n_fp = sum(1 for ep in matching if ep.get("group_type") == "false_positive")
+        n_nw = sum(1 for ep in matching if ep.get("group_type") == "normal_winner")
+        scores = sorted([ep.get("pump_watch_score") or 0 for ep in matching])
+        by_label[lbl] = {
+            "total":             total,
+            "4x_pump_count":     n_4x,
+            "false_positive_count": n_fp,
+            "normal_winner_count":  n_nw,
+            "4x_rate":           round(n_4x / total, 3),
+            "false_positive_rate": round(n_fp / total, 3),
+            "normal_winner_rate": round(n_nw / total, 3),
+            "median_score":      scores[len(scores) // 2],
+        }
+
+    high  = by_label.get(LABEL_HIGH,    {})
+    med   = by_label.get(LABEL_MEDIUM,  {})
+    spec  = by_label.get(LABEL_SPECULATIVE, {})
+    ign   = by_label.get(LABEL_IGNORE,  {})
+
+    high_4x = high.get("4x_rate", 0.0)
+    med_4x  = med.get("4x_rate",  0.0)
+    high_fp = high.get("false_positive_rate", 0.0)
+    ign_4x  = ign.get("4x_rate",  0.0)
+
+    high_underperforms_medium  = bool(high.get("total", 0) > 0 and med.get("total", 0) > 0 and high_4x < med_4x)
+    high_fp_rate_gt_4x_rate    = bool(high.get("total", 0) > 0 and high_fp > high_4x)
+    ignore_contains_many_4x    = bool(ign.get("total",  0) > 0 and ign_4x > 0.20)
+
+    warnings: list[str] = []
+    if high_underperforms_medium:
+        warnings.append(
+            f"PUMP_WATCH_HIGH 4x_rate ({high_4x:.1%}) < PUMP_WATCH_MEDIUM 4x_rate ({med_4x:.1%}). "
+            "HIGH label is not the best predictor."
+        )
+    if high_fp_rate_gt_4x_rate:
+        warnings.append(
+            f"PUMP_WATCH_HIGH false_positive_rate ({high_fp:.1%}) > 4x_rate ({high_4x:.1%}). "
+            "More false positives than true pump candidates in HIGH bucket."
+        )
+    if ignore_contains_many_4x:
+        warnings.append(
+            f"PUMP_IGNORE 4x_rate ({ign_4x:.1%}) > 20%. "
+            "Significant 4x pump events are being ignored — scoring may need recalibration."
+        )
+
+    return {
+        "by_label":                   by_label,
+        "high_underperforms_medium":  high_underperforms_medium,
+        "high_fp_rate_gt_4x_rate":    high_fp_rate_gt_4x_rate,
+        "ignore_contains_many_4x":    ignore_contains_many_4x,
+        "warnings":                   warnings,
+        "recommended_next_action": (
+            "Do not use PUMP_WATCH_HIGH as final selector until recalibrated."
+            if high_underperforms_medium or high_fp_rate_gt_4x_rate else
+            "Calibration looks reasonable — monitor with more runs."
+        ),
     }
