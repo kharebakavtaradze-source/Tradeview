@@ -1443,30 +1443,50 @@ function SplitImpactPanel({ runId }) {
   if (err)     return <div className={styles.errorMsg}>Split impact error: {err}</div>;
   if (!data)   return null;
 
-  const byCtx    = data.performance_by_split_context    || {};
-  const byTiming = data.performance_by_reverse_split_timing || {};
-  const artifacts = data.split_artifact_candidates      || [];
-  const summary  = data.split_impact_summary            || {};
-  const recs     = data.scanner_v2_split_patch_recommendations || [];
+  const byCtx    = data.performance_by_split_context         || {};
+  const byTiming = data.performance_by_reverse_split_timing  || {};
+  const artifacts = data.split_artifact_candidates           || [];
+  // summary is a list of strings from the backend
+  const summaryLines = Array.isArray(data.split_impact_summary)
+    ? data.split_impact_summary
+    : (data.split_impact_summary ? [String(data.split_impact_summary)] : []);
+  // recs is a list of dicts from the backend
+  const recs = Array.isArray(data.scanner_v2_split_patch_recommendations)
+    ? data.scanner_v2_split_patch_recommendations
+    : [];
+
+  const fmtCount = (row, key) => row[key] ?? '—';
+  const fmtRate  = (row, key) => row[key] != null ? `${(Number(row[key]) * 100).toFixed(1)}%` : '—';
+  const fmtPctOf = (num, denom) =>
+    num != null && denom > 0 ? `${((num / denom) * 100).toFixed(1)}%` : '—';
+  const fmtRet   = (row, key) => row[key] != null ? `${Number(row[key]).toFixed(1)}%` : '—';
+
+  const hasAnyData = Object.keys(byCtx).length > 0 || artifacts.length > 0 || recs.length > 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-      {/* Summary bar */}
-      <div className={styles.tableCard} style={{ padding: '8px 12px', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        {Object.entries(summary).map(([k, v]) => (
-          <span key={k} style={{ fontSize: 11 }}>
-            <span style={{ color: 'var(--text-muted)' }}>{k}:</span>{' '}
-            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{String(v)}</span>
-          </span>
-        ))}
-      </div>
+      {/* Summary lines */}
+      {summaryLines.length > 0 && (
+        <div className={styles.tableCard} style={{ padding: '10px 14px' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em',
+                        color: 'var(--text-muted)', textTransform: 'uppercase',
+                        marginBottom: 6 }}>Summary</div>
+          {summaryLines.map((line, i) => (
+            <div key={i} style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6,
+                                  fontFamily: 'var(--font-mono)' }}>{line}</div>
+          ))}
+        </div>
+      )}
 
       {/* Performance by split context */}
-      {Object.keys(byCtx).length > 0 && (
+      {Object.keys(byCtx).some(k => (byCtx[k].episode_count || 0) > 0) && (
         <div className={styles.tableCard}>
           <div className={styles.tableHeader}>
             <span className={styles.tableTitle}>Performance by Split Context</span>
+            <span className={styles.tableHint}>
+              episode_count · 4x% · fp% · avg return · med return
+            </span>
           </div>
           <div className={styles.tableScroll}>
             <table className={styles.dataTable}>
@@ -1474,21 +1494,34 @@ function SplitImpactPanel({ runId }) {
                 <tr>
                   <th className={styles.dataHead}>Context</th>
                   <th className={styles.dataHead}>N</th>
-                  <th className={styles.dataHead}>4x%</th>
+                  <th className={styles.dataHead}>4×%</th>
                   <th className={styles.dataHead}>FP%</th>
-                  <th className={styles.dataHead}>Med Mult</th>
+                  <th className={styles.dataHead}>FP Rate</th>
+                  <th className={styles.dataHead}>Avg Ret</th>
+                  <th className={styles.dataHead}>Med Ret</th>
+                  <th className={styles.dataHead}>Avg Days</th>
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(byCtx).map(([ctx, row]) => (
-                  <tr key={ctx} className={styles.dataRow}>
-                    <td className={styles.dataCell} style={{ color: SPLIT_CTX_COLOR[ctx] || 'var(--text)', fontWeight: 600, fontSize: 11 }}>{ctx}</td>
-                    <td className={styles.dataCell}>{row.count ?? '—'}</td>
-                    <td className={styles.dataCell}>{row['4x_pump_pct'] != null ? `${Number(row['4x_pump_pct']).toFixed(1)}%` : '—'}</td>
-                    <td className={styles.dataCell}>{row['false_positive_pct'] != null ? `${Number(row['false_positive_pct']).toFixed(1)}%` : '—'}</td>
-                    <td className={styles.dataCell}>{row['median_pump_multiple'] != null ? `${Number(row['median_pump_multiple']).toFixed(2)}×` : '—'}</td>
-                  </tr>
-                ))}
+                {Object.entries(byCtx)
+                  .filter(([, row]) => (row.episode_count || 0) > 0)
+                  .map(([ctx, row]) => (
+                    <tr key={ctx} className={styles.dataRow}>
+                      <td className={styles.dataCell}
+                        style={{ color: SPLIT_CTX_COLOR[ctx] || 'var(--text)', fontWeight: 600, fontSize: 11 }}>
+                        {ctx}
+                      </td>
+                      <td className={styles.dataCell}>{fmtCount(row, 'episode_count')}</td>
+                      <td className={styles.dataCell}>{fmtPctOf(row['4x_pump_count'], row.episode_count)}</td>
+                      <td className={styles.dataCell}>{fmtPctOf(row['false_positive_count'], row.episode_count)}</td>
+                      <td className={styles.dataCell}>{fmtRate(row, 'false_positive_rate')}</td>
+                      <td className={styles.dataCell}>{fmtRet(row, 'avg_pump_return_pct')}</td>
+                      <td className={styles.dataCell}>{fmtRet(row, 'median_pump_return_pct')}</td>
+                      <td className={styles.dataCell}>
+                        {row.avg_days_to_peak != null ? `${Number(row.avg_days_to_peak).toFixed(1)}d` : '—'}
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>
@@ -1496,7 +1529,7 @@ function SplitImpactPanel({ runId }) {
       )}
 
       {/* Performance by reverse-split timing */}
-      {Object.keys(byTiming).length > 0 && (
+      {Object.keys(byTiming).some(k => (byTiming[k].episode_count || 0) > 0) && (
         <div className={styles.tableCard}>
           <div className={styles.tableHeader}>
             <span className={styles.tableTitle}>Performance by Reverse-Split Timing Bucket</span>
@@ -1507,21 +1540,28 @@ function SplitImpactPanel({ runId }) {
                 <tr>
                   <th className={styles.dataHead}>Timing bucket</th>
                   <th className={styles.dataHead}>N</th>
-                  <th className={styles.dataHead}>4x%</th>
+                  <th className={styles.dataHead}>4×%</th>
                   <th className={styles.dataHead}>FP%</th>
-                  <th className={styles.dataHead}>Med Mult</th>
+                  <th className={styles.dataHead}>FP Rate</th>
+                  <th className={styles.dataHead}>Med Ret</th>
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(byTiming).map(([bucket, row]) => (
-                  <tr key={bucket} className={styles.dataRow}>
-                    <td className={styles.dataCell} style={{ fontSize: 11, color: 'var(--amber, #fbbf24)' }}>{bucket}</td>
-                    <td className={styles.dataCell}>{row.count ?? '—'}</td>
-                    <td className={styles.dataCell}>{row['4x_pump_pct'] != null ? `${Number(row['4x_pump_pct']).toFixed(1)}%` : '—'}</td>
-                    <td className={styles.dataCell}>{row['false_positive_pct'] != null ? `${Number(row['false_positive_pct']).toFixed(1)}%` : '—'}</td>
-                    <td className={styles.dataCell}>{row['median_pump_multiple'] != null ? `${Number(row['median_pump_multiple']).toFixed(2)}×` : '—'}</td>
-                  </tr>
-                ))}
+                {Object.entries(byTiming)
+                  .filter(([, row]) => (row.episode_count || 0) > 0)
+                  .map(([bucket, row]) => (
+                    <tr key={bucket} className={styles.dataRow}>
+                      <td className={styles.dataCell}
+                        style={{ fontSize: 11, color: 'var(--amber, #fbbf24)', fontFamily: 'var(--font-mono)' }}>
+                        {bucket}
+                      </td>
+                      <td className={styles.dataCell}>{fmtCount(row, 'episode_count')}</td>
+                      <td className={styles.dataCell}>{fmtPctOf(row['4x_pump_count'], row.episode_count)}</td>
+                      <td className={styles.dataCell}>{fmtPctOf(row['false_positive_count'], row.episode_count)}</td>
+                      <td className={styles.dataCell}>{fmtRate(row, 'false_positive_rate')}</td>
+                      <td className={styles.dataCell}>{fmtRet(row, 'median_pump_return_pct')}</td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>
@@ -1535,7 +1575,7 @@ function SplitImpactPanel({ runId }) {
             <span className={styles.tableTitle} style={{ color: 'var(--rose, #fb7185)' }}>
               Split Artifact Candidates ({artifacts.length})
             </span>
-            <span className={styles.tableHint}>price jump ≈ split ratio · exclude from scoring</span>
+            <span className={styles.tableHint}>price jump ≈ split ratio · exclude from calibration</span>
           </div>
           <div className={styles.tableScroll}>
             <table className={styles.dataTable}>
@@ -1543,21 +1583,37 @@ function SplitImpactPanel({ runId }) {
                 <tr>
                   <th className={styles.dataHead}>Symbol</th>
                   <th className={styles.dataHead}>Group</th>
-                  <th className={styles.dataHead}>Mult</th>
+                  <th className={styles.dataHead}>Raw Move</th>
                   <th className={styles.dataHead}>Split Ratio</th>
-                  <th className={styles.dataHead}>Δ Brk</th>
+                  <th className={styles.dataHead}>Split Type</th>
+                  <th className={styles.dataHead}>Adj Est</th>
                   <th className={styles.dataHead}>Reason</th>
                 </tr>
               </thead>
               <tbody>
                 {artifacts.map((a, i) => (
                   <tr key={i} className={styles.dataRow}>
-                    <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)' }}>{a.symbol}</td>
+                    <td className={styles.dataCell}
+                      style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{a.symbol}</td>
                     <td className={styles.dataCell}><GroupBadge type={a.group_type} /></td>
-                    <td className={styles.dataCell}>{a.pump_multiple != null ? `${Number(a.pump_multiple).toFixed(2)}×` : '—'}</td>
-                    <td className={styles.dataCell}>{a.nearest_split_ratio != null ? `${Number(a.nearest_split_ratio).toFixed(2)}×` : '—'}</td>
-                    <td className={styles.dataCell}>{a.nearest_split_days_from_breakout ?? '—'}</td>
-                    <td className={styles.dataCell} style={{ fontSize: 10, color: 'var(--text-dim)', maxWidth: 240 }}>{a.split_artifact_reason || '—'}</td>
+                    <td className={styles.dataCell}>
+                      {a.raw_move_pct != null ? `${Number(a.raw_move_pct).toFixed(1)}%` : '—'}
+                    </td>
+                    <td className={styles.dataCell}>
+                      {a.split_ratio != null ? `${Number(a.split_ratio).toFixed(2)}×` : '—'}
+                    </td>
+                    <td className={styles.dataCell}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--amber, #fbbf24)' }}>
+                      {a.split_type || '—'}
+                    </td>
+                    <td className={styles.dataCell}>
+                      {a.split_adjusted_move_estimate != null
+                        ? `${Number(a.split_adjusted_move_estimate).toFixed(1)}%` : '—'}
+                    </td>
+                    <td className={styles.dataCell}
+                      style={{ fontSize: 10, color: 'var(--text-dim)', maxWidth: 260 }}>
+                      {a.split_artifact_reason || '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1571,20 +1627,55 @@ function SplitImpactPanel({ runId }) {
         <div className={styles.tableCard}>
           <div className={styles.tableHeader}>
             <span className={styles.tableTitle}>Scanner v2 Split Patch Recommendations</span>
+            <span className={styles.tableHint}>reporting only — no scoring changes applied</span>
           </div>
-          <ul style={{ margin: '8px 12px 10px', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {recs.map((r, i) => (
-              <li key={i} style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, paddingLeft: 14, position: 'relative' }}>
-                <span style={{ position: 'absolute', left: 0, color: 'var(--amber, #fbbf24)' }}>·</span>
-                {r}
-              </li>
-            ))}
-          </ul>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' }}>
+            {recs.map((r, i) => {
+              const delta = r.suggested_score_delta;
+              const deltaStr = delta != null ? (delta > 0 ? `+${delta}` : String(delta)) : null;
+              return (
+                <div key={i} style={{
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--r-sm)', padding: '8px 12px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700,
+                                   color: 'var(--amber, #fbbf24)' }}>
+                      {r.suggested_flag || 'flag'}
+                    </span>
+                    {deltaStr && (
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10,
+                                     color: delta < 0 ? 'var(--red, #f87171)' : 'var(--lime, #86efac)' }}>
+                        {deltaStr} pts
+                      </span>
+                    )}
+                    {r.confidence && (
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)',
+                                     border: '1px solid var(--border)', borderRadius: 3,
+                                     padding: '1px 5px' }}>
+                        {r.confidence}
+                      </span>
+                    )}
+                    {r.sample_size != null && (
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                        n={r.sample_size}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                    {r.evidence || '—'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {Object.keys(byCtx).length === 0 && artifacts.length === 0 && recs.length === 0 && (
-        <div className={styles.statusMsg}>No split impact data for this run — splits phase may not have run yet.</div>
+      {!hasAnyData && (
+        <div className={styles.statusMsg}>
+          No split impact data for this run — splits phase may not have run yet.
+        </div>
       )}
     </div>
   );

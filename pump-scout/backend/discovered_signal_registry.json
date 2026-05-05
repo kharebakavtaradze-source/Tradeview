@@ -1,0 +1,519 @@
+[
+  {
+    "signal_id": "DISC_LIQ_RECLAIM_001",
+    "signal_name": "DISC_LIQ_RECLAIM_001",
+    "family": "L",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Dry-up reclaim bar: low-volume bars then reclaim of prior close with lower wick",
+    "human_readable_definition": "2+ dry-up days in the pre-window AND at least 1 reclaim bar (low dips below previous close but price closes back above it). Suggests accumulation absorption \u2014 smart money quietly buying while the stock drifts down on light volume.",
+    "machine_conditions": [
+      "dryup_day_count_pre >= 2",
+      "reclaim_bar_count_pre >= 1"
+    ],
+    "required_fields": [
+      "dryup_day_count_pre",
+      "reclaim_bar_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Run discovery against run 98 to populate stats.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_LIQ_SPRING_EMA50_001",
+    "signal_name": "DISC_LIQ_SPRING_EMA50_001",
+    "family": "L",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "EMA50 spring reclaim: low dips below EMA50 then close recovers above, with prior dry-up",
+    "human_readable_definition": "Price tests below EMA50 intraday but closes back above it (spring test), AND had 2+ dry-up days before that bar. Classic Wyckoff spring through a moving average.",
+    "machine_conditions": [
+      "ema50_reclaim_count_pre >= 1",
+      "dryup_day_count_pre >= 2"
+    ],
+    "required_fields": [
+      "ema50_reclaim_count_pre",
+      "dryup_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_LIQ_ABSORPTION_001",
+    "signal_name": "DISC_LIQ_ABSORPTION_001",
+    "family": "L",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Repeated accumulation-like days with dry-up background",
+    "human_readable_definition": "At least 3 accumulation-like days (high lower wick, close mid-high on below-avg volume) AND 3+ dry-up days in the pre-window. Multi-day evidence of smart money absorption.",
+    "machine_conditions": [
+      "had_accumulation_like == True",
+      "accumulation_like_day_count >= 3",
+      "dryup_day_count_pre >= 3"
+    ],
+    "required_fields": [
+      "had_accumulation_like",
+      "accumulation_like_day_count",
+      "dryup_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_GAP_SHAKEOUT_001",
+    "signal_name": "DISC_GAP_SHAKEOUT_001",
+    "family": "G",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Gap-down shakeout reclaim: price shook out below support then recovered",
+    "human_readable_definition": "Episode had a spring test / LPS event (low breaks support, close recovers) AND at least 1 reclaim bar. Classic shakeout before breakout pattern.",
+    "machine_conditions": [
+      "had_spring_test_lps == True",
+      "reclaim_bar_count_pre >= 1"
+    ],
+    "required_fields": [
+      "had_spring_test_lps",
+      "reclaim_bar_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Based on Wyckoff spring/LPS concept.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_GAP_HOLD_DRYUP_001",
+    "signal_name": "DISC_GAP_HOLD_DRYUP_001",
+    "family": "G",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Gap-up hold after dry-up: volume expansion after quiet accumulation",
+    "human_readable_definition": "3+ dry-up days AND 1+ abnormal volume days in the pre-window. Quiet accumulation period followed by a volume surge.",
+    "machine_conditions": [
+      "dryup_day_count_pre >= 3",
+      "abnormal_volume_day_count_pre >= 1"
+    ],
+    "required_fields": [
+      "dryup_day_count_pre",
+      "abnormal_volume_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_EMA_CLUSTER_RECLAIM_001",
+    "signal_name": "DISC_EMA_CLUSTER_RECLAIM_001",
+    "family": "E",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "EMA cluster reclaim with extended bull stack",
+    "human_readable_definition": "2+ EMA50 reclaim events in the pre-window AND 3+ consecutive bull-stack days. Price repeatedly reclaiming and holding above the EMA50 with bullish EMA ordering.",
+    "machine_conditions": [
+      "ema50_reclaim_count_pre >= 2",
+      "bull_stack_days_pre >= 3"
+    ],
+    "required_fields": [
+      "ema50_reclaim_count_pre",
+      "bull_stack_days_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_D_CONF_CLUSTER_001",
+    "signal_name": "DISC_D_CONF_CLUSTER_001",
+    "family": "D",
+    "status": "DISCOVERED",
+    "intended_use": "WATCH_SUPPORT",
+    "description": "D-confluence cluster with quality structure",
+    "human_readable_definition": "4+ D-confluence days in the pre-window, D-confluence flag True, AND max structure score >= 55. Multiple D/WLNBB confluence signals with structural quality \u2014 indicates setup building.",
+    "machine_conditions": [
+      "d_confluence_day_count_pre >= 4",
+      "had_d_confluence_pre == True",
+      "max_structure_score_pre >= 55"
+    ],
+    "required_fields": [
+      "d_confluence_day_count_pre",
+      "had_d_confluence_pre",
+      "max_structure_score_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Intended as BUY_SUPPORT only after replay validation and Scanner V2 review.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_VOLUME_DRYUP_EXPAND_001",
+    "signal_name": "DISC_VOLUME_DRYUP_EXPAND_001",
+    "family": "V",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Dry-up then volume expansion: 5+ dry-up days followed by abnormal volume",
+    "human_readable_definition": "5+ dry-up days (volume < 60% of 20d avg) followed by at least 1 abnormal volume day (volume > 2\u00d7 20d avg). Classic 'quiet then loud' accumulation-to-ignition sequence.",
+    "machine_conditions": [
+      "dryup_day_count_pre >= 5",
+      "abnormal_volume_day_count_pre >= 1"
+    ],
+    "required_fields": [
+      "dryup_day_count_pre",
+      "abnormal_volume_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. High priority for replay validation.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_COMPRESSION_LONG_001",
+    "signal_name": "DISC_COMPRESSION_LONG_001",
+    "family": "C",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Extended compression: 8+ compression days before breakout",
+    "human_readable_definition": "8+ BB squeeze / ATR contraction days in the pre-window, AND had_compression=True. Extended tightening of price range before the explosive move.",
+    "machine_conditions": [
+      "compression_days_pre >= 8",
+      "had_compression == True"
+    ],
+    "required_fields": [
+      "compression_days_pre",
+      "had_compression"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_SPLIT_REGIME_RS_RECENT_001",
+    "signal_name": "DISC_SPLIT_REGIME_RS_RECENT_001",
+    "family": "S",
+    "status": "DISCOVERED",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Recent reverse split speculative regime with accumulation evidence",
+    "human_readable_definition": "Reverse split within 15 days of breakout (not artifact) AND 3+ dry-up days. This forms a separate speculative regime \u2014 do NOT mix with clean 4\u00d7 pump model.",
+    "machine_conditions": [
+      "reverse_split_0_5d_before_breakout OR reverse_split_6_15d_before_breakout",
+      "split_artifact_risk == False",
+      "dryup_day_count_pre >= 3"
+    ],
+    "required_fields": [
+      "reverse_split_0_5d_before_breakout",
+      "reverse_split_6_15d_before_breakout",
+      "split_artifact_risk",
+      "dryup_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "IMPORTANT: Keep this as RESEARCH_ONLY. Reverse split regime requires its own model \u2014 do not use for Scanner V2 BUY routing. For Pump Watch: HIGH expansion risk is only a regime marker here, not an automatic reject.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_COMPOSITE_BUY_PRESSURE_001",
+    "signal_name": "DISC_PUMP_COMPOSITE_BUY_PRESSURE_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Repeated buy pressure: 6+ BUY_CANDIDATE days in pre-window",
+    "human_readable_definition": "Scanner V2 issued BUY_CANDIDATE on 6+ different days in the 40-day pre-window. This is a critical separator per raw-pattern run 98 (4\u00d7 pump median \u2248 6 vs false_positive median \u2248 1). High repeated scanner agreement = strong accumulation signal.",
+    "machine_conditions": [
+      "buy_candidate_day_count_pre >= 6"
+    ],
+    "required_fields": [
+      "buy_candidate_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      98
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 98,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Based on key finding from run 98: buy_candidate_day_count_pre separates 4\u00d7 pumps from false positives more than almost any other feature. Median 4\u00d7 pump = 6 days, false_positive = 1 day.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_COMPOSITE_STRUCTURE_HIGH_001",
+    "signal_name": "DISC_PUMP_COMPOSITE_STRUCTURE_HIGH_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Max structure spike: high structure score with confirmed/triggered phase",
+    "human_readable_definition": "max_structure_score >= 70 AND (had_confirmed_structure OR had_triggered_structure). Strong scanner agreement that the stock had genuine structural setup before the pump.",
+    "machine_conditions": [
+      "max_structure_score_pre >= 70",
+      "had_confirmed_structure_pre == True OR had_triggered_structure_pre == True"
+    ],
+    "required_fields": [
+      "max_structure_score_pre",
+      "had_confirmed_structure_pre",
+      "had_triggered_structure_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Quality structure at pre-breakout is a known prerequisite for clean 4\u00d7 pumps.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_COMPOSITE_FULL_001",
+    "signal_name": "DISC_PUMP_COMPOSITE_FULL_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Full convergence: buy pressure + structure + dry-up + compression",
+    "human_readable_definition": "4+ BUY_CANDIDATE days AND max structure score >= 58 AND 5+ dry-up days AND had_compression=True. All four key signals converging at once. Highest-confidence pre-pump composite.",
+    "machine_conditions": [
+      "buy_candidate_day_count_pre >= 4",
+      "max_structure_score_pre >= 58",
+      "dryup_day_count_pre >= 5",
+      "had_compression == True"
+    ],
+    "required_fields": [
+      "buy_candidate_day_count_pre",
+      "max_structure_score_pre",
+      "dryup_day_count_pre",
+      "had_compression"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Composite pattern requiring all four signal families simultaneously. High precision expected, lower recall.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_AVOID_PUMP_001",
+    "signal_name": "DISC_PUMP_AVOID_PUMP_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Avoid-then-pump: scanner issued AVOID but stock pumped 4\u00d7 with accumulation evidence",
+    "human_readable_definition": "Scanner routed AVOID (had_np_avoid_pre=True) AND (had_d_confluence_pre OR had_accumulation_like). Cases where the safety router correctly blocked BUY but there was underlying accumulation activity.",
+    "machine_conditions": [
+      "had_np_avoid_pre == True",
+      "had_d_confluence_pre == True OR had_accumulation_like == True"
+    ],
+    "required_fields": [
+      "had_np_avoid_pre",
+      "had_d_confluence_pre",
+      "had_accumulation_like"
+    ],
+    "forbidden_fields": [],
+    "source_run_ids": [
+      98
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 98,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY. Based on run 98 finding: many missed 4\u00d7 pumps had had_np_avoid_pre=True. This does NOT mean AVOID routing is wrong \u2014 it is correct for trade safety. But for speculative pump discovery, this pattern is worth studying. Do NOT use to weaken Scanner V2 AVOID logic.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  }
+]

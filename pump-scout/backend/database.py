@@ -606,6 +606,14 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("had_late_confirm_sequence_pre",        "BOOLEAN"),
     ("had_expansion_risk_flag_pre",          "BOOLEAN"),
     ("had_setup_only_l34_mid_avoid_pre",     "BOOLEAN"),
+    # Pattern Discovery / Pump Watch (Phase 2B-PD)
+    ("pump_watch_score",                     "INTEGER"),
+    ("pump_watch_label",                     "VARCHAR(30)"),
+    ("pump_watch_reasons",                   "TEXT"),
+    ("pump_watch_risk_flags",                "TEXT"),
+    ("pump_watch_pattern_ids",               "TEXT"),
+    ("pump_watch_split_context",             "VARCHAR(30)"),
+    ("pump_watch_confidence",                "VARCHAR(10)"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -3968,6 +3976,14 @@ class RawPatternEpisodeFeatures(Base):
     had_late_confirm_sequence_pre     = Column(Boolean,    nullable=True)
     had_expansion_risk_flag_pre       = Column(Boolean,    nullable=True)
     had_setup_only_l34_mid_avoid_pre  = Column(Boolean,    nullable=True)
+    # Pattern Discovery / Pump Watch fields (Phase 2B-PD)
+    pump_watch_score                  = Column(Integer,    nullable=True)
+    pump_watch_label                  = Column(String(30), nullable=True)
+    pump_watch_reasons                = Column(Text,       nullable=True)   # JSON list
+    pump_watch_risk_flags             = Column(Text,       nullable=True)   # JSON list
+    pump_watch_pattern_ids            = Column(Text,       nullable=True)   # JSON list
+    pump_watch_split_context          = Column(String(30), nullable=True)
+    pump_watch_confidence             = Column(String(10), nullable=True)
 
 
 class RawPatternComparison(Base):
@@ -4030,6 +4046,42 @@ class RawPatternAISummary(Base):
     raw_response   = Column(Text,        nullable=True)   # raw model text on failure
     parse_error    = Column(Text,        nullable=True)   # exception string on failure
     created_at     = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class DiscoveredPattern(Base):
+    """
+    Mined pattern candidates from the Pattern Discovery Engine.
+    One row per (run_id, signal_id) — updated on each discovery run.
+    """
+    __tablename__ = "discovered_patterns"
+
+    id                     = Column(Integer,  primary_key=True)
+    run_id                 = Column(Integer,  nullable=False, index=True)
+    signal_id              = Column(String(60), nullable=False, index=True)
+    family                 = Column(String(10), nullable=True)
+    status                 = Column(String(30), nullable=True)
+    intended_use           = Column(String(30), nullable=True)
+    description            = Column(Text,       nullable=True)
+    count_missed_4x        = Column(Integer,  nullable=True)
+    count_detected_4x      = Column(Integer,  nullable=True)
+    count_all_4x           = Column(Integer,  nullable=True)
+    count_false_positive   = Column(Integer,  nullable=True)
+    count_normal_winner    = Column(Integer,  nullable=True)
+    count_split_artifact   = Column(Integer,  nullable=True)
+    lift_vs_false_positive = Column(Float,    nullable=True)
+    lift_vs_normal_winner  = Column(Float,    nullable=True)
+    precision_estimate     = Column(Float,    nullable=True)
+    recall_all_4x          = Column(Float,    nullable=True)
+    false_positive_rate    = Column(Float,    nullable=True)
+    split_artifact_exposure= Column(Float,    nullable=True)
+    reverse_split_exposure = Column(Float,    nullable=True)
+    recommendation         = Column(String(30), nullable=True)
+    machine_conditions_json= Column(Text,       nullable=True)
+    created_at             = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "signal_id", name="uq_discovered_pattern_run_signal"),
+    )
 
 
 # ── Pump Study CRUD ───────────────────────────────────────────────────────────
@@ -5318,3 +5370,103 @@ async def get_stock_splits_for_symbols(
                 "source":           r.source,
             })
         return result
+
+
+# ── Pattern Discovery CRUD ────────────────────────────────────────────────────
+
+async def upsert_discovered_patterns(run_id: int, rows: list[dict]) -> int:
+    """
+    Upsert discovered pattern rows for a run.
+    Returns count of rows inserted/updated.
+    """
+    if not rows:
+        return 0
+    async with get_session_factory()() as session:
+        count = 0
+        for d in rows:
+            existing = (await session.execute(
+                select(DiscoveredPattern).where(
+                    DiscoveredPattern.run_id    == run_id,
+                    DiscoveredPattern.signal_id == d.get("signal_id"),
+                )
+            )).scalar_one_or_none()
+
+            if existing:
+                for col in [
+                    "family", "status", "intended_use", "description",
+                    "count_missed_4x", "count_detected_4x", "count_all_4x",
+                    "count_false_positive", "count_normal_winner", "count_split_artifact",
+                    "lift_vs_false_positive", "lift_vs_normal_winner",
+                    "precision_estimate", "recall_all_4x", "false_positive_rate",
+                    "split_artifact_exposure", "reverse_split_exposure",
+                    "recommendation", "machine_conditions_json",
+                ]:
+                    if col in d:
+                        setattr(existing, col, d[col])
+            else:
+                session.add(DiscoveredPattern(
+                    run_id                  = run_id,
+                    signal_id               = d.get("signal_id"),
+                    family                  = d.get("family"),
+                    status                  = d.get("status"),
+                    intended_use            = d.get("intended_use"),
+                    description             = d.get("description"),
+                    count_missed_4x         = d.get("count_missed_4x"),
+                    count_detected_4x       = d.get("count_detected_4x"),
+                    count_all_4x            = d.get("count_all_4x"),
+                    count_false_positive    = d.get("count_false_positive"),
+                    count_normal_winner     = d.get("count_normal_winner"),
+                    count_split_artifact    = d.get("count_split_artifact"),
+                    lift_vs_false_positive  = d.get("lift_vs_false_positive"),
+                    lift_vs_normal_winner   = d.get("lift_vs_normal_winner"),
+                    precision_estimate      = d.get("precision_estimate"),
+                    recall_all_4x           = d.get("recall_all_4x"),
+                    false_positive_rate     = d.get("false_positive_rate"),
+                    split_artifact_exposure = d.get("split_artifact_exposure"),
+                    reverse_split_exposure  = d.get("reverse_split_exposure"),
+                    recommendation          = d.get("recommendation"),
+                    machine_conditions_json = d.get("machine_conditions_json"),
+                ))
+                count += 1
+
+        await session.commit()
+        return count
+
+
+async def get_discovered_patterns(run_id: int) -> list[dict]:
+    """Return all discovered patterns for a run, sorted by lift_vs_false_positive desc."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(DiscoveredPattern)
+            .where(DiscoveredPattern.run_id == run_id)
+            .order_by(DiscoveredPattern.lift_vs_false_positive.desc().nullslast())
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "id":                    r.id,
+                "run_id":                r.run_id,
+                "signal_id":             r.signal_id,
+                "family":                r.family,
+                "status":                r.status,
+                "intended_use":          r.intended_use,
+                "description":           r.description,
+                "count_missed_4x":       r.count_missed_4x,
+                "count_detected_4x":     r.count_detected_4x,
+                "count_all_4x":          r.count_all_4x,
+                "count_false_positive":  r.count_false_positive,
+                "count_normal_winner":   r.count_normal_winner,
+                "count_split_artifact":  r.count_split_artifact,
+                "lift_vs_false_positive": r.lift_vs_false_positive,
+                "lift_vs_normal_winner": r.lift_vs_normal_winner,
+                "precision_estimate":    r.precision_estimate,
+                "recall_all_4x":         r.recall_all_4x,
+                "false_positive_rate":   r.false_positive_rate,
+                "split_artifact_exposure": r.split_artifact_exposure,
+                "reverse_split_exposure": r.reverse_split_exposure,
+                "recommendation":        r.recommendation,
+                "machine_conditions":    json.loads(r.machine_conditions_json or "[]"),
+                "created_at":            r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
