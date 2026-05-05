@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -4156,25 +4157,51 @@ async def raw_pattern_split_impact(run_id: int):
 
 # ── Pattern Discovery endpoints ───────────────────────────────────────────────
 
+class DiscoverRequest(BaseModel):
+    mode: str = "both"
+    """
+    Discovery mode:
+      episode_aggregate — mine only episode-level aggregate features (V1A, fast)
+      bar_sequence      — mine only per-bar symbolic tag sequences (V1B)
+      both              — run both V1A and V1B (default)
+    """
+    windows: list[int] = [1, 2, 3, 5, 10]
+    """Window sizes for bar-sequence mining. Only used when mode includes bar_sequence."""
+    exclude_split_artifacts: bool = False
+    """If True, exclude split_artifact episodes from episode-level mining counts."""
+
+
 @app.post("/api/replay/raw-pattern-study/{run_id}/discover")
-async def raw_pattern_discover(run_id: int, background_tasks: BackgroundTasks):
+async def raw_pattern_discover(
+    run_id: int,
+    background_tasks: BackgroundTasks,
+    body: DiscoverRequest = DiscoverRequest(),
+):
     """
     Launch the Pattern Discovery Engine for a completed raw-pattern run.
 
-    Runs the full pipeline asynchronously:
-      1. Load missed pump dataset from DB
-      2. Mine patterns (seed + composite)
-      3. Compute Pump Watch scores for all episodes
-      4. Persist pump_watch scores to raw_pattern_episode_features
-      5. Upsert discovered_patterns table
-      6. Update discovered_signal_registry.json
-      7. Build structured discovery report
+    Accepts optional JSON body to control discovery mode:
+      { "mode": "both", "windows": [1,2,3,5,10], "exclude_split_artifacts": false }
 
-    Does NOT modify Scanner V2 BUY/WATCH/AVOID routing.
-    All outputs are EXPERIMENTAL or PUMP_WATCH only.
+    mode values:
+      episode_aggregate — V1A: mine episode-level aggregate features (fast)
+      bar_sequence      — V1B: mine per-bar symbolic tag sequences
+      both              — run V1A then V1B (default)
+
+    Runs the full pipeline asynchronously. Does NOT modify Scanner V2
+    BUY/WATCH/AVOID routing. All outputs are EXPERIMENTAL or PUMP_WATCH only.
     """
     from database import get_raw_pattern_run
     from replay.pattern_discovery_engine import run_pattern_discovery, get_discovery_progress
+
+    valid_modes = {"episode_aggregate", "bar_sequence", "both"}
+    if body.mode not in valid_modes:
+        raise HTTPException(400, detail=f"Invalid mode '{body.mode}'. Must be one of: {valid_modes}")
+
+    valid_windows = {1, 2, 3, 5, 10}
+    bad_w = [w for w in body.windows if w not in valid_windows]
+    if bad_w:
+        raise HTTPException(400, detail=f"Invalid window sizes {bad_w}. Must be subset of {valid_windows}")
 
     run = await get_raw_pattern_run(run_id)
     if not run:
@@ -4190,8 +4217,19 @@ async def raw_pattern_discover(run_id: int, background_tasks: BackgroundTasks):
             "phase":  progress.get("phase"),
         }
 
-    background_tasks.add_task(run_pattern_discovery, run_id)
-    return {"status": "STARTED", "run_id": run_id}
+    background_tasks.add_task(
+        run_pattern_discovery,
+        run_id,
+        mode=body.mode,
+        windows=tuple(body.windows),
+        exclude_split_artifacts=body.exclude_split_artifacts,
+    )
+    return {
+        "status":  "STARTED",
+        "run_id":  run_id,
+        "mode":    body.mode,
+        "windows": body.windows,
+    }
 
 
 @app.get("/api/replay/raw-pattern-study/{run_id}/discover/status")

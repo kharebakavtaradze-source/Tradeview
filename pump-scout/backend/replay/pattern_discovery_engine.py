@@ -1,13 +1,26 @@
 """
 Pattern Discovery Engine — orchestrates the full discovery pipeline.
 
-Pipeline:
-  1. Load missed pump dataset from DB (raw_pattern_episode_features)
-  2. Run pattern miner on episode-level features
-  3. Compute pump watch scores for all episodes
-  4. Update discovered_signal_registry with new candidates
-  5. Persist pump watch scores back to DB
-  6. Generate structured discovery report
+Pipeline modes
+--------------
+  episode_aggregate (V1A)
+    1. Load missed pump dataset from DB (raw_pattern_episode_features)
+    2. Run pattern miner on episode-level aggregate features
+
+  bar_sequence (V1B)
+    1. Load raw daily bars from DB (raw_pattern_daily_features, PRE phase)
+    2. Build bar feature snapshots per episode
+    3. Build rolling-window tag sequences
+    4. Mine symbolic tag / sequence patterns
+
+  both (default)
+    Runs V1A then V1B; results are merged in the report.
+
+Common to all modes
+    3/5. Compute Pump Watch scores for all episodes
+    4/6. Persist pump_watch scores + pattern candidates to DB
+    5/7. Update discovered_signal_registry.json
+    6/8. Generate structured discovery report
 
 This engine does NOT change Scanner V2 BUY/WATCH/AVOID routing.
 All outputs are EXPERIMENTAL or PUMP_WATCH only.
@@ -26,14 +39,17 @@ _REGISTRY_PATH = os.path.join(
     os.path.dirname(__file__), "..", "discovered_signal_registry.json"
 )
 
-# In-memory progress tracker (parallel to pump_study_engine pattern)
+# In-memory progress tracker
 _discovery_progress: dict = {
     "running":    False,
     "run_id":     None,
+    "mode":       None,
     "phase":      None,
     "episodes":   0,
     "patterns_evaluated": 0,
     "patterns_experimental": 0,
+    "bar_patterns_evaluated": 0,
+    "bar_patterns_experimental": 0,
     "episodes_scored": 0,
     "error":      None,
     "started_at": None,
@@ -83,7 +99,6 @@ def _merge_registry(existing: list[dict], new_candidates: list[dict], run_id: in
 
         existing_entry = by_id.get(sid)
         if existing_entry:
-            # Update stats from this run
             existing_entry["last_run_id"]                = run_id
             existing_entry["last_updated"]               = today
             existing_entry["sample_count_4x"]            = cand.get("count_all_4x", 0)
@@ -105,12 +120,18 @@ def _merge_registry(existing: list[dict], new_candidates: list[dict], run_id: in
             }
             if _STATUS_RANK.get(new_status, 9) < _STATUS_RANK.get(old_status, 9):
                 existing_entry["status"] = new_status
+            # Propagate bar-sequence fields if present
+            for fld in ("source_type", "sequence_signature", "window_size",
+                        "bar_signature", "median_days_to_breakout", "example_symbols"):
+                if cand.get(fld) is not None:
+                    existing_entry[fld] = cand[fld]
         else:
-            # New entry
+            source_type = cand.get("source_type", "EPISODE_AGGREGATE")
             new_entry = {
                 "signal_id":               sid,
                 "signal_name":             sid,
                 "family":                  cand.get("family"),
+                "source_type":             source_type,
                 "status":                  cand.get("status", "DISCOVERED"),
                 "intended_use":            cand.get("intended_use", "RESEARCH_ONLY"),
                 "description":             cand.get("description", ""),
@@ -134,6 +155,11 @@ def _merge_registry(existing: list[dict], new_candidates: list[dict], run_id: in
                 "notes":                   "",
                 "replay_status":           "NOT_TESTED",
             }
+            # Bar-sequence extra fields
+            for fld in ("sequence_signature", "window_size", "bar_signature",
+                        "median_days_to_breakout", "example_symbols"):
+                if cand.get(fld) is not None:
+                    new_entry[fld] = cand[fld]
             by_id[sid] = new_entry
 
     return list(by_id.values())
@@ -142,10 +168,6 @@ def _merge_registry(existing: list[dict], new_candidates: list[dict], run_id: in
 # ── DB persistence helpers ────────────────────────────────────────────────────
 
 async def _persist_pump_watch_scores(run_id: int, scored_episodes: list[dict]) -> int:
-    """
-    Write pump watch scores back to raw_pattern_episode_features.
-    Returns number of rows updated.
-    """
     from database import update_raw_pattern_episode_features
 
     updated = 0
@@ -172,10 +194,6 @@ async def _persist_pump_watch_scores(run_id: int, scored_episodes: list[dict]) -
 
 
 async def _persist_pattern_candidates(run_id: int, candidates: list[dict]) -> int:
-    """
-    Upsert pattern candidates into the pattern_discovery_results table.
-    Returns number saved.
-    """
     from database import upsert_discovered_patterns
 
     rows: list[dict] = []
@@ -214,15 +232,114 @@ async def _persist_pattern_candidates(run_id: int, candidates: list[dict]) -> in
         return 0
 
 
+# ── Bar-sequence pipeline helpers ─────────────────────────────────────────────
+
+async def _run_bar_sequence_pipeline(
+    run_id: int,
+    dataset: dict,
+    windows: tuple,
+) -> tuple[list[dict], dict]:
+    """
+    Load daily bar rows, build snapshots + sequences, mine bar patterns.
+
+    Returns (bar_candidates, bar_sequences_by_group).
+    """
+    from database import get_raw_pattern_daily_features
+    from replay.bar_feature_engine import (
+        build_bar_feature_snapshots_for_episode,
+        build_bar_sequences,
+    )
+    from replay.pattern_miner import mine_bar_patterns
+
+    _discovery_progress["phase"] = "LOADING_BAR_FEATURES"
+    logger.info(f"[DISCOVERY/V1B] run={run_id}: loading raw daily bars (PRE phase only)")
+
+    all_daily = await get_raw_pattern_daily_features(
+        run_id=run_id, phase="PRE", limit=200_000
+    )
+
+    # Group by episode_id for fast lookup
+    daily_by_episode: dict[int, list[dict]] = {}
+    for row in all_daily:
+        eid = row.get("episode_id")
+        if eid is not None:
+            daily_by_episode.setdefault(eid, []).append(row)
+
+    logger.info(
+        f"[DISCOVERY/V1B] run={run_id}: {len(all_daily)} daily rows "
+        f"across {len(daily_by_episode)} episodes"
+    )
+
+    _discovery_progress["phase"] = "BUILDING_BAR_SEQUENCES"
+
+    # Build sequences per group
+    _GROUPS = ["missed_4x_pump", "detected_4x_pump", "false_positive",
+               "normal_winner", "split_artifact"]
+
+    bar_sequences_by_group: dict[str, list[dict]] = {g: [] for g in _GROUPS}
+
+    total_snapshots = 0
+    for grp in _GROUPS:
+        episodes = dataset.get(grp) or []
+        for ep in episodes:
+            ep_id      = ep.get("episode_id") or ep.get("id")
+            daily_rows = daily_by_episode.get(ep_id, [])
+            if not daily_rows:
+                continue
+            snaps = build_bar_feature_snapshots_for_episode(ep, daily_rows)
+            if not snaps:
+                continue
+            total_snapshots += len(snaps)
+            seqs = build_bar_sequences(snaps, windows=windows)
+            bar_sequences_by_group[grp].extend(seqs)
+
+    logger.info(
+        f"[DISCOVERY/V1B] run={run_id}: {total_snapshots} bar snapshots, "
+        f"{sum(len(v) for v in bar_sequences_by_group.values())} sequences built"
+    )
+
+    _discovery_progress["phase"] = "MINING_BAR_PATTERNS"
+    bar_candidates = mine_bar_patterns(
+        bar_sequences_by_group=bar_sequences_by_group,
+        windows=windows,
+    )
+
+    _discovery_progress["bar_patterns_evaluated"]   = len(bar_candidates)
+    _discovery_progress["bar_patterns_experimental"] = sum(
+        1 for c in bar_candidates if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")
+    )
+    logger.info(
+        f"[DISCOVERY/V1B] run={run_id}: {len(bar_candidates)} bar patterns | "
+        f"experimental={_discovery_progress['bar_patterns_experimental']}"
+    )
+
+    return bar_candidates, bar_sequences_by_group
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
-async def run_pattern_discovery(run_id: int) -> dict:
+async def run_pattern_discovery(
+    run_id: int,
+    mode: str = "both",
+    windows: tuple = (1, 2, 3, 5, 10),
+    exclude_split_artifacts: bool = False,
+) -> dict:
     """
     Full discovery pipeline for one raw_pattern_study run_id.
 
-    Returns a summary dict with:
-      status, episodes_loaded, patterns_evaluated, patterns_experimental,
-      episodes_scored, pump_watch_distribution, top_patterns, feature_separability
+    Parameters
+    ----------
+    run_id                : raw_pattern_runs.id to analyse
+    mode                  : "episode_aggregate" | "bar_sequence" | "both"
+    windows               : bar-sequence window sizes (only used when mode
+                            includes bar_sequence)
+    exclude_split_artifacts : if True, split_artifact episodes are excluded
+                              from episode-level mining counts (still kept
+                              in a separate group for exposure stats)
+
+    Returns
+    -------
+    Summary dict with status, episodes_loaded, patterns_evaluated, etc.
     """
     global _discovery_progress
 
@@ -232,14 +349,17 @@ async def run_pattern_discovery(run_id: int) -> dict:
     _discovery_progress.update({
         "running":    True,
         "run_id":     run_id,
+        "mode":       mode,
         "phase":      "LOADING",
         "error":      None,
+        "bar_patterns_evaluated":    0,
+        "bar_patterns_experimental": 0,
         "started_at": datetime.now(tz=timezone.utc).isoformat(),
         "finished_at": None,
     })
 
     try:
-        # ── Phase 1: Load dataset ─────────────────────────────────────────────
+        # ── Phase 1: Load episode-level dataset ───────────────────────────────
         from replay.missed_pump_dataset import load_dataset_for_run
         _discovery_progress["phase"] = "LOADING_DATASET"
 
@@ -247,65 +367,76 @@ async def run_pattern_discovery(run_id: int) -> dict:
         if not dataset:
             raise ValueError(f"No episodes found for run_id={run_id}")
 
-        summary = dataset.get("summary") or {}
-        total_episodes = summary.get("total_episodes", 0)
-        _discovery_progress["episodes"] = total_episodes
+        summary      = dataset.get("summary") or {}
+        total_ep     = summary.get("total_episodes", 0)
+        _discovery_progress["episodes"] = total_ep
 
         logger.info(
-            f"[DISCOVERY] run={run_id}: loaded {total_episodes} episodes | "
+            f"[DISCOVERY] run={run_id} mode={mode}: loaded {total_ep} episodes | "
             f"missed={summary.get('missed_4x_pump_count')} "
             f"detected={summary.get('detected_4x_pump_count')} "
             f"fp={summary.get('false_positive_count')} "
             f"art={summary.get('split_artifact_count')}"
         )
 
-        # ── Phase 2: Pattern mining ───────────────────────────────────────────
-        from replay.pattern_miner import mine_patterns, compute_feature_separability
-        _discovery_progress["phase"] = "PATTERN_MINING"
+        # ── Phase 2: Episode-aggregate pattern mining (V1A) ───────────────────
+        candidates: list[dict] = []
+        feature_sep: list[dict] = []
+        bar_candidates: list[dict] = []
+        bar_sequences_by_group: dict = {}
 
-        candidates = mine_patterns(dataset)
-        _discovery_progress["patterns_evaluated"] = len(candidates)
-        _discovery_progress["patterns_experimental"] = sum(
-            1 for c in candidates if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")
-        )
+        if mode in ("episode_aggregate", "both"):
+            from replay.pattern_miner import mine_patterns, compute_feature_separability
+            _discovery_progress["phase"] = "PATTERN_MINING_V1A"
 
-        feature_sep = compute_feature_separability(dataset)
+            candidates  = mine_patterns(dataset)
+            feature_sep = compute_feature_separability(dataset)
 
-        logger.info(
-            f"[DISCOVERY] run={run_id}: {len(candidates)} patterns evaluated | "
-            f"experimental={_discovery_progress['patterns_experimental']}"
-        )
+            _discovery_progress["patterns_evaluated"]   = len(candidates)
+            _discovery_progress["patterns_experimental"] = sum(
+                1 for c in candidates
+                if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")
+            )
+            logger.info(
+                f"[DISCOVERY/V1A] run={run_id}: {len(candidates)} patterns | "
+                f"experimental={_discovery_progress['patterns_experimental']}"
+            )
 
-        # ── Phase 3: Pump Watch scoring ───────────────────────────────────────
+        # ── Phase 3: Bar-sequence pattern mining (V1B) ────────────────────────
+        if mode in ("bar_sequence", "both"):
+            bar_candidates, bar_sequences_by_group = await _run_bar_sequence_pipeline(
+                run_id=run_id,
+                dataset=dataset,
+                windows=windows,
+            )
+
+        # ── Phase 4: Pump Watch scoring ───────────────────────────────────────
         from replay.pump_watch_scorer import score_episodes, summarize_pump_watch_distribution
         _discovery_progress["phase"] = "PUMP_WATCH_SCORING"
 
-        # Build flat episode list for scoring
-        all_episodes_raw: list[dict] = []
         from database import get_raw_pattern_episode_features
         all_episodes_raw = await get_raw_pattern_episode_features(run_id=run_id, limit=10000)
 
-        scored = score_episodes(all_episodes_raw)
+        scored       = score_episodes(all_episodes_raw)
+        pw_dist      = summarize_pump_watch_distribution(scored)
         _discovery_progress["episodes_scored"] = len(scored)
 
-        pw_distribution = summarize_pump_watch_distribution(scored)
-
-        # ── Phase 4: Persist pump watch scores ────────────────────────────────
+        # ── Phase 5: Persist pump watch scores ────────────────────────────────
         _discovery_progress["phase"] = "PERSISTING_SCORES"
         updated = await _persist_pump_watch_scores(run_id, scored)
         logger.info(f"[DISCOVERY] run={run_id}: persisted pump_watch scores for {updated} episodes")
 
-        # ── Phase 5: Persist pattern candidates ───────────────────────────────
+        # ── Phase 6: Persist pattern candidates ───────────────────────────────
         _discovery_progress["phase"] = "PERSISTING_PATTERNS"
-        saved_patterns = await _persist_pattern_candidates(run_id, candidates)
+        all_candidates = candidates + bar_candidates
+        saved_patterns = await _persist_pattern_candidates(run_id, all_candidates)
         logger.info(f"[DISCOVERY] run={run_id}: persisted {saved_patterns} pattern rows")
 
-        # ── Phase 6: Update registry ──────────────────────────────────────────
+        # ── Phase 7: Update registry ──────────────────────────────────────────
         _discovery_progress["phase"] = "UPDATING_REGISTRY"
         existing_registry = _load_registry()
-        # Only merge EXPERIMENTAL or EXPERIMENTAL_RARE patterns into registry
         registry_candidates = [
-            c for c in candidates
+            c for c in all_candidates
             if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE", "RESEARCH_ONLY")
         ]
         merged_registry = _merge_registry(existing_registry, registry_candidates, run_id)
@@ -315,15 +446,18 @@ async def run_pattern_discovery(run_id: int) -> dict:
             f"{len(merged_registry)} total signals"
         )
 
-        # ── Phase 7: Build report ─────────────────────────────────────────────
+        # ── Phase 8: Build report ─────────────────────────────────────────────
         _discovery_progress["phase"] = "BUILDING_REPORT"
         from replay.pattern_discovery_report import build_discovery_report
         report = build_discovery_report(
             run_id=run_id,
             dataset_summary=summary,
             pattern_candidates=candidates,
+            bar_candidates=bar_candidates,
             feature_separability=feature_sep,
-            pump_watch_distribution=pw_distribution,
+            pump_watch_distribution=pw_dist,
+            mode=mode,
+            windows=list(windows),
         )
 
         _discovery_progress.update({
@@ -333,18 +467,28 @@ async def run_pattern_discovery(run_id: int) -> dict:
         })
 
         return {
-            "status":                  "COMPLETE",
-            "run_id":                  run_id,
-            "episodes_loaded":         total_episodes,
-            "patterns_evaluated":      len(candidates),
-            "patterns_experimental":   _discovery_progress["patterns_experimental"],
-            "episodes_scored":         len(scored),
-            "pump_watch_distribution": pw_distribution,
-            "top_patterns":            [c for c in candidates if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")][:10],
-            "feature_separability":    feature_sep[:20],
-            "dataset_summary":         summary,
-            "report":                  report,
-            "registry_total_signals":  len(merged_registry),
+            "status":                    "COMPLETE",
+            "run_id":                    run_id,
+            "mode":                      mode,
+            "episodes_loaded":           total_ep,
+            "patterns_evaluated":        len(candidates),
+            "patterns_experimental":     _discovery_progress["patterns_experimental"],
+            "bar_patterns_evaluated":    len(bar_candidates),
+            "bar_patterns_experimental": _discovery_progress["bar_patterns_experimental"],
+            "episodes_scored":           len(scored),
+            "pump_watch_distribution":   pw_dist,
+            "top_patterns":              [
+                c for c in candidates
+                if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")
+            ][:10],
+            "top_bar_patterns":          [
+                c for c in bar_candidates
+                if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")
+            ][:10],
+            "feature_separability":      feature_sep[:20],
+            "dataset_summary":           summary,
+            "report":                    report,
+            "registry_total_signals":    len(merged_registry),
         }
 
     except Exception as exc:
@@ -359,16 +503,14 @@ async def run_pattern_discovery(run_id: int) -> dict:
 
 
 async def get_discovery_results(run_id: int) -> dict:
-    """
-    Return the latest discovery results for a run_id from the DB.
-    """
+    """Return the latest discovery results for a run_id from the DB."""
     from database import get_discovered_patterns, get_raw_pattern_episode_features
     from replay.pump_watch_scorer import summarize_pump_watch_distribution
 
     try:
-        patterns  = await get_discovered_patterns(run_id)
-        episodes  = await get_raw_pattern_episode_features(run_id=run_id, limit=10000)
-        pw_dist   = summarize_pump_watch_distribution(episodes)
+        patterns = await get_discovered_patterns(run_id)
+        episodes = await get_raw_pattern_episode_features(run_id=run_id, limit=10000)
+        pw_dist  = summarize_pump_watch_distribution(episodes)
 
         return {
             "run_id":                  run_id,

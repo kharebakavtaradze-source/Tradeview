@@ -279,28 +279,115 @@ def _section_by_family(candidates: list[dict]) -> dict[str, list[dict]]:
 
 # ── Main report builder ───────────────────────────────────────────────────────
 
+def _section_bar_patterns(
+    bar_candidates: list[dict],
+    window_filter: Optional[int] = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Format bar/sequence pattern candidates as report rows."""
+    filtered = bar_candidates
+    if window_filter is not None:
+        filtered = [c for c in bar_candidates if c.get("window_size") == window_filter]
+
+    rows: list[dict] = []
+    for c in filtered[:limit]:
+        rows.append({
+            "signal_id":           c.get("signal_id"),
+            "family":              c.get("family"),
+            "source_type":         c.get("source_type"),
+            "window_size":         c.get("window_size"),
+            "sequence_signature":  c.get("sequence_signature"),
+            "status":              c.get("status"),
+            "status_emoji":        _STATUS_EMOJI.get(c.get("status", ""), ""),
+            "description":         c.get("description"),
+            "intended_use":        c.get("intended_use"),
+            "recommendation":      c.get("recommendation"),
+            "count_all_4x":        c.get("count_all_4x"),
+            "count_missed_4x":     c.get("count_missed_4x"),
+            "count_false_positive": c.get("count_false_positive"),
+            "lift_vs_fp":          _fmt_lift(c.get("lift_vs_false_positive")),
+            "lift_vs_fp_raw":      c.get("lift_vs_false_positive"),
+            "precision_estimate":  _fmt_rate(c.get("precision_estimate")),
+            "recall_all_4x":       _fmt_rate(c.get("recall_all_4x")),
+            "false_positive_rate": _fmt_rate(c.get("false_positive_rate")),
+        })
+    return rows
+
+
+def _section_bar_summary(
+    bar_candidates: list[dict],
+    windows: list[int],
+) -> dict:
+    """Summarize bar pattern discovery across window sizes."""
+    by_window: dict[int, dict] = {}
+    for w in windows:
+        cands_w = [c for c in bar_candidates if c.get("window_size") == w]
+        exp_w   = [c for c in cands_w if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")]
+        by_window[w] = {
+            "window_size":       w,
+            "total":             len(cands_w),
+            "experimental":      len(exp_w),
+            "top_lift":          max((c.get("lift_vs_false_positive") or 0) for c in cands_w) if cands_w else 0,
+            "top_signature":     exp_w[0].get("sequence_signature") if exp_w else None,
+        }
+
+    all_exp = [c for c in bar_candidates if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")]
+    return {
+        "title":              "Bar-Sequence Pattern Discovery Summary",
+        "total_signatures":   len(bar_candidates),
+        "experimental_count": len(all_exp),
+        "by_window":          list(by_window.values()),
+        "top_experimental":   _section_bar_patterns(all_exp, limit=10),
+        "note": (
+            "Bar-sequence patterns mine symbolic tag signatures from per-bar "
+            "raw_pattern_daily_features rows. window_size=1 = single-bar tag; "
+            "window_size<=3 = ordered bar sequence (→); "
+            "window_size>3 = unordered tag-bag across window. "
+            "Anti-leakage: group_type is NEVER used as a pattern condition."
+        ),
+    }
+
+
 def build_discovery_report(
     run_id: int,
     dataset_summary: dict,
     pattern_candidates: list[dict],
     feature_separability: list[dict],
     pump_watch_distribution: dict,
+    bar_candidates: Optional[list[dict]] = None,
+    mode: str = "both",
+    windows: Optional[list[int]] = None,
 ) -> dict:
     """
     Build the full pattern discovery report.
 
-    Returns a structured dict with sections:
-      dataset_summary, top_experimental, top_rare, top_research_only,
-      rejected, feature_separability, pump_watch, split_summary,
-      registry_additions, replay_recommendations, by_family
+    Parameters
+    ----------
+    run_id               : run identifier
+    dataset_summary      : from missed_pump_dataset
+    pattern_candidates   : episode-aggregate pattern candidates (V1A)
+    feature_separability : from compute_feature_separability
+    pump_watch_distribution : from summarize_pump_watch_distribution
+    bar_candidates       : bar/sequence pattern candidates (V1B); may be empty
+    mode                 : "episode_aggregate" | "bar_sequence" | "both"
+    windows              : bar window sizes used
+
+    Returns a structured dict with sections suitable for JSON serialization
+    and frontend display.
     """
+    bar_candidates = bar_candidates or []
+    windows        = windows or [1, 2, 3, 5, 10]
+
     experimental  = [c for c in pattern_candidates if c["status"] == "EXPERIMENTAL"]
     rare          = [c for c in pattern_candidates if c["status"] == "EXPERIMENTAL_RARE"]
     research_only = [c for c in pattern_candidates if c["status"] == "RESEARCH_ONLY"]
     rejected      = [c for c in pattern_candidates if c["status"] == "REJECT"]
 
+    bar_exp       = [c for c in bar_candidates if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")]
+
     report = {
         "run_id":          run_id,
+        "mode":            mode,
         "section_dataset_summary":      _section_dataset_summary(dataset_summary),
         "section_top_experimental":     _section_top_patterns(experimental, limit=20),
         "section_top_rare":             _section_top_patterns(rare, limit=10),
@@ -309,18 +396,28 @@ def build_discovery_report(
         "section_feature_separability": _section_feature_separability(feature_separability, limit=25),
         "section_pump_watch":           _section_pump_watch(pump_watch_distribution),
         "section_split_summary":        _section_split_summary(dataset_summary, pattern_candidates),
-        "section_registry_additions":   _section_registry_additions(pattern_candidates),
-        "section_replay_recommendations": _section_replay_recommendations(pattern_candidates),
+        "section_registry_additions":   _section_registry_additions(pattern_candidates + bar_exp),
+        "section_replay_recommendations": _section_replay_recommendations(pattern_candidates + bar_exp),
         "section_by_family":            _section_by_family(pattern_candidates),
+        # Bar-sequence sections (V1B)
+        "section_bar_summary":          _section_bar_summary(bar_candidates, windows) if bar_candidates else None,
+        "section_bar_single_bar":       _section_bar_patterns(bar_candidates, window_filter=1,  limit=20),
+        "section_bar_two_bar":          _section_bar_patterns(bar_candidates, window_filter=2,  limit=20),
+        "section_bar_three_bar":        _section_bar_patterns(bar_candidates, window_filter=3,  limit=15),
+        "section_bar_five_bar":         _section_bar_patterns(bar_candidates, window_filter=5,  limit=15),
+        "section_bar_ten_bar":          _section_bar_patterns(bar_candidates, window_filter=10, limit=10),
         "counts": {
-            "total_patterns_evaluated": len(pattern_candidates),
-            "experimental":             len(experimental),
-            "experimental_rare":        len(rare),
-            "research_only":            len(research_only),
-            "rejected":                 len(rejected),
+            "total_patterns_evaluated":     len(pattern_candidates),
+            "experimental":                 len(experimental),
+            "experimental_rare":            len(rare),
+            "research_only":                len(research_only),
+            "rejected":                     len(rejected),
+            "bar_total_signatures":         len(bar_candidates),
+            "bar_experimental":             len(bar_exp),
         },
         "notes_for_next_research": _notes_for_next_research(
-            experimental, rare, research_only, rejected, dataset_summary
+            experimental, rare, research_only, rejected, dataset_summary,
+            bar_exp=bar_exp,
         ),
     }
 
@@ -333,6 +430,7 @@ def _notes_for_next_research(
     research_only: list[dict],
     rejected: list[dict],
     dataset_summary: dict,
+    bar_exp: Optional[list[dict]] = None,
 ) -> list[str]:
     """Generate human-readable research notes for the next cycle."""
     notes: list[str] = []
@@ -385,6 +483,22 @@ def _notes_for_next_research(
         "Do not retrain the main pump model on them. "
         "A dedicated RS_REGIME Pump Watch model should be evaluated separately."
     )
+
+    # Bar-sequence discovery notes
+    if bar_exp:
+        bar_exp = bar_exp or []
+        top_bar = bar_exp[:3]
+        ids = ", ".join(c["signal_id"] for c in top_bar)
+        notes.append(
+            f"BAR PATTERNS: {len(bar_exp)} bar/sequence patterns qualified (EXPERIMENTAL/RARE). "
+            f"Top signatures: {ids}. "
+            "Validate by replaying on unseen date range before adding to Pump Watch."
+        )
+    else:
+        notes.append(
+            "BAR PATTERNS: No bar/sequence patterns qualified in this run. "
+            "Try running in mode='bar_sequence' or 'both' with more episodes."
+        )
 
     # Anti-leakage reminder
     notes.append(

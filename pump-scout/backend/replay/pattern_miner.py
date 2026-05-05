@@ -1,26 +1,30 @@
 """
-Pattern Miner — finds recurring bar/sequence patterns before 4x pumps.
+Pattern Miner — finds recurring patterns before 4x pumps.
 
-Operates on a missed_pump_dataset (from missed_pump_dataset.py).
+Two mining modes:
 
-For each seed pattern definition, computes per-group counts,
-lift vs false_positive, precision/recall estimates, and forward return stats.
+  episode_aggregate: evaluates seed pattern conditions against pre-window
+    aggregate fields (buy_candidate_day_count_pre, dryup_day_count_pre, …)
+    loaded from raw_pattern_episode_features.  (V1A — original implementation)
 
-Output: list of PatternCandidate dicts, one per pattern.
+  bar_sequence: mines symbolic tag signatures and rolling-window sequences
+    built from raw_pattern_daily_features bars. Uses mine_bar_patterns().
+    (V1B — new implementation)
 
 Statuses:
-  EXPERIMENTAL      — min thresholds met (count_all_4x >= 8, lift >= 1.5)
-  EXPERIMENTAL_RARE — lower count (count >= 4) but high lift (>= 2.0)
-  RESEARCH_ONLY     — below thresholds but non-zero and worth tracking
+  EXPERIMENTAL      — count_all_4x >= 8, lift >= 1.5
+  EXPERIMENTAL_RARE — count_all_4x >= 4, lift >= 2.0
+  RESEARCH_ONLY     — non-zero, lift >= 1.0
   REJECT            — lift < 1.0 or no signal
 
 Anti-leakage: pattern conditions use only PRE-window features.
-              forward_return fields are passed from external context,
-              not computed from group_type.
+              forward_return, group_type, pump_multiple, and
+              days_from_breakout_to_peak are NEVER used as conditions.
 """
 
 import logging
 import math
+from collections import defaultdict
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -739,3 +743,201 @@ def group_patterns_by_family(candidates: list[dict]) -> dict[str, list[dict]]:
         fam = c.get("family") or "UNKNOWN"
         groups.setdefault(fam, []).append(c)
     return groups
+
+
+# ── Bar / sequence pattern mining (V1B) ──────────────────────────────────────
+
+_SOURCE_TYPE_MAP: dict[int, str] = {
+    1:  "SINGLE_BAR",
+    2:  "TWO_BAR_SEQUENCE",
+    3:  "THREE_BAR_SEQUENCE",
+    5:  "FIVE_BAR_SEQUENCE",
+    10: "TEN_BAR_CONTEXT",
+}
+
+_GROUPS = ["missed_4x_pump", "detected_4x_pump", "false_positive", "normal_winner", "split_artifact"]
+
+
+def _infer_bar_pattern_family(sig: str) -> str:
+    """Infer pattern family code from a tag signature string."""
+    if "DELTA_IGNITION" in sig or "DELTA_ABSORB" in sig:
+        return "D"
+    if "EMA50_RECLAIM" in sig or "EMA_BULL_STACK" in sig:
+        return "E"
+    if "GAP_UP" in sig or "GAP_DOWN" in sig:
+        return "G"
+    if "BB_COMPRESS" in sig:
+        return "C"
+    if "DRYUP" in sig or "VOL_SPIKE" in sig:
+        return "V"
+    if "LOWER_WICK_RECLAIM" in sig or "RECLAIM_BAR" in sig:
+        return "L"
+    return "P"
+
+
+def mine_bar_patterns(
+    bar_sequences_by_group: dict,
+    windows: tuple = (1, 2, 3, 5, 10),
+    min_episode_count_4x: int = 3,
+) -> list[dict]:
+    """
+    Mine bar-level and sequence-level patterns from symbolic tag sequences.
+
+    Parameters
+    ----------
+    bar_sequences_by_group : dict mapping group_name → list of sequence dicts.
+        Each sequence dict (from build_bar_sequences) has:
+          episode_id, window_size, sequence_signature, tag_counts, group_type.
+        Group names: missed_4x_pump, detected_4x_pump, false_positive,
+                     normal_winner, split_artifact.
+    windows                : window sizes to analyze (must match those used
+                             when building the sequences).
+    min_episode_count_4x   : minimum unique episodes in the combined 4x group
+                             to include a pattern in results (avoids extreme noise).
+
+    Returns
+    -------
+    List of bar PatternCandidate dicts, sorted by status then lift.
+    Only signatures with at least min_episode_count_4x 4x-pump episodes
+    OR any false-positive hits are returned.
+
+    source_type field distinguishes: SINGLE_BAR | TWO_BAR_SEQUENCE |
+    THREE_BAR_SEQUENCE | FIVE_BAR_SEQUENCE | TEN_BAR_CONTEXT.
+
+    Anti-leakage: group_type is NOT used as a pattern condition. It is
+    the outcome label used only for lift/precision statistics.
+    """
+    results: list[dict] = []
+
+    for w in windows:
+        source_type = _SOURCE_TYPE_MAP.get(w, f"{w}BAR_SEQUENCE")
+
+        # For each signature, count unique matching *episodes* per group
+        # (not sequence windows — one episode can produce many windows)
+        sig_to_episodes: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
+
+        for grp in _GROUPS:
+            for seq in bar_sequences_by_group.get(grp) or []:
+                if seq.get("window_size") != w:
+                    continue
+                sig  = seq.get("sequence_signature") or "FLAT"
+                epid = seq.get("episode_id")
+                if epid is not None:
+                    sig_to_episodes[sig][grp].add(epid)
+
+        # Total unique episodes per group (use window_size=1 as reference)
+        total_by_grp: dict[str, int] = {}
+        for grp in _GROUPS:
+            ep_ids = {
+                seq["episode_id"]
+                for seq in (bar_sequences_by_group.get(grp) or [])
+                if seq.get("window_size") == 1 and seq.get("episode_id") is not None
+            }
+            total_by_grp[grp] = len(ep_ids)
+
+        tot_missed   = total_by_grp.get("missed_4x_pump",   0)
+        tot_detected = total_by_grp.get("detected_4x_pump", 0)
+        tot_fp       = total_by_grp.get("false_positive",   0)
+        tot_nw       = total_by_grp.get("normal_winner",    0)
+        tot_all_4x   = tot_missed + tot_detected
+
+        for sig, grp_eps in sig_to_episodes.items():
+            cnt_missed   = len(grp_eps.get("missed_4x_pump",   set()))
+            cnt_detected = len(grp_eps.get("detected_4x_pump", set()))
+            cnt_fp       = len(grp_eps.get("false_positive",   set()))
+            cnt_nw       = len(grp_eps.get("normal_winner",    set()))
+            cnt_art      = len(grp_eps.get("split_artifact",   set()))
+            cnt_all_4x   = cnt_missed + cnt_detected
+
+            # Skip signatures with no signal
+            if cnt_all_4x == 0 and cnt_fp == 0:
+                continue
+            # Require minimum 4x coverage or at least some FP exposure to report
+            if cnt_all_4x < min_episode_count_4x and cnt_fp == 0:
+                continue
+
+            rate_4x = cnt_all_4x / max(tot_all_4x, 1)
+            rate_fp = cnt_fp     / max(tot_fp,     1)
+            rate_nw = cnt_nw     / max(tot_nw,     1)
+
+            lift_vs_fp = rate_4x / max(rate_fp, _TINY)
+            lift_vs_nw = rate_4x / max(rate_nw, _TINY)
+
+            all_matching = cnt_all_4x + cnt_fp + cnt_nw
+            precision    = cnt_all_4x / max(all_matching, 1)
+            recall_4x    = cnt_all_4x / max(tot_all_4x,  1)
+            fp_rate      = cnt_fp / max(tot_fp, 1) if tot_fp > 0 else None
+
+            # Status
+            if cnt_all_4x >= STANDARD_MIN_COUNT_4X and lift_vs_fp >= STANDARD_MIN_LIFT:
+                status = "EXPERIMENTAL"
+            elif cnt_all_4x >= RARE_MIN_COUNT_4X and lift_vs_fp >= RARE_MIN_LIFT:
+                status = "EXPERIMENTAL_RARE"
+            elif cnt_all_4x >= min_episode_count_4x and lift_vs_fp >= 1.0:
+                status = "RESEARCH_ONLY"
+            else:
+                status = "REJECT"
+
+            if status == "EXPERIMENTAL" and (fp_rate or 1.0) < 0.60:
+                recommendation = "add_to_pump_watch"
+            elif status == "EXPERIMENTAL_RARE":
+                recommendation = "needs_more_data"
+            elif status == "RESEARCH_ONLY":
+                recommendation = "keep_research"
+            else:
+                recommendation = "reject"
+
+            # Build a stable signal_id from window + signature (truncated)
+            safe_sig = sig[:50].replace("+", "_").replace("→", "SEQ").replace(" ", "")
+            signal_id = f"DISC_BAR_{source_type}_{safe_sig}"
+
+            results.append({
+                "signal_id":              signal_id,
+                "family":                 _infer_bar_pattern_family(sig),
+                "source_type":            source_type,
+                "window_size":            w,
+                "sequence_signature":     sig,
+                "description":            f"Bar {source_type}: {sig}",
+                "intended_use":           "PUMP_WATCH" if status != "REJECT" else "RESEARCH_ONLY",
+                "machine_conditions":     [f"window_size={w}", f"signature={sig}"],
+                "status":                 status,
+                "recommendation":         recommendation,
+                # Counts
+                "count_missed_4x":        cnt_missed,
+                "count_detected_4x":      cnt_detected,
+                "count_all_4x":           cnt_all_4x,
+                "count_false_positive":   cnt_fp,
+                "count_normal_winner":    cnt_nw,
+                "count_split_artifact":   cnt_art,
+                # Rates
+                "rate_all_4x":            round(rate_4x, 4),
+                "rate_false_positive":    round(rate_fp, 4),
+                "rate_normal_winner":     round(rate_nw, 4),
+                # Lift
+                "lift_vs_false_positive": round(lift_vs_fp, 3),
+                "lift_vs_normal_winner":  round(lift_vs_nw, 3),
+                # Precision / recall
+                "precision_estimate":     round(precision,  4),
+                "recall_all_4x":          round(recall_4x,  4),
+                "false_positive_rate":    fp_rate,
+                # Exposure
+                "split_artifact_exposure": round(cnt_art / max(cnt_all_4x, 1), 4) if cnt_all_4x > 0 else None,
+                "reverse_split_exposure":  None,
+            })
+
+    # Sort: status priority, then lift descending
+    _STATUS_ORDER = {
+        "EXPERIMENTAL": 0, "EXPERIMENTAL_RARE": 1,
+        "RESEARCH_ONLY": 2, "REJECT": 3,
+    }
+    results.sort(key=lambda r: (
+        _STATUS_ORDER.get(r["status"], 9),
+        -(r["lift_vs_false_positive"] or 0),
+    ))
+
+    logger.info(
+        f"mine_bar_patterns: {len(results)} bar candidates | "
+        f"windows={windows} | "
+        f"experimental={sum(1 for r in results if r['status'] in ('EXPERIMENTAL','EXPERIMENTAL_RARE'))}"
+    )
+    return results

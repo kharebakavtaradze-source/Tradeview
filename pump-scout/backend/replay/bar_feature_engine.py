@@ -1,5 +1,6 @@
 """
-Bar Feature Engine — per-bar detailed feature computation.
+Bar Feature Engine — per-bar detailed feature computation + symbolic tagging
+and sequence building for bar-level pattern discovery (V1B).
 
 Consumes sorted OHLCV candles (oldest→newest):
   {"date": str, "open": float, "high": float, "low": float,
@@ -11,6 +12,11 @@ Outcome/label fields are NEVER computed here.
 Usage:
   features = build_bar_features(candles, bar_idx=-1, splits=[])
   dataset  = build_all_bar_features(symbol, candles, splits=[])
+
+Bar-level discovery (V1B):
+  snaps = build_bar_feature_snapshots_for_episode(episode, raw_daily_rows)
+  seqs  = build_bar_sequences(snaps, windows=(1, 2, 3, 5, 10))
+  tags  = bars_to_tags(snap)
 """
 
 import math
@@ -1021,3 +1027,346 @@ def build_pre_window_bar_summary(
         "max_compression_streak":      _max_streak("compression_active"),
         "max_bull_ema_stack_streak":   _max_streak("is_strong_close"),
     }
+
+
+# ── Symbolic tag constants ─────────────────────────────────────────────────────
+
+TAG_STRONG_CLOSE       = "STRONG_CLOSE"
+TAG_WEAK_CLOSE         = "WEAK_CLOSE"
+TAG_LOWER_WICK_RECLAIM = "LOWER_WICK_RECLAIM"
+TAG_GAP_UP             = "GAP_UP"
+TAG_GAP_UP_HOLD        = "GAP_UP_HOLD"
+TAG_GAP_DOWN           = "GAP_DOWN"
+TAG_GAP_DOWN_RECLAIM   = "GAP_DOWN_RECLAIM"
+TAG_EMA50_RECLAIM      = "EMA50_RECLAIM"
+TAG_EMA_BULL_STACK     = "EMA_BULL_STACK"
+TAG_DRYUP              = "DRYUP"
+TAG_VOLUME_SPIKE       = "VOL_SPIKE"
+TAG_DELTA_IGNITION     = "DELTA_IGNITION"
+TAG_DELTA_ABSORPTION   = "DELTA_ABSORPTION"
+TAG_BB_COMPRESSION     = "BB_COMPRESS"
+TAG_EXPANSION          = "EXPANSION"
+TAG_BULL_ENGULF        = "BULL_ENGULF"
+TAG_INSIDE_BAR         = "INSIDE_BAR"
+TAG_RECLAIM_BAR        = "RECLAIM_BAR"
+TAG_WIDE_RANGE         = "WIDE_RANGE"
+TAG_L34                = "L34"
+TAG_NP_SETUP           = "NP_SETUP"
+TAG_NP_TRIGGER         = "NP_TRIGGER"
+TAG_FLAT               = "FLAT"
+
+ALL_TAGS = [
+    TAG_STRONG_CLOSE, TAG_WEAK_CLOSE, TAG_LOWER_WICK_RECLAIM,
+    TAG_GAP_UP, TAG_GAP_UP_HOLD, TAG_GAP_DOWN, TAG_GAP_DOWN_RECLAIM,
+    TAG_EMA50_RECLAIM, TAG_EMA_BULL_STACK,
+    TAG_DRYUP, TAG_VOLUME_SPIKE,
+    TAG_DELTA_IGNITION, TAG_DELTA_ABSORPTION,
+    TAG_BB_COMPRESSION, TAG_EXPANSION,
+    TAG_BULL_ENGULF, TAG_INSIDE_BAR, TAG_RECLAIM_BAR, TAG_WIDE_RANGE,
+    TAG_L34, TAG_NP_SETUP, TAG_NP_TRIGGER,
+]
+
+
+# ── Symbolic tag conversion ────────────────────────────────────────────────────
+
+def bars_to_tags(bar_features: dict) -> list[str]:
+    """
+    Convert a bar feature dict to a sorted list of symbolic tag strings.
+
+    Accepts both build_bar_features() output (with keys like is_strong_close,
+    ema50_reclaim_bar) and build_bar_feature_snapshots_for_episode() snapshots
+    (which map DB column names like strong_close_near_high, dryup_day).
+
+    Returns a deduplicated, sorted list of tag strings.
+    Returns [TAG_FLAT] when no tags apply.
+    """
+    tags: list[str] = []
+
+    # ── Close position ─────────────────────────────────────────────────────────
+    cp = (
+        bar_features.get("close_position_in_range")
+        or bar_features.get("close_position_in_bar")
+        or 0.5
+    )
+    sc = bar_features.get("is_strong_close") or bar_features.get("strong_close_near_high") or (cp >= 0.70)
+    wc = bar_features.get("is_weak_close")   or bar_features.get("weak_close_near_low")   or (cp <= 0.30)
+
+    if sc:
+        tags.append(TAG_STRONG_CLOSE)
+    if wc:
+        tags.append(TAG_WEAK_CLOSE)
+
+    # Lower wick reclaim: strong lower shadow + closes above midpoint
+    lw = bar_features.get("lower_wick_pct") or 0.0
+    if lw >= 0.30 and cp >= 0.50:
+        tags.append(TAG_LOWER_WICK_RECLAIM)
+
+    # ── Gap patterns ───────────────────────────────────────────────────────────
+    gap_pct  = bar_features.get("gap_pct") or 0.0
+    gap_up   = bar_features.get("has_gap_up")   or (gap_pct >= 2.0)
+    gap_down = bar_features.get("has_gap_down") or (gap_pct <= -2.0)
+
+    if gap_up:
+        tags.append(TAG_GAP_UP)
+    if gap_down:
+        tags.append(TAG_GAP_DOWN)
+
+    gap_hold       = bar_features.get("gap_hold")                  or (gap_up and sc)
+    gap_dn_reclaim = (
+        bar_features.get("gap_down_reclaim_same_day")
+        or (gap_down and bar_features.get("close_reclaims_prev_close", False))
+    )
+    if gap_hold:
+        tags.append(TAG_GAP_UP_HOLD)
+    if gap_dn_reclaim:
+        tags.append(TAG_GAP_DOWN_RECLAIM)
+
+    # ── EMA patterns ───────────────────────────────────────────────────────────
+    ema50_rec = (
+        bar_features.get("ema50_reclaim_bar")
+        or bar_features.get("low_below_ema50_close_above")
+    )
+    if ema50_rec:
+        tags.append(TAG_EMA50_RECLAIM)
+
+    if bar_features.get("ema_stack_state") == "BULL":
+        tags.append(TAG_EMA_BULL_STACK)
+
+    # ── Volume / dry-up ────────────────────────────────────────────────────────
+    rvol       = bar_features.get("relative_volume_20d") or bar_features.get("volume_vs_avg20") or 1.0
+    is_dryup   = bar_features.get("is_dryup") or bar_features.get("dryup_day")   or (rvol < 0.5)
+    is_vol_spk = bar_features.get("is_abnormal_volume") or bar_features.get("abnormal_volume_day") or (rvol >= 3.0)
+
+    if is_dryup:
+        tags.append(TAG_DRYUP)
+    if is_vol_spk:
+        tags.append(TAG_VOLUME_SPIKE)
+
+    # ── Delta patterns ─────────────────────────────────────────────────────────
+    if bar_features.get("delta_ignition"):
+        tags.append(TAG_DELTA_IGNITION)
+    if bar_features.get("delta_absorption"):
+        tags.append(TAG_DELTA_ABSORPTION)
+
+    # ── Compression ────────────────────────────────────────────────────────────
+    comp_state  = bar_features.get("compression_state") or ""
+    comp_active = bar_features.get("compression_active") or (comp_state in ("STRONG", "MEDIUM"))
+    if comp_active:
+        tags.append(TAG_BB_COMPRESSION)
+
+    # ── Candle structure ───────────────────────────────────────────────────────
+    if bar_features.get("expansion_bar"):
+        tags.append(TAG_EXPANSION)
+    if bar_features.get("is_bullish_engulfing") or bar_features.get("bullish_engulfing"):
+        tags.append(TAG_BULL_ENGULF)
+    if bar_features.get("is_inside_bar") or bar_features.get("inside_bar"):
+        tags.append(TAG_INSIDE_BAR)
+    if bar_features.get("is_reclaim_bar") or bar_features.get("reclaim_bar"):
+        tags.append(TAG_RECLAIM_BAR)
+    if bar_features.get("is_wide_range") or bar_features.get("wide_range_bar"):
+        tags.append(TAG_WIDE_RANGE)
+
+    # ── Scanner signal context ─────────────────────────────────────────────────
+    if bar_features.get("has_l34"):
+        tags.append(TAG_L34)
+    if bar_features.get("np_is_setup"):
+        tags.append(TAG_NP_SETUP)
+    if bar_features.get("np_is_trigger"):
+        tags.append(TAG_NP_TRIGGER)
+
+    result = sorted(set(tags))
+    return result if result else [TAG_FLAT]
+
+
+# ── Bar snapshot builder (from DB daily rows) ─────────────────────────────────
+
+def build_bar_feature_snapshots_for_episode(
+    episode: dict,
+    raw_daily_rows: list[dict],
+) -> list[dict]:
+    """
+    Build bar feature snapshots from already-computed raw_pattern_daily_features rows.
+
+    Uses DB-stored bar features rather than recomputing from raw candles, so it
+    does NOT require fetching OHLCV from an external API.
+
+    Parameters
+    ----------
+    episode        : episode dict (from raw_pattern_episode_features).
+                     Must contain episode_id (or id), symbol, group_type.
+    raw_daily_rows : rows from raw_pattern_daily_features for this episode.
+                     May include PRE/PUMP/POST phases — only PRE is used.
+                     Rows are sorted by relative_day_from_start ascending
+                     (most negative = oldest = furthest from breakout).
+
+    Returns
+    -------
+    List of snapshot dicts, one per PRE-phase bar, sorted oldest→newest.
+    Each snapshot has OHLCV, days_to_breakout (positive integer),
+    episode_id, group_type, bar feature fields, and symbolic tags.
+
+    Anti-leakage: group_type and episode_id are NOT used as pattern conditions.
+    They are metadata for grouping results during mining only.
+    """
+    episode_id = episode.get("episode_id") or episode.get("id")
+    symbol     = episode.get("symbol") or ""
+    group_type = episode.get("group_type") or "unknown"
+
+    # PRE-phase rows only, sorted oldest→newest (most-negative rel day first)
+    pre_rows = sorted(
+        [r for r in raw_daily_rows if r.get("phase") == "PRE"],
+        key=lambda r: (r.get("relative_day_from_start") or 0),
+    )
+
+    snapshots: list[dict] = []
+    for row in pre_rows:
+        # relative_day_from_start is negative for PRE bars (e.g. -5 = 5 days before breakout)
+        rel_day = row.get("relative_day_from_start") or 0
+        days_to_breakout = abs(rel_day)
+
+        # Overflow features stored as JSON
+        fj: dict = row.get("feature_json") or {}
+        if isinstance(fj, str):
+            import json as _json
+            try:
+                fj = _json.loads(fj)
+            except Exception:
+                fj = {}
+
+        snap: dict = {
+            # Identity
+            "episode_id":       episode_id,
+            "symbol":           symbol,
+            "group_type":       group_type,
+            "date":             row.get("date") or "",
+            # OHLCV
+            "open":             row.get("open"),
+            "high":             row.get("high"),
+            "low":              row.get("low"),
+            "close":            row.get("close"),
+            "volume":           row.get("volume"),
+            "phase":            "PRE",
+            "days_to_breakout": days_to_breakout,
+            # Candle anatomy (from DB columns → normalized names)
+            "close_position_in_range": row.get("close_position_in_bar"),
+            "body_pct":                row.get("body_pct"),
+            "lower_wick_pct":          row.get("lower_wick_pct"),
+            "upper_wick_pct":          row.get("upper_wick_pct"),
+            "gap_pct":                 row.get("gap_pct"),
+            "is_strong_close":         row.get("strong_close_near_high"),
+            "is_weak_close":           row.get("weak_close_near_low"),
+            "is_wide_range":           row.get("wide_range_bar"),
+            "is_narrow_range":         row.get("narrow_range_bar"),
+            "is_bullish_engulfing":    row.get("bullish_engulfing"),
+            "is_inside_bar":           row.get("inside_bar"),
+            "is_outside_bar":          row.get("outside_bar"),
+            "is_reclaim_bar":          row.get("reclaim_bar"),
+            "expansion_bar":           row.get("expansion_bar"),
+            # Volume (DB columns → normalized names)
+            "relative_volume_20d":     row.get("volume_vs_avg20"),
+            "volume_z":                row.get("volume_zscore"),
+            "is_dryup":                row.get("dryup_day"),
+            "is_abnormal_volume":      row.get("abnormal_volume_day"),
+            # Compression / volatility (DB columns)
+            "compression_state":       row.get("compression_state"),
+            "bb_width":                row.get("bb_width"),
+            "ema_spread_pct":          row.get("ema_spread_pct"),
+            # Extras from feature_json (populated by build_bar_features via pump_study_engine)
+            "ema50_reclaim_bar":        fj.get("ema50_reclaim_bar"),
+            "delta_ignition":           fj.get("delta_ignition"),
+            "delta_absorption":         fj.get("delta_absorption"),
+            "has_l34":                  fj.get("has_l34"),
+            "np_is_setup":              fj.get("np_is_setup"),
+            "np_is_trigger":            fj.get("np_is_trigger"),
+            "ema_stack_state":          fj.get("ema_stack_state"),
+            "gap_hold":                 fj.get("gap_hold"),
+            "gap_down_reclaim_same_day": fj.get("gap_down_reclaim_same_day"),
+        }
+
+        snap["tags"]          = bars_to_tags(snap)
+        snap["tag_signature"] = "+".join(snap["tags"])
+
+        snapshots.append(snap)
+
+    return snapshots
+
+
+# ── Bar sequence builder ───────────────────────────────────────────────────────
+
+def build_bar_sequences(
+    bar_snapshots: list[dict],
+    windows: tuple = (1, 2, 3, 5, 10),
+) -> list[dict]:
+    """
+    Build rolling-window sequence features from bar snapshots for one episode.
+
+    Signature encoding by window size:
+      window=1 : the bar's own tag_signature (tags joined by "+")
+      window≤3 : ordered bar signatures joined by "→"  (preserves bar order)
+      window>3  : sorted tag-set across all bars (unordered bag-of-tags)
+
+    Parameters
+    ----------
+    bar_snapshots : list from build_bar_feature_snapshots_for_episode(),
+                    sorted oldest→newest (days_to_breakout descending).
+    windows       : window sizes to generate sequences for.
+
+    Returns
+    -------
+    Flat list of BarSequenceFeature dicts. Every (window_size, position)
+    combination generates one entry. Most-recent windows (nearest breakout)
+    have the smallest days_to_breakout_end values.
+    """
+    if not bar_snapshots:
+        return []
+
+    episode_id = bar_snapshots[0].get("episode_id")
+    symbol     = bar_snapshots[0].get("symbol") or ""
+    group_type = bar_snapshots[0].get("group_type") or ""
+
+    sequences: list[dict] = []
+
+    for w in windows:
+        if len(bar_snapshots) < w:
+            continue
+
+        for start_i in range(len(bar_snapshots) - w + 1):
+            window_bars = bar_snapshots[start_i: start_i + w]
+            bar_tags    = [b["tags"] for b in window_bars]
+            start_date  = window_bars[0].get("date") or ""
+            end_date    = window_bars[-1].get("date") or ""
+            days_start  = window_bars[0].get("days_to_breakout") or 0
+            days_end    = window_bars[-1].get("days_to_breakout") or 0
+
+            # Sequence signature
+            if w == 1:
+                sig = window_bars[0]["tag_signature"]
+            elif w <= 3:
+                # Ordered: each bar's tag_signature separated by →
+                sig = "→".join(b["tag_signature"] for b in window_bars)
+            else:
+                # Unordered bag-of-tags across the window
+                all_tags = sorted(set(t for bt in bar_tags for t in bt))
+                sig = "+".join(all_tags) if all_tags else TAG_FLAT
+
+            # Per-tag count across the window
+            tag_counts: dict[str, int] = {}
+            for bt in bar_tags:
+                for t in bt:
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+
+            sequences.append({
+                "episode_id":             episode_id,
+                "symbol":                 symbol,
+                "group_type":             group_type,
+                "window_size":            w,
+                "start_date":             start_date,
+                "end_date":               end_date,
+                "days_to_breakout_start": days_start,
+                "days_to_breakout_end":   days_end,
+                "sequence_signature":     sig,
+                "bar_tags":               bar_tags,
+                "tag_counts":             tag_counts,
+            })
+
+    return sequences
