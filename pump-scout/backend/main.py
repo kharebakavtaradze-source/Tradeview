@@ -4264,26 +4264,36 @@ async def raw_pattern_discover_results(run_id: int):
 @app.get("/api/replay/raw-pattern-study/{run_id}/discover/export-full")
 async def raw_pattern_discover_export_full(
     run_id: int,
-    include_rejected: bool = True,
+    section: str = "full",
+    include_rejected: Optional[bool] = None,
     top_n: Optional[int] = None,
+    source_type: Optional[str] = None,
+    status: Optional[str] = None,
+    min_4x_ep: Optional[int] = None,
+    max_fp_rate: Optional[float] = None,
+    hide_split_contaminated: Optional[bool] = None,
 ):
     """
-    Full JSON export of a raw-pattern-study run including all Pattern Discovery results.
+    Sectioned JSON export of Pattern Discovery results for a run.
 
-    Designed for ChatGPT analysis — contains everything in one file:
-    run metadata, all episodes (with pump_watch fields), all discovered patterns
-    (accepted + rejected with reject reasons), source-type breakdown, ranking
-    tables (top by lift / missed 4x / reliability / source type), split
-    contamination summary, bar-sequence stats, registry snapshot.
+    Sections (default: full):
+      compact   — ChatGPT-optimised: accepted only, sample episodes, key fields
+      summary   — Metadata + stats only, no patterns list
+      accepted  — All accepted patterns with full detail, no episodes
+      rankings  — Ranking tables only (top_lift / top_missed / top_reliability / by_source_type)
+      episodes  — Episode list with pump_watch fields, no patterns
+      patterns  — All patterns (accepted + rejected) without episode data
+      rejected  — Rejected patterns only with reject_reason
+      full      — Everything (may be large)
 
-    Query params:
-      include_rejected=true  — include REJECT-status patterns (default true)
-      top_n=N                — limit ranking table rows (default: all)
-
-    Filename: raw-pattern-run-{run_id}-discovery-full.json
+    Filename: raw-pattern-run-{run_id}-discovery-{section}.json
     """
     from database import get_raw_pattern_run
     from replay.pattern_discovery_engine import build_discovery_export
+
+    _VALID_SECTIONS = {"compact", "summary", "accepted", "rankings", "episodes", "patterns", "rejected", "full"}
+    if section not in _VALID_SECTIONS:
+        raise HTTPException(400, detail=f"Invalid section '{section}'. Valid: {sorted(_VALID_SECTIONS)}")
 
     run = await get_raw_pattern_run(run_id)
     if not run:
@@ -4292,19 +4302,25 @@ async def raw_pattern_discover_export_full(
     try:
         payload = await build_discovery_export(
             run_id,
+            section=section,
             include_rejected=include_rejected,
             top_n=top_n,
+            source_type_filter=source_type,
+            status_filter=status,
+            min_4x_ep=min_4x_ep,
+            max_fp_rate=max_fp_rate,
+            hide_split_contaminated=hide_split_contaminated,
         )
     except Exception as exc:
-        logger.exception("discover_export_full run_id=%s failed", run_id)
+        logger.exception("discover_export_full run_id=%s section=%s failed", run_id, section)
         raise HTTPException(500, detail=str(exc))
 
     content = json.dumps(payload, default=str)
+    filename = f"raw-pattern-run-{run_id}-discovery-{section}.json"
     return StreamingResponse(
         iter([content]),
         media_type="application/json",
-        headers={"Content-Disposition":
-                 f'attachment; filename="raw-pattern-run-{run_id}-discovery-full.json"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
