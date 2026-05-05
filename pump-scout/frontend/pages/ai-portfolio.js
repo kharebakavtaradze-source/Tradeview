@@ -320,14 +320,30 @@ export default function AIPortfolio() {
   const closedPositions = allPositions.filter(p => p.status === 'CLOSED').slice(0, 15);
   const portfolioHistory = history.history || [];
 
-  const totalValue = Number(state?.total_value) || 2000;
+  const cash = Number(state?.cash) || 0;
   const baseline = Number(state?.baseline_value) || 2000;
-  // Always compute P&L from live values so it's correct regardless of stored total_pnl_pct
-  const totalPnl = totalValue > 0 && baseline > 0
+
+  // Compute live position value from current_price/shares so the display is
+  // accurate without waiting for the next DB update_portfolio_state() call.
+  const posLiveValue = positions.reduce((s, p) => {
+    const price = p.current_price || p.entry_price;
+    const shares = p.shares;
+    if (price && shares) return s + price * shares;
+    return s + (p.current_value || p.invested_usd || 0);
+  }, 0);
+
+  // Prefer the live computation; fall back to stored total_value only when
+  // there are no open positions (e.g. all-cash portfolio without a run today).
+  const totalValue = positions.length > 0
+    ? cash + posLiveValue
+    : (Number(state?.total_value) || baseline);
+
+  const invested = posLiveValue;
+
+  // P&L % is always computed from live values
+  const totalPnl = baseline > 0
     ? parseFloat(((totalValue - baseline) / baseline * 100).toFixed(2))
     : 0;
-  const cash = state?.cash || 0;
-  const invested = state?.invested || 0;
 
   // AI portfolio closed trade stats
   const closedPnls = closedPositions.map(p => p.pnl_pct || 0);
