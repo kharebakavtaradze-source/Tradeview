@@ -1078,3 +1078,169 @@
 }
 .modalDeleteBtn:hover { background: rgba(239,68,68,0.22); }
 .modalDeleteBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Pattern Discovery Panel ─────────────────────────────────────────────── */
+
+.discoveryPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.discoveryControls {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+}
+
+.discoveryControlsTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.discoveryNote {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.discoveryRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.discoveryField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.discoveryLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.discoverySelect {
+  background: var(--surface1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 8px;
+  cursor: pointer;
+  min-width: 200px;
+}
+.discoverySelect:focus { outline: none; border-color: var(--accent-border); }
+.discoverySelect:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.windowCheckboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.windowCheckLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.windowCheckLabel input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.windowCheckLabel input[type="checkbox"]:disabled { cursor: not-allowed; }
+
+.discoveryRefreshBtn {
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast);
+}
+.discoveryRefreshBtn:hover { color: var(--text); border-color: var(--accent-border); }
+.discoveryRefreshBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.discoveryStatus {
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.discoveryStatusRunning {
+  border-color: var(--cyan, #22d3ee);
+  background: rgba(34, 211, 238, 0.06);
+  color: var(--cyan, #22d3ee);
+}
+
+.discoveryStatusComplete {
+  border-color: var(--lime, #86efac);
+  background: rgba(134, 239, 172, 0.06);
+  color: var(--lime, #86efac);
+}
+
+.discoveryStatusError {
+  border-color: var(--red, #ef4444);
+  background: rgba(239, 68, 68, 0.06);
+  color: var(--red, #ef4444);
+}
+
+.discoverySummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.discoverySummaryCard {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  min-width: 100px;
+  text-align: center;
+}
+
+.discoverySummaryVal {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.discoverySummaryLabel {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.discoveryWarning {
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid var(--amber, #fbbf24);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  font-size: 11px;
+  color: var(--amber, #fbbf24);
+  line-height: 1.5;
+}
