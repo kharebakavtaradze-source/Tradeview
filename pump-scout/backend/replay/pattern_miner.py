@@ -595,6 +595,7 @@ def _evaluate_pattern(
 
     return {
         "signal_id":              pattern_def["signal_id"],
+        "source_type":            "EPISODE_AGGREGATE",
         "family":                 pattern_def["family"],
         "description":            pattern_def["description"],
         "intended_use":           pattern_def.get("intended_use", "RESEARCH_ONLY"),

@@ -1693,6 +1693,17 @@ const SOURCE_TYPE_LABELS = {
   TEN_BAR_CONTEXT:    'Ten-Bar Context',
   EPISODE_AGGREGATE:  'Episode Agg',
 };
+
+function normalizeSourceType(sourceType, signalId) {
+  if (sourceType && sourceType !== 'EPISODE_AGGREGATE') return sourceType;
+  if (!signalId) return 'EPISODE_AGGREGATE';
+  if (signalId.startsWith('DISC_BAR_TEN_BAR_CONTEXT_'))    return 'TEN_BAR_CONTEXT';
+  if (signalId.startsWith('DISC_BAR_THREE_BAR_SEQUENCE_')) return 'THREE_BAR_SEQUENCE';
+  if (signalId.startsWith('DISC_BAR_TWO_BAR_SEQUENCE_'))   return 'TWO_BAR_SEQUENCE';
+  if (signalId.startsWith('DISC_BAR_FIVE_BAR_SEQUENCE_'))  return 'FIVE_BAR_SEQUENCE';
+  if (signalId.startsWith('DISC_BAR_SINGLE_BAR_'))         return 'SINGLE_BAR';
+  return sourceType || 'EPISODE_AGGREGATE';
+}
 const STATUS_COLOR = {
   EXPERIMENTAL:      'var(--lime)',
   EXPERIMENTAL_RARE: 'var(--cyan)',
@@ -1704,7 +1715,7 @@ function fmtPct(v) { return v == null ? '—' : `${(Number(v) * 100).toFixed(1)}
 function fmtLift(v) { return v == null ? '—' : `${Number(v).toFixed(2)}×`; }
 
 function PatternRow({ p }) {
-  const st = p.source_type || 'EPISODE_AGGREGATE';
+  const st = normalizeSourceType(p.source_type, p.signal_id);
   return (
     <tr>
       <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 9 }}>
@@ -1849,7 +1860,7 @@ function PatternDiscoveryPanel({ runId }) {
   const patterns = results?.patterns || [];
   const bySourceType = {};
   for (const p of patterns) {
-    const st = p.source_type || 'EPISODE_AGGREGATE';
+    const st = normalizeSourceType(p.source_type, p.signal_id);
     (bySourceType[st] = bySourceType[st] || []).push(p);
   }
 
@@ -2193,7 +2204,7 @@ function AllPatternsTable({ patterns }) {
               {rejected.length === 0
                 ? <tr><td colSpan={8} className={styles.dataCell} style={{ color: 'var(--text-muted)', textAlign: 'center' }}>No rejected patterns.</td></tr>
                 : rejected.map((p, i) => {
-                    const st = p.source_type || 'EPISODE_AGGREGATE';
+                    const st = normalizeSourceType(p.source_type, p.signal_id);
                     const reason = _rejectReason(p);
                     return (
                       <tr key={p.signal_id || i}>

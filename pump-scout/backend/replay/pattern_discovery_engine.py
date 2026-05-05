@@ -208,6 +208,7 @@ async def _persist_pattern_candidates(run_id: int, candidates: list[dict]) -> in
         rows.append({
             "run_id":                  run_id,
             "signal_id":               c.get("signal_id"),
+            "source_type":             c.get("source_type", "EPISODE_AGGREGATE"),
             "family":                  c.get("family"),
             "status":                  c.get("status"),
             "intended_use":            c.get("intended_use"),
