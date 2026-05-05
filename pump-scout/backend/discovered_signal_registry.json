@@ -532,8 +532,12 @@
       "bar_tags contains WIDE_RANGE"
     ],
     "required_fields": [],
-    "forbidden_fields": ["split_artifact_risk"],
-    "source_run_ids": [103],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
     "discovery_date": "2026-05-05",
     "last_run_id": 103,
     "last_updated": "2026-05-05",
@@ -568,8 +572,12 @@
       "sequence_signature contains WEAK_CLOSE"
     ],
     "required_fields": [],
-    "forbidden_fields": ["split_artifact_risk"],
-    "source_run_ids": [103],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
     "discovery_date": "2026-05-05",
     "last_run_id": 103,
     "last_updated": "2026-05-05",
@@ -578,7 +586,7 @@
     "sample_count_normal_winner": 0,
     "lift_vs_false_positive": 3.0,
     "false_positive_rate": 0.0667,
-    "split_artifact_exposure": 0.10,
+    "split_artifact_exposure": 0.1,
     "reverse_split_exposure": null,
     "precision_estimate": null,
     "recall_all_4x": null,
@@ -606,8 +614,12 @@
       "sequence_signature contains WIDE_RANGE"
     ],
     "required_fields": [],
-    "forbidden_fields": ["split_artifact_risk"],
-    "source_run_ids": [103],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
     "discovery_date": "2026-05-05",
     "last_run_id": 103,
     "last_updated": "2026-05-05",
@@ -638,8 +650,12 @@
       "bar_tags contains STRONG_CLOSE"
     ],
     "required_fields": [],
-    "forbidden_fields": ["split_artifact_risk"],
-    "source_run_ids": [103],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
     "discovery_date": "2026-05-05",
     "last_run_id": 103,
     "last_updated": "2026-05-05",
@@ -670,8 +686,12 @@
       "bar_2_tags contains WEAK_CLOSE"
     ],
     "required_fields": [],
-    "forbidden_fields": ["split_artifact_risk"],
-    "source_run_ids": [103],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
     "discovery_date": "2026-05-05",
     "last_run_id": 103,
     "last_updated": "2026-05-05",
@@ -703,8 +723,14 @@
       "clv > 0.4",
       "TAG_GAP_DOWN_RECLAIM_FLOW in flow_tags"
     ],
-    "required_fields": ["gap_pct", "clv", "flow_tags"],
-    "forbidden_fields": ["split_artifact_risk"],
+    "required_fields": [
+      "gap_pct",
+      "clv",
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
     "source_run_ids": [],
     "discovery_date": "2026-05-05",
     "last_run_id": null,
@@ -735,8 +761,12 @@
       "TAG_LOWER_WICK_ABSORPTION in flow_tags",
       "TAG_BUY_PRESSURE_HIGH in flow_tags"
     ],
-    "required_fields": ["flow_tags"],
-    "forbidden_fields": ["split_artifact_risk"],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
     "source_run_ids": [],
     "discovery_date": "2026-05-05",
     "last_run_id": null,
@@ -767,8 +797,12 @@
       "TAG_EFFORT_RESULT_BULL in flow_tags",
       "TAG_CLOSE_HIGH in flow_tags"
     ],
-    "required_fields": ["flow_tags"],
-    "forbidden_fields": ["split_artifact_risk"],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
     "source_run_ids": [],
     "discovery_date": "2026-05-05",
     "last_run_id": null,
@@ -799,8 +833,12 @@
       "bar[-2]: TAG_LOW_EFFORT_HIGH_RESULT or small volume",
       "bar[-1]: TAG_DELTA_PROXY_BULL in flow_tags"
     ],
-    "required_fields": ["flow_tags"],
-    "forbidden_fields": ["split_artifact_risk"],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
     "source_run_ids": [],
     "discovery_date": "2026-05-05",
     "last_run_id": null,
@@ -831,8 +869,12 @@
       "TAG_CMF_TURN_UP in flow_tags",
       "TAG_CMF_POSITIVE in flow_tags"
     ],
-    "required_fields": ["flow_tags"],
-    "forbidden_fields": ["split_artifact_risk"],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
     "source_run_ids": [],
     "discovery_date": "2026-05-05",
     "last_run_id": null,
@@ -862,8 +904,12 @@
     "machine_conditions": [
       "TAG_OBV_ACCUM_3D in flow_tags"
     ],
-    "required_fields": ["flow_tags"],
-    "forbidden_fields": ["split_artifact_risk"],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
     "source_run_ids": [],
     "discovery_date": "2026-05-05",
     "last_run_id": null,
@@ -894,8 +940,12 @@
       "bar[-2]: TAG_UPPER_WICK_SUPPLY in flow_tags",
       "bar[-1]: TAG_LOWER_WICK_ABSORPTION in flow_tags"
     ],
-    "required_fields": ["flow_tags"],
-    "forbidden_fields": ["split_artifact_risk"],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
     "source_run_ids": [],
     "discovery_date": "2026-05-05",
     "last_run_id": null,
@@ -910,6 +960,212 @@
     "precision_estimate": null,
     "recall_all_4x": null,
     "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_STRESS_PREP_1B",
+    "signal_name": "PX_FLOW_STRESS_PREP_1B",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_BEARISH_STRESS",
+    "status": "EXPERIMENTAL",
+    "intended_use": "PUMP_WATCH_CONTEXT",
+    "description": "Single-bar bearish stress: ADL distribution + OBV distribution + CMF negative + upper-wick supply. Signals active supply/distribution overhead.",
+    "human_readable_definition": "Single-bar signature with 3+ bearish flow tags: ADL_DISTRIB_3D (ADL trending down), OBV_DISTRIB_3D (OBV trending down), CMF_NEGATIVE (Chaikin MF negative), UPPER_WICK_SUPPLY (large upper wick with negative CLV). OHLCV-proxy for concentrated supply pressure. NOT true bid/ask flow. Use as PUMP_WATCH context for active distribution overhead \u2014 do NOT route to BUY.",
+    "machine_conditions": [
+      "signature=ADL_DISTRIB_3D+CMF_NEGATIVE+OBV_DISTRIB_3D+UPPER_WICK_SUPPLY",
+      "feature_family=FLOW",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      137
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 137,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 10,
+    "sample_count_false_positive": null,
+    "sample_count_normal_winner": null,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": 0.222,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "reliability_score_estimate": 0.7046,
+    "notes": "Run 137: cnt_4x=10, fpr=22.2%, reliability\u22480.70. EXPERIMENTAL \u2014 confirmed in run 137. Do NOT add direct FLOW score boost. Do NOT route to BUY. PUMP_WATCH context: active overhead supply/distribution. flow_subtype=FLOW_BEARISH_STRESS. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_ADL_OBV_DIVERGENCE_1B",
+    "signal_name": "PX_FLOW_ADL_OBV_DIVERGENCE_1B",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_DIVERGENCE",
+    "status": "EXPERIMENTAL",
+    "intended_use": "PUMP_WATCH_CONTEXT",
+    "description": "ADL/OBV divergence: ADL accumulating while OBV distributing. Hidden accumulation despite surface selling.",
+    "human_readable_definition": "Single-bar signature: ADL_ACCUM_3D (ADL trending up \u2014 net money-flow positive) co-occurring with OBV_DISTRIB_3D (OBV trending down \u2014 on-balance volume declining). Classic accumulation divergence: smart money accumulating on upticks while broader volume is net-selling. OHLCV proxy only. NOT true bid/ask flow. Use as PUMP_WATCH context for hidden accumulation \u2014 do NOT route to BUY.",
+    "machine_conditions": [
+      "signature=ADL_ACCUM_3D+OBV_DISTRIB_3D",
+      "feature_family=FLOW",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      137
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 137,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 9,
+    "sample_count_false_positive": null,
+    "sample_count_normal_winner": null,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": 0.148,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "reliability_score_estimate": 0.6907,
+    "notes": "Run 137: cnt_4x=9, fpr=14.8%, reliability\u22480.69. EXPERIMENTAL \u2014 confirmed in run 137. Do NOT add direct FLOW score boost. Do NOT route to BUY. PUMP_WATCH context: hidden accumulation divergence. flow_subtype=FLOW_DIVERGENCE. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_BEAR_PRESSURE_RECLAIM_WATCH",
+    "signal_name": "PX_FLOW_BEAR_PRESSURE_RECLAIM_WATCH",
+    "family": "F",
+    "source_type": "TWO_BAR_SEQUENCE",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_ABSORPTION",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Bear pressure followed by reclaim bar: selling pressure absorbed then price reclaims. Watch for failed distribution.",
+    "human_readable_definition": "Two-bar sequence: first bar has bearish flow characteristics (OBV_DISTRIB_3D or CMF_NEGATIVE), second bar shows reclaim (BUY_PRESSURE_HIGH or ADL_ACCUM_3D or CLOSE_HIGH). Candidate for failed distribution / demand absorption pattern. OHLCV proxy only. NOT true bid/ask flow. RESEARCH_ONLY \u2014 not confirmed in live runs.",
+    "machine_conditions": [
+      "bar[-2]: OBV_DISTRIB_3D or CMF_NEGATIVE in flow_tags",
+      "bar[-1]: BUY_PRESSURE_HIGH or ADL_ACCUM_3D in flow_tags",
+      "feature_family=FLOW",
+      "source_type=TWO_BAR_SEQUENCE"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY seed pattern \u2014 not yet confirmed in any run. Watch for failed distribution with demand absorption. Do NOT add direct FLOW score boost. Do NOT route to BUY. flow_subtype=FLOW_ABSORPTION. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_ABSORPTION_WATCH",
+    "signal_name": "PX_FLOW_ABSORPTION_WATCH",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_ABSORPTION",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Accumulation absorption: ADL accumulating with positive CLV or signed volume, despite surface selling pressure.",
+    "human_readable_definition": "Single-bar: ADL_ACCUM_3D (net money-flow positive) co-occurring with CLV_POSITIVE or SIGNED_VOL_POSITIVE (close-location or volume-weighted positive), while any bearish tag is also present (UPPER_WICK_SUPPLY or CLOSE_LOW). Wyckoff absorption proxy: demand soaking up supply. OHLCV proxy only. NOT true bid/ask flow. RESEARCH_ONLY.",
+    "machine_conditions": [
+      "ADL_ACCUM_3D in flow_tags",
+      "CLV_POSITIVE or SIGNED_VOL_POSITIVE in flow_tags",
+      "UPPER_WICK_SUPPLY or CLOSE_LOW in flow_tags",
+      "feature_family=FLOW",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY seed pattern \u2014 not yet confirmed in any run. Wyckoff absorption proxy. Do NOT add direct FLOW score boost. Do NOT route to BUY. flow_subtype=FLOW_ABSORPTION. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_COMBINED_DRYUP_FLOW_STRESS_1B",
+    "signal_name": "PX_COMBINED_DRYUP_FLOW_STRESS_1B",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "COMBINED",
+    "flow_subtype": "FLOW_BEARISH_STRESS",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "PUMP_WATCH_CONTEXT",
+    "description": "Combined price-action + flow: dryup/compression bar with bearish flow stress tags. Pre-pump stress context.",
+    "human_readable_definition": "Single-bar combined signature: price-action dryup/compression tag (DRYUP or COMPRESSION or LOW_VOL) co-occurring with bearish flow tags (ADL_DISTRIB_3D or OBV_DISTRIB_3D or CMF_NEGATIVE). Represents the tension between volume compression and distribution pressure typical in pre-pump setups with overhead supply. COMBINED feature family: OHLCV price-action + OHLCV flow proxy. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "DRYUP or COMPRESSION or LOW_VOL in bar_tags",
+      "ADL_DISTRIB_3D or OBV_DISTRIB_3D or CMF_NEGATIVE in flow_tags",
+      "feature_family=COMBINED",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags",
+      "bar_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY seed pattern \u2014 not yet confirmed in any run. COMBINED feature family: dryup/compression + bearish flow stress. PUMP_WATCH context for pre-pump overhead supply detection. Do NOT add direct score boost. Do NOT route to BUY. flow_subtype=FLOW_BEARISH_STRESS. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
     "replay_status": "NOT_TESTED"
   }
 ]
