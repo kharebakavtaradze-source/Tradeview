@@ -4261,6 +4261,53 @@ async def raw_pattern_discover_results(run_id: int):
         raise HTTPException(500, detail=str(exc))
 
 
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/export-full")
+async def raw_pattern_discover_export_full(
+    run_id: int,
+    include_rejected: bool = True,
+    top_n: Optional[int] = None,
+):
+    """
+    Full JSON export of a raw-pattern-study run including all Pattern Discovery results.
+
+    Designed for ChatGPT analysis — contains everything in one file:
+    run metadata, all episodes (with pump_watch fields), all discovered patterns
+    (accepted + rejected with reject reasons), source-type breakdown, ranking
+    tables (top by lift / missed 4x / reliability / source type), split
+    contamination summary, bar-sequence stats, registry snapshot.
+
+    Query params:
+      include_rejected=true  — include REJECT-status patterns (default true)
+      top_n=N                — limit ranking table rows (default: all)
+
+    Filename: raw-pattern-run-{run_id}-discovery-full.json
+    """
+    from database import get_raw_pattern_run
+    from replay.pattern_discovery_engine import build_discovery_export
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    try:
+        payload = await build_discovery_export(
+            run_id,
+            include_rejected=include_rejected,
+            top_n=top_n,
+        )
+    except Exception as exc:
+        logger.exception("discover_export_full run_id=%s failed", run_id)
+        raise HTTPException(500, detail=str(exc))
+
+    content = json.dumps(payload, default=str)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="raw-pattern-run-{run_id}-discovery-full.json"'},
+    )
+
+
 @app.get("/api/replay/raw-pattern-study/{run_id}/pump-watch")
 async def raw_pattern_pump_watch(
     run_id: int,
