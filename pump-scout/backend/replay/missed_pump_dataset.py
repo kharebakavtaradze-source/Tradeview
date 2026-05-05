@@ -40,6 +40,9 @@ def _classify_episode_group(ep: dict) -> str:
     if gt == "normal_winner":
         return "normal_winner"
 
+    if gt == "missed_mover":
+        return "normal_winner"
+
     return "unknown"
 
 

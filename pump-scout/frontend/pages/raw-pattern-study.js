@@ -1971,17 +1971,35 @@ function PatternDiscoveryPanel({ runId }) {
           isRunning   ? styles.discoveryStatusRunning  :
           isComplete  ? styles.discoveryStatusComplete : ''
         }`}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             {isRunning && <span className={styles.pulsingDot} />}
             <span style={{ fontWeight: 600 }}>
               {isRunning ? (PHASE_LABEL[phase] || phase) : isComplete ? 'Discovery complete' : hasError ? 'Discovery failed' : phase || 'idle'}
             </span>
-            {isRunning && status.episodes > 0 && (
+            {status.episodes > 0 && (
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                {status.episodes} episodes · {status.episodes_scored} scored · {status.patterns_evaluated} episode patterns · {status.bar_patterns_evaluated} bar patterns
+                {status.episodes} episodes · {status.episodes_scored} scored · {status.patterns_evaluated} ep-patterns · {status.bar_patterns_evaluated} bar-patterns · {status.patterns_saved} saved
               </span>
             )}
           </div>
+          {/* Group classification debug */}
+          {status.group_counts && Object.keys(status.group_counts).length > 0 && (
+            <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10, color: 'var(--text-muted)' }}>
+              {Object.entries(status.group_counts).map(([g, n]) => (
+                <span key={g} style={{ fontFamily: 'var(--font-mono)' }}>
+                  <span style={{ color: n === 0 ? 'var(--red)' : 'inherit' }}>{g}</span>={n}
+                </span>
+              ))}
+              {(status.pre_daily_rows_loaded > 0 || status.bar_snapshots_created > 0) && (
+                <>
+                  <span style={{ color: 'var(--border)' }}>|</span>
+                  <span>daily_rows={status.pre_daily_rows_loaded}</span>
+                  <span>snapshots={status.bar_snapshots_created}</span>
+                  <span>sequences={status.bar_sequences_created}</span>
+                </>
+              )}
+            </div>
+          )}
           {hasError && status.error && (
             <div className={styles.errorMsg} style={{ marginTop: 6 }}>{status.error}</div>
           )}
@@ -2028,6 +2046,7 @@ function PatternDiscoveryPanel({ runId }) {
               { id: 'top-lift',   label: 'Top by Lift' },
               { id: 'top-missed', label: 'Top by Missed 4x' },
               { id: 'by-type',    label: 'By Source Type' },
+              { id: 'all',        label: `All (${patterns.length})` },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -2060,6 +2079,11 @@ function PatternDiscoveryPanel({ runId }) {
                 />
               ))}
             </div>
+          )}
+
+          {/* All patterns including REJECT */}
+          {resTab === 'all' && (
+            <AllPatternsTable patterns={patterns} />
           )}
         </>
       )}
@@ -2100,6 +2124,110 @@ function PatternTable({ title, rows }) {
             {rows.map((p, i) => <PatternRow key={p.signal_id || i} p={p} />)}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function _rejectReason(p) {
+  if (p.status !== 'REJECT') return null;
+  if ((p.count_all_4x || 0) < 2) return 'low_count';
+  if ((p.lift_vs_false_positive || 0) < 1.0) return 'low_lift';
+  return 'unknown';
+}
+
+function AllPatternsTable({ patterns }) {
+  const sorted = [...patterns].sort((a, b) => {
+    const sOrder = { EXPERIMENTAL: 0, EXPERIMENTAL_RARE: 1, RESEARCH_ONLY: 2, REJECT: 3 };
+    const sd = (sOrder[a.status] ?? 9) - (sOrder[b.status] ?? 9);
+    if (sd !== 0) return sd;
+    return (b.lift_vs_false_positive || 0) - (a.lift_vs_false_positive || 0);
+  });
+
+  const accepted = sorted.filter(p => p.status !== 'REJECT');
+  const rejected = sorted.filter(p => p.status === 'REJECT');
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className={styles.tableCard}>
+        <div className={styles.tableHeader}>
+          <span className={styles.tableTitle}>Accepted Patterns ({accepted.length})</span>
+          <span className={styles.tableHint}>EXPERIMENTAL / EXPERIMENTAL_RARE / RESEARCH_ONLY</span>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className={styles.historyTable} style={{ width: '100%' }}>
+            <thead>
+              <tr className={styles.historyHead}>
+                <th>Signal ID</th><th>Source</th><th>Status</th>
+                <th>Lift vs FP</th><th>4x Ep</th><th>Missed</th>
+                <th>FP Rate</th><th>Recommendation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accepted.length === 0
+                ? <tr><td colSpan={8} className={styles.dataCell} style={{ color: 'var(--red)', textAlign: 'center' }}>No accepted patterns — all patterns were rejected.</td></tr>
+                : accepted.map((p, i) => <PatternRow key={p.signal_id || i} p={p} />)
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className={styles.tableCard}>
+        <div className={styles.tableHeader}>
+          <span className={styles.tableTitle} style={{ color: 'var(--red)' }}>
+            Rejected Patterns ({rejected.length})
+          </span>
+          <span className={styles.tableHint}>REJECT — shown for debug visibility</span>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className={styles.historyTable} style={{ width: '100%' }}>
+            <thead>
+              <tr className={styles.historyHead}>
+                <th>Signal ID</th><th>Source</th><th>Reject Reason</th>
+                <th>Lift vs FP</th><th>4x Ep</th><th>FP Ep</th>
+                <th>NW Ep</th><th>Description / Signature</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rejected.length === 0
+                ? <tr><td colSpan={8} className={styles.dataCell} style={{ color: 'var(--text-muted)', textAlign: 'center' }}>No rejected patterns.</td></tr>
+                : rejected.map((p, i) => {
+                    const st = p.source_type || 'EPISODE_AGGREGATE';
+                    const reason = _rejectReason(p);
+                    return (
+                      <tr key={p.signal_id || i}>
+                        <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 9 }}>{p.signal_id}</td>
+                        <td className={styles.dataCell} style={{ fontSize: 9 }}>
+                          <span style={{ border: '1px solid var(--border)', borderRadius: 3, padding: '1px 4px', fontSize: 8 }}>
+                            {SOURCE_TYPE_LABELS[st] || st}
+                          </span>
+                        </td>
+                        <td className={styles.dataCell}>
+                          <span style={{ fontSize: 9, fontWeight: 600, color: 'var(--red)' }}>{reason}</span>
+                        </td>
+                        <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                          {fmtLift(p.lift_vs_false_positive)}
+                        </td>
+                        <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                          {p.count_all_4x ?? '—'}
+                        </td>
+                        <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                          {p.count_false_positive ?? '—'}
+                        </td>
+                        <td className={styles.dataCell} style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                          {p.count_normal_winner ?? '—'}
+                        </td>
+                        <td className={styles.dataCell} style={{ fontSize: 10, maxWidth: 260, color: 'var(--text-dim)' }}>
+                          {p.description || p.sequence_signature || '—'}
+                        </td>
+                      </tr>
+                    );
+                  })
+              }
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
