@@ -51,14 +51,19 @@ _discovery_progress: dict = {
     "pre_daily_rows_loaded": 0,
     "bar_snapshots_created": 0,
     "bar_sequences_created": 0,
+    "flow_sequences_created": 0,
+    "combined_sequences_created": 0,
     "patterns_evaluated": 0,
     "patterns_experimental": 0,
     "bar_patterns_evaluated": 0,
     "bar_patterns_experimental": 0,
+    "flow_patterns_evaluated": 0,
+    "combined_patterns_evaluated": 0,
     "patterns_rejected_low_count": 0,
     "patterns_rejected_low_lift": 0,
     "patterns_saved": 0,
     "episodes_scored": 0,
+    "flow_tag_counts": {},
     "error":      None,
     "started_at": None,
     "finished_at": None,
@@ -210,6 +215,7 @@ async def _persist_pattern_candidates(run_id: int, candidates: list[dict]) -> in
             "run_id":                  run_id,
             "signal_id":               c.get("signal_id"),
             "source_type":             c.get("source_type", "EPISODE_AGGREGATE"),
+            "feature_family":          c.get("feature_family"),
             "family":                  c.get("family"),
             "status":                  c.get("status"),
             "intended_use":            c.get("intended_use"),
@@ -247,11 +253,14 @@ async def _run_bar_sequence_pipeline(
     run_id: int,
     dataset: dict,
     windows: tuple,
+    include_flow: bool = False,
+    include_combined: bool = False,
 ) -> tuple[list[dict], dict]:
     """
     Load daily bar rows, build snapshots + sequences, mine bar patterns.
 
-    Returns (bar_candidates, bar_sequences_by_group).
+    Returns (all_bar_candidates, bar_sequences_by_group).
+    bar_sequences_by_group uses price-action sequences (backward compat).
     """
     from database import get_raw_pattern_daily_features
     from replay.bar_feature_engine import (
@@ -266,7 +275,6 @@ async def _run_bar_sequence_pipeline(
     all_daily = await get_raw_pattern_daily_features(
         run_id=run_id, phase="PRE", limit=200_000
     )
-
     _discovery_progress["pre_daily_rows_loaded"] = len(all_daily)
 
     # Group by episode_id for fast lookup
@@ -283,13 +291,18 @@ async def _run_bar_sequence_pipeline(
 
     _discovery_progress["phase"] = "BUILDING_BAR_SEQUENCES"
 
-    # Build sequences per group
     _GROUPS = ["missed_4x_pump", "detected_4x_pump", "false_positive",
                "normal_winner", "split_artifact"]
 
-    bar_sequences_by_group: dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    # Build price-action sequences (V1B) — always
+    bar_sequences_by_group:      dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    flow_sequences_by_group:     dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    combined_sequences_by_group: dict[str, list[dict]] = {g: [] for g in _GROUPS}
 
     total_snapshots = 0
+    # Accumulate flow tag counts for debug
+    flow_tag_counts: dict[str, int] = {}
+
     for grp in _GROUPS:
         episodes = dataset.get(grp) or []
         for ep in episodes:
@@ -297,37 +310,90 @@ async def _run_bar_sequence_pipeline(
             daily_rows = daily_by_episode.get(ep_id, [])
             if not daily_rows:
                 continue
+            # build_bar_feature_snapshots_for_episode now also calls build_bar_flow_features
             snaps = build_bar_feature_snapshots_for_episode(ep, daily_rows)
             if not snaps:
                 continue
             total_snapshots += len(snaps)
-            seqs = build_bar_sequences(snaps, windows=windows)
-            bar_sequences_by_group[grp].extend(seqs)
 
-    total_sequences = sum(len(v) for v in bar_sequences_by_group.values())
-    _discovery_progress["bar_snapshots_created"] = total_snapshots
-    _discovery_progress["bar_sequences_created"] = total_sequences
+            # Price-action sequences (V1B)
+            seqs_price = build_bar_sequences(snaps, windows=windows, tag_mode="price")
+            bar_sequences_by_group[grp].extend(seqs_price)
+
+            # Flow sequences (V1C)
+            if include_flow or include_combined:
+                seqs_flow = build_bar_sequences(snaps, windows=windows, tag_mode="flow")
+                flow_sequences_by_group[grp].extend(seqs_flow)
+
+            # Combined sequences (V1B + V1C)
+            if include_combined:
+                seqs_combined = build_bar_sequences(snaps, windows=windows, tag_mode="combined")
+                combined_sequences_by_group[grp].extend(seqs_combined)
+
+            # Collect flow tag counts for debug
+            for snap in snaps:
+                for t in (snap.get("flow_tags") or []):
+                    flow_tag_counts[t] = flow_tag_counts.get(t, 0) + 1
+
+    total_seq    = sum(len(v) for v in bar_sequences_by_group.values())
+    total_flow   = sum(len(v) for v in flow_sequences_by_group.values())
+    total_comb   = sum(len(v) for v in combined_sequences_by_group.values())
+    _discovery_progress["bar_snapshots_created"]     = total_snapshots
+    _discovery_progress["bar_sequences_created"]     = total_seq
+    _discovery_progress["flow_sequences_created"]    = total_flow
+    _discovery_progress["combined_sequences_created"] = total_comb
+    _discovery_progress["flow_tag_counts"]           = flow_tag_counts
+
     logger.info(
-        f"[DISCOVERY/V1B] run={run_id}: {total_snapshots} bar snapshots, "
-        f"{total_sequences} sequences built"
+        f"[DISCOVERY/V1B+C] run={run_id}: {total_snapshots} snapshots | "
+        f"price_seqs={total_seq} flow_seqs={total_flow} combined_seqs={total_comb}"
     )
 
+    # ── Mine price-action patterns (V1B) ──────────────────────────────────────
     _discovery_progress["phase"] = "MINING_BAR_PATTERNS"
     bar_candidates = mine_bar_patterns(
         bar_sequences_by_group=bar_sequences_by_group,
         windows=windows,
+        feature_family="PRICE_ACTION",
     )
-
-    _discovery_progress["bar_patterns_evaluated"]   = len(bar_candidates)
+    _discovery_progress["bar_patterns_evaluated"]    = len(bar_candidates)
     _discovery_progress["bar_patterns_experimental"] = sum(
         1 for c in bar_candidates if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")
     )
+
+    all_candidates = list(bar_candidates)
+
+    # ── Mine flow patterns (V1C) ──────────────────────────────────────────────
+    flow_candidates: list[dict] = []
+    if include_flow and any(flow_sequences_by_group.values()):
+        _discovery_progress["phase"] = "MINING_FLOW_PATTERNS"
+        flow_candidates = mine_bar_patterns(
+            bar_sequences_by_group=flow_sequences_by_group,
+            windows=windows,
+            feature_family="FLOW",
+        )
+        _discovery_progress["flow_patterns_evaluated"] = len(flow_candidates)
+        all_candidates.extend(flow_candidates)
+
+    # ── Mine combined patterns (V1C) ──────────────────────────────────────────
+    combined_candidates: list[dict] = []
+    if include_combined and any(combined_sequences_by_group.values()):
+        _discovery_progress["phase"] = "MINING_COMBINED_PATTERNS"
+        combined_candidates = mine_bar_patterns(
+            bar_sequences_by_group=combined_sequences_by_group,
+            windows=windows,
+            feature_family="COMBINED",
+        )
+        _discovery_progress["combined_patterns_evaluated"] = len(combined_candidates)
+        all_candidates.extend(combined_candidates)
+
     logger.info(
-        f"[DISCOVERY/V1B] run={run_id}: {len(bar_candidates)} bar patterns | "
-        f"experimental={_discovery_progress['bar_patterns_experimental']}"
+        f"[DISCOVERY/V1B+C] run={run_id}: price={len(bar_candidates)} "
+        f"flow={len(flow_candidates)} combined={len(combined_candidates)} "
+        f"total={len(all_candidates)}"
     )
 
-    return bar_candidates, bar_sequences_by_group
+    return all_candidates, bar_sequences_by_group
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -345,8 +411,10 @@ async def run_pattern_discovery(
     ----------
     run_id                : raw_pattern_runs.id to analyse
     mode                  : "episode_aggregate" | "bar_sequence" | "both"
+                            | "flow" | "combined" | "all"
+                            "all" = episode_aggregate + bar_sequence + flow + combined
     windows               : bar-sequence window sizes (only used when mode
-                            includes bar_sequence)
+                            includes bar_sequence or flow)
     exclude_split_artifacts : if True, split_artifact episodes are excluded
                               from episode-level mining counts (still kept
                               in a separate group for exposure stats)
@@ -355,6 +423,11 @@ async def run_pattern_discovery(
     -------
     Summary dict with status, episodes_loaded, patterns_evaluated, etc.
     """
+    # Normalise mode flags
+    _run_episode = mode in ("episode_aggregate", "both", "all")
+    _run_price   = mode in ("bar_sequence", "both", "all")
+    _run_flow    = mode in ("flow", "combined", "all")
+    _run_combined = mode in ("combined", "all")
     global _discovery_progress
 
     if _discovery_progress["running"]:
@@ -370,11 +443,16 @@ async def run_pattern_discovery(
         "pre_daily_rows_loaded": 0,
         "bar_snapshots_created": 0,
         "bar_sequences_created": 0,
-        "bar_patterns_evaluated":    0,
-        "bar_patterns_experimental": 0,
+        "flow_sequences_created": 0,
+        "combined_sequences_created": 0,
+        "bar_patterns_evaluated":     0,
+        "bar_patterns_experimental":  0,
+        "flow_patterns_evaluated":    0,
+        "combined_patterns_evaluated": 0,
         "patterns_rejected_low_count": 0,
-        "patterns_rejected_low_lift": 0,
+        "patterns_rejected_low_lift":  0,
         "patterns_saved": 0,
+        "flow_tag_counts": {},
         "started_at": datetime.now(tz=timezone.utc).isoformat(),
         "finished_at": None,
     })
@@ -417,7 +495,7 @@ async def run_pattern_discovery(
         bar_candidates: list[dict] = []
         bar_sequences_by_group: dict = {}
 
-        if mode in ("episode_aggregate", "both"):
+        if _run_episode:
             from replay.pattern_miner import mine_patterns, compute_feature_separability
             _discovery_progress["phase"] = "PATTERN_MINING_V1A"
 
@@ -444,12 +522,14 @@ async def run_pattern_discovery(
                 f"rejected_low_lift={_discovery_progress['patterns_rejected_low_lift']}"
             )
 
-        # ── Phase 3: Bar-sequence pattern mining (V1B) ────────────────────────
-        if mode in ("bar_sequence", "both"):
+        # ── Phase 3: Bar/flow pattern mining (V1B + V1C) ─────────────────────
+        if _run_price or _run_flow or _run_combined:
             bar_candidates, bar_sequences_by_group = await _run_bar_sequence_pipeline(
                 run_id=run_id,
                 dataset=dataset,
                 windows=windows,
+                include_flow=_run_flow,
+                include_combined=_run_combined,
             )
 
         # ── Phase 4: Pump Watch scoring ───────────────────────────────────────
@@ -581,14 +661,39 @@ def _st_from_signal_id(signal_id: str, stored: Optional[str] = None) -> str:
     if not signal_id:
         return "EPISODE_AGGREGATE"
     for prefix, st in (
-        ("DISC_BAR_TEN_BAR_CONTEXT_",    "TEN_BAR_CONTEXT"),
-        ("DISC_BAR_THREE_BAR_SEQUENCE_", "THREE_BAR_SEQUENCE"),
-        ("DISC_BAR_TWO_BAR_SEQUENCE_",   "TWO_BAR_SEQUENCE"),
-        ("DISC_BAR_FIVE_BAR_SEQUENCE_",  "FIVE_BAR_SEQUENCE"),
-        ("DISC_BAR_SINGLE_BAR_",         "SINGLE_BAR"),
+        ("DISC_BAR_TEN_BAR_CONTEXT_",        "TEN_BAR_CONTEXT"),
+        ("DISC_BAR_THREE_BAR_SEQUENCE_",     "THREE_BAR_SEQUENCE"),
+        ("DISC_BAR_TWO_BAR_SEQUENCE_",       "TWO_BAR_SEQUENCE"),
+        ("DISC_BAR_FIVE_BAR_SEQUENCE_",      "FIVE_BAR_SEQUENCE"),
+        ("DISC_BAR_SINGLE_BAR_",             "SINGLE_BAR"),
+        ("DISC_FLOW_TEN_BAR_CONTEXT_",       "TEN_BAR_CONTEXT"),
+        ("DISC_FLOW_THREE_BAR_SEQUENCE_",    "THREE_BAR_SEQUENCE"),
+        ("DISC_FLOW_TWO_BAR_SEQUENCE_",      "TWO_BAR_SEQUENCE"),
+        ("DISC_FLOW_FIVE_BAR_SEQUENCE_",     "FIVE_BAR_SEQUENCE"),
+        ("DISC_FLOW_SINGLE_BAR_",            "SINGLE_BAR"),
+        ("DISC_COMBINED_TEN_BAR_CONTEXT_",   "TEN_BAR_CONTEXT"),
+        ("DISC_COMBINED_THREE_BAR_SEQUENCE_","THREE_BAR_SEQUENCE"),
+        ("DISC_COMBINED_TWO_BAR_SEQUENCE_",  "TWO_BAR_SEQUENCE"),
+        ("DISC_COMBINED_FIVE_BAR_SEQUENCE_", "FIVE_BAR_SEQUENCE"),
+        ("DISC_COMBINED_SINGLE_BAR_",        "SINGLE_BAR"),
     ):
         if signal_id.startswith(prefix):
             return st
+    return "EPISODE_AGGREGATE"
+
+
+def _ff_from_signal_id(signal_id: str, stored: Optional[str] = None) -> str:
+    """Infer feature_family from signal_id prefix."""
+    if stored:
+        return stored
+    if not signal_id:
+        return "EPISODE_AGGREGATE"
+    if signal_id.startswith("DISC_FLOW_"):
+        return "FLOW"
+    if signal_id.startswith("DISC_COMBINED_"):
+        return "COMBINED"
+    if signal_id.startswith("DISC_BAR_"):
+        return "PRICE_ACTION"
     return "EPISODE_AGGREGATE"
 
 
@@ -836,6 +941,7 @@ async def build_discovery_export(
     # ── Normalise patterns ────────────────────────────────────────────────────
     for p in patterns:
         p["source_type"]       = _st_from_signal_id(p.get("signal_id"), p.get("source_type"))
+        p["feature_family"]    = _ff_from_signal_id(p.get("signal_id"), p.get("feature_family"))
         p["reject_reason"]     = _reject_reason(p)
         p["reliability_score"] = _reliability_score(p)
 
@@ -854,9 +960,29 @@ async def build_discovery_export(
         key=lambda x: -(x.get("split_artifact_exposure") or 0),
     )
 
+    # feature_family counts
+    by_ff_all: dict[str, list] = {}
+    for p in patterns:
+        by_ff_all.setdefault(p["feature_family"], []).append(p)
+    feature_family_counts = {ff: len(lst) for ff, lst in by_ff_all.items()}
+
     # Pump Watch summary (only when episodes were loaded)
     pw_dist = summarize_pump_watch_distribution(episodes) if episodes else {}
     diagnostic_label_counts = pw_dist.get("diagnostic_label_counts", {}) if pw_dist else {}
+
+    # Flow debug from in-memory progress
+    flow_debug = {
+        "flow_features_created":        prog.get("bar_snapshots_created", 0),
+        "flow_sequences_created":       prog.get("flow_sequences_created", 0),
+        "combined_sequences_created":   prog.get("combined_sequences_created", 0),
+        "flow_patterns_created":        prog.get("flow_patterns_evaluated", 0),
+        "combined_patterns_created":    prog.get("combined_patterns_evaluated", 0),
+        "flow_tag_counts":              prog.get("flow_tag_counts", {}),
+        "delta_note": (
+            "All flow features are OHLCV-derived proxies, NOT true bid/ask delta. "
+            "CLV, signed_volume_proxy, OBV, ADL, CMF computed from open/high/low/close/volume."
+        ),
+    }
 
     group_counts = prog.get("group_counts") or {}
     discovery_status = {
@@ -978,6 +1104,34 @@ async def build_discovery_export(
         for st, lst in by_st_working.items()
     }
 
+    # Flow-family rankings
+    flow_working = [p for p in working if p.get("feature_family") == "FLOW"]
+    combined_working = [p for p in working if p.get("feature_family") == "COMBINED"]
+
+    top_flow_by_clean_reliability = _top(
+        [p for p in flow_working
+         if (p.get("split_artifact_exposure") or 0) <= 0.50
+         and (p.get("count_all_4x") or 0) >= 4],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    top_combined_by_clean_reliability = _top(
+        [p for p in combined_working
+         if (p.get("split_artifact_exposure") or 0) <= 0.50
+         and (p.get("count_all_4x") or 0) >= 4],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    top_flow_by_missed_4x = _top(
+        [p for p in flow_working
+         if (p.get("count_missed_4x") or 0) > 0
+         and (p.get("false_positive_rate") or 1.0) <= 0.35],
+        lambda x: -(x["count_missed_4x"] or 0), min(100, n))
+
+    top_combined_by_missed_4x = _top(
+        [p for p in combined_working
+         if (p.get("count_missed_4x") or 0) > 0
+         and (p.get("false_positive_rate") or 1.0) <= 0.35],
+        lambda x: -(x["count_missed_4x"] or 0), min(100, n))
+
     # ── Accepted sorted for section output ────────────────────────────────────
     accepted_sorted = sorted(
         working,
@@ -1027,10 +1181,12 @@ async def build_discovery_export(
             "run": run,
             "discovery_status": discovery_status,
             "debug": debug,
+            "flow_debug": flow_debug,
             "summary": summary_obj,
             "pump_watch_summary": pw_dist,
             "diagnostic_label_counts": diagnostic_label_counts,
             "patterns_by_source_type_counts": st_counts,
+            "feature_family_counts": feature_family_counts,
             "split_contamination_summary": split_contamination_summary,
             "bar_sequence_summary": bar_sequence_summary,
             "ranking_formula_version": _RANKING_FORMULA_VERSION,
@@ -1053,19 +1209,25 @@ async def build_discovery_export(
                 "hide_split_contaminated": hide_split_contaminated,
                 "top_n": n,
             },
-            "accepted_patterns":          accepted_sorted,
-            "top_by_reliability":         top_by_reliability,
-            "top_by_clean_reliability":   top_by_clean_reliability,
-            "top_by_supported_edge":      top_by_supported_edge,
-            "top_by_missed_4x":          top_by_missed,
-            "top_by_missed_4x_clean":    top_by_missed_4x_clean,
-            "top_by_source_type":        top_by_source_type,
-            "ranking_formula_version":   _RANKING_FORMULA_VERSION,
-            "reliability_score_legend":  _RELIABILITY_SCORE_LEGEND,
+            "accepted_patterns":                 accepted_sorted,
+            "top_by_reliability":                top_by_reliability,
+            "top_by_clean_reliability":          top_by_clean_reliability,
+            "top_by_supported_edge":             top_by_supported_edge,
+            "top_by_missed_4x":                 top_by_missed,
+            "top_by_missed_4x_clean":           top_by_missed_4x_clean,
+            "top_by_source_type":               top_by_source_type,
+            "top_flow_by_clean_reliability":     top_flow_by_clean_reliability,
+            "top_combined_by_clean_reliability": top_combined_by_clean_reliability,
+            "top_flow_by_missed_4x":             top_flow_by_missed_4x,
+            "top_combined_by_missed_4x":         top_combined_by_missed_4x,
+            "feature_family_counts":             feature_family_counts,
+            "ranking_formula_version":           _RANKING_FORMULA_VERSION,
+            "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
                 "accepted_patterns sorted by reliability_score desc. "
                 "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
                 "top_by_lift is research-only and unstable for zero-FP patterns. "
+                "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
                 "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
             ),
         }
@@ -1077,19 +1239,25 @@ async def build_discovery_export(
             "exported_at": exported_at,
             "run_id": run_id,
             "run": run,
-            "top_by_reliability":       top_by_reliability,
-            "top_by_clean_reliability": top_by_clean_reliability,
-            "top_by_supported_edge":    top_by_supported_edge,
-            "top_by_lift":              top_by_lift,
-            "top_by_missed_4x":        top_by_missed,
-            "top_by_missed_4x_clean":  top_by_missed_4x_clean,
-            "top_by_source_type":      top_by_source_type,
-            "split_contamination":     split_contamination_summary,
-            "ranking_formula_version": _RANKING_FORMULA_VERSION,
-            "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
+            "top_by_reliability":                 top_by_reliability,
+            "top_by_clean_reliability":           top_by_clean_reliability,
+            "top_by_supported_edge":              top_by_supported_edge,
+            "top_by_lift":                        top_by_lift,
+            "top_by_missed_4x":                  top_by_missed,
+            "top_by_missed_4x_clean":            top_by_missed_4x_clean,
+            "top_by_source_type":                top_by_source_type,
+            "top_flow_by_clean_reliability":     top_flow_by_clean_reliability,
+            "top_combined_by_clean_reliability": top_combined_by_clean_reliability,
+            "top_flow_by_missed_4x":             top_flow_by_missed_4x,
+            "top_combined_by_missed_4x":         top_combined_by_missed_4x,
+            "feature_family_counts":             feature_family_counts,
+            "split_contamination":               split_contamination_summary,
+            "ranking_formula_version":           _RANKING_FORMULA_VERSION,
+            "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
                 "IMPORTANT: top_by_lift is dominated by rare zero-FP patterns with low sample count. "
                 "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+                "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
                 "top_by_supported_edge requires count_all_4x>=8, lift>=1.5, fpr<=25%, exposure<=50%."
             ),
         }
@@ -1140,26 +1308,33 @@ async def build_discovery_export(
             "run": run,
             "discovery_status": discovery_status,
             "debug": debug,
+            "flow_debug": flow_debug,
             "pump_watch_summary": pw_dist,
             "diagnostic_label_counts": diagnostic_label_counts,
             "patterns_by_source_type_counts": st_counts,
-            "accepted_patterns":          accepted_sorted[:1000],
-            "top_by_reliability":         top_by_reliability,
-            "top_by_clean_reliability":   top_by_clean_reliability,
-            "top_by_supported_edge":      top_by_supported_edge,
-            "top_by_missed_4x":          top_by_missed,
-            "top_by_missed_4x_clean":    top_by_missed_4x_clean,
-            "top_by_source_type":        top_by_source_type,
-            "split_contamination_summary": split_contamination_summary,
-            "sample_episodes":           sample_episodes,
-            "registry_snapshot":         registry,
-            "ranking_formula_version":   _RANKING_FORMULA_VERSION,
-            "reliability_score_legend":  _RELIABILITY_SCORE_LEGEND,
+            "feature_family_counts":             feature_family_counts,
+            "accepted_patterns":                 accepted_sorted[:1000],
+            "top_by_reliability":                top_by_reliability,
+            "top_by_clean_reliability":          top_by_clean_reliability,
+            "top_by_supported_edge":             top_by_supported_edge,
+            "top_by_missed_4x":                 top_by_missed,
+            "top_by_missed_4x_clean":           top_by_missed_4x_clean,
+            "top_by_source_type":               top_by_source_type,
+            "top_flow_by_clean_reliability":     top_flow_by_clean_reliability,
+            "top_combined_by_clean_reliability": top_combined_by_clean_reliability,
+            "top_flow_by_missed_4x":             top_flow_by_missed_4x,
+            "top_combined_by_missed_4x":         top_combined_by_missed_4x,
+            "split_contamination_summary":       split_contamination_summary,
+            "sample_episodes":                   sample_episodes,
+            "registry_snapshot":                 registry,
+            "ranking_formula_version":           _RANKING_FORMULA_VERSION,
+            "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
                 "Compact export: accepted patterns only (max 1000), sample episodes (top 25 per group). "
                 "For all episodes use section=episodes. For rejected patterns use section=rejected. "
                 "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
                 "top_by_lift is research-only — unstable for zero-FP patterns. "
+                "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
                 "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
             ),
         }
@@ -1173,31 +1348,38 @@ async def build_discovery_export(
         "run": run,
         "discovery_status": discovery_status,
         "debug": debug,
+        "flow_debug": flow_debug,
         "summary": summary_obj,
         "episodes": episodes,
         "comparisons": comps,
         "pump_watch_summary": pw_dist,
         "diagnostic_label_counts": diagnostic_label_counts,
-        "discovered_patterns":      patterns if include_rejected else accepted_all,
-        "accepted_patterns":        accepted_all,
-        "rejected_patterns":        rejected_all if include_rejected else [],
-        "patterns_by_source_type":  by_st_all,
-        "top_by_lift":              top_by_lift,
-        "top_by_missed_4x":        top_by_missed,
-        "top_by_reliability":       top_by_reliability,
-        "top_by_clean_reliability": top_by_clean_reliability,
-        "top_by_supported_edge":    top_by_supported_edge,
-        "top_by_missed_4x_clean":  top_by_missed_4x_clean,
-        "top_by_source_type":       top_by_source_type,
-        "split_contamination":      split_contamination_full,
-        "bar_sequence_summary":     bar_sequence_summary,
-        "registry_snapshot":        registry,
-        "ranking_formula_version":  _RANKING_FORMULA_VERSION,
-        "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
+        "feature_family_counts":                 feature_family_counts,
+        "discovered_patterns":                   patterns if include_rejected else accepted_all,
+        "accepted_patterns":                     accepted_all,
+        "rejected_patterns":                     rejected_all if include_rejected else [],
+        "patterns_by_source_type":               by_st_all,
+        "top_by_lift":                           top_by_lift,
+        "top_by_missed_4x":                     top_by_missed,
+        "top_by_reliability":                    top_by_reliability,
+        "top_by_clean_reliability":              top_by_clean_reliability,
+        "top_by_supported_edge":                 top_by_supported_edge,
+        "top_by_missed_4x_clean":               top_by_missed_4x_clean,
+        "top_by_source_type":                    top_by_source_type,
+        "top_flow_by_clean_reliability":         top_flow_by_clean_reliability,
+        "top_combined_by_clean_reliability":     top_combined_by_clean_reliability,
+        "top_flow_by_missed_4x":                 top_flow_by_missed_4x,
+        "top_combined_by_missed_4x":             top_combined_by_missed_4x,
+        "split_contamination":                   split_contamination_full,
+        "bar_sequence_summary":                  bar_sequence_summary,
+        "registry_snapshot":                     registry,
+        "ranking_formula_version":               _RANKING_FORMULA_VERSION,
+        "reliability_score_legend":              _RELIABILITY_SCORE_LEGEND,
         "notes": _notes(
             "Full export includes all patterns (accepted + rejected), all episodes, comparisons. "
             "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
             "top_by_lift is research-only and unstable for small-sample zero-FP patterns. "
+            "Flow patterns (top_flow_*) are OHLCV proxies, NOT true bid/ask delta. "
             "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
         ),
     }

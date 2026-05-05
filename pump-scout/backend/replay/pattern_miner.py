@@ -761,8 +761,12 @@ _GROUPS = ["missed_4x_pump", "detected_4x_pump", "false_positive", "normal_winne
 
 def _infer_bar_pattern_family(sig: str) -> str:
     """Infer pattern family code from a tag signature string."""
-    if "DELTA_IGNITION" in sig or "DELTA_ABSORB" in sig:
+    if "DELTA_PROXY" in sig or "DELTA_IGNITION" in sig or "DELTA_ABSORB" in sig:
         return "D"
+    if "OBV_" in sig or "ADL_" in sig or "CMF_" in sig:
+        return "F"   # Flow
+    if "EFFORT_RESULT" in sig or "HIGH_EFFORT" in sig or "LOW_EFFORT" in sig:
+        return "F"
     if "EMA50_RECLAIM" in sig or "EMA_BULL_STACK" in sig:
         return "E"
     if "GAP_UP" in sig or "GAP_DOWN" in sig:
@@ -771,7 +775,7 @@ def _infer_bar_pattern_family(sig: str) -> str:
         return "C"
     if "DRYUP" in sig or "VOL_SPIKE" in sig:
         return "V"
-    if "LOWER_WICK_RECLAIM" in sig or "RECLAIM_BAR" in sig:
+    if "LOWER_WICK_RECLAIM" in sig or "RECLAIM_BAR" in sig or "LOWER_WICK_ABSORPTION" in sig:
         return "L"
     return "P"
 
@@ -780,6 +784,7 @@ def mine_bar_patterns(
     bar_sequences_by_group: dict,
     windows: tuple = (1, 2, 3, 5, 10),
     min_episode_count_4x: int = 3,
+    feature_family: str = "PRICE_ACTION",
 ) -> list[dict]:
     """
     Mine bar-level and sequence-level patterns from symbolic tag sequences.
@@ -795,6 +800,8 @@ def mine_bar_patterns(
                              when building the sequences).
     min_episode_count_4x   : minimum unique episodes in the combined 4x group
                              to include a pattern in results (avoids extreme noise).
+    feature_family         : "PRICE_ACTION" | "FLOW" | "COMBINED"
+                             Controls signal_id prefix (DISC_BAR_ / DISC_FLOW_ / DISC_COMBINED_).
 
     Returns
     -------
@@ -808,6 +815,13 @@ def mine_bar_patterns(
     Anti-leakage: group_type is NOT used as a pattern condition. It is
     the outcome label used only for lift/precision statistics.
     """
+    # Signal ID prefix based on feature family
+    _FAMILY_PREFIX = {
+        "PRICE_ACTION": "DISC_BAR_",
+        "FLOW":         "DISC_FLOW_",
+        "COMBINED":     "DISC_COMBINED_",
+    }
+    sig_id_prefix_base = _FAMILY_PREFIX.get(feature_family, "DISC_BAR_")
     results: list[dict] = []
 
     for w in windows:
@@ -890,7 +904,7 @@ def mine_bar_patterns(
                 recommendation = "reject"
 
             # Build a stable signal_id ≤ 60 chars (DB constraint)
-            prefix = f"DISC_BAR_{source_type}_"
+            prefix = f"{sig_id_prefix_base}{source_type}_"
             cleaned = sig.replace("+", "_").replace("→", "SEQ").replace(" ", "")
             budget = 60 - len(prefix)
             if len(cleaned) > budget:
@@ -904,6 +918,7 @@ def mine_bar_patterns(
                 "signal_id":              signal_id,
                 "family":                 _infer_bar_pattern_family(sig),
                 "source_type":            source_type,
+                "feature_family":         feature_family,
                 "window_size":            w,
                 "sequence_signature":     sig,
                 "description":            f"Bar {source_type}: {sig}",
