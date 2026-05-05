@@ -1970,6 +1970,17 @@ function PatternDiscoveryPanel({ runId }) {
               {loadingRes ? '…' : '↻ Refresh Results'}
             </button>
           )}
+
+          {results && !isRunning && (
+            <a
+              href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full`}
+              download={`raw-pattern-run-${runId}-discovery-full.json`}
+              className={styles.discoveryRefreshBtn}
+              style={{ textDecoration: 'none', display: 'inline-block' }}
+            >
+              ⬇ Full Discovery JSON
+            </a>
+          )}
         </div>
 
         {launchErr && <div className={styles.errorMsg} style={{ marginTop: 8 }}>{launchErr}</div>}

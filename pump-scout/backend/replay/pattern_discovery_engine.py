@@ -570,3 +570,279 @@ async def get_discovery_results(run_id: int) -> dict:
     except Exception as exc:
         logger.error(f"get_discovery_results({run_id}): {exc}")
         return {"run_id": run_id, "error": str(exc)}
+
+
+# ── Source-type inference (mirrors database._infer_source_type) ───────────────
+
+def _st_from_signal_id(signal_id: str, stored: Optional[str] = None) -> str:
+    if stored:
+        return stored
+    if not signal_id:
+        return "EPISODE_AGGREGATE"
+    for prefix, st in (
+        ("DISC_BAR_TEN_BAR_CONTEXT_",    "TEN_BAR_CONTEXT"),
+        ("DISC_BAR_THREE_BAR_SEQUENCE_", "THREE_BAR_SEQUENCE"),
+        ("DISC_BAR_TWO_BAR_SEQUENCE_",   "TWO_BAR_SEQUENCE"),
+        ("DISC_BAR_FIVE_BAR_SEQUENCE_",  "FIVE_BAR_SEQUENCE"),
+        ("DISC_BAR_SINGLE_BAR_",         "SINGLE_BAR"),
+    ):
+        if signal_id.startswith(prefix):
+            return st
+    return "EPISODE_AGGREGATE"
+
+
+def _reject_reason(p: dict) -> Optional[str]:
+    if p.get("status") != "REJECT":
+        return None
+    cnt  = p.get("count_all_4x") or 0
+    lift = p.get("lift_vs_false_positive") or 0
+    fpr  = p.get("false_positive_rate") or 0
+    art  = p.get("split_artifact_exposure") or 0
+    if cnt == 0:
+        return "no_4x_hits"
+    if cnt < 2:
+        return "low_count"
+    if art > 0.8:
+        return "split_contaminated"
+    if fpr > 0.9:
+        return "false_positive_contaminated"
+    if lift < 1.0:
+        return "low_lift"
+    return "unknown"
+
+
+def _reliability_score(p: dict) -> float:
+    lift = p.get("lift_vs_false_positive") or 0
+    cnt  = p.get("count_all_4x") or 0
+    return round(lift * math.sqrt(max(cnt, 0)), 4)
+
+
+# ── Full discovery export builder ─────────────────────────────────────────────
+
+async def build_discovery_export(
+    run_id: int,
+    include_rejected: bool = True,
+    top_n: Optional[int] = None,
+) -> dict:
+    """
+    Build a complete ChatGPT-ready export for one raw-pattern + discovery run.
+
+    Returns a structured dict with:
+      run, episodes, comparisons, all discovered_patterns,
+      accepted/rejected split, source-type breakdown,
+      ranking tables, split-contamination summary, bar-sequence summary,
+      registry snapshot, debug counters, and analysis guidance notes.
+
+    Does NOT expose Scanner V2 routing or modify any live scanner logic.
+    All output is EXPERIMENTAL / RESEARCH_ONLY.
+    """
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_episode_features,
+        get_raw_pattern_comparisons,
+        get_discovered_patterns,
+    )
+    from replay.pump_watch_scorer import summarize_pump_watch_distribution
+
+    run      = await get_raw_pattern_run(run_id)
+    episodes = await get_raw_pattern_episode_features(run_id, limit=10000)
+    comps    = await get_raw_pattern_comparisons(run_id)
+    patterns = await get_discovered_patterns(run_id)
+    registry = _load_registry()
+    prog     = get_discovery_progress()
+
+    # ── Normalise source_type, add computed fields ────────────────────────────
+    for p in patterns:
+        p["source_type"]       = _st_from_signal_id(p.get("signal_id"), p.get("source_type"))
+        p["reject_reason"]     = _reject_reason(p)
+        p["reliability_score"] = _reliability_score(p)
+
+    # ── Pump Watch summary ────────────────────────────────────────────────────
+    pw_dist = summarize_pump_watch_distribution(episodes)
+
+    # ── Derived splits ────────────────────────────────────────────────────────
+    accepted  = [p for p in patterns if p.get("status") != "REJECT"]
+    rejected  = [p for p in patterns if p.get("status") == "REJECT"]
+
+    by_st: dict[str, list] = {}
+    for p in patterns:
+        by_st.setdefault(p["source_type"], []).append(p)
+    st_counts = {st: len(lst) for st, lst in by_st.items()}
+
+    # ── Ranking tables ────────────────────────────────────────────────────────
+    n = top_n or len(patterns)
+
+    top_by_lift = sorted(
+        (p for p in patterns if p.get("lift_vs_false_positive") is not None),
+        key=lambda x: -(x["lift_vs_false_positive"] or 0),
+    )[:min(100, n)]
+
+    top_by_missed = sorted(
+        (p for p in patterns if (p.get("count_missed_4x") or 0) > 0),
+        key=lambda x: -(x["count_missed_4x"] or 0),
+    )[:min(100, n)]
+
+    top_by_reliability = sorted(
+        patterns,
+        key=lambda x: -(x["reliability_score"] or 0),
+    )[:min(100, n)]
+
+    top_by_source_type = {
+        st: sorted(lst, key=lambda x: -(x.get("lift_vs_false_positive") or 0))[:50]
+        for st, lst in by_st.items()
+    }
+
+    # ── Split contamination ───────────────────────────────────────────────────
+    CONTAM_THRESHOLD = 0.50
+    contaminated = sorted(
+        (p for p in patterns if (p.get("split_artifact_exposure") or 0) > CONTAM_THRESHOLD),
+        key=lambda x: -(x.get("split_artifact_exposure") or 0),
+    )
+
+    # ── Bar sequence summary ──────────────────────────────────────────────────
+    bar_top_lift = [
+        {"signal_id": p["signal_id"], "source_type": p["source_type"],
+         "lift": p.get("lift_vs_false_positive"), "count_4x": p.get("count_all_4x")}
+        for p in top_by_lift if p["source_type"] != "EPISODE_AGGREGATE"
+    ][:20]
+
+    bar_top_missed = [
+        {"signal_id": p["signal_id"], "source_type": p["source_type"],
+         "count_missed": p.get("count_missed_4x"), "lift": p.get("lift_vs_false_positive")}
+        for p in top_by_missed if p["source_type"] != "EPISODE_AGGREGATE"
+    ][:20]
+
+    bar_top_fp_trap = sorted(
+        (p for p in patterns if p["source_type"] != "EPISODE_AGGREGATE"),
+        key=lambda x: -(x.get("false_positive_rate") or 0),
+    )[:10]
+    bar_top_fp_trap_slim = [
+        {"signal_id": p["signal_id"], "source_type": p["source_type"],
+         "fp_rate": p.get("false_positive_rate"), "count_fp": p.get("count_false_positive")}
+        for p in bar_top_fp_trap
+    ]
+
+    bar_sequence_summary = {
+        "daily_rows_loaded":     prog.get("pre_daily_rows_loaded", 0),
+        "bar_snapshots_created": prog.get("bar_snapshots_created", 0),
+        "bar_sequences_created": prog.get("bar_sequences_created", 0),
+        "single_bar_patterns":   st_counts.get("SINGLE_BAR",        0),
+        "two_bar_patterns":      st_counts.get("TWO_BAR_SEQUENCE",   0),
+        "three_bar_patterns":    st_counts.get("THREE_BAR_SEQUENCE", 0),
+        "five_bar_patterns":     st_counts.get("FIVE_BAR_SEQUENCE",  0),
+        "ten_bar_patterns":      st_counts.get("TEN_BAR_CONTEXT",    0),
+        "top_signatures":                  bar_top_lift,
+        "top_missed_4x_signatures":        bar_top_missed,
+        "top_false_positive_trap_signatures": bar_top_fp_trap_slim,
+    }
+
+    # ── Debug counters ────────────────────────────────────────────────────────
+    group_counts = prog.get("group_counts") or {}
+    discovery_status = {
+        "episodes":         prog.get("episodes")        or len(episodes),
+        "episodes_scored":  prog.get("episodes_scored") or 0,
+        "episode_patterns": prog.get("patterns_evaluated") or st_counts.get("EPISODE_AGGREGATE", 0),
+        "bar_patterns":     prog.get("bar_patterns_evaluated") or (len(patterns) - st_counts.get("EPISODE_AGGREGATE", 0)),
+        "patterns_saved":   prog.get("patterns_saved")  or len(patterns),
+        **group_counts,
+    }
+
+    debug = {
+        "daily_rows":   prog.get("pre_daily_rows_loaded", 0),
+        "snapshots":    prog.get("bar_snapshots_created", 0),
+        "sequences":    prog.get("bar_sequences_created", 0),
+        "rejected_low_count":    prog.get("patterns_rejected_low_count", 0),
+        "rejected_low_lift":     prog.get("patterns_rejected_low_lift",  0),
+        "rejected_split_artifact":              sum(1 for p in rejected if p.get("reject_reason") == "split_contaminated"),
+        "rejected_false_positive_contamination": sum(1 for p in rejected if p.get("reject_reason") == "false_positive_contaminated"),
+        "rejected_no_4x_hits":   sum(1 for p in rejected if p.get("reject_reason") == "no_4x_hits"),
+        "source_type_counts":    st_counts,
+    }
+
+    summary = {
+        "total_patterns":     len(patterns),
+        "accepted_patterns":  len(accepted),
+        "rejected_patterns":  len(rejected),
+        "source_type_counts": st_counts,
+        "contaminated_count": len(contaminated),
+    }
+
+    # ── Notes / guidance ──────────────────────────────────────────────────────
+    notes = {
+        "analysis_guidance": (
+            "discovered_patterns contains ALL patterns including REJECTs. "
+            "accepted_patterns: EXPERIMENTAL / EXPERIMENTAL_RARE / RESEARCH_ONLY. "
+            "rejected_patterns: REJECT status, see reject_reason field. "
+            "reliability_score = lift_vs_false_positive * sqrt(count_all_4x). "
+            "split_contamination.patterns must NOT be added to scanner without "
+            "first excluding split-artifact episodes from the training set. "
+            "IMPORTANT: Do NOT use any pattern to modify Scanner V2 BUY/WATCH/AVOID routing. "
+            "All patterns are EXPERIMENTAL or RESEARCH_ONLY only."
+        ),
+        "reject_reason_legend": {
+            "no_4x_hits":                 "Pattern matched 0 episodes in the 4x pump group",
+            "low_count":                  "Pattern matched < 2 episodes in the 4x pump group",
+            "split_contaminated":         "split_artifact_exposure > 0.8",
+            "false_positive_contaminated": "false_positive_rate > 0.9",
+            "low_lift":                   "lift_vs_false_positive < 1.0",
+            "unknown":                    "Rejected for undetermined reason",
+        },
+        "source_type_legend": {
+            "EPISODE_AGGREGATE": "V1A: pre-window aggregate features per episode (buy_candidate_day_count_pre, etc.)",
+            "SINGLE_BAR":        "V1B: single-bar symbolic tag signature",
+            "TWO_BAR_SEQUENCE":  "V1B: rolling 2-bar tag sequence",
+            "THREE_BAR_SEQUENCE": "V1B: rolling 3-bar tag sequence",
+            "FIVE_BAR_SEQUENCE": "V1B: rolling 5-bar tag sequence",
+            "TEN_BAR_CONTEXT":   "V1B: 10-bar rolling context window",
+        },
+        "status_legend": {
+            "EXPERIMENTAL":      "count_all_4x >= 8, lift >= 1.5 — ready for Pump Watch evaluation",
+            "EXPERIMENTAL_RARE": "count_all_4x >= 4, lift >= 2.0 — promising but needs more data",
+            "RESEARCH_ONLY":     "count_all_4x >= 2, lift >= 1.0 — monitor only",
+            "REJECT":            "Below thresholds — see reject_reason",
+        },
+    }
+
+    # ── Assemble ──────────────────────────────────────────────────────────────
+    payload: dict = {
+        "export_type":      "raw_pattern_study_with_discovery",
+        "exported_at":      datetime.now(tz=timezone.utc).isoformat(),
+        "run":              run,
+        "discovery_status": discovery_status,
+        "debug":            debug,
+        "summary":          summary,
+        "episodes":         episodes,
+        "comparisons":      comps,
+        "pump_watch_summary": pw_dist,
+        "discovered_patterns": patterns if include_rejected else accepted,
+        "accepted_patterns":  accepted,
+        "rejected_patterns":  rejected if include_rejected else [],
+        "patterns_by_source_type": {
+            st: lst if include_rejected else [p for p in lst if p.get("status") != "REJECT"]
+            for st, lst in by_st.items()
+        },
+        "top_by_lift":         top_by_lift,
+        "top_by_missed_4x":    top_by_missed,
+        "top_by_reliability":  top_by_reliability,
+        "top_by_source_type":  top_by_source_type,
+        "split_contamination": {
+            "contaminated_pattern_count": len(contaminated),
+            "threshold": CONTAM_THRESHOLD,
+            "patterns": [
+                {
+                    "signal_id":              p["signal_id"],
+                    "source_type":            p["source_type"],
+                    "split_artifact_exposure": p.get("split_artifact_exposure"),
+                    "count_all_4x":           p.get("count_all_4x"),
+                    "count_false_positive":   p.get("count_false_positive"),
+                    "recommendation": "do_not_add_without_cleaning_split_episodes",
+                }
+                for p in contaminated
+            ],
+        },
+        "bar_sequence_summary": bar_sequence_summary,
+        "registry_snapshot":    registry,
+        "notes":                notes,
+    }
+
+    return payload
