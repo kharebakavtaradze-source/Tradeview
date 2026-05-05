@@ -46,10 +46,17 @@ _discovery_progress: dict = {
     "mode":       None,
     "phase":      None,
     "episodes":   0,
+    "group_counts": {},
+    "pre_daily_rows_loaded": 0,
+    "bar_snapshots_created": 0,
+    "bar_sequences_created": 0,
     "patterns_evaluated": 0,
     "patterns_experimental": 0,
     "bar_patterns_evaluated": 0,
     "bar_patterns_experimental": 0,
+    "patterns_rejected_low_count": 0,
+    "patterns_rejected_low_lift": 0,
+    "patterns_saved": 0,
     "episodes_scored": 0,
     "error":      None,
     "started_at": None,
@@ -258,6 +265,8 @@ async def _run_bar_sequence_pipeline(
         run_id=run_id, phase="PRE", limit=200_000
     )
 
+    _discovery_progress["pre_daily_rows_loaded"] = len(all_daily)
+
     # Group by episode_id for fast lookup
     daily_by_episode: dict[int, list[dict]] = {}
     for row in all_daily:
@@ -293,9 +302,12 @@ async def _run_bar_sequence_pipeline(
             seqs = build_bar_sequences(snaps, windows=windows)
             bar_sequences_by_group[grp].extend(seqs)
 
+    total_sequences = sum(len(v) for v in bar_sequences_by_group.values())
+    _discovery_progress["bar_snapshots_created"] = total_snapshots
+    _discovery_progress["bar_sequences_created"] = total_sequences
     logger.info(
         f"[DISCOVERY/V1B] run={run_id}: {total_snapshots} bar snapshots, "
-        f"{sum(len(v) for v in bar_sequences_by_group.values())} sequences built"
+        f"{total_sequences} sequences built"
     )
 
     _discovery_progress["phase"] = "MINING_BAR_PATTERNS"
@@ -352,8 +364,15 @@ async def run_pattern_discovery(
         "mode":       mode,
         "phase":      "LOADING",
         "error":      None,
+        "group_counts": {},
+        "pre_daily_rows_loaded": 0,
+        "bar_snapshots_created": 0,
+        "bar_sequences_created": 0,
         "bar_patterns_evaluated":    0,
         "bar_patterns_experimental": 0,
+        "patterns_rejected_low_count": 0,
+        "patterns_rejected_low_lift": 0,
+        "patterns_saved": 0,
         "started_at": datetime.now(tz=timezone.utc).isoformat(),
         "finished_at": None,
     })
@@ -369,14 +388,25 @@ async def run_pattern_discovery(
 
         summary      = dataset.get("summary") or {}
         total_ep     = summary.get("total_episodes", 0)
-        _discovery_progress["episodes"] = total_ep
+        group_counts = {
+            "missed_4x_pump":   summary.get("missed_4x_pump_count", 0),
+            "detected_4x_pump": summary.get("detected_4x_pump_count", 0),
+            "false_positive":   summary.get("false_positive_count", 0),
+            "normal_winner":    summary.get("normal_winner_count", 0),
+            "split_artifact":   summary.get("split_artifact_count", 0),
+            "unknown":          len(dataset.get("unknown") or []),
+        }
+        _discovery_progress["episodes"]    = total_ep
+        _discovery_progress["group_counts"] = group_counts
 
         logger.info(
             f"[DISCOVERY] run={run_id} mode={mode}: loaded {total_ep} episodes | "
-            f"missed={summary.get('missed_4x_pump_count')} "
-            f"detected={summary.get('detected_4x_pump_count')} "
-            f"fp={summary.get('false_positive_count')} "
-            f"art={summary.get('split_artifact_count')}"
+            f"missed={group_counts['missed_4x_pump']} "
+            f"detected={group_counts['detected_4x_pump']} "
+            f"fp={group_counts['false_positive']} "
+            f"nw={group_counts['normal_winner']} "
+            f"art={group_counts['split_artifact']} "
+            f"unknown={group_counts['unknown']}"
         )
 
         # ── Phase 2: Episode-aggregate pattern mining (V1A) ───────────────────
@@ -392,14 +422,24 @@ async def run_pattern_discovery(
             candidates  = mine_patterns(dataset)
             feature_sep = compute_feature_separability(dataset)
 
-            _discovery_progress["patterns_evaluated"]   = len(candidates)
-            _discovery_progress["patterns_experimental"] = sum(
+            _discovery_progress["patterns_evaluated"]         = len(candidates)
+            _discovery_progress["patterns_experimental"]      = sum(
                 1 for c in candidates
                 if c["status"] in ("EXPERIMENTAL", "EXPERIMENTAL_RARE")
             )
+            _discovery_progress["patterns_rejected_low_count"] = sum(
+                1 for c in candidates
+                if c["status"] == "REJECT" and (c.get("count_all_4x") or 0) < 2
+            )
+            _discovery_progress["patterns_rejected_low_lift"]  = sum(
+                1 for c in candidates
+                if c["status"] == "REJECT" and (c.get("count_all_4x") or 0) >= 2
+            )
             logger.info(
                 f"[DISCOVERY/V1A] run={run_id}: {len(candidates)} patterns | "
-                f"experimental={_discovery_progress['patterns_experimental']}"
+                f"experimental={_discovery_progress['patterns_experimental']} | "
+                f"rejected_low_count={_discovery_progress['patterns_rejected_low_count']} | "
+                f"rejected_low_lift={_discovery_progress['patterns_rejected_low_lift']}"
             )
 
         # ── Phase 3: Bar-sequence pattern mining (V1B) ────────────────────────
@@ -430,6 +470,7 @@ async def run_pattern_discovery(
         _discovery_progress["phase"] = "PERSISTING_PATTERNS"
         all_candidates = candidates + bar_candidates
         saved_patterns = await _persist_pattern_candidates(run_id, all_candidates)
+        _discovery_progress["patterns_saved"] = saved_patterns
         logger.info(f"[DISCOVERY] run={run_id}: persisted {saved_patterns} pattern rows")
 
         # ── Phase 7: Update registry ──────────────────────────────────────────
@@ -471,10 +512,17 @@ async def run_pattern_discovery(
             "run_id":                    run_id,
             "mode":                      mode,
             "episodes_loaded":           total_ep,
+            "group_counts":              group_counts,
+            "pre_daily_rows_loaded":     _discovery_progress["pre_daily_rows_loaded"],
+            "bar_snapshots_created":     _discovery_progress["bar_snapshots_created"],
+            "bar_sequences_created":     _discovery_progress["bar_sequences_created"],
             "patterns_evaluated":        len(candidates),
             "patterns_experimental":     _discovery_progress["patterns_experimental"],
+            "patterns_rejected_low_count": _discovery_progress["patterns_rejected_low_count"],
+            "patterns_rejected_low_lift":  _discovery_progress["patterns_rejected_low_lift"],
             "bar_patterns_evaluated":    len(bar_candidates),
             "bar_patterns_experimental": _discovery_progress["bar_patterns_experimental"],
+            "patterns_saved":            saved_patterns,
             "episodes_scored":           len(scored),
             "pump_watch_distribution":   pw_dist,
             "top_patterns":              [

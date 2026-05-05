@@ -22,6 +22,7 @@ Anti-leakage: pattern conditions use only PRE-window features.
               days_from_breakout_to_peak are NEVER used as conditions.
 """
 
+import hashlib
 import logging
 import math
 from collections import defaultdict
@@ -645,8 +646,7 @@ def mine_patterns(
     for pdef in all_patterns:
         try:
             result = _evaluate_pattern(pdef, dataset)
-            if result["count_all_4x"] > 0 or result["count_false_positive"] > 0:
-                results.append(result)
+            results.append(result)
         except Exception as exc:
             logger.warning(f"Pattern eval error [{pdef.get('signal_id')}]: {exc}")
 
@@ -887,9 +887,16 @@ def mine_bar_patterns(
             else:
                 recommendation = "reject"
 
-            # Build a stable signal_id from window + signature (truncated)
-            safe_sig = sig[:50].replace("+", "_").replace("→", "SEQ").replace(" ", "")
-            signal_id = f"DISC_BAR_{source_type}_{safe_sig}"
+            # Build a stable signal_id ≤ 60 chars (DB constraint)
+            prefix = f"DISC_BAR_{source_type}_"
+            cleaned = sig.replace("+", "_").replace("→", "SEQ").replace(" ", "")
+            budget = 60 - len(prefix)
+            if len(cleaned) > budget:
+                h = hashlib.md5(sig.encode()).hexdigest()[:5]
+                safe_sig = cleaned[:budget - 6] + "_" + h
+            else:
+                safe_sig = cleaned
+            signal_id = f"{prefix}{safe_sig}"
 
             results.append({
                 "signal_id":              signal_id,
