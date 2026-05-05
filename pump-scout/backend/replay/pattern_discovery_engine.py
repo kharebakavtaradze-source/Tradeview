@@ -612,10 +612,64 @@ def _reject_reason(p: dict) -> Optional[str]:
     return "unknown"
 
 
+_RANKING_FORMULA_VERSION = "balanced_reliability_v2"
+
+_RELIABILITY_SCORE_LEGEND = {
+    "formula": (
+        "0.40*support_score + 0.25*fp_quality + 0.20*lift_score + 0.15*recall_score - split_penalty"
+    ),
+    "components": {
+        "support_score": "min(count_all_4x / 10, 1.0)",
+        "fp_quality":    "1.0 - min(false_positive_rate, 1.0)",
+        "lift_score":    "log1p(min(lift_vs_false_positive, 20)) / log1p(20)",
+        "recall_score":  "min(recall_all_4x, 1.0)",
+        "split_penalty": "min(split_artifact_exposure, 1.0) * 0.25",
+    },
+    "caps": [
+        "count_all_4x < 4  => cap 0.35",
+        "count_all_4x 4–7  => cap 0.55",
+        "false_positive_rate > 0.25 => cap 0.60",
+        "split_artifact_exposure > 0.50 => cap 0.45",
+    ],
+    "range": "0.0 – 1.0",
+    "version": _RANKING_FORMULA_VERSION,
+}
+
+
 def _reliability_score(p: dict) -> float:
-    lift = p.get("lift_vs_false_positive") or 0
     cnt  = p.get("count_all_4x") or 0
-    return round(lift * math.sqrt(max(cnt, 0)), 4)
+    lift = p.get("lift_vs_false_positive") or 0
+    fpr  = p.get("false_positive_rate") or 0
+    rec  = p.get("recall_all_4x") or 0
+    art  = p.get("split_artifact_exposure") or 0
+
+    support_score = min(cnt / 10.0, 1.0)
+    fp_quality    = 1.0 - min(fpr, 1.0)
+    lift_capped   = min(lift, 20.0)
+    lift_score    = math.log1p(lift_capped) / math.log1p(20.0)
+    recall_score  = min(rec, 1.0)
+    split_penalty = min(art, 1.0) * 0.25
+
+    score = (
+        0.40 * support_score
+        + 0.25 * fp_quality
+        + 0.20 * lift_score
+        + 0.15 * recall_score
+        - split_penalty
+    )
+    score = max(0.0, min(1.0, score))
+
+    # Sample-size caps — prevent rare zero-FP patterns from dominating
+    if cnt < 4:
+        score = min(score, 0.35)
+    elif cnt <= 7:
+        score = min(score, 0.55)
+    if fpr > 0.25:
+        score = min(score, 0.60)
+    if art > 0.50:
+        score = min(score, 0.45)
+
+    return round(score, 4)
 
 
 # ── Section defaults ──────────────────────────────────────────────────────────
@@ -661,9 +715,27 @@ _NOTES_BASE = {
         "RESEARCH_ONLY":     "count_all_4x >= 2, lift >= 1.0",
         "REJECT":            "Below thresholds — see reject_reason",
     },
+    "diagnostic_label_legend": {
+        "PX_MISSING_STRUCTURE_RESCUE": (
+            "Episode has missing/zero structure score and no scanner pressure, "
+            "but shows raw dryup/compression + D-confluence + trend evidence. "
+            "PUMP_IGNORE→PUMP_SPECULATIVE rescue only."
+        ),
+        "PX_REVERSE_SPLIT_REGIME": (
+            "Episode occurred near a recent or old reverse split. "
+            "Treated as a separate speculative regime — not mixed with clean pump models."
+        ),
+        "SPLIT_ARTIFACT_EXCLUDED": (
+            "Episode identified as split artifact — excluded from all pump watch routing."
+        ),
+    },
     "safety": (
         "IMPORTANT: Do NOT use any pattern to modify Scanner V2 BUY/WATCH/AVOID routing. "
         "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
+    ),
+    "ranking_note": (
+        "top_by_lift is research-only and unstable for small-sample zero-FP patterns. "
+        "Use top_by_clean_reliability or top_by_supported_edge for signal selection."
     ),
 }
 
@@ -784,6 +856,7 @@ async def build_discovery_export(
 
     # Pump Watch summary (only when episodes were loaded)
     pw_dist = summarize_pump_watch_distribution(episodes) if episodes else {}
+    diagnostic_label_counts = pw_dist.get("diagnostic_label_counts", {}) if pw_dist else {}
 
     group_counts = prog.get("group_counts") or {}
     discovery_status = {
@@ -873,6 +946,30 @@ async def build_discovery_export(
         (p for p in working if (p.get("count_missed_4x") or 0) > 0),
         lambda x: -(x["count_missed_4x"] or 0), min(100, n))
 
+    # Clean reliability: hide high-contamination + require minimum 4x sample
+    top_by_clean_reliability = _top(
+        [p for p in working
+         if (p.get("split_artifact_exposure") or 0) <= 0.50
+         and (p.get("count_all_4x") or 0) >= 4],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    # Supported edge: all quality gates met simultaneously
+    top_by_supported_edge = _top(
+        [p for p in working
+         if (p.get("count_all_4x") or 0) >= 8
+         and (p.get("lift_vs_false_positive") or 0) >= 1.5
+         and (p.get("false_positive_rate") or 1.0) <= 0.25
+         and (p.get("split_artifact_exposure") or 0) <= 0.50],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    # Clean missed-4x: exclude high FP rate and contaminated patterns
+    top_by_missed_4x_clean = _top(
+        [p for p in working
+         if (p.get("count_missed_4x") or 0) > 0
+         and (p.get("false_positive_rate") or 1.0) <= 0.35
+         and (p.get("split_artifact_exposure") or 0) <= 0.50],
+        lambda x: -(x["count_missed_4x"] or 0), min(100, n))
+
     by_st_working: dict[str, list] = {}
     for p in working:
         by_st_working.setdefault(p["source_type"], []).append(p)
@@ -932,9 +1029,12 @@ async def build_discovery_export(
             "debug": debug,
             "summary": summary_obj,
             "pump_watch_summary": pw_dist,
+            "diagnostic_label_counts": diagnostic_label_counts,
             "patterns_by_source_type_counts": st_counts,
             "split_contamination_summary": split_contamination_summary,
             "bar_sequence_summary": bar_sequence_summary,
+            "ranking_formula_version": _RANKING_FORMULA_VERSION,
+            "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(),
         }
 
@@ -953,13 +1053,19 @@ async def build_discovery_export(
                 "hide_split_contaminated": hide_split_contaminated,
                 "top_n": n,
             },
-            "accepted_patterns": accepted_sorted,
-            "top_by_reliability": top_by_reliability,
-            "top_by_missed_4x":   top_by_missed,
-            "top_by_source_type": top_by_source_type,
+            "accepted_patterns":          accepted_sorted,
+            "top_by_reliability":         top_by_reliability,
+            "top_by_clean_reliability":   top_by_clean_reliability,
+            "top_by_supported_edge":      top_by_supported_edge,
+            "top_by_missed_4x":          top_by_missed,
+            "top_by_missed_4x_clean":    top_by_missed_4x_clean,
+            "top_by_source_type":        top_by_source_type,
+            "ranking_formula_version":   _RANKING_FORMULA_VERSION,
+            "reliability_score_legend":  _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
-                "accepted_patterns sorted by reliability_score desc, count_all_4x desc, false_positive_rate asc. "
-                "reliability_score = lift_vs_false_positive * sqrt(count_all_4x). "
+                "accepted_patterns sorted by reliability_score desc. "
+                "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+                "top_by_lift is research-only and unstable for zero-FP patterns. "
                 "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
             ),
         }
@@ -971,15 +1077,20 @@ async def build_discovery_export(
             "exported_at": exported_at,
             "run_id": run_id,
             "run": run,
-            "top_by_reliability": top_by_reliability,
-            "top_by_lift":        top_by_lift,
-            "top_by_missed_4x":   top_by_missed,
-            "top_by_source_type": top_by_source_type,
-            "split_contamination": split_contamination_summary,
+            "top_by_reliability":       top_by_reliability,
+            "top_by_clean_reliability": top_by_clean_reliability,
+            "top_by_supported_edge":    top_by_supported_edge,
+            "top_by_lift":              top_by_lift,
+            "top_by_missed_4x":        top_by_missed,
+            "top_by_missed_4x_clean":  top_by_missed_4x_clean,
+            "top_by_source_type":      top_by_source_type,
+            "split_contamination":     split_contamination_summary,
+            "ranking_formula_version": _RANKING_FORMULA_VERSION,
+            "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
                 "IMPORTANT: top_by_lift is dominated by rare zero-FP patterns with low sample count. "
-                "Prefer top_by_reliability for signal selection. "
-                "reliability_score = lift_vs_false_positive * sqrt(count_all_4x)."
+                "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+                "top_by_supported_edge requires count_all_4x>=8, lift>=1.5, fpr<=25%, exposure<=50%."
             ),
         }
 
@@ -1030,18 +1141,25 @@ async def build_discovery_export(
             "discovery_status": discovery_status,
             "debug": debug,
             "pump_watch_summary": pw_dist,
+            "diagnostic_label_counts": diagnostic_label_counts,
             "patterns_by_source_type_counts": st_counts,
-            "accepted_patterns": accepted_sorted[:1000],
-            "top_by_reliability": top_by_reliability,
-            "top_by_missed_4x":   top_by_missed,
-            "top_by_source_type": top_by_source_type,
+            "accepted_patterns":          accepted_sorted[:1000],
+            "top_by_reliability":         top_by_reliability,
+            "top_by_clean_reliability":   top_by_clean_reliability,
+            "top_by_supported_edge":      top_by_supported_edge,
+            "top_by_missed_4x":          top_by_missed,
+            "top_by_missed_4x_clean":    top_by_missed_4x_clean,
+            "top_by_source_type":        top_by_source_type,
             "split_contamination_summary": split_contamination_summary,
-            "sample_episodes": sample_episodes,
-            "registry_snapshot": registry,
+            "sample_episodes":           sample_episodes,
+            "registry_snapshot":         registry,
+            "ranking_formula_version":   _RANKING_FORMULA_VERSION,
+            "reliability_score_legend":  _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(
                 "Compact export: accepted patterns only (max 1000), sample episodes (top 25 per group). "
                 "For all episodes use section=episodes. For rejected patterns use section=rejected. "
-                "reliability_score = lift_vs_false_positive * sqrt(count_all_4x). "
+                "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+                "top_by_lift is research-only — unstable for zero-FP patterns. "
                 "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
             ),
         }
@@ -1059,20 +1177,27 @@ async def build_discovery_export(
         "episodes": episodes,
         "comparisons": comps,
         "pump_watch_summary": pw_dist,
-        "discovered_patterns": patterns if include_rejected else accepted_all,
-        "accepted_patterns":   accepted_all,
-        "rejected_patterns":   rejected_all if include_rejected else [],
-        "patterns_by_source_type": by_st_all,
-        "top_by_lift":         top_by_lift,
-        "top_by_missed_4x":    top_by_missed,
-        "top_by_reliability":  top_by_reliability,
-        "top_by_source_type":  top_by_source_type,
-        "split_contamination": split_contamination_full,
-        "bar_sequence_summary": bar_sequence_summary,
-        "registry_snapshot":   registry,
+        "diagnostic_label_counts": diagnostic_label_counts,
+        "discovered_patterns":      patterns if include_rejected else accepted_all,
+        "accepted_patterns":        accepted_all,
+        "rejected_patterns":        rejected_all if include_rejected else [],
+        "patterns_by_source_type":  by_st_all,
+        "top_by_lift":              top_by_lift,
+        "top_by_missed_4x":        top_by_missed,
+        "top_by_reliability":       top_by_reliability,
+        "top_by_clean_reliability": top_by_clean_reliability,
+        "top_by_supported_edge":    top_by_supported_edge,
+        "top_by_missed_4x_clean":  top_by_missed_4x_clean,
+        "top_by_source_type":       top_by_source_type,
+        "split_contamination":      split_contamination_full,
+        "bar_sequence_summary":     bar_sequence_summary,
+        "registry_snapshot":        registry,
+        "ranking_formula_version":  _RANKING_FORMULA_VERSION,
+        "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
         "notes": _notes(
             "Full export includes all patterns (accepted + rejected), all episodes, comparisons. "
-            "reliability_score = lift_vs_false_positive * sqrt(count_all_4x). "
+            "Use top_by_clean_reliability or top_by_supported_edge for signal selection. "
+            "top_by_lift is research-only and unstable for small-sample zero-FP patterns. "
             "All patterns are EXPERIMENTAL or RESEARCH_ONLY."
         ),
     }

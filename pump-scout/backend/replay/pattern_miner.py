@@ -840,6 +840,7 @@ def mine_bar_patterns(
         tot_detected = total_by_grp.get("detected_4x_pump", 0)
         tot_fp       = total_by_grp.get("false_positive",   0)
         tot_nw       = total_by_grp.get("normal_winner",    0)
+        tot_art      = total_by_grp.get("split_artifact",   0)
         tot_all_4x   = tot_missed + tot_detected
 
         for sig, grp_eps in sig_to_episodes.items():
@@ -928,8 +929,10 @@ def mine_bar_patterns(
                 "precision_estimate":     round(precision,  4),
                 "recall_all_4x":          round(recall_4x,  4),
                 "false_positive_rate":    fp_rate,
-                # Exposure
-                "split_artifact_exposure": round(cnt_art / max(cnt_all_4x, 1), 4) if cnt_all_4x > 0 else None,
+                # Exposure — normalised 0–1: fraction of all split-artifact episodes
+                # that match this pattern. Using tot_art as denominator ensures the
+                # value stays ≤ 1.0 (unlike cnt_art/cnt_all_4x which can exceed 1).
+                "split_artifact_exposure": round(cnt_art / max(tot_art, 1), 4) if tot_art > 0 else None,
                 "reverse_split_exposure":  None,
             })
 

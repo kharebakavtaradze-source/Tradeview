@@ -37,6 +37,91 @@ THRESHOLD_HIGH       = 65
 THRESHOLD_MEDIUM     = 45
 THRESHOLD_SPECULATIVE = 30
 
+# ── Diagnostic label IDs ──────────────────────────────────────────────────────
+
+DIAG_MISSING_STRUCTURE_RESCUE = "PX_MISSING_STRUCTURE_RESCUE"
+DIAG_REVERSE_SPLIT_REGIME     = "PX_REVERSE_SPLIT_REGIME"
+DIAG_SPLIT_ARTIFACT_EXCLUDED  = "SPLIT_ARTIFACT_EXCLUDED"
+
+
+def _apply_diagnostic_labels(ep: dict, label: str, score: int,
+                              risk_flags: list[str]) -> dict:
+    """
+    Compute diagnostic labels for an episode.
+
+    Returns:
+        {
+          "pump_watch_diagnostic_labels": list[str],   # e.g. ["PX_MISSING_STRUCTURE_RESCUE"]
+          "pump_watch_pattern_id":        str | None,  # primary diagnostic ID if any
+          "pump_watch_rescue_reason":     str | None,  # human-readable rescue note
+        }
+    """
+    diag_labels: list[str] = []
+    pattern_id: Optional[str] = None
+    rescue_reason: Optional[str] = None
+
+    # ── PX_REVERSE_SPLIT_REGIME ───────────────────────────────────────────────
+    split_ctx = ep.get("split_context") or ""
+    has_reverse_split = split_ctx in ("RECENT_REVERSE_SPLIT", "OLD_REVERSE_SPLIT") or \
+                        ep.get("has_reverse_split_near_episode")
+
+    if has_reverse_split and not ep.get("split_artifact_risk"):
+        diag_labels.append(DIAG_REVERSE_SPLIT_REGIME)
+        pattern_id = DIAG_REVERSE_SPLIT_REGIME
+        if split_ctx == "RECENT_REVERSE_SPLIT":
+            rescue_reason = "reverse_split_regime_recent"
+        else:
+            rescue_reason = "reverse_split_regime_old"
+
+    # ── PX_MISSING_STRUCTURE_RESCUE ───────────────────────────────────────────
+    max_ss = ep.get("max_structure_score_pre") or 0
+    bc_days = ep.get("buy_candidate_day_count_pre") or 0
+    watch_days = ep.get("watch_day_count_pre") or 0
+
+    missing_structure = (
+        max_ss is None or max_ss <= 0
+        or f"low_structure_score={max_ss}" in risk_flags
+        or "low_structure_score=0" in " ".join(risk_flags)
+    )
+    no_scanner_pressure = (
+        "no_scanner_pressure" in risk_flags
+        or (bc_days <= 1 and watch_days <= 1
+            and not ep.get("had_np_buy_candidate_pre")
+            and not ep.get("had_np_watch_pre"))
+    )
+
+    dryup = ep.get("dryup_day_count_pre") or 0
+    compression = ep.get("compression_days_pre") or 0
+    atr_contraction = ep.get("atr_contraction_days_pre") or 0
+    d_days = ep.get("d_confluence_day_count_pre") or 0
+    d_best = ep.get("d_confluence_best_type") or ""
+    bull_stack = ep.get("bull_stack_days_pre") or 0
+    days_ema50 = ep.get("days_above_ema50_pre") or 0
+
+    _STRONG_D_TYPES = {"D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34", "D4_THEN_BEUP_5B"}
+
+    has_raw_dryup = (8 <= dryup <= 30) or compression >= 6 or atr_contraction >= 10
+    has_raw_dconf = d_days >= 4 or ep.get("had_d_confluence_pre") or d_best in _STRONG_D_TYPES
+    has_raw_trend  = (
+        bull_stack >= 10 or days_ema50 >= 15
+        or ep.get("had_accumulation_like") or ep.get("had_spring_test_lps")
+    )
+    raw_strength = has_raw_dryup and has_raw_dconf and has_raw_trend
+
+    if (missing_structure and no_scanner_pressure and raw_strength
+            and not ep.get("split_artifact_risk")
+            and label == LABEL_IGNORE and score >= 15):
+        diag_labels.append(DIAG_MISSING_STRUCTURE_RESCUE)
+        if not pattern_id:
+            pattern_id = DIAG_MISSING_STRUCTURE_RESCUE
+            rescue_reason = "missing_structure_rescue_raw_strength"
+
+    return {
+        "pump_watch_diagnostic_labels": diag_labels,
+        "pump_watch_pattern_id":        pattern_id,
+        "pump_watch_rescue_reason":     rescue_reason,
+    }
+
 
 # ── Scoring ───────────────────────────────────────────────────────────────────
 
@@ -67,13 +152,16 @@ def compute_pump_watch_score(ep: dict) -> dict:
     # ── Base eligibility checks ───────────────────────────────────────────────
     if ep.get("split_artifact_risk"):
         return {
-            "pump_watch_score":       -40,
-            "pump_watch_label":       LABEL_IGNORE,
-            "pump_watch_reasons":     [],
-            "pump_watch_risk_flags":  ["SPLIT_ARTIFACT_EXCLUDED"],
-            "pump_watch_pattern_ids": [],
-            "pump_watch_split_context": ep.get("split_context") or "SPLIT_ARTIFACT_RISK",
-            "pump_watch_confidence":  "LOW",
+            "pump_watch_score":             -40,
+            "pump_watch_label":             LABEL_IGNORE,
+            "pump_watch_reasons":           [],
+            "pump_watch_risk_flags":        ["SPLIT_ARTIFACT_EXCLUDED"],
+            "pump_watch_pattern_ids":       [],
+            "pump_watch_split_context":     ep.get("split_context") or "SPLIT_ARTIFACT_RISK",
+            "pump_watch_confidence":        "LOW",
+            "pump_watch_diagnostic_labels": [DIAG_SPLIT_ARTIFACT_EXCLUDED],
+            "pump_watch_pattern_id":        DIAG_SPLIT_ARTIFACT_EXCLUDED,
+            "pump_watch_rescue_reason":     None,
         }
 
     skip_reason = ep.get("np_skip_reason") or ""
@@ -261,14 +349,31 @@ def compute_pump_watch_score(ep: dict) -> dict:
     else:
         confidence = "LOW"
 
+    diag = _apply_diagnostic_labels(ep, label, score, risk_flags)
+
+    # Rescue routing: PUMP_IGNORE with raw strength → PUMP_SPECULATIVE
+    if DIAG_MISSING_STRUCTURE_RESCUE in diag["pump_watch_diagnostic_labels"] and label == LABEL_IGNORE:
+        label = LABEL_SPECULATIVE
+        risk_flags.append("structure_fields_missing")
+
+    # Reverse split regime: cap confidence at MEDIUM for recent splits
+    split_ctx = ep.get("split_context") or ""
+    if DIAG_REVERSE_SPLIT_REGIME in diag["pump_watch_diagnostic_labels"]:
+        risk_flags.append("reverse_split_regime_requires_separate_model")
+        if split_ctx == "RECENT_REVERSE_SPLIT" and confidence == "HIGH":
+            confidence = "MEDIUM"
+
     return {
-        "pump_watch_score":        score,
-        "pump_watch_label":        label,
-        "pump_watch_reasons":      reasons,
-        "pump_watch_risk_flags":   risk_flags,
-        "pump_watch_pattern_ids":  matched_patterns,
-        "pump_watch_split_context": ep.get("split_context") or "NO_SPLIT",
-        "pump_watch_confidence":   confidence,
+        "pump_watch_score":           score,
+        "pump_watch_label":           label,
+        "pump_watch_reasons":         reasons,
+        "pump_watch_risk_flags":      risk_flags,
+        "pump_watch_pattern_ids":     matched_patterns,
+        "pump_watch_split_context":   ep.get("split_context") or "NO_SPLIT",
+        "pump_watch_confidence":      confidence,
+        "pump_watch_diagnostic_labels": diag["pump_watch_diagnostic_labels"],
+        "pump_watch_pattern_id":      diag["pump_watch_pattern_id"],
+        "pump_watch_rescue_reason":   diag["pump_watch_rescue_reason"],
     }
 
 
@@ -319,7 +424,18 @@ def summarize_pump_watch_distribution(scored_episodes: list[dict]) -> dict:
                 by_label[lbl]["false_positive_count"] / by_label[lbl]["total"], 3
             )
 
+    all_diag_labels = [DIAG_MISSING_STRUCTURE_RESCUE, DIAG_REVERSE_SPLIT_REGIME,
+                       DIAG_SPLIT_ARTIFACT_EXCLUDED]
+    diagnostic_label_counts = {
+        lbl: sum(
+            1 for ep in scored_episodes
+            if lbl in (ep.get("pump_watch_diagnostic_labels") or [])
+        )
+        for lbl in all_diag_labels
+    }
+
     return {
-        "by_group_type": distribution,
-        "by_label":      by_label,
+        "by_group_type":          distribution,
+        "by_label":               by_label,
+        "diagnostic_label_counts": diagnostic_label_counts,
     }
