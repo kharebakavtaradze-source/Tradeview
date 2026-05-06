@@ -817,9 +817,11 @@ def mine_bar_patterns(
     """
     # Signal ID prefix based on feature family
     _FAMILY_PREFIX = {
-        "PRICE_ACTION": "DISC_BAR_",
-        "FLOW":         "DISC_FLOW_",
-        "COMBINED":     "DISC_COMBINED_",
+        "PRICE_ACTION":         "DISC_BAR_",
+        "FLOW":                 "DISC_FLOW_",
+        "COMBINED":             "DISC_COMBINED_",
+        "CUSTOM_SIGNAL":        "DISC_CUSTOM_",
+        "FLOW_CUSTOM_COMBINED": "DISC_FLOW_CUSTOM_",
     }
     sig_id_prefix_base = _FAMILY_PREFIX.get(feature_family, "DISC_BAR_")
     results: list[dict] = []

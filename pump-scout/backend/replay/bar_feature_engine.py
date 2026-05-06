@@ -1281,6 +1281,20 @@ def build_bar_feature_snapshots_for_episode(
             "ema_stack_state":          fj.get("ema_stack_state"),
             "gap_hold":                 fj.get("gap_hold"),
             "gap_down_reclaim_same_day": fj.get("gap_down_reclaim_same_day"),
+            # Custom D/L/WLNBB signal flags (pre-computed by upstream process)
+            "has_l43":     fj.get("has_l43"),
+            "has_l22":     fj.get("has_l22"),
+            "has_l64":     fj.get("has_l64"),
+            "has_fri34":   fj.get("has_fri34"),
+            "has_fri64":   fj.get("has_fri64"),
+            "has_d3_beup": fj.get("has_d3_beup"),
+            "has_d4_beup": fj.get("has_d4_beup"),
+            "has_d6_beup": fj.get("has_d6_beup"),
+            "has_d4_l34":  fj.get("has_d4_l34"),
+            "has_d3_l34":  fj.get("has_d3_l34"),
+            "has_vbo":     fj.get("has_vbo"),
+            "has_lvbo":    fj.get("has_lvbo"),
+            "has_ld":      fj.get("has_ld"),
         }
 
         snap["tags"]          = bars_to_tags(snap)
@@ -1290,11 +1304,23 @@ def build_bar_feature_snapshots_for_episode(
         snap["flow_tag_signature"]     = TAG_FLAT
         snap["combined_tags"]          = snap["tags"][:]
         snap["combined_tag_signature"] = snap["tag_signature"]
+        # Custom signal tags — populated by build_custom_signal_tags()
+        snap["custom_tags"]                        = ["CUSTOM_FLAT"]
+        snap["custom_tag_signature"]               = "CUSTOM_FLAT"
+        snap["flow_custom_combined_tags"]          = ["FLAT"]
+        snap["flow_custom_combined_tag_signature"] = "FLAT"
 
         snapshots.append(snap)
 
     # Compute V1C flow features across the full sequence
     build_bar_flow_features(snapshots)
+
+    # Compute custom signal tags (single-bar flags + multi-bar composites)
+    try:
+        from replay.custom_signal_engine import build_custom_signal_tags
+        build_custom_signal_tags(snapshots)
+    except Exception:
+        pass  # Custom signal engine optional — fails gracefully
 
     return snapshots
 
@@ -1341,6 +1367,10 @@ def build_bar_sequences(
         sig_key = "flow_tag_signature"
     elif tag_mode == "combined":
         sig_key = "combined_tag_signature"
+    elif tag_mode == "custom":
+        sig_key = "custom_tag_signature"
+    elif tag_mode == "flow_custom_combined":
+        sig_key = "flow_custom_combined_tag_signature"
     else:
         sig_key = "tag_signature"
 
@@ -1359,6 +1389,10 @@ def build_bar_sequences(
                 bar_tags = [b.get("flow_tags") or [TAG_FLAT] for b in window_bars]
             elif tag_mode == "combined":
                 bar_tags = [b.get("combined_tags") or [TAG_FLAT] for b in window_bars]
+            elif tag_mode == "custom":
+                bar_tags = [b.get("custom_tags") or ["CUSTOM_FLAT"] for b in window_bars]
+            elif tag_mode == "flow_custom_combined":
+                bar_tags = [b.get("flow_custom_combined_tags") or [TAG_FLAT] for b in window_bars]
             else:
                 bar_tags = [b.get("tags") or [TAG_FLAT] for b in window_bars]
 
