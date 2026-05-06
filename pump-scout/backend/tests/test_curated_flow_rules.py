@@ -711,3 +711,91 @@ class TestOBVProxySafety:
         res_flow  = evaluate_curated_rules_on_snaps(snaps_flow)
         assert BADGE_OBV_ACCUM_DISTRIB not in res_price["curated_flow_badges"]
         assert BADGE_OBV_ACCUM_DISTRIB in  res_flow["curated_flow_badges"]
+
+
+# ── End-to-end: build_curated_flow_replay_analysis ───────────────────────────
+
+class TestCuratedFlowReplayAnalysis:
+    """
+    End-to-end: build_curated_flow_replay_analysis with one episode + one matching
+    snapshot produces a non-empty report with exact_badge_match_count > 0.
+    """
+
+    _OBV_SIG = "ADL_DISTRIB_3D+CMF_NEGATIVE+OBV_ACCUM_3D"
+
+    def _obv_snap(self):
+        return {
+            "flow_tags":           ["ADL_DISTRIB_3D", "CMF_NEGATIVE", "OBV_ACCUM_3D"],
+            "flow_tag_signature":  self._OBV_SIG,
+            "tags":                [],
+            "date":                "T-1",
+            "days_to_breakout":    1,
+        }
+
+    def _scored_ep_with_debug(self, episode_id=1):
+        """Episode pre-scored with OBV badge + curated_flow_debug pre-populated."""
+        ep  = _ep(episode_id=episode_id, group_type="4x_pump", symbol="TST")
+        cf  = score_episode_curated_flow(ep, [self._obv_snap()])
+        ep_scored = {**ep, **cf}
+        # Simulate what score_episodes_curated_flow would have stored in the fresh path
+        ep_scored["curated_flow_debug"] = {
+            "snapshot_count":           1,
+            "snapshots_with_flow_tags": 1,
+            "seen_flow_signatures":     [self._OBV_SIG],
+            "badges_matched":           list(ep_scored.get("curated_flow_badges") or []),
+            "exact_match_count":        ep_scored.get("curated_flow_exact_match_count", 0),
+        }
+        return ep_scored
+
+    def test_exact_badge_match_count_nonzero(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+
+        result = build_curated_flow_replay_analysis([self._scored_ep_with_debug()])
+        assert result["episode_count"] == 1
+        diag = result["curated_match_diagnostics"]
+        assert diag["exact_badge_match_count"] > 0, diag
+
+    def test_obv_badge_in_badge_match_counts(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+
+        result = build_curated_flow_replay_analysis([self._scored_ep_with_debug()])
+        diag = result["curated_match_diagnostics"]
+        assert diag["badge_match_counts"][BADGE_OBV_ACCUM_DISTRIB] == 1
+
+    def test_top_seen_flow_signatures_nonempty(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+
+        result = build_curated_flow_replay_analysis([self._scored_ep_with_debug()])
+        diag = result["curated_match_diagnostics"]
+        assert len(diag["top_seen_flow_signatures"]) > 0
+        assert diag["top_seen_flow_signatures"][0]["signature"] == self._OBV_SIG
+
+    def test_required_diagnostic_keys_always_present(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+
+        # Works for both matching and non-matching episodes
+        ep_no_signal = _ep(episode_id=99, symbol="EMPTY")
+        for ep in [self._scored_ep_with_debug(), ep_no_signal]:
+            result = build_curated_flow_replay_analysis([ep])
+            diag   = result["curated_match_diagnostics"]
+            for key in (
+                "exact_badge_match_count",
+                "episodes_with_no_snapshots",
+                "episodes_with_snapshots_but_no_flow_tags",
+                "episodes_with_flow_tags_but_no_badge",
+                "top_seen_flow_signatures",
+            ):
+                assert key in diag, f"Missing key '{key}' for ep={ep.get('symbol')}"
+
+    def test_no_curated_flow_error_on_success(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+
+        result = build_curated_flow_replay_analysis([self._scored_ep_with_debug()])
+        assert result.get("curated_flow_error") is None
+
+    def test_empty_episodes_returns_zero_count(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+
+        result = build_curated_flow_replay_analysis([])
+        assert result["episode_count"] == 0
+        assert result["report_type"] == "curated_flow_replay_analysis"
