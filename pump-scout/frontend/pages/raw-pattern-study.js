@@ -1792,6 +1792,11 @@ function PatternDiscoveryPanel({ runId }) {
   const [loadingFlowImpact, setLoadingFlowImpact] = useState(false);
   const [flowImpactErr,     setFlowImpactErr]     = useState('');
 
+  // Curated FLOW Replay tab — lazy-loaded from summary export
+  const [curatedFlow,        setCuratedFlow]        = useState(null);
+  const [loadingCuratedFlow, setLoadingCuratedFlow] = useState(false);
+  const [curatedFlowErr,     setCuratedFlowErr]     = useState('');
+
   const stopPoll = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     setPolling(false);
@@ -1810,6 +1815,22 @@ function PatternDiscoveryPanel({ runId }) {
       setFlowImpactErr(String(e));
     } finally {
       setLoadingFlowImpact(false);
+    }
+  };
+
+  const fetchCuratedFlow = async () => {
+    if (curatedFlow || loadingCuratedFlow) return;
+    setLoadingCuratedFlow(true);
+    setCuratedFlowErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=summary`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
+      const d = await r.json();
+      setCuratedFlow(d.curated_flow_replay_analysis || {});
+    } catch (e) {
+      setCuratedFlowErr(String(e));
+    } finally {
+      setLoadingCuratedFlow(false);
     }
   };
 
@@ -2188,12 +2209,17 @@ function PatternDiscoveryPanel({ runId }) {
               { id: 'by-family',    label: 'By Family' },
               { id: 'by-type',      label: 'By Source Type' },
               { id: 'all',          label: `All (${patterns.length})` },
-              { id: 'flow-impact',  label: 'FLOW Impact' },
+              { id: 'flow-impact',   label: 'FLOW Impact' },
+              { id: 'curated-flow', label: 'Curated FLOW' },
             ].filter(t => !t.hidden).map(({ id, label }) => (
               <button
                 key={id}
                 className={`${styles.tab}${resTab === id ? ' ' + styles.tabActive : ''}`}
-                onClick={() => { setResTab(id); if (id === 'flow-impact') fetchFlowImpact(); }}
+                onClick={() => {
+                  setResTab(id);
+                  if (id === 'flow-impact')  fetchFlowImpact();
+                  if (id === 'curated-flow') fetchCuratedFlow();
+                }}
               >
                 {label}
               </button>
@@ -2269,6 +2295,15 @@ function PatternDiscoveryPanel({ runId }) {
               data={flowImpact}
               loading={loadingFlowImpact}
               error={flowImpactErr}
+            />
+          )}
+
+          {/* Curated FLOW Replay (research-only) */}
+          {resTab === 'curated-flow' && (
+            <CuratedFlowTab
+              data={curatedFlow}
+              loading={loadingCuratedFlow}
+              error={curatedFlowErr}
             />
           )}
         </>
@@ -2617,6 +2652,293 @@ function FlowImpactTab({ data, loading, error }) {
           <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
             {recs.map((rec, i) => (
               <div key={i} style={{ fontSize: 12, display: 'flex', gap: 8 }}>
+                <span style={{ color: 'var(--blue)', flexShrink: 0 }}>▸</span>
+                <span>{typeof rec === 'string' ? rec : rec.text || JSON.stringify(rec)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Curated FLOW Replay Tab ────────────────────────────────────────────────────
+
+function CuratedFlowTab({ data, loading, error }) {
+  if (loading) return <div className={styles.statusMsg}>Loading Curated FLOW analysis…</div>;
+  if (error)   return <div className={styles.errorMsg}>{error}</div>;
+  if (!data || Object.keys(data).length === 0)
+    return <div className={styles.statusMsg}>No Curated FLOW data. Run discovery with flow mode first.</div>;
+
+  const fmtPct  = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+  const fmtN    = v => (v == null ? '—' : String(v));
+  const fmtInt  = v => (v == null ? '—' : String(Math.round(v)));
+
+  const bucketPerf = data.bucket_performance      || {};
+  const matrix     = data.pump_watch_x_curated_flow_matrix || {};
+  const badgePerf  = data.badge_performance        || [];
+  const missed4x   = data.missed_4x_rescue         || [];
+  const fpTraps    = data.false_positive_traps      || [];
+  const baseline   = data.baseline_vs_curated_flow  || {};
+  const summary    = data.summary                   || {};
+  const warnings   = data.warnings                  || [];
+  const recs       = data.recommendations           || [];
+
+  const BUCKET_ORDER  = ['CURATED_FLOW_HIGH', 'CURATED_FLOW_MEDIUM', 'CURATED_FLOW_LOW', 'CURATED_FLOW_IGNORE'];
+  const BUCKET_LABELS = {
+    CURATED_FLOW_HIGH:   'CF HIGH (≥8)',
+    CURATED_FLOW_MEDIUM: 'CF MEDIUM (5-7)',
+    CURATED_FLOW_LOW:    'CF LOW (3-4)',
+    CURATED_FLOW_IGNORE: 'CF IGNORE (<3)',
+  };
+  const PW_ORDER = ['PUMP_WATCH_HIGH', 'PUMP_WATCH_MEDIUM', 'PUMP_SPECULATIVE', 'PUMP_IGNORE'];
+
+  const BADGE_LABELS = {
+    PX_FLOW_DIVERGENCE_ACCUM_PRESSURE: 'Divergence Accum (+4)',
+    PX_FLOW_BULLISH_ACCUM_IGNITION:    'Bullish Accum (+3)',
+    PX_FLOW_DIVERGENCE_SUPPLY_ABSORB:  'Supply Absorb (+3)',
+    PX_IGNITION_CONFIRM_PRICE_ACTION:  'Ignition Confirm (+2)',
+    PX_GAP_RESET_RECLAIM_CONTEXT:      'Gap Reset (+2)',
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* Safety note */}
+      <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
+        <strong>RESEARCH ONLY</strong> — Curated FLOW layer from run 139 top patterns (5 frozen rules).
+        No BUY promotion. No Scanner V2 change. All output is experimental.
+        {data.anti_leakage_note && <span> · {data.anti_leakage_note}</span>}
+      </div>
+
+      {/* Warnings */}
+      {warnings.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle} style={{ color: 'var(--yellow)' }}>⚠ Warnings</span>
+          </div>
+          <div style={{ padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {warnings.map((w, i) => (
+              <div key={i} style={{ fontSize: 12, color: 'var(--yellow)', display: 'flex', gap: 8 }}>
+                <span>⚠</span><span>{w}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Summary cards */}
+      {Object.keys(summary).length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 10 }}>
+          {[
+            { label: 'Total Episodes',    val: fmtN(summary.total_episodes) },
+            { label: 'CF HIGH',           val: fmtN(summary.cf_high_count) },
+            { label: 'CF HIGH 4× Rate',   val: fmtPct(summary.cf_high_4x_rate) },
+            { label: 'CF HIGH FP Rate',   val: fmtPct(summary.cf_high_fp_rate) },
+            { label: 'Rescued 4×',        val: fmtN(summary.missed_4x_rescued) },
+            { label: 'FP Traps',          val: fmtN(summary.fp_traps) },
+          ].map(({ label, val }) => (
+            <div key={label} className={styles.tableCard} style={{ padding: '10px 14px', textAlign: 'center' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--blue)' }}>{val}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Bucket Performance */}
+      {Object.keys(bucketPerf).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Bucket Performance</span>
+            <span className={styles.tableHint}>Score thresholds: HIGH≥8, MED 5-7, LOW 3-4, IGNORE&lt;3</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Bucket</th><th>Count</th><th>4× Rate</th><th>FP Rate</th>
+                  <th>4× Count</th><th>FP Count</th>
+                  <th>Split Art.</th><th>Rev Split</th><th>Low DV</th>
+                </tr>
+              </thead>
+              <tbody>
+                {BUCKET_ORDER.map(bk => {
+                  const r = bucketPerf[bk];
+                  if (!r) return null;
+                  return (
+                    <tr key={bk} className={styles.historyRow}>
+                      <td style={{ fontWeight: 600 }}>{BUCKET_LABELS[bk] || bk}</td>
+                      <td>{fmtN(r.total)}</td>
+                      <td style={{ color: (r.four_x_rate||0) > 0.35 ? 'var(--green)' : undefined }}>
+                        {fmtPct(r.four_x_rate)}
+                      </td>
+                      <td style={{ color: (r.fp_rate||0) > 0.30 ? 'var(--red)' : undefined }}>
+                        {fmtPct(r.fp_rate)}
+                      </td>
+                      <td>{fmtN(r.four_x_count)}</td>
+                      <td>{fmtN(r.fp_count)}</td>
+                      <td>{fmtN(r.split_artifact_count)}</td>
+                      <td>{fmtN(r.reverse_split_count)}</td>
+                      <td>{fmtN(r.low_dollar_volume_count)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* PW × CF Matrix */}
+      {Object.keys(matrix).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Pump Watch × Curated FLOW Matrix</span>
+            <span className={styles.tableHint}>4× rate per cell</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>PW Label</th>
+                  {BUCKET_ORDER.map(bk => <th key={bk}>{BUCKET_LABELS[bk] || bk}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {PW_ORDER.map(pw => (
+                  <tr key={pw} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{pw.replace('_', ' ')}</td>
+                    {BUCKET_ORDER.map(bk => {
+                      const cell = (matrix[pw] || {})[bk];
+                      if (!cell) return <td key={bk}>—</td>;
+                      return (
+                        <td key={bk} style={{
+                          background: (cell.four_x_rate||0) > 0.40 ? 'rgba(0,200,100,0.08)' :
+                                      (cell.four_x_rate||0) < 0.10 ? 'rgba(200,50,50,0.06)' : undefined,
+                        }}>
+                          {fmtPct(cell.four_x_rate)} <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>n={cell.total}</span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Badge Performance */}
+      {badgePerf.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Badge Performance</span>
+            <span className={styles.tableHint}>Per frozen rule stats</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Badge</th><th>Count</th><th>4× Rate</th><th>FP Rate</th>
+                  <th>Split Art.</th><th>Rev Split</th><th>Low DV</th>
+                </tr>
+              </thead>
+              <tbody>
+                {badgePerf.map((b, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontSize: 11 }}>{BADGE_LABELS[b.badge] || b.badge}</td>
+                    <td>{fmtN(b.total)}</td>
+                    <td style={{ color: (b.four_x_rate||0) > 0.35 ? 'var(--green)' : undefined }}>
+                      {fmtPct(b.four_x_rate)}
+                    </td>
+                    <td style={{ color: (b.fp_rate||0) > 0.30 ? 'var(--red)' : undefined }}>
+                      {fmtPct(b.fp_rate)}
+                    </td>
+                    <td>{fmtN(b.split_artifact_count)}</td>
+                    <td>{fmtN(b.reverse_split_count)}</td>
+                    <td>{fmtN(b.low_dollar_volume_count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Missed 4× Rescue */}
+      {missed4x.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Missed 4× Rescue Candidates</span>
+            <span className={styles.tableHint}>4× episodes missed by PW but caught by CF HIGH/MEDIUM</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Symbol</th><th>PW Label</th><th>CF Bucket</th><th>CF Score</th>
+                  <th>Badges</th><th>Split</th>
+                </tr>
+              </thead>
+              <tbody>
+                {missed4x.slice(0, 30).map((ep, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600 }}>{ep.ticker || ep.symbol || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{ep.pump_watch_label || '—'}</td>
+                    <td style={{ color: 'var(--green)' }}>{ep.curated_flow_bucket || '—'}</td>
+                    <td>{fmtInt(ep.curated_flow_score)}</td>
+                    <td style={{ fontSize: 10 }}>{(ep.curated_flow_badges || []).map(b => BADGE_LABELS[b] || b).join(', ') || '—'}</td>
+                    <td style={{ fontSize: 10 }}>{ep.split_context || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* FP Traps */}
+      {fpTraps.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>False Positive Traps</span>
+            <span className={styles.tableHint}>FP episodes with CF HIGH/MEDIUM — study trap patterns</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Symbol</th><th>CF Bucket</th><th>CF Score</th>
+                  <th>Badges</th><th>Trap Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fpTraps.slice(0, 30).map((ep, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600 }}>{ep.ticker || ep.symbol || '—'}</td>
+                    <td style={{ color: 'var(--red)' }}>{ep.curated_flow_bucket || '—'}</td>
+                    <td>{fmtInt(ep.curated_flow_score)}</td>
+                    <td style={{ fontSize: 10 }}>{(ep.curated_flow_badges || []).map(b => BADGE_LABELS[b] || b).join(', ') || '—'}</td>
+                    <td style={{ fontSize: 10, color: 'var(--yellow)' }}>{(ep.trap_notes || []).join('; ') || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Recommendations */}
+      {recs.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Recommendations</span>
+          </div>
+          <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {recs.map((rec, i) => (
+              <div key={i} style={{ fontSize: 12, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                 <span style={{ color: 'var(--blue)', flexShrink: 0 }}>▸</span>
                 <span>{typeof rec === 'string' ? rec : rec.text || JSON.stringify(rec)}</span>
               </div>
