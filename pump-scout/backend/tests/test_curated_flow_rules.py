@@ -24,6 +24,9 @@ from replay.curated_flow_rules import (
     BADGE_GAP_RESET_RECLAIM,
     BADGE_OBV_ACCUM_DISTRIB,
     ALL_CURATED_BADGES,
+    _num,
+    _gte,
+    _between,
     evaluate_curated_flow_badges_from_snapshots,
     evaluate_curated_rules_on_snaps,
     compute_curated_flow_score,
@@ -799,3 +802,164 @@ class TestCuratedFlowReplayAnalysis:
         result = build_curated_flow_replay_analysis([])
         assert result["episode_count"] == 0
         assert result["report_type"] == "curated_flow_replay_analysis"
+
+
+# ── Safe numeric helpers ──────────────────────────────────────────────────────
+
+class TestNumHelpers:
+    def test_num_none_returns_default(self):
+        assert _num(None) == 0
+        assert _num(None, default=5) == 5
+
+    def test_num_int_passthrough(self):
+        assert _num(10) == 10.0
+        assert _num(0) == 0.0
+
+    def test_num_float_passthrough(self):
+        assert _num(3.5) == 3.5
+
+    def test_num_non_finite_returns_default(self):
+        import math
+        assert _num("NaN") == 0       # string "NaN" → nan → default
+        assert _num(float("nan")) == 0 # float NaN → default
+        assert _num(float("inf")) == 0 # Inf → default
+        assert _num("abc") == 0        # non-numeric string → default
+
+    def test_num_string_numeric(self):
+        assert _num("7") == 7.0
+
+    def test_gte_none_is_false_for_positive_threshold(self):
+        assert _gte(None, 5) is False
+        assert _gte(None, 1) is False
+
+    def test_gte_valid_value(self):
+        assert _gte(10, 5) is True
+        assert _gte(5, 5) is True
+        assert _gte(4, 5) is False
+
+    def test_between_none_is_false(self):
+        assert _between(None, 8, 25) is False
+
+    def test_between_valid_range(self):
+        assert _between(10, 8, 25) is True
+        assert _between(8, 8, 25) is True
+        assert _between(25, 8, 25) is True
+        assert _between(7, 8, 25) is False
+        assert _between(26, 8, 25) is False
+
+
+# ── None-safe scoring ─────────────────────────────────────────────────────────
+
+class TestNoneSafeScoring:
+    """
+    Ensures compute_curated_flow_score and the full analyzer pipeline never
+    crash when episode fields are None (as they can be in the database).
+    """
+
+    _NULL_EP = {
+        "dryup_day_count_pre":              None,
+        "d_confluence_day_count_pre":       None,
+        "compression_days_pre":             None,
+        "median_dollar_volume_pre":         None,
+        "avg_atr_pct_pre":                  None,
+        "high_expansion_risk_day_count_pre": None,
+        "had_accumulation_like":            None,
+        "had_spring_test_lps":              None,
+        "split_context":                    None,
+        "price_bucket":                     None,
+        "atr_bucket":                       None,
+        "dollar_volume_bucket":             None,
+        "split_artifact_risk":              None,
+        "pump_multiple":                    None,
+        "pump_watch_score":                 None,
+        "pump_watch_label":                 None,
+        "group_type":                       "4x_pump",
+        "symbol":                           "NULLTEST",
+        "episode_id":                       42,
+    }
+
+    def _null_ep(self, **overrides):
+        return {**self._NULL_EP, **overrides}
+
+    def test_median_dollar_volume_pre_none_does_not_crash(self):
+        ep = self._null_ep(median_dollar_volume_pre=None)
+        result = compute_curated_flow_score([], ep)
+        assert result["curated_flow_bucket"] == "CURATED_FLOW_IGNORE"
+
+    def test_dryup_day_count_pre_none_does_not_crash(self):
+        ep = self._null_ep(dryup_day_count_pre=None)
+        result = compute_curated_flow_score([], ep)
+        assert "curated_flow_bucket" in result
+
+    def test_d_confluence_day_count_pre_none_does_not_crash(self):
+        ep = self._null_ep(d_confluence_day_count_pre=None)
+        result = compute_curated_flow_score([], ep)
+        assert "curated_flow_bucket" in result
+
+    def test_compression_days_pre_none_does_not_crash(self):
+        ep = self._null_ep(compression_days_pre=None)
+        result = compute_curated_flow_score([], ep)
+        assert "curated_flow_bucket" in result
+
+    def test_high_expansion_risk_none_does_not_crash(self):
+        ep = self._null_ep(high_expansion_risk_day_count_pre=None)
+        result = compute_curated_flow_score([], ep)
+        assert "curated_flow_bucket" in result
+
+    def test_obv_badge_scores_with_all_context_fields_none(self):
+        # Exact badge must still fire even when all optional context fields are None
+        obv_snap = {
+            "flow_tags":          ["ADL_DISTRIB_3D", "CMF_NEGATIVE", "OBV_ACCUM_3D"],
+            "flow_tag_signature": "ADL_DISTRIB_3D+CMF_NEGATIVE+OBV_ACCUM_3D",
+            "tags": [], "date": "T-1", "days_to_breakout": 1,
+        }
+        ep = self._null_ep()
+        result = score_episode_curated_flow(ep, [obv_snap])
+        assert BADGE_OBV_ACCUM_DISTRIB in result["curated_flow_badges"]
+        assert result["curated_flow_exact_match_count"] == 1
+        assert result["curated_flow_bucket"] != "CURATED_FLOW_IGNORE"
+
+    def test_no_badge_plus_none_context_stays_ignore(self):
+        ep = self._null_ep()
+        result = compute_curated_flow_score([], ep)
+        assert result["curated_flow_bucket"] == "CURATED_FLOW_IGNORE"
+        assert result["curated_flow_is_proxy_only"] is True
+
+    def test_full_analyzer_none_fields_does_not_crash(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+        # False-positive episode with high_expansion_risk=None is what crashed run 146
+        fp_ep = self._null_ep(
+            group_type="false_positive",
+            curated_flow_badges=[BADGE_DIVERGENCE_ABSORB_PRESSURE],
+            curated_flow_bucket="CURATED_FLOW_HIGH",
+            curated_flow_score=9,
+            curated_flow_exact_match_count=1,
+            curated_flow_is_proxy_only=False,
+        )
+        result = build_curated_flow_replay_analysis([fp_ep])
+        assert result.get("curated_flow_error") is None
+        assert result["episode_count"] == 1
+        assert "curated_match_diagnostics" in result
+
+    def test_missing_dollar_volume_adds_risk_flag(self):
+        # When median_dollar_volume_pre is None, bonus is skipped and risk flag set
+        obv_snap = {
+            "flow_tags":          ["ADL_DISTRIB_3D", "CMF_NEGATIVE", "OBV_ACCUM_3D"],
+            "flow_tag_signature": "ADL_DISTRIB_3D+CMF_NEGATIVE+OBV_ACCUM_3D",
+            "tags": [], "date": "T-1", "days_to_breakout": 1,
+        }
+        ep = self._null_ep(median_dollar_volume_pre=None)
+        result = score_episode_curated_flow(ep, [obv_snap])
+        assert "missing_dollar_volume" in result["curated_flow_risk_flags"]
+
+    def test_all_none_episodes_full_pipeline_no_error(self):
+        from replay.curated_flow_analyzer import build_curated_flow_replay_analysis
+        episodes = [self._null_ep(episode_id=i, group_type=g) for i, g in enumerate(
+            ["4x_pump", "false_positive", "normal_winner", "4x_pump", "no_pump"]
+        )]
+        result = build_curated_flow_replay_analysis(episodes)
+        assert result.get("curated_flow_error") is None
+        assert result["episode_count"] == 5
+        diag = result["curated_match_diagnostics"]
+        assert "badge_match_counts" in diag
+        assert "top_seen_flow_signatures" in diag
