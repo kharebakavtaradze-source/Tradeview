@@ -25,6 +25,35 @@ Scoring model (v2)
 
 from typing import Optional
 
+
+# ── None-safe numeric helpers ─────────────────────────────────────────────────
+
+def _num(value, default: float = 0) -> float:
+    """Coerce a possibly-None episode field to a finite number.
+    Handles None, empty-string, NaN, Inf, and non-numeric values without crashing.
+    dict.get(key, default) only substitutes when the key is absent; it does NOT
+    substitute when the key is present with value None, so always use _num().
+    """
+    if value is None:
+        return default
+    try:
+        v = float(value)
+        return v if (v == v and v != float("inf") and v != float("-inf")) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _gte(value, threshold: float, default: float = 0) -> bool:
+    """None-safe `value >= threshold`. Returns False when value is None/invalid."""
+    return _num(value, default) >= threshold
+
+
+def _between(value, low: float, high: float, default: float = 0) -> bool:
+    """None-safe `low <= value <= high`. Returns False when value is None/invalid."""
+    v = _num(value, default)
+    return low <= v <= high
+
+
 # ── Curated badge names ───────────────────────────────────────────────────────
 
 # Strict divergence variant — requires LOWER_WICK_ABSORPTION (run-142 pattern)
@@ -571,21 +600,21 @@ def compute_curated_flow_score(
             primary_badge = badge
 
     # ── B. Context bonuses (only with exact badge OR allow_proxy_score) ───────
-    dryup       = ep.get("dryup_day_count_pre") or 0
-    d_conf      = ep.get("d_confluence_day_count_pre") or 0
-    compression = ep.get("compression_days_pre") or 0
+    dryup       = _num(ep.get("dryup_day_count_pre"))
+    d_conf      = _num(ep.get("d_confluence_day_count_pre"))
+    compression = _num(ep.get("compression_days_pre"))
     had_accum   = bool(ep.get("had_accumulation_like"))
     had_spring  = bool(ep.get("had_spring_test_lps"))
     split_ctx   = ep.get("split_context") or "NO_SPLIT"
-    median_dv   = ep.get("median_dollar_volume_pre") or 0
-    high_exp_ct = ep.get("high_expansion_risk_day_count_pre") or 0
+    median_dv   = _num(ep.get("median_dollar_volume_pre"))
+    high_exp_ct = _num(ep.get("high_expansion_risk_day_count_pre"))
 
     if has_exact_badge or allow_proxy_score:
-        if 8 <= dryup <= 25:
+        if _between(dryup, 8, 25):
             score += 2; reasons.append("+2 dryup 8-25d")
-        if d_conf >= 4:
+        if _gte(d_conf, 4):
             score += 2; reasons.append("+2 d_confluence>=4d")
-        if compression >= 6:
+        if _gte(compression, 6):
             score += 1; reasons.append("+1 compression>=6d")
         if had_accum:
             score += 1; reasons.append("+1 had_accumulation_like")
@@ -593,7 +622,9 @@ def compute_curated_flow_score(
             score += 1; reasons.append("+1 had_spring_test_lps")
         if split_ctx == "NO_SPLIT":
             score += 1; reasons.append("+1 no_split")
-        if median_dv >= 100_000:
+        if median_dv == 0:
+            risk_flags.append("missing_dollar_volume")
+        elif _gte(median_dv, 100_000):
             score += 1; reasons.append("+1 median_dv>=100k")
     else:
         reasons.append("[context bonuses skipped: no exact badge]")
@@ -628,7 +659,7 @@ def compute_curated_flow_score(
         or BADGE_DIVERGENCE_ACCUM        in badges
         or BADGE_BULLISH_ACCUM           in badges
     )
-    if high_exp_ct >= 30 and not has_bullish:
+    if _gte(high_exp_ct, 30) and not has_bullish:
         score -= 2; risk_flags.append("high_expansion_risk"); reasons.append("-2 high_exp>=30_no_bullish")
 
     # Regime penalties for OBV divergence badge (run-144 regime analysis)
@@ -641,7 +672,7 @@ def compute_curated_flow_score(
             score -= 2; risk_flags.append("obv_atr_extreme"); reasons.append("-2 obv_badge+atr_extreme")
 
     # Badge matched but no dryup/compression/D-confluence context
-    has_context = dryup >= 5 or compression >= 4 or d_conf >= 2
+    has_context = _gte(dryup, 5) or _gte(compression, 4) or _gte(d_conf, 2)
     if has_exact_badge and not has_context:
         score -= 2; risk_flags.append("badge_no_context"); reasons.append("-2 badge_no_context")
 
