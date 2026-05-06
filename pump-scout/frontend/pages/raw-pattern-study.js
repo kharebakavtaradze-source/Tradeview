@@ -2688,15 +2688,17 @@ function CuratedFlowTab({ data, loading, error }) {
   const fmtN    = v => (v == null ? '—' : String(v));
   const fmtInt  = v => (v == null ? '—' : String(Math.round(v)));
 
-  const bucketPerf = data.bucket_performance      || {};
-  const matrix     = data.pump_watch_x_curated_flow_matrix || {};
-  const badgePerf  = data.badge_performance        || [];
-  const missed4x   = data.missed_4x_rescue         || [];
-  const fpTraps    = data.false_positive_traps      || [];
-  const baseline   = data.baseline_vs_curated_flow  || {};
-  const summary    = data.summary                   || {};
-  const warnings   = data.warnings                  || [];
-  const recs       = data.recommendations           || [];
+  const bucketPerf   = data.bucket_performance                || {};
+  const matrix       = data.pump_watch_x_curated_flow_matrix  || {};
+  const badgeMatrix  = data.pump_watch_x_exact_badge_matrix   || {};
+  const badgePerf    = data.badge_performance                  || [];
+  const missed4x     = data.missed_4x_rescue                  || [];
+  const fpTraps      = data.false_positive_traps               || [];
+  const baseline     = data.baseline_vs_curated_flow           || {};
+  const summary      = data.summary                            || {};
+  const diagnostics  = data.curated_match_diagnostics          || {};
+  const warnings     = data.warnings                           || [];
+  const recs         = data.recommendations                    || [];
 
   const BUCKET_ORDER  = ['CURATED_FLOW_HIGH', 'CURATED_FLOW_MEDIUM', 'CURATED_FLOW_LOW', 'CURATED_FLOW_IGNORE'];
   const BUCKET_LABELS = {
@@ -2706,13 +2708,15 @@ function CuratedFlowTab({ data, loading, error }) {
     CURATED_FLOW_IGNORE: 'CF IGNORE (<3)',
   };
   const PW_ORDER = ['PUMP_WATCH_HIGH', 'PUMP_WATCH_MEDIUM', 'PUMP_SPECULATIVE', 'PUMP_IGNORE'];
+  const EXACT_COLS = ['EXACT_BADGE_PRESENT', 'PROXY_ONLY', 'NO_CURATED_SIGNAL'];
 
   const BADGE_LABELS = {
-    PX_FLOW_DIVERGENCE_ACCUM_PRESSURE: 'Divergence Accum (+4)',
-    PX_FLOW_BULLISH_ACCUM_IGNITION:    'Bullish Accum (+3)',
-    PX_FLOW_DIVERGENCE_SUPPLY_ABSORB:  'Supply Absorb (+3)',
-    PX_IGNITION_CONFIRM_PRICE_ACTION:  'Ignition Confirm (+2)',
-    PX_GAP_RESET_RECLAIM_CONTEXT:      'Gap Reset (+2)',
+    PX_FLOW_DIVERGENCE_ABSORB_PRESSURE_1B: 'Absorb Pressure (+5) ★',
+    PX_FLOW_DIVERGENCE_ACCUM_PRESSURE:     'Divergence Accum (+4)',
+    PX_FLOW_BULLISH_ACCUM_IGNITION:        'Bullish Accum (+3)',
+    PX_FLOW_DIVERGENCE_SUPPLY_ABSORB:      'Supply Absorb (+3)',
+    PX_IGNITION_CONFIRM_PRICE_ACTION:      'Ignition Confirm (+2)',
+    PX_GAP_RESET_RECLAIM_CONTEXT:          'Gap Reset (+2)',
   };
 
   return (
@@ -2720,8 +2724,9 @@ function CuratedFlowTab({ data, loading, error }) {
 
       {/* Safety note */}
       <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
-        <strong>RESEARCH ONLY</strong> — Curated FLOW layer from run 139 top patterns (5 frozen rules).
-        No BUY promotion. No Scanner V2 change. All output is experimental.
+        <strong>RESEARCH ONLY</strong> — Curated FLOW layer: 6 frozen rules from run 139/142 top patterns.
+        Exact badge required for CF HIGH/MEDIUM. Proxy-only score capped at CF LOW.
+        No BUY promotion. No Scanner V2 change.
         {data.anti_leakage_note && <span> · {data.anti_leakage_note}</span>}
       </div>
 
@@ -2745,12 +2750,15 @@ function CuratedFlowTab({ data, loading, error }) {
       {Object.keys(summary).length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 10 }}>
           {[
-            { label: 'Total Episodes',    val: fmtN(summary.total_episodes) },
-            { label: 'CF HIGH',           val: fmtN(summary.cf_high_count) },
-            { label: 'CF HIGH 4× Rate',   val: fmtPct(summary.cf_high_4x_rate) },
-            { label: 'CF HIGH FP Rate',   val: fmtPct(summary.cf_high_fp_rate) },
-            { label: 'Rescued 4×',        val: fmtN(summary.missed_4x_rescued) },
-            { label: 'FP Traps',          val: fmtN(summary.fp_traps) },
+            { label: 'Total Episodes',    val: fmtN(summary.episode_count) },
+            { label: 'Exact Badge Eps',   val: fmtN(summary.exact_badge_match_count) },
+            { label: 'Proxy-Only Eps',    val: fmtN(summary.proxy_only_count) },
+            { label: 'CF HIGH',           val: fmtN(summary.curated_flow_high_count) },
+            { label: 'CF HIGH 4× Rate',   val: fmtPct(summary.curated_flow_high_4x_rate) },
+            { label: 'CF HIGH FP Rate',   val: fmtPct(summary.curated_flow_high_fp_rate) },
+            { label: 'PW HIGH 4× Rate',   val: fmtPct(summary.pump_watch_high_4x_rate) },
+            { label: 'Rescued 4×',        val: fmtN(summary.missed_4x_rescued_count) },
+            { label: 'FP Traps',          val: fmtN(summary.false_positive_trap_count) },
           ].map(({ label, val }) => (
             <div key={label} className={styles.tableCard} style={{ padding: '10px 14px', textAlign: 'center' }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--blue)' }}>{val}</div>
@@ -2787,11 +2795,11 @@ function CuratedFlowTab({ data, loading, error }) {
                       <td style={{ color: (r.four_x_rate||0) > 0.35 ? 'var(--green)' : undefined }}>
                         {fmtPct(r.four_x_rate)}
                       </td>
-                      <td style={{ color: (r.fp_rate||0) > 0.30 ? 'var(--red)' : undefined }}>
-                        {fmtPct(r.fp_rate)}
+                      <td style={{ color: (r.false_positive_rate||0) > 0.30 ? 'var(--red)' : undefined }}>
+                        {fmtPct(r.false_positive_rate)}
                       </td>
                       <td>{fmtN(r.four_x_count)}</td>
-                      <td>{fmtN(r.fp_count)}</td>
+                      <td>{fmtN(r.false_positive_count)}</td>
                       <td>{fmtN(r.split_artifact_count)}</td>
                       <td>{fmtN(r.reverse_split_count)}</td>
                       <td>{fmtN(r.low_dollar_volume_count)}</td>
@@ -2843,12 +2851,92 @@ function CuratedFlowTab({ data, loading, error }) {
         </div>
       )}
 
+      {/* PW × Exact Badge Presence Matrix */}
+      {Object.keys(badgeMatrix).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Pump Watch × Exact Badge Presence</span>
+            <span className={styles.tableHint}>Does having an exact badge lift 4× rate above proxy-only?</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>PW Label</th>
+                  {EXACT_COLS.map(c => <th key={c} style={{ fontSize: 10 }}>{c.replace(/_/g,' ')}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {PW_ORDER.map(pw => (
+                  <tr key={pw} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{pw.replace(/_/g,' ')}</td>
+                    {EXACT_COLS.map(col => {
+                      const cell = (badgeMatrix[pw] || {})[col];
+                      if (!cell) return <td key={col}>—</td>;
+                      const isExact = col === 'EXACT_BADGE_PRESENT';
+                      return (
+                        <td key={col} style={{
+                          background: isExact && (cell.four_x_rate||0) > 0.40 ? 'rgba(0,200,100,0.10)' : undefined,
+                        }}>
+                          {fmtPct(cell.four_x_rate)}
+                          <span style={{ color: 'var(--text-muted)', fontSize: 10 }}> n={cell.total}</span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Exact Match Diagnostics */}
+      {Object.keys(diagnostics).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Exact Match Diagnostics</span>
+            <span className={styles.tableHint}>Badge firing counts vs proxy-only scores</span>
+          </div>
+          <div style={{ padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 12, display: 'flex', gap: 16 }}>
+              <span>Episodes with exact badges: <strong style={{ color: 'var(--green)' }}>{fmtN(diagnostics.episodes_with_exact_badges)}</strong></span>
+              <span>Proxy-only scored: <strong style={{ color: 'var(--yellow)' }}>{fmtN(diagnostics.episodes_with_proxy_only_score)}</strong></span>
+              <span>Total exact badge hits: <strong>{fmtN(diagnostics.exact_badge_match_count)}</strong></span>
+            </div>
+            {diagnostics.badge_match_counts && Object.keys(diagnostics.badge_match_counts).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                {Object.entries(diagnostics.badge_match_counts)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([badge, n]) => (
+                    <div key={badge} style={{
+                      fontSize: 10, padding: '2px 8px',
+                      background: n > 0 ? 'rgba(0,150,255,0.12)' : 'rgba(100,100,100,0.1)',
+                      borderRadius: 4,
+                      color: n > 0 ? 'var(--blue)' : 'var(--text-muted)',
+                    }}>
+                      {BADGE_LABELS[badge] || badge}: {n}
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+            {diagnostics.episodes_with_exact_badges === 0 && (
+              <div style={{ fontSize: 11, color: 'var(--yellow)', marginTop: 4 }}>
+                ⚠ No exact badges matched — all CF scores are proxy-only (dryup/compression context).
+                Bar snapshots (flow_tags) may be missing from the pipeline cache.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Badge Performance */}
       {badgePerf.length > 0 && (
         <div className={styles.tableCard}>
           <div className={styles.tableHeader}>
             <span className={styles.tableTitle}>Badge Performance</span>
-            <span className={styles.tableHint}>Per frozen rule stats</span>
+            <span className={styles.tableHint}>Per frozen rule stats — exact badge episodes only</span>
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table className={styles.historyTable} style={{ width: '100%' }}>
@@ -2860,14 +2948,17 @@ function CuratedFlowTab({ data, loading, error }) {
               </thead>
               <tbody>
                 {badgePerf.map((b, i) => (
-                  <tr key={i} className={styles.historyRow}>
-                    <td style={{ fontSize: 11 }}>{BADGE_LABELS[b.badge] || b.badge}</td>
+                  <tr key={i} className={styles.historyRow}
+                    style={{ background: b.badge === 'PX_FLOW_DIVERGENCE_ABSORB_PRESSURE_1B' ? 'rgba(0,200,100,0.05)' : undefined }}>
+                    <td style={{ fontSize: 11, fontWeight: b.badge === 'PX_FLOW_DIVERGENCE_ABSORB_PRESSURE_1B' ? 700 : undefined }}>
+                      {BADGE_LABELS[b.badge] || b.badge}
+                    </td>
                     <td>{fmtN(b.total)}</td>
                     <td style={{ color: (b.four_x_rate||0) > 0.35 ? 'var(--green)' : undefined }}>
                       {fmtPct(b.four_x_rate)}
                     </td>
-                    <td style={{ color: (b.fp_rate||0) > 0.30 ? 'var(--red)' : undefined }}>
-                      {fmtPct(b.fp_rate)}
+                    <td style={{ color: (b.false_positive_rate||0) > 0.30 ? 'var(--red)' : undefined }}>
+                      {fmtPct(b.false_positive_rate)}
                     </td>
                     <td>{fmtN(b.split_artifact_count)}</td>
                     <td>{fmtN(b.reverse_split_count)}</td>
@@ -2892,17 +2983,18 @@ function CuratedFlowTab({ data, loading, error }) {
               <thead>
                 <tr className={styles.historyHead}>
                   <th>Symbol</th><th>PW Label</th><th>CF Bucket</th><th>CF Score</th>
-                  <th>Badges</th><th>Split</th>
+                  <th>Exact Badges</th><th>Primary Badge</th><th>Split</th>
                 </tr>
               </thead>
               <tbody>
                 {missed4x.slice(0, 30).map((ep, i) => (
                   <tr key={i} className={styles.historyRow}>
                     <td style={{ fontWeight: 600 }}>{ep.ticker || ep.symbol || '—'}</td>
-                    <td style={{ fontSize: 11 }}>{ep.pump_watch_label || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{(ep.pump_watch_label || ep.original_pw_label || '—').replace(/_/g,' ')}</td>
                     <td style={{ color: 'var(--green)' }}>{ep.curated_flow_bucket || '—'}</td>
-                    <td>{fmtInt(ep.curated_flow_score)}</td>
+                    <td>{fmtInt(ep.curated_flow_score)} <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>({ep.curated_flow_exact_match_count || 0}✓)</span></td>
                     <td style={{ fontSize: 10 }}>{(ep.curated_flow_badges || []).map(b => BADGE_LABELS[b] || b).join(', ') || '—'}</td>
+                    <td style={{ fontSize: 10, color: 'var(--blue)' }}>{BADGE_LABELS[ep.curated_flow_primary_badge] || ep.curated_flow_primary_badge || '—'}</td>
                     <td style={{ fontSize: 10 }}>{ep.split_context || '—'}</td>
                   </tr>
                 ))}
@@ -2924,7 +3016,7 @@ function CuratedFlowTab({ data, loading, error }) {
               <thead>
                 <tr className={styles.historyHead}>
                   <th>Symbol</th><th>CF Bucket</th><th>CF Score</th>
-                  <th>Badges</th><th>Trap Notes</th>
+                  <th>Badges</th><th>Proxy-Only?</th><th>Trap Notes</th>
                 </tr>
               </thead>
               <tbody>
@@ -2932,8 +3024,11 @@ function CuratedFlowTab({ data, loading, error }) {
                   <tr key={i} className={styles.historyRow}>
                     <td style={{ fontWeight: 600 }}>{ep.ticker || ep.symbol || '—'}</td>
                     <td style={{ color: 'var(--red)' }}>{ep.curated_flow_bucket || '—'}</td>
-                    <td>{fmtInt(ep.curated_flow_score)}</td>
+                    <td>{fmtInt(ep.curated_flow_score)} <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>({ep.curated_flow_exact_match_count || 0}✓)</span></td>
                     <td style={{ fontSize: 10 }}>{(ep.curated_flow_badges || []).map(b => BADGE_LABELS[b] || b).join(', ') || '—'}</td>
+                    <td style={{ fontSize: 10, color: ep.curated_flow_is_proxy_only ? 'var(--yellow)' : 'var(--text-muted)' }}>
+                      {ep.curated_flow_is_proxy_only ? 'YES' : 'no'}
+                    </td>
                     <td style={{ fontSize: 10, color: 'var(--yellow)' }}>{(ep.trap_notes || []).join('; ') || '—'}</td>
                   </tr>
                 ))}

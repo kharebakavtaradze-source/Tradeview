@@ -11,12 +11,14 @@ Covers:
 import pytest
 
 from replay.curated_flow_rules import (
+    BADGE_DIVERGENCE_ABSORB_PRESSURE,
     BADGE_DIVERGENCE_ACCUM,
     BADGE_BULLISH_ACCUM,
     BADGE_SUPPLY_ABSORB,
     BADGE_IGNITION_CONFIRM,
     BADGE_GAP_RESET_RECLAIM,
     ALL_CURATED_BADGES,
+    evaluate_curated_flow_badges_from_snapshots,
     evaluate_curated_rules_on_snaps,
     compute_curated_flow_score,
     score_episode_curated_flow,
@@ -49,6 +51,49 @@ def _ep(**kwargs):
     }
     base.update(kwargs)
     return base
+
+
+# ── Rule 0: DIVERGENCE_ABSORB_PRESSURE (run 142 strict variant) ──────────────
+
+class TestRule0DivergenceAbsorbPressure:
+    _tags = {
+        "ADL_ACCUM_3D", "BUY_PRESSURE_HIGH", "CLOSE_HIGH",
+        "CMF_NEGATIVE", "LOWER_WICK_ABSORPTION", "OBV_ACCUM_3D",
+    }
+
+    def test_full_match(self):
+        snaps = [_snap(flow_tags=self._tags)]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_DIVERGENCE_ABSORB_PRESSURE in res["curated_flow_badges"]
+
+    def test_partial_no_match_missing_lower_wick(self):
+        partial = self._tags - {"LOWER_WICK_ABSORPTION"}
+        snaps = [_snap(flow_tags=partial)]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_DIVERGENCE_ABSORB_PRESSURE not in res["curated_flow_badges"]
+
+    def test_both_absorb_and_accum_fire_independently(self):
+        # Remove LOWER_WICK_ABSORPTION → only ACCUM fires; add it → both fire
+        accum_only = self._tags - {"LOWER_WICK_ABSORPTION"}
+        snaps = [_snap(flow_tags=self._tags), _snap(flow_tags=accum_only)]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_DIVERGENCE_ABSORB_PRESSURE in res["curated_flow_badges"]
+        assert BADGE_DIVERGENCE_ACCUM in res["curated_flow_badges"]
+
+    def test_score_weight_is_higher_than_accum(self):
+        # ABSORB_PRESSURE weight=5, ACCUM weight=4 → only max is used
+        badges = [BADGE_DIVERGENCE_ABSORB_PRESSURE, BADGE_DIVERGENCE_ACCUM]
+        ep = _ep(dryup_day_count_pre=10)
+        res = compute_curated_flow_score(badges, ep)
+        # Max of (5, 4) = 5; suppressed reason should appear
+        assert any("double-count suppressed" in r for r in res["curated_flow_reasons"])
+
+    def test_matched_bars_populated(self):
+        snaps = [_snap(flow_tags=self._tags)]
+        res = evaluate_curated_flow_badges_from_snapshots(snaps)
+        assert res["exact_match_count"] >= 1
+        assert any(mb["badge"] == BADGE_DIVERGENCE_ABSORB_PRESSURE
+                   for mb in res["matched_bars"])
 
 
 # ── Rule 1: DIVERGENCE_ACCUM ─────────────────────────────────────────────────
@@ -285,7 +330,25 @@ class TestScoreBuckets:
         res = compute_curated_flow_score(badges, ep)
         assert "badge_no_context" in res["curated_flow_risk_flags"]
 
-    def test_context_bonuses(self):
+    def test_context_bonuses_require_exact_badge(self):
+        # v2: context bonuses are skipped when no exact badge present
+        badges = []
+        ep = _ep(
+            dryup_day_count_pre=12,
+            d_confluence_day_count_pre=5,
+            compression_days_pre=8,
+            had_accumulation_like=True,
+            had_spring_test_lps=True,
+            split_context="NO_SPLIT",
+            median_dollar_volume_pre=150_000,
+        )
+        res = compute_curated_flow_score(badges, ep)
+        assert res["curated_flow_score"] == 0
+        assert res["curated_flow_bucket"] == "CURATED_FLOW_IGNORE"
+        assert any("context bonuses skipped" in r for r in res["curated_flow_reasons"])
+
+    def test_context_bonuses_with_allow_proxy_score(self):
+        # allow_proxy_score=True lets context bonuses fire without exact badge
         badges = []
         ep = _ep(
             dryup_day_count_pre=12,         # +2
@@ -296,9 +359,49 @@ class TestScoreBuckets:
             split_context="NO_SPLIT",       # +1
             median_dollar_volume_pre=150_000, # +1
         )
-        res = compute_curated_flow_score(badges, ep)
+        res = compute_curated_flow_score(badges, ep, allow_proxy_score=True)
         assert res["curated_flow_score"] == 9
         assert res["curated_flow_bucket"] == "CURATED_FLOW_HIGH"
+
+    def test_proxy_only_cap_at_4(self):
+        # No exact badge: score capped at 4 → at most LOW bucket
+        badges = []
+        ep = _ep(
+            dryup_day_count_pre=12,
+            d_confluence_day_count_pre=5,
+            compression_days_pre=8,
+            had_accumulation_like=True,
+            had_spring_test_lps=True,
+            split_context="NO_SPLIT",
+            median_dollar_volume_pre=150_000,
+        )
+        # Force context bonuses by using allow_proxy_score=True but check cap is present
+        # without allow_proxy_score: cap is applied, score = 0 capped at 4 → still 0
+        res_default = compute_curated_flow_score(badges, ep)
+        assert res_default["curated_flow_is_proxy_only"] is True
+        assert res_default["curated_flow_score"] <= 4
+        assert res_default["curated_flow_bucket"] in ("CURATED_FLOW_LOW", "CURATED_FLOW_IGNORE")
+
+    def test_is_proxy_only_false_when_badge_present(self):
+        badges = [BADGE_DIVERGENCE_ACCUM]
+        res = compute_curated_flow_score(badges, _ep(dryup_day_count_pre=10))
+        assert res["curated_flow_is_proxy_only"] is False
+        assert res["curated_flow_exact_match_count"] == 1
+
+    def test_divergence_pressure_double_count_prevention(self):
+        # Both ABSORB_PRESSURE(5) and ACCUM(4) fire → only max=5 counts
+        badges = [BADGE_DIVERGENCE_ABSORB_PRESSURE, BADGE_DIVERGENCE_ACCUM]
+        ep = _ep(dryup_day_count_pre=10)
+        res = compute_curated_flow_score(badges, ep)
+        # Score should include weight=5 (not 5+4=9 from badge alone)
+        # Badge scores = 5; plus context bonuses (+2 dryup, +1 no_split, +1 dv) = 9
+        assert res["curated_flow_score"] == 9
+        assert res["curated_flow_primary_badge"] == BADGE_DIVERGENCE_ABSORB_PRESSURE
+
+    def test_primary_badge_is_highest_weight_div_pressure(self):
+        badges = [BADGE_DIVERGENCE_ACCUM, BADGE_DIVERGENCE_ABSORB_PRESSURE]
+        res = compute_curated_flow_score(badges, _ep(dryup_day_count_pre=10))
+        assert res["curated_flow_primary_badge"] == BADGE_DIVERGENCE_ABSORB_PRESSURE
 
     def test_reasons_list_non_empty_when_scored(self):
         badges = [BADGE_DIVERGENCE_ACCUM]
@@ -342,13 +445,26 @@ class TestScoreEpisodeCuratedFlow:
                                    "CMF_NEGATIVE", "OBV_ACCUM_3D"})]
         ep = _ep(dryup_day_count_pre=10)
         res = score_episode_curated_flow(ep, snaps)
-        assert "curated_flow_badges" in res
-        assert "curated_flow_score" in res
-        assert "curated_flow_bucket" in res
-        assert "curated_flow_risk_flags" in res
-        assert "curated_flow_reasons" in res
-        assert "curated_flow_badge_reasons" in res
-        assert "curated_flow_subtypes" in res
+        for field in (
+            "curated_flow_badges", "curated_flow_score", "curated_flow_bucket",
+            "curated_flow_risk_flags", "curated_flow_reasons",
+            "curated_flow_badge_reasons", "curated_flow_subtypes",
+            "curated_flow_exact_match_count", "curated_flow_is_proxy_only",
+            "curated_flow_primary_badge", "curated_flow_matched_bars",
+        ):
+            assert field in res, f"Missing field: {field}"
+
+    def test_exact_match_count_correct(self):
+        snaps = [_snap(flow_tags={"ADL_ACCUM_3D", "BUY_PRESSURE_HIGH", "CLOSE_HIGH",
+                                   "CMF_NEGATIVE", "OBV_ACCUM_3D"})]
+        res = score_episode_curated_flow(_ep(dryup_day_count_pre=10), snaps)
+        assert res["curated_flow_exact_match_count"] == 1
+
+    def test_matched_bars_non_empty_when_badge_fires(self):
+        snaps = [_snap(flow_tags={"ADL_ACCUM_3D", "BUY_PRESSURE_HIGH", "CLOSE_HIGH",
+                                   "CMF_NEGATIVE", "OBV_ACCUM_3D"})]
+        res = score_episode_curated_flow(_ep(dryup_day_count_pre=10), snaps)
+        assert len(res["curated_flow_matched_bars"]) >= 1
 
     def test_bucket_is_valid_string(self):
         snaps = []
