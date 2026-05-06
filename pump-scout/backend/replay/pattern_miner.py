@@ -951,6 +951,14 @@ def mine_bar_patterns(
                 # value stays ≤ 1.0 (unlike cnt_art/cnt_all_4x which can exceed 1).
                 "split_artifact_exposure": round(cnt_art / max(tot_art, 1), 4) if tot_art > 0 else None,
                 "reverse_split_exposure":  None,
+                # Regime support: maps group → list of episode_ids that matched.
+                # Underscore prefix = NOT persisted to DB (_persist_pattern_candidates ignores it).
+                # Used by regime_engine.build_pattern_regime_breakdown() in the same process.
+                "_matched_by_group": {
+                    g: list(ids)
+                    for g, ids in grp_eps.items()
+                    if ids
+                },
             })
 
     # Sort: status priority, then lift descending

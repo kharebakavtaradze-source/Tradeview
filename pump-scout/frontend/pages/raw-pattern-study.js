@@ -2212,6 +2212,7 @@ function PatternDiscoveryPanel({ runId }) {
               { id: 'flow-impact',   label: 'FLOW Impact' },
               { id: 'curated-flow',  label: 'Curated FLOW' },
               { id: 'custom-signals', label: 'Custom Signals' },
+              { id: 'regimes',        label: 'Regimes' },
             ].filter(t => !t.hidden).map(({ id, label }) => (
               <button
                 key={id}
@@ -2220,7 +2221,7 @@ function PatternDiscoveryPanel({ runId }) {
                   setResTab(id);
                   if (id === 'flow-impact')  fetchFlowImpact();
                   if (id === 'curated-flow') fetchCuratedFlow();
-                  // custom-signals reads directly from results — no extra fetch
+                  // custom-signals and regimes read directly from results — no extra fetch
                 }}
               >
                 {label}
@@ -2312,6 +2313,11 @@ function PatternDiscoveryPanel({ runId }) {
           {/* Custom D/L/WLNBB Signals (research-only) */}
           {resTab === 'custom-signals' && (
             <CustomSignalsTab results={results} />
+          )}
+
+          {/* Price / Volatility Regimes (research-only) */}
+          {resTab === 'regimes' && (
+            <RegimesTab results={results} />
           )}
         </>
       )}
@@ -3126,6 +3132,227 @@ function CustomSignalsTab({ results }) {
           title="Top Custom Signal (V1D) — Clean Reliability (cnt≥4, exposure≤50%)"
           rows={topClean}
         />
+      )}
+    </div>
+  );
+}
+
+// ── Price / Volatility Regime Tab ─────────────────────────────────────────────
+
+function RegimesTab({ results }) {
+  if (!results || Object.keys(results).length === 0)
+    return <div className={styles.statusMsg}>No results loaded.</div>;
+
+  const ra = results.regime_analysis || {};
+  const hasData = Object.keys(ra).length > 0;
+
+  if (!hasData) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className={styles.discoveryNote} style={{ padding: '10px 14px', fontSize: 12 }}>
+          <strong>Regime analysis not yet available.</strong>{' '}
+          Run pattern discovery to populate price / volatility regime data.
+          Regime buckets (price, dollar volume, ATR, compression) are computed
+          automatically during any discovery run.
+        </div>
+      </div>
+    );
+  }
+
+  const fmtPct  = v => v == null ? '—' : `${(v * 100).toFixed(1)}%`;
+  const fmtN    = v => v == null ? '—' : String(v);
+  const fmtDV   = v => {
+    if (v == null) return '—';
+    if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 1_000)     return `$${(v / 1_000).toFixed(0)}K`;
+    return `$${v}`;
+  };
+
+  const warnings         = ra.regime_warnings              || [];
+  const perf             = ra.regime_performance           || {};
+  const cleanTradeable   = ra.top_patterns_clean_tradeable || [];
+  const priceByRegime    = ra.top_flow_by_price_regime     || {};
+  const volByRegime      = ra.top_flow_by_volatility_regime || {};
+  const customByPrice    = ra.top_custom_by_price_regime   || {};
+  const hasFullData      = ra.has_full_regime_data;
+
+  const priceLegend = ra.price_bucket_legend || {};
+  const dvLegend    = ra.dv_bucket_legend    || {};
+  const atrLegend   = ra.atr_bucket_legend   || {};
+
+  // ── Bucket performance table helper ────────────────────────────────────────
+  function BucketTable({ title, stats, legend }) {
+    const rows = Object.entries(stats || {});
+    if (rows.length === 0)
+      return (
+        <div className={styles.tableCard} style={{ padding: '8px 12px' }}>
+          <div className={styles.tableHeader}><span className={styles.tableTitle}>{title}</span></div>
+          <div className={styles.statusMsg} style={{ fontSize: 11 }}>No data.</div>
+        </div>
+      );
+
+    const sorted = rows.sort((a, b) => (b[1].count_4x || 0) - (a[1].count_4x || 0));
+    return (
+      <div className={styles.tableCard}>
+        <div className={styles.tableHeader}>
+          <span className={styles.tableTitle}>{title}</span>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className={styles.historyTable} style={{ width: '100%', fontSize: 11 }}>
+            <thead>
+              <tr className={styles.historyHead}>
+                <th>Bucket</th>
+                <th>Range</th>
+                <th>Episodes</th>
+                <th>4× Pumps</th>
+                <th>False Pos</th>
+                <th>4× Rate</th>
+                <th>FP Rate</th>
+                <th>Splits</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(([bucket, s]) => {
+                const rate4x = s['4x_rate'];
+                const fpRate = s.fp_rate;
+                const goodBucket = (rate4x || 0) > 0.50;
+                const badBucket  = (fpRate  || 0) > 0.60;
+                return (
+                  <tr key={bucket} className={styles.historyRow}
+                    style={{ background: goodBucket ? 'rgba(0,200,100,0.06)' : badBucket ? 'rgba(255,80,80,0.06)' : undefined }}>
+                    <td className={styles.dataCell} style={{ fontFamily: 'monospace', fontSize: 10 }}>{bucket}</td>
+                    <td className={styles.dataCell} style={{ color: 'var(--text-muted)', fontSize: 10 }}>{legend[bucket] || '—'}</td>
+                    <td className={styles.dataCell}>{fmtN(s.episode_count)}</td>
+                    <td className={styles.dataCell}>{fmtN(s.count_4x)}</td>
+                    <td className={styles.dataCell}>{fmtN(s.count_fp)}</td>
+                    <td className={styles.dataCell}
+                      style={{ color: goodBucket ? 'var(--green)' : fpRate > 0.5 ? 'var(--red)' : undefined, fontWeight: 600 }}>
+                      {fmtPct(rate4x)}
+                    </td>
+                    <td className={styles.dataCell}
+                      style={{ color: badBucket ? 'var(--red)' : (fpRate || 0) < 0.30 ? 'var(--green)' : undefined }}>
+                      {fmtPct(fpRate)}
+                    </td>
+                    <td className={styles.dataCell} style={{ color: 'var(--text-muted)' }}>{fmtN(s.count_split)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Regime-grouped pattern list helper ─────────────────────────────────────
+  function RegimePatternSection({ title, byBucket, legend }) {
+    const entries = Object.entries(byBucket || {}).filter(([, pats]) => pats.length > 0);
+    if (entries.length === 0) return null;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', padding: '4px 0' }}>{title}</div>
+        {entries.map(([bucket, pats]) => (
+          <PatternTable
+            key={bucket}
+            title={`${bucket}  (${legend[bucket] || '—'})  — ${pats.length} patterns`}
+            rows={pats}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* Safety note */}
+      <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
+        <strong>RESEARCH ONLY</strong> — Price / Volatility Regime Layer (V1F).
+        Regime buckets computed from PRE-window daily bars.
+        No BUY promotion. No Scanner V2 change.
+        {!hasFullData && (
+          <span style={{ color: 'var(--yellow)', marginLeft: 8 }}>
+            ⚠ Partial data — price and ATR buckets require a fresh discovery run in the same session.
+          </span>
+        )}
+      </div>
+
+      {/* Warning banners */}
+      {warnings.map(w => (
+        <div key={w.code} className={styles.tableCard}
+          style={{ padding: '10px 14px', borderLeft: `3px solid ${w.level === 'WARNING' ? 'var(--red)' : 'var(--yellow)'}` }}>
+          <div style={{ fontSize: 12, color: w.level === 'WARNING' ? 'var(--red)' : 'var(--yellow)', fontWeight: 600, marginBottom: 4 }}>
+            {w.level === 'WARNING' ? '⚠' : '◉'} {w.code}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{w.message}</div>
+        </div>
+      ))}
+
+      {/* Section 1: Price regime performance */}
+      <BucketTable
+        title="Episode Performance by Price Bucket"
+        stats={perf.by_price_bucket}
+        legend={priceLegend}
+      />
+
+      {/* Section 2: Dollar-volume regime performance */}
+      <BucketTable
+        title="Episode Performance by Dollar-Volume Bucket"
+        stats={perf.by_dollar_volume_bucket}
+        legend={dvLegend}
+      />
+
+      {/* Section 3: ATR (volatility) regime performance */}
+      <BucketTable
+        title="Episode Performance by ATR Bucket (Volatility)"
+        stats={perf.by_atr_bucket}
+        legend={atrLegend}
+      />
+
+      {/* Section 4: Split context performance */}
+      <BucketTable
+        title="Episode Performance by Split Context"
+        stats={perf.by_split_context}
+        legend={{ NO_SPLIT: 'Clean — no reverse split', OLD_REVERSE_SPLIT: 'Old reverse split (>90d)', RECENT_REVERSE_SPLIT: 'Recent reverse split (≤90d)' }}
+      />
+
+      {/* Section 5: FLOW patterns by price regime */}
+      <RegimePatternSection
+        title="Top FLOW Patterns — Grouped by Best-Performing Price Regime"
+        byBucket={priceByRegime}
+        legend={priceLegend}
+      />
+
+      {/* Section 6: FLOW patterns by volatility regime */}
+      <RegimePatternSection
+        title="Top FLOW Patterns — Grouped by Best-Performing ATR Regime"
+        byBucket={volByRegime}
+        legend={atrLegend}
+      />
+
+      {/* Section 7: Custom signal patterns by price regime */}
+      {Object.keys(customByPrice).length > 0 && (
+        <RegimePatternSection
+          title="Top Custom Signal Patterns — Grouped by Best-Performing Price Regime"
+          byBucket={customByPrice}
+          legend={priceLegend}
+        />
+      )}
+
+      {/* Section 8: Clean tradeable patterns */}
+      {cleanTradeable.length > 0 && (
+        <PatternTable
+          title={`Clean Tradeable Patterns — split≤25%, cnt≥4, FP≤35% (${cleanTradeable.length})`}
+          rows={cleanTradeable}
+        />
+      )}
+
+      {/* No per-pattern regime breakdown message when cache cold */}
+      {!hasFullData && (
+        <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11, marginTop: 4 }}>
+          Per-pattern regime breakdown and regime-grouped rankings require a fresh discovery run
+          in the same server session (in-memory cache). Re-run discovery to populate.
+        </div>
       )}
     </div>
   );
