@@ -40,6 +40,10 @@ _REGISTRY_PATH = os.path.join(
     os.path.dirname(__file__), "..", "discovered_signal_registry.json"
 )
 
+# Curated FLOW evaluation cache: (run_id, episode_id) → curated_flow_result dict
+# Populated during _run_bar_sequence_pipeline(); consumed by build_discovery_export().
+_curated_flow_cache: dict[tuple[int, int], dict] = {}
+
 # In-memory progress tracker
 _discovery_progress: dict = {
     "running":    False,
@@ -332,6 +336,20 @@ async def _run_bar_sequence_pipeline(
             if include_combined:
                 seqs_combined = build_bar_sequences(snaps, windows=windows, tag_mode="combined")
                 combined_sequences_by_group[grp].extend(seqs_combined)
+
+            # Evaluate curated FLOW rules on bar snapshots and cache result
+            if include_flow or include_combined:
+                try:
+                    from replay.curated_flow_rules import score_episode_curated_flow
+                    ep_id_for_cache = ep.get("episode_id") or ep.get("id")
+                    if ep_id_for_cache is not None:
+                        cf_result = score_episode_curated_flow(ep, snaps)
+                        _curated_flow_cache[(run_id, ep_id_for_cache)] = cf_result
+                        # Also attach directly so the in-memory episode has the fields
+                        ep.update(cf_result)
+                except Exception as _cfe:
+                    logger.debug("curated_flow_rules failed for episode %s: %s",
+                                 ep.get("episode_id"), _cfe)
 
             # Collect flow tag counts for debug
             for snap in snaps:
@@ -1251,6 +1269,25 @@ async def build_discovery_export(
             logger.warning("flow_impact_analyzer failed: %s", _fia_err)
             flow_scored_episodes = episodes
 
+    # Curated FLOW replay analysis (research-only, Part 9)
+    curated_scored_episodes: list = []
+    curated_flow_analysis: dict = {}
+    if episodes:
+        try:
+            from replay.curated_flow_analyzer import (
+                score_episodes_curated_flow,
+                build_curated_flow_replay_analysis,
+            )
+            curated_scored_episodes = score_episodes_curated_flow(
+                flow_scored_episodes if flow_scored_episodes else episodes
+            )
+            curated_flow_analysis = build_curated_flow_replay_analysis(
+                curated_scored_episodes, flow_working + combined_working
+            )
+        except Exception as _cfa_err:
+            logger.warning("curated_flow_analyzer failed: %s", _cfa_err)
+            curated_scored_episodes = flow_scored_episodes if flow_scored_episodes else episodes
+
     top_flow_by_clean_reliability = _top(
         [p for p in flow_working
          if (p.get("split_artifact_exposure") or 0) <= 0.50
@@ -1319,8 +1356,8 @@ async def build_discovery_export(
     )[:n]
 
     # ── Sample episodes for compact section ───────────────────────────────────
-    # Use flow_scored_episodes so per-episode flow fields are available
-    _ep_src = flow_scored_episodes if flow_scored_episodes else episodes
+    # Prefer curated_scored_episodes (has all flow + curated_flow_* fields)
+    _ep_src = curated_scored_episodes if curated_scored_episodes else (flow_scored_episodes if flow_scored_episodes else episodes)
     sample_episodes: dict = {}
     split_summary: dict = {}
     if _ep_src:
@@ -1372,6 +1409,7 @@ async def build_discovery_export(
             "split_contamination_summary": split_contamination_summary,
             "bar_sequence_summary": bar_sequence_summary,
             "flow_replay_analysis": flow_replay_analysis,
+            "curated_flow_replay_analysis": curated_flow_analysis,
             "ranking_formula_version": _RANKING_FORMULA_VERSION,
             "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(),
@@ -1468,6 +1506,7 @@ async def build_discovery_export(
             "episodes": _ep_src or episodes,
             "pump_watch_summary": pw_dist,
             "split_summary": split_summary,
+            "curated_flow_replay_analysis": curated_flow_analysis,
             "notes": _notes(),
         }
 
@@ -1530,6 +1569,7 @@ async def build_discovery_export(
             "split_contamination_summary":       split_contamination_summary,
             "sample_episodes":                   sample_episodes,
             "flow_replay_analysis":              flow_replay_analysis,
+            "curated_flow_replay_analysis":      curated_flow_analysis,
             "registry_snapshot":                 registry,
             "ranking_formula_version":           _RANKING_FORMULA_VERSION,
             "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
@@ -1584,6 +1624,7 @@ async def build_discovery_export(
         "split_contamination":                   split_contamination_full,
         "bar_sequence_summary":                  bar_sequence_summary,
         "flow_replay_analysis":                  flow_replay_analysis,
+        "curated_flow_replay_analysis":          curated_flow_analysis,
         "registry_snapshot":                     registry,
         "ranking_formula_version":               _RANKING_FORMULA_VERSION,
         "reliability_score_legend":              _RELIABILITY_SCORE_LEGEND,
