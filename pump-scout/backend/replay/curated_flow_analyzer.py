@@ -28,9 +28,11 @@ from replay.curated_flow_rules import (
     ALL_CURATED_BADGES,
     BADGE_DIVERGENCE_ABSORB_PRESSURE,
     BADGE_DIVERGENCE_ACCUM,
+    BADGE_OBV_ACCUM_DISTRIB,
     BADGE_SUPPLY_ABSORB,
     score_episode_curated_flow,
     curated_rules_registry_snapshot,
+    normalize_snapshot_flow_tags,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,6 +177,25 @@ def score_episodes_curated_flow(
 
         cf = score_episode_curated_flow(ep_copy, snaps)
         ep_copy.update(cf)
+
+        # Per-episode curated_flow_debug diagnostics
+        snaps_with_tags = sum(
+            1 for s in snaps
+            if (s.get("flow_tags") or []) not in ([], ["FLAT"])
+        )
+        seen_sigs: list[str] = [
+            s.get("flow_tag_signature") or "FLAT"
+            for s in snaps
+            if (s.get("flow_tag_signature") or "FLAT") != "FLAT"
+        ]
+        ep_copy["curated_flow_debug"] = {
+            "snapshot_count":              len(snaps),
+            "snapshots_with_flow_tags":    snaps_with_tags,
+            "seen_flow_signatures":        sorted(set(seen_sigs)),
+            "badges_matched":              list(ep_copy.get("curated_flow_badges") or []),
+            "exact_match_count":           ep_copy.get("curated_flow_exact_match_count", 0),
+        }
+
         result.append(ep_copy)
 
     return result
@@ -189,11 +210,15 @@ def _build_curated_match_diagnostics(episodes: list[dict]) -> dict:
     Returns
     -------
     {
-      "exact_badge_match_count":       int,
-      "proxy_score_only_count":        int,
-      "episodes_with_exact_badges":    int,
-      "episodes_with_proxy_only_score":int,
-      "badge_match_counts":            {badge: n},
+      "exact_badge_match_count":                   int,
+      "proxy_score_only_count":                    int,
+      "episodes_with_exact_badges":                int,
+      "episodes_with_proxy_only_score":            int,
+      "badge_match_counts":                        {badge: n},
+      "episodes_with_no_snapshots":                int,
+      "episodes_with_snapshots_but_no_flow_tags":  int,
+      "episodes_with_flow_tags_but_no_badge":      int,
+      "top_seen_flow_signatures":                  [{signature, count}],
     }
     """
     eps_with_exact  = [e for e in episodes if _cf_exact_count(e) > 0]
@@ -203,12 +228,38 @@ def _build_curated_match_diagnostics(episodes: list[dict]) -> dict:
     for badge in ALL_CURATED_BADGES:
         badge_counts[badge] = sum(1 for e in episodes if badge in _cf_badges(e))
 
+    # Per-episode debug breakdowns (available when score_episodes_curated_flow ran)
+    no_snaps           = 0
+    snaps_no_flow_tags = 0
+    flow_tags_no_badge = 0
+    sig_counter: dict[str, int] = {}
+    for ep in episodes:
+        dbg = ep.get("curated_flow_debug") or {}
+        snap_n     = dbg.get("snapshot_count", 0)
+        snaps_wtag = dbg.get("snapshots_with_flow_tags", 0)
+        if snap_n == 0:
+            no_snaps += 1
+        elif snaps_wtag == 0:
+            snaps_no_flow_tags += 1
+        elif _cf_exact_count(ep) == 0:
+            flow_tags_no_badge += 1
+        for sig in (dbg.get("seen_flow_signatures") or []):
+            sig_counter[sig] = sig_counter.get(sig, 0) + 1
+
+    top_sigs = sorted(sig_counter.items(), key=lambda x: -x[1])[:20]
+
     return {
-        "exact_badge_match_count":        sum(_cf_exact_count(e) for e in episodes),
-        "proxy_score_only_count":         len(eps_proxy_only),
-        "episodes_with_exact_badges":     len(eps_with_exact),
-        "episodes_with_proxy_only_score": len(eps_proxy_only),
-        "badge_match_counts":             badge_counts,
+        "exact_badge_match_count":                  sum(_cf_exact_count(e) for e in episodes),
+        "proxy_score_only_count":                   len(eps_proxy_only),
+        "episodes_with_exact_badges":               len(eps_with_exact),
+        "episodes_with_proxy_only_score":           len(eps_proxy_only),
+        "badge_match_counts":                       badge_counts,
+        "episodes_with_no_snapshots":               no_snaps,
+        "episodes_with_snapshots_but_no_flow_tags": snaps_no_flow_tags,
+        "episodes_with_flow_tags_but_no_badge":     flow_tags_no_badge,
+        "top_seen_flow_signatures":                 [
+            {"signature": sig, "count": cnt} for sig, cnt in top_sigs
+        ],
     }
 
 
@@ -259,7 +310,8 @@ def _build_pw_exact_badge_matrix(episodes: list[dict]) -> dict:
     """
     Second matrix: Pump Watch label × Exact Badge Presence.
 
-    Columns: EXACT_BADGE_PRESENT, PROXY_ONLY, NO_CURATED_SIGNAL
+    Columns: EXACT_BADGE_PRESENT, PROXY_ONLY, NO_CURATED_SIGNAL,
+             plus one column per badge in ALL_CURATED_BADGES.
     """
     def _col(ep: dict) -> str:
         if _cf_exact_count(ep) > 0:
@@ -267,6 +319,8 @@ def _build_pw_exact_badge_matrix(episodes: list[dict]) -> dict:
         if _cf_score(ep) >= 3:
             return "PROXY_ONLY"
         return "NO_CURATED_SIGNAL"
+
+    all_cols = _EXACT_PRESENCE_COLS + ALL_CURATED_BADGES
 
     matrix: dict[str, dict] = {}
     for pw in _PW_LABELS:
@@ -276,6 +330,12 @@ def _build_pw_exact_badge_matrix(episodes: list[dict]) -> dict:
             stats = _outcome_stats(cell)
             stats["sample_symbols"] = [_sym(e) for e in cell[:5]]
             matrix[pw][col] = stats
+        # Per-badge breakdown for this PW label
+        for badge in ALL_CURATED_BADGES:
+            cell = [e for e in episodes if _pw_label(e) == pw and badge in _cf_badges(e)]
+            stats = _outcome_stats(cell)
+            stats["sample_symbols"] = [_sym(e) for e in cell[:5]]
+            matrix[pw][badge] = stats
     return matrix
 
 
@@ -310,17 +370,25 @@ def _build_badge_performance(episodes: list[dict], regime_available: bool = Fals
             1 for e in matched if e.get("split_artifact_risk")
         )
 
-        # Price / DV regime breakdown (if regime data available on episodes)
-        if regime_available:
-            pb_counts: dict[str, int] = {}
-            dv_counts: dict[str, int] = {}
-            for e in matched:
-                pb = e.get("price_bucket") or "UNKNOWN"
-                pb_counts[pb] = pb_counts.get(pb, 0) + 1
-                dv = e.get("dollar_volume_bucket") or "UNKNOWN"
-                dv_counts[dv] = dv_counts.get(dv, 0) + 1
-            stats["price_bucket_breakdown"]        = pb_counts
-            stats["dollar_volume_bucket_breakdown"] = dv_counts
+        # Regime breakdown — always compute if any episode has bucket fields
+        def _regime_breakdown(eps: list[dict], field: str) -> dict:
+            by_bucket: dict[str, dict] = {}
+            for e in eps:
+                bkt = e.get(field) or "UNKNOWN"
+                if bkt not in by_bucket:
+                    by_bucket[bkt] = {"n": 0, "n_4x": 0, "n_fp": 0}
+                by_bucket[bkt]["n"]    += 1
+                if _is_4x(e): by_bucket[bkt]["n_4x"] += 1
+                if _is_fp(e): by_bucket[bkt]["n_fp"]  += 1
+            # Add 4x_rate per bucket
+            for bkt, d in by_bucket.items():
+                d["4x_rate"] = _safe_rate(d["n_4x"], d["n"])
+                d["fp_rate"] = _safe_rate(d["n_fp"], d["n"])
+            return by_bucket
+
+        stats["by_price_bucket"]        = _regime_breakdown(matched, "price_bucket")
+        stats["by_atr_bucket"]          = _regime_breakdown(matched, "atr_bucket")
+        stats["by_dollar_volume_bucket"] = _regime_breakdown(matched, "dollar_volume_bucket")
 
         rows.append(stats)
     return rows

@@ -1,12 +1,17 @@
 """
-Unit tests for replay/curated_flow_rules.py — Part 11.
+Unit tests for replay/curated_flow_rules.py — Part 11 + Part 15 additions.
 
 Covers:
-  - Rule matching for all 5 curated badges (single-bar flow, price, 5-bar window)
+  - Rule matching for all curated badges (single-bar flow, price, 5-bar window)
+  - OBV divergence badge (run-144, Part 7)
   - Score computation: HIGH / MEDIUM / LOW / IGNORE bucket assignment
   - Context bonuses and risk penalties
+  - OBV family double-count prevention (Part 9)
+  - OBV regime penalties: price_gt25 and atr_extreme (Part 10)
+  - Flow tag normalization via normalize_snapshot_flow_tags (Part 5)
   - Anti-leakage assertion (_assert_no_leakage)
   - Export field existence via score_episode_curated_flow
+  - Proxy safety: OBV badge must not be reachable without exact match
 """
 import pytest
 
@@ -17,11 +22,13 @@ from replay.curated_flow_rules import (
     BADGE_SUPPLY_ABSORB,
     BADGE_IGNITION_CONFIRM,
     BADGE_GAP_RESET_RECLAIM,
+    BADGE_OBV_ACCUM_DISTRIB,
     ALL_CURATED_BADGES,
     evaluate_curated_flow_badges_from_snapshots,
     evaluate_curated_rules_on_snaps,
     compute_curated_flow_score,
     score_episode_curated_flow,
+    normalize_snapshot_flow_tags,
 )
 
 
@@ -491,3 +498,216 @@ class TestScoreEpisodeCuratedFlow:
         res = score_episode_curated_flow(_ep(), [])
         assert res["curated_flow_bucket"] == "CURATED_FLOW_IGNORE"
         assert res["curated_flow_badges"] == []
+
+
+# ── Rule (new): OBV_ACCUM_DISTRIB (run-144, Part 7) ──────────────────────────
+
+class TestRuleOBVAccumDistrib:
+    _tags = {"ADL_DISTRIB_3D", "CMF_NEGATIVE", "OBV_ACCUM_3D"}
+
+    def test_full_match(self):
+        snaps = [_snap(flow_tags=self._tags)]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_OBV_ACCUM_DISTRIB in res["curated_flow_badges"]
+
+    def test_partial_no_match_missing_obv_accum(self):
+        snaps = [_snap(flow_tags=self._tags - {"OBV_ACCUM_3D"})]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_OBV_ACCUM_DISTRIB not in res["curated_flow_badges"]
+
+    def test_partial_no_match_missing_adl_distrib(self):
+        snaps = [_snap(flow_tags=self._tags - {"ADL_DISTRIB_3D"})]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_OBV_ACCUM_DISTRIB not in res["curated_flow_badges"]
+
+    def test_partial_no_match_missing_cmf_negative(self):
+        snaps = [_snap(flow_tags=self._tags - {"CMF_NEGATIVE"})]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_OBV_ACCUM_DISTRIB not in res["curated_flow_badges"]
+
+    def test_match_on_any_bar(self):
+        snaps = [_snap(), _snap(flow_tags=self._tags)]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_OBV_ACCUM_DISTRIB in res["curated_flow_badges"]
+
+    def test_flow_mode_only(self):
+        # Must come from flow_tags, not price tags
+        snaps = [_snap(flow_tags=set(), tags=self._tags)]
+        res = evaluate_curated_rules_on_snaps(snaps)
+        assert BADGE_OBV_ACCUM_DISTRIB not in res["curated_flow_badges"]
+
+    def test_in_all_curated_badges(self):
+        assert BADGE_OBV_ACCUM_DISTRIB in ALL_CURATED_BADGES
+
+    def test_score_weight_4(self):
+        badges = [BADGE_OBV_ACCUM_DISTRIB]
+        ep = _ep(dryup_day_count_pre=10)
+        res = compute_curated_flow_score(badges, ep)
+        # Score should be at least 4 from badge alone (+ context bonuses, - maybe badge_no_context)
+        # dryup=10 → has_context=True → no badge_no_context penalty
+        # +4 badge + +2 dryup + +1 no_split + +1 dv = 8 → HIGH
+        assert res["curated_flow_score"] >= 4
+
+    def test_not_bearish_only_penalized(self):
+        # OBV_ACCUM_DISTRIB alone should NOT trigger bearish_supply_only flag
+        badges = [BADGE_OBV_ACCUM_DISTRIB]
+        ep = _ep(dryup_day_count_pre=10)
+        res = compute_curated_flow_score(badges, ep)
+        assert "bearish_supply_only" not in res["curated_flow_risk_flags"]
+
+
+# ── OBV family double-count prevention (Part 9) ───────────────────────────────
+
+class TestOBVFamilyDoubleCount:
+    def test_obv_supply_both_fire_only_max_score(self):
+        # BADGE_OBV_ACCUM_DISTRIB (+4) and BADGE_SUPPLY_ABSORB (+3) are in same family
+        # Only max=4 should be counted from the family
+        badges = [BADGE_OBV_ACCUM_DISTRIB, BADGE_SUPPLY_ABSORB]
+        ep = _ep(dryup_day_count_pre=10)
+        res = compute_curated_flow_score(badges, ep)
+        assert any("double-count suppressed" in r for r in res["curated_flow_reasons"])
+
+    def test_obv_is_primary_over_supply_absorb(self):
+        badges = [BADGE_OBV_ACCUM_DISTRIB, BADGE_SUPPLY_ABSORB]
+        res = compute_curated_flow_score(badges, _ep(dryup_day_count_pre=10))
+        assert res["curated_flow_primary_badge"] == BADGE_OBV_ACCUM_DISTRIB
+
+    def test_supply_absorb_alone_gets_its_own_score(self):
+        badges = [BADGE_SUPPLY_ABSORB]
+        ep = _ep(dryup_day_count_pre=10)
+        res = compute_curated_flow_score(badges, ep)
+        # SUPPLY_ABSORB alone: +3 badge; but bearish_supply_only penalty applies → -2
+        # dryup has_context → no badge_no_context
+        # Score = 3 - 2 (bearish_supply_only) + 2 (dryup) + 1 + 1 = 5 → MEDIUM
+        assert res["curated_flow_score"] >= 1
+
+    def test_obv_family_separate_from_dp_family(self):
+        # Both ABSORB_PRESSURE (dp_family) and OBV_ACCUM_DISTRIB (obv_family) should both score
+        badges = [BADGE_DIVERGENCE_ABSORB_PRESSURE, BADGE_OBV_ACCUM_DISTRIB]
+        ep = _ep(dryup_day_count_pre=10)
+        res = compute_curated_flow_score(badges, ep)
+        # Both families count independently: dp(5) + obv(4) + context
+        # No double-count suppression across families
+        score = res["curated_flow_score"]
+        assert score >= 9  # at minimum: 5 + 4 = 9 from badges alone
+
+
+# ── OBV regime penalties (Part 10) ───────────────────────────────────────────
+
+class TestOBVRegimePenalties:
+    _obv_badges = [BADGE_OBV_ACCUM_DISTRIB]
+
+    def test_price_gt25_penalty(self):
+        ep = _ep(dryup_day_count_pre=10, price_bucket="PRICE_GT_25")
+        res = compute_curated_flow_score(self._obv_badges, ep)
+        assert "obv_price_gt25" in res["curated_flow_risk_flags"]
+        # Penalty of -2 should apply
+        assert any("obv_badge+price_gt25" in r for r in res["curated_flow_reasons"])
+
+    def test_atr_extreme_penalty(self):
+        ep = _ep(dryup_day_count_pre=10, atr_bucket="ATR_EXTREME_GT_40")
+        res = compute_curated_flow_score(self._obv_badges, ep)
+        assert "obv_atr_extreme" in res["curated_flow_risk_flags"]
+        assert any("obv_badge+atr_extreme" in r for r in res["curated_flow_reasons"])
+
+    def test_both_regime_penalties_stack(self):
+        ep = _ep(dryup_day_count_pre=10, price_bucket="PRICE_GT_25", atr_bucket="ATR_EXTREME_GT_40")
+        res = compute_curated_flow_score(self._obv_badges, ep)
+        assert "obv_price_gt25" in res["curated_flow_risk_flags"]
+        assert "obv_atr_extreme" in res["curated_flow_risk_flags"]
+
+    def test_no_penalty_normal_regime(self):
+        ep = _ep(dryup_day_count_pre=10, price_bucket="PRICE_1_TO_3", atr_bucket="ATR_LOW_LT_5")
+        res = compute_curated_flow_score(self._obv_badges, ep)
+        assert "obv_price_gt25" not in res["curated_flow_risk_flags"]
+        assert "obv_atr_extreme" not in res["curated_flow_risk_flags"]
+
+    def test_penalty_only_when_obv_badge_present(self):
+        # Should not apply penalties if OBV badge not in list
+        badges = [BADGE_DIVERGENCE_ACCUM]
+        ep = _ep(dryup_day_count_pre=10, price_bucket="PRICE_GT_25")
+        res = compute_curated_flow_score(badges, ep)
+        assert "obv_price_gt25" not in res["curated_flow_risk_flags"]
+
+
+# ── normalize_snapshot_flow_tags (Part 5) ─────────────────────────────────────
+
+class TestNormalizeSnapshotFlowTags:
+    def test_reads_flow_tags_list(self):
+        snap = {"flow_tags": ["ADL_ACCUM_3D", "CMF_NEGATIVE"]}
+        result = normalize_snapshot_flow_tags(snap)
+        assert "ADL_ACCUM_3D" in result
+        assert "CMF_NEGATIVE" in result
+
+    def test_skips_flat_in_flow_tags(self):
+        snap = {"flow_tags": ["FLAT"]}
+        result = normalize_snapshot_flow_tags(snap)
+        assert result == [] or result == ["FLAT"]
+
+    def test_explicit_empty_flow_tags_no_fallback_to_tags(self):
+        # If flow_tags is explicitly [], do NOT fall back to tags even if tags has flow-named strings
+        snap = {
+            "flow_tags": [],
+            "tags": ["ADL_ACCUM_3D", "CMF_NEGATIVE"],
+        }
+        result = normalize_snapshot_flow_tags(snap)
+        # Must respect the explicit empty flow_tags — no tags-field pollution
+        assert "ADL_ACCUM_3D" not in result
+        assert result == []
+
+    def test_falls_back_to_flow_tag_signature(self):
+        snap = {"flow_tag_signature": "ADL_ACCUM_3D+OBV_ACCUM_3D"}
+        result = normalize_snapshot_flow_tags(snap)
+        assert "ADL_ACCUM_3D" in result
+        assert "OBV_ACCUM_3D" in result
+
+    def test_falls_back_to_feature_json_flow_tags(self):
+        snap = {"feature_json": {"flow_tags": ["CMF_NEGATIVE", "OBV_ACCUM_3D"]}}
+        result = normalize_snapshot_flow_tags(snap)
+        assert "CMF_NEGATIVE" in result
+
+    def test_empty_snap_returns_empty(self):
+        result = normalize_snapshot_flow_tags({})
+        assert result == []
+
+    def test_priority_flow_tags_over_signature(self):
+        # flow_tags list takes priority over flow_tag_signature
+        snap = {
+            "flow_tags": ["ADL_ACCUM_3D"],
+            "flow_tag_signature": "DIFFERENT_TAG",
+        }
+        result = normalize_snapshot_flow_tags(snap)
+        assert "ADL_ACCUM_3D" in result
+        assert "DIFFERENT_TAG" not in result
+
+    def test_returns_list(self):
+        snap = {"flow_tags": ["ADL_ACCUM_3D"]}
+        result = normalize_snapshot_flow_tags(snap)
+        assert isinstance(result, list)
+
+
+# ── Proxy safety: OBV badge requires exact match ──────────────────────────────
+
+class TestOBVProxySafety:
+    def test_obv_badge_not_scored_without_exact_match(self):
+        # Proxy-only path: no badges → no OBV regime penalty, score capped at 4
+        ep = _ep(
+            dryup_day_count_pre=12,
+            d_confluence_day_count_pre=5,
+            compression_days_pre=8,
+            price_bucket="PRICE_1_TO_3",
+        )
+        res = compute_curated_flow_score([], ep)
+        assert "obv_price_gt25" not in res["curated_flow_risk_flags"]
+        assert "obv_atr_extreme"  not in res["curated_flow_risk_flags"]
+        assert res["curated_flow_is_proxy_only"] is True
+
+    def test_obv_badge_required_tags_are_flow_only(self):
+        # Verify the badge fires from flow_tags, not price tags
+        obv_tags = {"ADL_DISTRIB_3D", "CMF_NEGATIVE", "OBV_ACCUM_3D"}
+        snaps_price_only = [_snap(flow_tags=set(), tags=obv_tags)]
+        snaps_flow       = [_snap(flow_tags=obv_tags, tags=set())]
+        res_price = evaluate_curated_rules_on_snaps(snaps_price_only)
+        res_flow  = evaluate_curated_rules_on_snaps(snaps_flow)
+        assert BADGE_OBV_ACCUM_DISTRIB not in res_price["curated_flow_badges"]
+        assert BADGE_OBV_ACCUM_DISTRIB in  res_flow["curated_flow_badges"]

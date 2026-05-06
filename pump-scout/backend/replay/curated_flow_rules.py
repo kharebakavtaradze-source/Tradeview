@@ -30,6 +30,9 @@ from typing import Optional
 # Strict divergence variant — requires LOWER_WICK_ABSORPTION (run-142 pattern)
 BADGE_DIVERGENCE_ABSORB_PRESSURE = "PX_FLOW_DIVERGENCE_ABSORB_PRESSURE_1B"
 
+# OBV accumulation + ADL distribution divergence (run-144 pattern)
+BADGE_OBV_ACCUM_DISTRIB          = "PX_FLOW_DIVERGENCE_OBV_ACCUM_DISTRIB_1B"
+
 # Broad divergence variant — original run-139 pattern
 BADGE_DIVERGENCE_ACCUM           = "PX_FLOW_DIVERGENCE_ACCUM_PRESSURE"
 
@@ -41,6 +44,7 @@ BADGE_GAP_RESET_RECLAIM          = "PX_GAP_RESET_RECLAIM_CONTEXT"
 # Canonical order: strict-first within each family
 ALL_CURATED_BADGES: list[str] = [
     BADGE_DIVERGENCE_ABSORB_PRESSURE,
+    BADGE_OBV_ACCUM_DISTRIB,
     BADGE_DIVERGENCE_ACCUM,
     BADGE_BULLISH_ACCUM,
     BADGE_SUPPLY_ABSORB,
@@ -52,6 +56,12 @@ ALL_CURATED_BADGES: list[str] = [
 _DIV_PRESSURE_FAMILY: frozenset[str] = frozenset({
     BADGE_DIVERGENCE_ABSORB_PRESSURE,
     BADGE_DIVERGENCE_ACCUM,
+})
+
+# OBV-divergence family — only max score applied to avoid double-counting
+_DIV_OBV_FAMILY: frozenset[str] = frozenset({
+    BADGE_OBV_ACCUM_DISTRIB,
+    BADGE_SUPPLY_ABSORB,
 })
 
 # ── Frozen rule definitions ───────────────────────────────────────────────────
@@ -97,7 +107,35 @@ CURATED_RULES: list[dict] = [
         "safety_note": "Do not route to BUY. Research-only FLOW context.",
     },
 
-    # ── Rule 1: BROAD divergence accumulation with hidden demand (run 139) ─────
+    # ── Rule 1: OBV accumulation / ADL distribution divergence (run 144) ────────
+    {
+        "badge":            BADGE_OBV_ACCUM_DISTRIB,
+        "required_tags":    frozenset({
+            "ADL_DISTRIB_3D", "CMF_NEGATIVE", "OBV_ACCUM_3D",
+        }),
+        "optional_tags":    frozenset(),
+        "tag_mode":         "flow",
+        "window":           1,
+        "feature_family":   "FLOW",
+        "source_type":      "SINGLE_BAR",
+        "flow_subtype":     "FLOW_DIVERGENCE",
+        "intended_use":     "WATCHLIST_RANKING",
+        "production_status":"RESEARCH_ONLY",
+        "score_weight":     4,
+        "run144_stats": {
+            "count_all_4x": 25, "count_false_positive": 8,
+            "false_positive_rate": 0.131, "reliability_score": 0.7647,
+            "split_artifact_exposure": None,
+            "regime_notes": "Best in PRICE_1_TO_3 (84.6% 4x) / PRICE_3_TO_10 (75.0% 4x). Avoid PRICE_GT_25.",
+        },
+        "interpretation": (
+            "OBV accumulating while ADL distributing and CMF negative. "
+            "Hidden-demand divergence — buyers absorbing supply without visible price progress."
+        ),
+        "safety_note": "Do not route to BUY. Research-only FLOW divergence context.",
+    },
+
+    # ── Rule 2: BROAD divergence accumulation with hidden demand (run 139) ─────
     {
         "badge":            BADGE_DIVERGENCE_ACCUM,
         "required_tags":    frozenset({
@@ -242,6 +280,77 @@ _OUTCOME_FIELDS = frozenset({
 })
 
 
+# ── Known flow tag vocabulary (for normalization fallback) ────────────────────
+
+_KNOWN_FLOW_TAGS: frozenset[str] = frozenset({
+    "ADL_ACCUM_3D", "ADL_DISTRIB_3D",
+    "OBV_ACCUM_3D", "OBV_DISTRIB_3D",
+    "CMF_NEGATIVE", "CMF_POSITIVE",
+    "BUY_PRESSURE_HIGH", "BUY_PRESSURE_LOW",
+    "CLOSE_HIGH", "CLOSE_LOW",
+    "LOWER_WICK_ABSORPTION", "UPPER_WICK_SUPPLY",
+    "DELTA_PROXY_BULL", "DELTA_PROXY_BEAR",
+    "EFFORT_RESULT_BULL", "EFFORT_RESULT_BEAR",
+    "LOW_EFFORT_HIGH_RESULT", "HIGH_EFFORT_LOW_RESULT",
+    "GAP_DOWN_RECLAIM_FLOW", "GAP_UP_HOLD_FLOW",
+    "GAP_UP_FADE_FLOW", "GAP_DOWN_FAIL_FLOW",
+})
+
+
+def normalize_snapshot_flow_tags(snapshot: dict) -> list[str]:
+    """
+    Extract and normalize flow tags from a snapshot using a priority fallback chain.
+
+    Priority:
+      1. snapshot["flow_tags"] if list
+      2. snapshot["flow_tag_signature"] split by "+"
+      3. snapshot["feature_json"]["flow_tags"] if list
+      4. snapshot["feature_json"]["flow_tag_signature"] split by "+"
+      5. snapshot["tag_signature"] if it contains known flow tags
+      6. snapshot["tags"] if it contains known flow tags
+
+    Returns a deduplicated, uppercased, whitespace-stripped list.
+    """
+    def _parse(val) -> list[str]:
+        if isinstance(val, list):
+            return [str(t).strip().upper() for t in val if str(t).strip()]
+        if isinstance(val, str):
+            return [t.strip().upper() for t in val.replace("→", "+").split("+") if t.strip()]
+        return []
+
+    fj = snapshot.get("feature_json") or {}
+
+    # If flow_tags is explicitly set (even as []), respect it — no fallback to tags field.
+    # Only use the last-resort tag fallback when all explicit flow fields are absent.
+    explicit_flow_tags = snapshot.get("flow_tags")
+    if explicit_flow_tags is not None:
+        candidate = _parse(explicit_flow_tags)
+    else:
+        for candidate in [
+            _parse(snapshot.get("flow_tag_signature")),
+            _parse(fj.get("flow_tags")),
+            _parse(fj.get("flow_tag_signature")),
+        ]:
+            if candidate:
+                break
+        else:
+            # Last-resort: check tag_signature / tags for known flow tags
+            ts = _parse(snapshot.get("tag_signature"))
+            if any(t in _KNOWN_FLOW_TAGS for t in ts):
+                candidate = ts
+            else:
+                tg = _parse(snapshot.get("tags"))
+                candidate = tg if any(t in _KNOWN_FLOW_TAGS for t in tg) else []
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for t in candidate:
+        if t and t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
+
+
 # ── Exact bar-level badge evaluation ─────────────────────────────────────────
 
 def evaluate_curated_flow_badges_from_snapshots(snaps: list[dict]) -> dict:
@@ -277,7 +386,7 @@ def evaluate_curated_flow_badges_from_snapshots(snaps: list[dict]) -> dict:
     # ── Single-bar rules (window=1) ───────────────────────────────────────────
     for snap in snaps:
         snap_date  = snap.get("date") or snap.get("days_to_breakout") or "?"
-        flow_tags  = set(snap.get("flow_tags") or [])
+        flow_tags  = set(normalize_snapshot_flow_tags(snap))
         price_tags = set(snap.get("tags") or [])
 
         for rule in CURATED_RULES:
@@ -418,14 +527,17 @@ def compute_curated_flow_score(
     has_exact_badge   = exact_badge_count > 0
 
     # ── A. Badge scores with double-counting prevention ───────────────────────
-    # Divergence-pressure family: only the max score counts (not the sum)
-    dp_badges  = [b for b in badges if b in _DIV_PRESSURE_FAMILY]
-    other_badges = [b for b in badges if b not in _DIV_PRESSURE_FAMILY]
+    # Each family uses max-score (not sum) to avoid double-counting
+    dp_badges   = [b for b in badges if b in _DIV_PRESSURE_FAMILY]
+    obv_badges  = [b for b in badges if b in _DIV_OBV_FAMILY]
+    other_badges = [
+        b for b in badges
+        if b not in _DIV_PRESSURE_FAMILY and b not in _DIV_OBV_FAMILY
+    ]
 
     primary_badge: Optional[str] = None
 
     if dp_badges:
-        # Max score from the divergence-pressure family
         primary_dp    = max(dp_badges, key=lambda b: BADGE_SCORE_WEIGHTS.get(b, 0))
         max_dp_score  = BADGE_SCORE_WEIGHTS[primary_dp]
         score        += max_dp_score
@@ -435,6 +547,19 @@ def compute_curated_flow_score(
             suppressed = [b for b in dp_badges if b != primary_dp]
             reasons.append(
                 f"[double-count suppressed: {', '.join(suppressed)} in div_pressure_family]"
+            )
+
+    if obv_badges:
+        primary_obv   = max(obv_badges, key=lambda b: BADGE_SCORE_WEIGHTS.get(b, 0))
+        max_obv_score = BADGE_SCORE_WEIGHTS[primary_obv]
+        score        += max_obv_score
+        reasons.append(f"+{max_obv_score} {primary_obv} (div_obv_family_max)")
+        if primary_badge is None:
+            primary_badge = primary_obv
+        if len(obv_badges) > 1:
+            suppressed = [b for b in obv_badges if b != primary_obv]
+            reasons.append(
+                f"[double-count suppressed: {', '.join(suppressed)} in div_obv_family]"
             )
 
     for badge in other_badges:
@@ -486,6 +611,7 @@ def compute_curated_flow_score(
     # Bearish/supply-only badge without any bullish/reclaim confirmation
     bearish_only = (
         BADGE_SUPPLY_ABSORB in badges
+        and BADGE_OBV_ACCUM_DISTRIB          not in badges
         and BADGE_DIVERGENCE_ABSORB_PRESSURE not in badges
         and BADGE_DIVERGENCE_ACCUM           not in badges
         and BADGE_BULLISH_ACCUM              not in badges
@@ -495,14 +621,24 @@ def compute_curated_flow_score(
     if bearish_only:
         score -= 2; risk_flags.append("bearish_supply_only"); reasons.append("-2 bearish_supply_only")
 
-    # High expansion risk without any bullish flow badge
+    # High expansion risk without any bullish/accumulation flow badge
     has_bullish = (
         BADGE_DIVERGENCE_ABSORB_PRESSURE in badges
+        or BADGE_OBV_ACCUM_DISTRIB       in badges
         or BADGE_DIVERGENCE_ACCUM        in badges
         or BADGE_BULLISH_ACCUM           in badges
     )
     if high_exp_ct >= 30 and not has_bullish:
         score -= 2; risk_flags.append("high_expansion_risk"); reasons.append("-2 high_exp>=30_no_bullish")
+
+    # Regime penalties for OBV divergence badge (run-144 regime analysis)
+    if BADGE_OBV_ACCUM_DISTRIB in badges:
+        price_bucket = ep.get("price_bucket") or ""
+        atr_bucket   = ep.get("atr_bucket") or ""
+        if price_bucket == "PRICE_GT_25":
+            score -= 2; risk_flags.append("obv_price_gt25"); reasons.append("-2 obv_badge+price_gt25")
+        if atr_bucket == "ATR_EXTREME_GT_40":
+            score -= 2; risk_flags.append("obv_atr_extreme"); reasons.append("-2 obv_badge+atr_extreme")
 
     # Badge matched but no dryup/compression/D-confluence context
     has_context = dryup >= 5 or compression >= 4 or d_conf >= 2
@@ -569,7 +705,7 @@ def curated_rules_registry_snapshot() -> list[dict]:
             "intended_use":     r["intended_use"],
             "production_status":r["production_status"],
             "score_weight":     r["score_weight"],
-            "run_stats":        r.get("run142_stats") or r.get("run139_stats", {}),
+            "run_stats":        r.get("run144_stats") or r.get("run142_stats") or r.get("run139_stats", {}),
             "interpretation":   r.get("interpretation"),
             "safety_note":      r.get("safety_note"),
         }

@@ -262,6 +262,7 @@ def compute_episode_regime(episode: dict, daily_rows: list[dict]) -> dict:
         "gap_count_pre":            gap_count,
         "max_gap_pct_pre":          round(max_gap_pct, 2),
         "gap_risk_bucket":          gap_risk_bucket,
+        "split_context":            episode.get("split_context") or "NO_SPLIT",
     }
 
 
