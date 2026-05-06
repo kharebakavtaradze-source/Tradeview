@@ -30,6 +30,7 @@ from replay.curated_flow_rules import (
     BADGE_DIVERGENCE_ACCUM,
     BADGE_OBV_ACCUM_DISTRIB,
     BADGE_SUPPLY_ABSORB,
+    _num,
     score_episode_curated_flow,
     curated_rules_registry_snapshot,
     normalize_snapshot_flow_tags,
@@ -490,10 +491,10 @@ def _build_fp_traps(episodes: list[dict]) -> list[dict]:
         sc = ep.get("split_context") or "NO_SPLIT"
         if sc in ("RECENT_REVERSE_SPLIT", "OLD_REVERSE_SPLIT"):
             trap_notes.append("reverse_split_regime")
-        dv = ep.get("median_dollar_volume_pre") or 0
+        dv = _num(ep.get("median_dollar_volume_pre"))
         if 0 < dv < 50_000:
             trap_notes.append("low_dollar_volume")
-        if ep.get("high_expansion_risk_day_count_pre", 0) >= 20:
+        if _num(ep.get("high_expansion_risk_day_count_pre")) >= 20:
             trap_notes.append("high_expansion_risk")
         if BADGE_SUPPLY_ABSORB in badges and BADGE_DIVERGENCE_ACCUM not in badges:
             trap_notes.append("bearish_supply_only_badge")
