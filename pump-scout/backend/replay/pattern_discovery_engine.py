@@ -1425,6 +1425,41 @@ async def build_discovery_export(
     pw_calibration = compute_pump_watch_calibration(episodes)    if episodes else {}
     diagnostic_label_counts = pw_dist.get("diagnostic_label_counts", {}) if pw_dist else {}
 
+    # Custom signal diagnostics from daily feature_json flags
+    _custom_flag_keys = [
+        "has_l34", "has_l43", "has_l22", "has_l64",
+        "has_fri34", "has_fri64",
+        "has_d3_beup", "has_d4_beup", "has_d6_beup",
+        "has_d4_l34", "has_d3_l34",
+        "has_vbo", "has_lvbo", "has_ld",
+        "np_is_setup", "np_is_trigger",
+    ]
+    _ctag_counts: dict[str, int] = {k: 0 for k in _custom_flag_keys}
+    _total_bars           = 0
+    _flat_bars            = 0
+    _episodes_with_signal = 0
+    for _eid, _daily_rows in daily_by_episode.items():
+        _ep_has_signal = False
+        for _r in _daily_rows:
+            _fj = _r.get("feature_json") or {}
+            _total_bars += 1
+            _bar_has_signal = False
+            for _k in _custom_flag_keys:
+                if _fj.get(_k):
+                    _ctag_counts[_k] += 1
+                    _bar_has_signal = True
+            if not _bar_has_signal:
+                _flat_bars += 1
+            else:
+                _ep_has_signal = True
+        if _ep_has_signal:
+            _episodes_with_signal += 1
+    _custom_missing = not any(_ctag_counts.values())
+    _coverage_rate = (
+        round((_total_bars - _flat_bars) / _total_bars, 4)
+        if _total_bars > 0 else 0.0
+    )
+
     # Flow debug from in-memory progress
     flow_debug = {
         "flow_features_created":          prog.get("bar_snapshots_created", 0),
@@ -1437,6 +1472,12 @@ async def build_discovery_export(
         "custom_patterns_created":        prog.get("custom_patterns_evaluated", 0),
         "flow_custom_patterns_created":   prog.get("flow_custom_patterns_evaluated", 0),
         "flow_tag_counts":                prog.get("flow_tag_counts", {}),
+        "custom_tag_counts":              _ctag_counts,
+        "custom_non_flat_bar_count":      _total_bars - _flat_bars,
+        "custom_flat_bar_count":          _flat_bars,
+        "custom_signal_coverage_rate":    _coverage_rate,
+        "custom_episodes_with_any_signal": _episodes_with_signal,
+        "custom_missing_upstream_warning": _custom_missing,
         "delta_note": (
             "All flow features are OHLCV-derived proxies, NOT true bid/ask delta. "
             "CLV, signed_volume_proxy, OBV, ADL, CMF computed from open/high/low/close/volume."
@@ -1604,7 +1645,8 @@ async def build_discovery_export(
                 build_curated_flow_replay_analysis,
             )
             curated_scored_episodes = score_episodes_curated_flow(
-                flow_scored_episodes if flow_scored_episodes else episodes
+                flow_scored_episodes if flow_scored_episodes else episodes,
+                daily_by_episode=daily_by_episode,
             )
             curated_flow_analysis = build_curated_flow_replay_analysis(
                 curated_scored_episodes, flow_working + combined_working
