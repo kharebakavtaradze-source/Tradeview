@@ -63,6 +63,10 @@ _discovery_progress: dict = {
     "bar_patterns_experimental": 0,
     "flow_patterns_evaluated": 0,
     "combined_patterns_evaluated": 0,
+    "custom_sequences_created": 0,
+    "flow_custom_sequences_created": 0,
+    "custom_patterns_evaluated": 0,
+    "flow_custom_patterns_evaluated": 0,
     "patterns_rejected_low_count": 0,
     "patterns_rejected_low_lift": 0,
     "patterns_saved": 0,
@@ -262,6 +266,7 @@ async def _run_bar_sequence_pipeline(
     windows: tuple,
     include_flow: bool = False,
     include_combined: bool = False,
+    include_custom: bool = False,
 ) -> tuple[list[dict], dict]:
     """
     Load daily bar rows, build snapshots + sequences, mine bar patterns.
@@ -302,9 +307,11 @@ async def _run_bar_sequence_pipeline(
                "normal_winner", "split_artifact"]
 
     # Build price-action sequences (V1B) — always
-    bar_sequences_by_group:      dict[str, list[dict]] = {g: [] for g in _GROUPS}
-    flow_sequences_by_group:     dict[str, list[dict]] = {g: [] for g in _GROUPS}
-    combined_sequences_by_group: dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    bar_sequences_by_group:              dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    flow_sequences_by_group:             dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    combined_sequences_by_group:         dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    custom_sequences_by_group:           dict[str, list[dict]] = {g: [] for g in _GROUPS}
+    flow_custom_sequences_by_group:      dict[str, list[dict]] = {g: [] for g in _GROUPS}
 
     total_snapshots = 0
     # Accumulate flow tag counts for debug
@@ -337,6 +344,13 @@ async def _run_bar_sequence_pipeline(
                 seqs_combined = build_bar_sequences(snaps, windows=windows, tag_mode="combined")
                 combined_sequences_by_group[grp].extend(seqs_combined)
 
+            # Custom signal sequences (CUSTOM_SIGNAL family)
+            if include_custom:
+                seqs_custom = build_bar_sequences(snaps, windows=windows, tag_mode="custom")
+                custom_sequences_by_group[grp].extend(seqs_custom)
+                seqs_fcc = build_bar_sequences(snaps, windows=windows, tag_mode="flow_custom_combined")
+                flow_custom_sequences_by_group[grp].extend(seqs_fcc)
+
             # Evaluate curated FLOW rules on bar snapshots and cache result
             if include_flow or include_combined:
                 try:
@@ -356,18 +370,23 @@ async def _run_bar_sequence_pipeline(
                 for t in (snap.get("flow_tags") or []):
                     flow_tag_counts[t] = flow_tag_counts.get(t, 0) + 1
 
-    total_seq    = sum(len(v) for v in bar_sequences_by_group.values())
-    total_flow   = sum(len(v) for v in flow_sequences_by_group.values())
-    total_comb   = sum(len(v) for v in combined_sequences_by_group.values())
-    _discovery_progress["bar_snapshots_created"]     = total_snapshots
-    _discovery_progress["bar_sequences_created"]     = total_seq
-    _discovery_progress["flow_sequences_created"]    = total_flow
-    _discovery_progress["combined_sequences_created"] = total_comb
-    _discovery_progress["flow_tag_counts"]           = flow_tag_counts
+    total_seq     = sum(len(v) for v in bar_sequences_by_group.values())
+    total_flow    = sum(len(v) for v in flow_sequences_by_group.values())
+    total_comb    = sum(len(v) for v in combined_sequences_by_group.values())
+    total_custom  = sum(len(v) for v in custom_sequences_by_group.values())
+    total_fcc     = sum(len(v) for v in flow_custom_sequences_by_group.values())
+    _discovery_progress["bar_snapshots_created"]       = total_snapshots
+    _discovery_progress["bar_sequences_created"]       = total_seq
+    _discovery_progress["flow_sequences_created"]      = total_flow
+    _discovery_progress["combined_sequences_created"]  = total_comb
+    _discovery_progress["custom_sequences_created"]    = total_custom
+    _discovery_progress["flow_custom_sequences_created"] = total_fcc
+    _discovery_progress["flow_tag_counts"]             = flow_tag_counts
 
     logger.info(
         f"[DISCOVERY/V1B+C] run={run_id}: {total_snapshots} snapshots | "
-        f"price_seqs={total_seq} flow_seqs={total_flow} combined_seqs={total_comb}"
+        f"price_seqs={total_seq} flow_seqs={total_flow} combined_seqs={total_comb} "
+        f"custom_seqs={total_custom} flow_custom_seqs={total_fcc}"
     )
 
     # ── Mine price-action patterns (V1B) ──────────────────────────────────────
@@ -408,9 +427,34 @@ async def _run_bar_sequence_pipeline(
         _discovery_progress["combined_patterns_evaluated"] = len(combined_candidates)
         all_candidates.extend(combined_candidates)
 
+    # ── Mine custom signal patterns ───────────────────────────────────────────
+    custom_candidates: list[dict] = []
+    if include_custom and any(custom_sequences_by_group.values()):
+        _discovery_progress["phase"] = "MINING_CUSTOM_PATTERNS"
+        custom_candidates = mine_bar_patterns(
+            bar_sequences_by_group=custom_sequences_by_group,
+            windows=windows,
+            feature_family="CUSTOM_SIGNAL",
+        )
+        _discovery_progress["custom_patterns_evaluated"] = len(custom_candidates)
+        all_candidates.extend(custom_candidates)
+
+    # ── Mine FLOW + Custom combined patterns ──────────────────────────────────
+    flow_custom_candidates: list[dict] = []
+    if include_custom and any(flow_custom_sequences_by_group.values()):
+        _discovery_progress["phase"] = "MINING_FLOW_CUSTOM_PATTERNS"
+        flow_custom_candidates = mine_bar_patterns(
+            bar_sequences_by_group=flow_custom_sequences_by_group,
+            windows=windows,
+            feature_family="FLOW_CUSTOM_COMBINED",
+        )
+        _discovery_progress["flow_custom_patterns_evaluated"] = len(flow_custom_candidates)
+        all_candidates.extend(flow_custom_candidates)
+
     logger.info(
         f"[DISCOVERY/V1B+C] run={run_id}: price={len(bar_candidates)} "
         f"flow={len(flow_candidates)} combined={len(combined_candidates)} "
+        f"custom={len(custom_candidates)} flow_custom={len(flow_custom_candidates)} "
         f"total={len(all_candidates)}"
     )
 
@@ -445,10 +489,11 @@ async def run_pattern_discovery(
     Summary dict with status, episodes_loaded, patterns_evaluated, etc.
     """
     # Normalise mode flags
-    _run_episode = mode in ("episode_aggregate", "both", "all")
-    _run_price   = mode in ("bar_sequence", "both", "all")
-    _run_flow    = mode in ("flow", "combined", "all")
+    _run_episode  = mode in ("episode_aggregate", "both", "all")
+    _run_price    = mode in ("bar_sequence", "both", "all")
+    _run_flow     = mode in ("flow", "combined", "all")
     _run_combined = mode in ("combined", "all")
+    _run_custom   = mode in ("custom", "all")
     global _discovery_progress
 
     if _discovery_progress["running"]:
@@ -466,10 +511,14 @@ async def run_pattern_discovery(
         "bar_sequences_created": 0,
         "flow_sequences_created": 0,
         "combined_sequences_created": 0,
-        "bar_patterns_evaluated":     0,
-        "bar_patterns_experimental":  0,
-        "flow_patterns_evaluated":    0,
-        "combined_patterns_evaluated": 0,
+        "custom_sequences_created": 0,
+        "flow_custom_sequences_created": 0,
+        "bar_patterns_evaluated":       0,
+        "bar_patterns_experimental":    0,
+        "flow_patterns_evaluated":      0,
+        "combined_patterns_evaluated":  0,
+        "custom_patterns_evaluated":    0,
+        "flow_custom_patterns_evaluated": 0,
         "patterns_rejected_low_count": 0,
         "patterns_rejected_low_lift":  0,
         "patterns_saved": 0,
@@ -543,14 +592,15 @@ async def run_pattern_discovery(
                 f"rejected_low_lift={_discovery_progress['patterns_rejected_low_lift']}"
             )
 
-        # ── Phase 3: Bar/flow pattern mining (V1B + V1C) ─────────────────────
-        if _run_price or _run_flow or _run_combined:
+        # ── Phase 3: Bar/flow/custom pattern mining (V1B + V1C + custom) ────
+        if _run_price or _run_flow or _run_combined or _run_custom:
             bar_candidates, bar_sequences_by_group = await _run_bar_sequence_pipeline(
                 run_id=run_id,
                 dataset=dataset,
                 windows=windows,
                 include_flow=_run_flow,
                 include_combined=_run_combined,
+                include_custom=_run_custom,
             )
 
         # ── Phase 4: Pump Watch scoring ───────────────────────────────────────
@@ -682,21 +732,31 @@ def _st_from_signal_id(signal_id: str, stored: Optional[str] = None) -> str:
     if not signal_id:
         return "EPISODE_AGGREGATE"
     for prefix, st in (
-        ("DISC_BAR_TEN_BAR_CONTEXT_",        "TEN_BAR_CONTEXT"),
-        ("DISC_BAR_THREE_BAR_SEQUENCE_",     "THREE_BAR_SEQUENCE"),
-        ("DISC_BAR_TWO_BAR_SEQUENCE_",       "TWO_BAR_SEQUENCE"),
-        ("DISC_BAR_FIVE_BAR_SEQUENCE_",      "FIVE_BAR_SEQUENCE"),
-        ("DISC_BAR_SINGLE_BAR_",             "SINGLE_BAR"),
-        ("DISC_FLOW_TEN_BAR_CONTEXT_",       "TEN_BAR_CONTEXT"),
-        ("DISC_FLOW_THREE_BAR_SEQUENCE_",    "THREE_BAR_SEQUENCE"),
-        ("DISC_FLOW_TWO_BAR_SEQUENCE_",      "TWO_BAR_SEQUENCE"),
-        ("DISC_FLOW_FIVE_BAR_SEQUENCE_",     "FIVE_BAR_SEQUENCE"),
-        ("DISC_FLOW_SINGLE_BAR_",            "SINGLE_BAR"),
-        ("DISC_COMBINED_TEN_BAR_CONTEXT_",   "TEN_BAR_CONTEXT"),
-        ("DISC_COMBINED_THREE_BAR_SEQUENCE_","THREE_BAR_SEQUENCE"),
-        ("DISC_COMBINED_TWO_BAR_SEQUENCE_",  "TWO_BAR_SEQUENCE"),
-        ("DISC_COMBINED_FIVE_BAR_SEQUENCE_", "FIVE_BAR_SEQUENCE"),
-        ("DISC_COMBINED_SINGLE_BAR_",        "SINGLE_BAR"),
+        ("DISC_BAR_TEN_BAR_CONTEXT_",             "TEN_BAR_CONTEXT"),
+        ("DISC_BAR_THREE_BAR_SEQUENCE_",          "THREE_BAR_SEQUENCE"),
+        ("DISC_BAR_TWO_BAR_SEQUENCE_",            "TWO_BAR_SEQUENCE"),
+        ("DISC_BAR_FIVE_BAR_SEQUENCE_",           "FIVE_BAR_SEQUENCE"),
+        ("DISC_BAR_SINGLE_BAR_",                  "SINGLE_BAR"),
+        ("DISC_FLOW_TEN_BAR_CONTEXT_",            "TEN_BAR_CONTEXT"),
+        ("DISC_FLOW_THREE_BAR_SEQUENCE_",         "THREE_BAR_SEQUENCE"),
+        ("DISC_FLOW_TWO_BAR_SEQUENCE_",           "TWO_BAR_SEQUENCE"),
+        ("DISC_FLOW_FIVE_BAR_SEQUENCE_",          "FIVE_BAR_SEQUENCE"),
+        ("DISC_FLOW_SINGLE_BAR_",                 "SINGLE_BAR"),
+        ("DISC_COMBINED_TEN_BAR_CONTEXT_",        "TEN_BAR_CONTEXT"),
+        ("DISC_COMBINED_THREE_BAR_SEQUENCE_",     "THREE_BAR_SEQUENCE"),
+        ("DISC_COMBINED_TWO_BAR_SEQUENCE_",       "TWO_BAR_SEQUENCE"),
+        ("DISC_COMBINED_FIVE_BAR_SEQUENCE_",      "FIVE_BAR_SEQUENCE"),
+        ("DISC_COMBINED_SINGLE_BAR_",             "SINGLE_BAR"),
+        ("DISC_CUSTOM_TEN_BAR_CONTEXT_",          "TEN_BAR_CONTEXT"),
+        ("DISC_CUSTOM_THREE_BAR_SEQUENCE_",       "THREE_BAR_SEQUENCE"),
+        ("DISC_CUSTOM_TWO_BAR_SEQUENCE_",         "TWO_BAR_SEQUENCE"),
+        ("DISC_CUSTOM_FIVE_BAR_SEQUENCE_",        "FIVE_BAR_SEQUENCE"),
+        ("DISC_CUSTOM_SINGLE_BAR_",               "SINGLE_BAR"),
+        ("DISC_FLOW_CUSTOM_TEN_BAR_CONTEXT_",     "TEN_BAR_CONTEXT"),
+        ("DISC_FLOW_CUSTOM_THREE_BAR_SEQUENCE_",  "THREE_BAR_SEQUENCE"),
+        ("DISC_FLOW_CUSTOM_TWO_BAR_SEQUENCE_",    "TWO_BAR_SEQUENCE"),
+        ("DISC_FLOW_CUSTOM_FIVE_BAR_SEQUENCE_",   "FIVE_BAR_SEQUENCE"),
+        ("DISC_FLOW_CUSTOM_SINGLE_BAR_",          "SINGLE_BAR"),
     ):
         if signal_id.startswith(prefix):
             return st
@@ -709,10 +769,14 @@ def _ff_from_signal_id(signal_id: str, stored: Optional[str] = None) -> str:
         return stored
     if not signal_id:
         return "EPISODE_AGGREGATE"
+    if signal_id.startswith("DISC_FLOW_CUSTOM_"):
+        return "FLOW_CUSTOM_COMBINED"
     if signal_id.startswith("DISC_FLOW_"):
         return "FLOW"
     if signal_id.startswith("DISC_COMBINED_"):
         return "COMBINED"
+    if signal_id.startswith("DISC_CUSTOM_"):
+        return "CUSTOM_SIGNAL"
     if signal_id.startswith("DISC_BAR_"):
         return "PRICE_ACTION"
     return "EPISODE_AGGREGATE"
@@ -1113,15 +1177,24 @@ async def build_discovery_export(
 
     # Flow debug from in-memory progress
     flow_debug = {
-        "flow_features_created":        prog.get("bar_snapshots_created", 0),
-        "flow_sequences_created":       prog.get("flow_sequences_created", 0),
-        "combined_sequences_created":   prog.get("combined_sequences_created", 0),
-        "flow_patterns_created":        prog.get("flow_patterns_evaluated", 0),
-        "combined_patterns_created":    prog.get("combined_patterns_evaluated", 0),
-        "flow_tag_counts":              prog.get("flow_tag_counts", {}),
+        "flow_features_created":          prog.get("bar_snapshots_created", 0),
+        "flow_sequences_created":         prog.get("flow_sequences_created", 0),
+        "combined_sequences_created":     prog.get("combined_sequences_created", 0),
+        "flow_patterns_created":          prog.get("flow_patterns_evaluated", 0),
+        "combined_patterns_created":      prog.get("combined_patterns_evaluated", 0),
+        "custom_sequences_created":       prog.get("custom_sequences_created", 0),
+        "flow_custom_sequences_created":  prog.get("flow_custom_sequences_created", 0),
+        "custom_patterns_created":        prog.get("custom_patterns_evaluated", 0),
+        "flow_custom_patterns_created":   prog.get("flow_custom_patterns_evaluated", 0),
+        "flow_tag_counts":                prog.get("flow_tag_counts", {}),
         "delta_note": (
             "All flow features are OHLCV-derived proxies, NOT true bid/ask delta. "
             "CLV, signed_volume_proxy, OBV, ADL, CMF computed from open/high/low/close/volume."
+        ),
+        "custom_signal_note": (
+            "CUSTOM_SIGNAL family is RESEARCH_ONLY. "
+            "Tags read from feature_json boolean flags pre-computed by upstream process. "
+            "Run discovery with mode='custom' or mode='all' to populate."
         ),
     }
 
@@ -1246,8 +1319,10 @@ async def build_discovery_export(
     }
 
     # Flow-family rankings
-    flow_working = [p for p in working if p.get("feature_family") == "FLOW"]
-    combined_working = [p for p in working if p.get("feature_family") == "COMBINED"]
+    flow_working         = [p for p in working if p.get("feature_family") == "FLOW"]
+    combined_working     = [p for p in working if p.get("feature_family") == "COMBINED"]
+    custom_working       = [p for p in working if p.get("feature_family") == "CUSTOM_SIGNAL"]
+    flow_custom_working  = [p for p in working if p.get("feature_family") == "FLOW_CUSTOM_COMBINED"]
 
     # Enrich calibration with pattern-level flow_subtype aggregation
     if pw_calibration:
@@ -1327,6 +1402,43 @@ async def build_discovery_export(
          and (p.get("false_positive_rate") or 1.0) <= 0.30
          and (p.get("split_artifact_exposure") or 0) <= 0.35],
         lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    # Custom signal rankings
+    top_custom_signal_clean_reliability = _top(
+        [p for p in custom_working
+         if (p.get("split_artifact_exposure") or 0) <= 0.50
+         and (p.get("count_all_4x") or 0) >= 4],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    top_flow_custom_combined = _top(
+        [p for p in flow_custom_working
+         if (p.get("split_artifact_exposure") or 0) <= 0.50
+         and (p.get("count_all_4x") or 0) >= 4],
+        lambda x: -(x["reliability_score"] or 0), min(100, n))
+
+    def _sig_has_tag(p: dict, tag: str) -> bool:
+        """True if pattern signal_id or machine_conditions mention this tag."""
+        if tag in (p.get("signal_id") or ""):
+            return True
+        mc = p.get("machine_conditions") or []
+        if isinstance(mc, str):
+            return tag in mc
+        return any(tag in str(c) for c in mc)
+
+    top_custom_l43_patterns = _top(
+        [p for p in custom_working + flow_custom_working if _sig_has_tag(p, "L43")],
+        lambda x: -(x["reliability_score"] or 0), min(50, n))
+
+    top_custom_d_confluence_patterns = _top(
+        [p for p in custom_working + flow_custom_working
+         if any(_sig_has_tag(p, t) for t in ("D3_BEUP", "D4_BEUP", "D6_BEUP", "D3_L34", "D4_L34"))],
+        lambda x: -(x["reliability_score"] or 0), min(50, n))
+
+    top_custom_l_series_patterns = _top(
+        [p for p in custom_working + flow_custom_working
+         if any(_sig_has_tag(p, t) for t in ("L34", "L64", "L22"))
+         and not _sig_has_tag(p, "L43")],
+        lambda x: -(x["reliability_score"] or 0), min(50, n))
 
     # Subtype-specific FLOW rankings (sorted by reliability_score)
     top_flow_divergence = _top(
@@ -1410,6 +1522,9 @@ async def build_discovery_export(
             "bar_sequence_summary": bar_sequence_summary,
             "flow_replay_analysis": flow_replay_analysis,
             "curated_flow_replay_analysis": curated_flow_analysis,
+            "custom_signal_patterns_created":   prog.get("custom_patterns_evaluated", 0),
+            "flow_custom_patterns_created":     prog.get("flow_custom_patterns_evaluated", 0),
+            "custom_signal_sequences_created":  prog.get("custom_sequences_created", 0),
             "ranking_formula_version": _RANKING_FORMULA_VERSION,
             "reliability_score_legend": _RELIABILITY_SCORE_LEGEND,
             "notes": _notes(),
@@ -1570,6 +1685,11 @@ async def build_discovery_export(
             "sample_episodes":                   sample_episodes,
             "flow_replay_analysis":              flow_replay_analysis,
             "curated_flow_replay_analysis":      curated_flow_analysis,
+            "top_custom_signal_clean_reliability": top_custom_signal_clean_reliability,
+            "top_flow_custom_combined":          top_flow_custom_combined,
+            "top_custom_l43_patterns":           top_custom_l43_patterns,
+            "top_custom_d_confluence_patterns":  top_custom_d_confluence_patterns,
+            "top_custom_l_series_patterns":      top_custom_l_series_patterns,
             "registry_snapshot":                 registry,
             "ranking_formula_version":           _RANKING_FORMULA_VERSION,
             "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
@@ -1625,6 +1745,11 @@ async def build_discovery_export(
         "bar_sequence_summary":                  bar_sequence_summary,
         "flow_replay_analysis":                  flow_replay_analysis,
         "curated_flow_replay_analysis":          curated_flow_analysis,
+        "top_custom_signal_clean_reliability":   top_custom_signal_clean_reliability,
+        "top_flow_custom_combined":              top_flow_custom_combined,
+        "top_custom_l43_patterns":               top_custom_l43_patterns,
+        "top_custom_d_confluence_patterns":      top_custom_d_confluence_patterns,
+        "top_custom_l_series_patterns":          top_custom_l_series_patterns,
         "registry_snapshot":                     registry,
         "ranking_formula_version":               _RANKING_FORMULA_VERSION,
         "reliability_score_legend":              _RELIABILITY_SCORE_LEGEND,
