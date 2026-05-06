@@ -162,6 +162,33 @@ def score_episodes_curated_flow(
                 ep_copy["curated_flow_exact_match_count"] = len(ep_copy.get("curated_flow_badges") or [])
             if "curated_flow_is_proxy_only" not in ep_copy:
                 ep_copy["curated_flow_is_proxy_only"] = ep_copy["curated_flow_exact_match_count"] == 0
+            # Build curated_flow_debug for cached episodes using daily rows if available
+            if "curated_flow_debug" not in ep_copy:
+                snaps: list[dict] = []
+                if daily_by_episode and ep_id is not None:
+                    daily_rows = daily_by_episode.get(ep_id, [])
+                    if daily_rows:
+                        try:
+                            snaps = build_bar_feature_snapshots_for_episode(ep_copy, daily_rows)
+                        except Exception as _e:
+                            logger.debug("snapshot build failed ep %s: %s", ep_id, _e)
+                snaps_with_tags = sum(
+                    1 for s in snaps
+                    if (s.get("flow_tags") or []) not in ([], ["FLAT"])
+                )
+                seen_sigs: list[str] = [
+                    s.get("flow_tag_signature") or "FLAT"
+                    for s in snaps
+                    if (s.get("flow_tag_signature") or "FLAT") != "FLAT"
+                ]
+                ep_copy["curated_flow_debug"] = {
+                    "snapshot_count":           len(snaps),
+                    "snapshots_with_flow_tags": snaps_with_tags,
+                    "seen_flow_signatures":     sorted(set(seen_sigs)),
+                    "badges_matched":           list(ep_copy.get("curated_flow_badges") or []),
+                    "exact_match_count":        ep_copy.get("curated_flow_exact_match_count", 0),
+                    "source":                   "cached",
+                }
             result.append(ep_copy)
             continue
 
