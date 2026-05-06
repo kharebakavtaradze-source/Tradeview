@@ -44,6 +44,14 @@ _REGISTRY_PATH = os.path.join(
 # Populated during _run_bar_sequence_pipeline(); consumed by build_discovery_export().
 _curated_flow_cache: dict[tuple[int, int], dict] = {}
 
+# Regime caches — populated during _run_bar_sequence_pipeline().
+# (run_id, episode_id) → regime dict (price/vol/ATR/compression/gap buckets)
+_episode_regime_cache: dict[tuple[int, int], dict] = {}
+
+# run_id → {signal_id → {group: [episode_ids]}}
+# Populated after mine_bar_patterns() calls. Used for per-pattern regime breakdown.
+_pattern_episode_ids_cache: dict[int, dict[str, dict]] = {}
+
 # In-memory progress tracker
 _discovery_progress: dict = {
     "running":    False,
@@ -351,6 +359,17 @@ async def _run_bar_sequence_pipeline(
                 seqs_fcc = build_bar_sequences(snaps, windows=windows, tag_mode="flow_custom_combined")
                 flow_custom_sequences_by_group[grp].extend(seqs_fcc)
 
+            # Compute per-episode regime and cache for regime analysis
+            try:
+                from replay.regime_engine import compute_episode_regime
+                ep_id_for_regime = ep.get("episode_id") or ep.get("id")
+                if ep_id_for_regime is not None:
+                    regime_result = compute_episode_regime(ep, daily_rows)
+                    _episode_regime_cache[(run_id, ep_id_for_regime)] = regime_result
+            except Exception as _re:
+                logger.debug("regime_engine failed for episode %s: %s",
+                             ep.get("episode_id"), _re)
+
             # Evaluate curated FLOW rules on bar snapshots and cache result
             if include_flow or include_combined:
                 try:
@@ -457,6 +476,20 @@ async def _run_bar_sequence_pipeline(
         f"custom={len(custom_candidates)} flow_custom={len(flow_custom_candidates)} "
         f"total={len(all_candidates)}"
     )
+
+    # Populate per-pattern episode-ID cache for regime breakdown in same session
+    pid_map: dict[str, dict] = {}
+    for c in all_candidates:
+        sid = c.get("signal_id")
+        mbg = c.get("_matched_by_group")
+        if sid and mbg:
+            pid_map[sid] = mbg
+    if pid_map:
+        _pattern_episode_ids_cache[run_id] = pid_map
+        logger.debug(
+            "[DISCOVERY/REGIME] run=%s: cached episode IDs for %d patterns",
+            run_id, len(pid_map),
+        )
 
     return all_candidates, bar_sequences_by_group
 
@@ -713,11 +746,42 @@ async def get_discovery_results(run_id: int) -> dict:
         episodes = await get_raw_pattern_episode_features(run_id=run_id, limit=10000)
         pw_dist  = summarize_pump_watch_distribution(episodes)
 
+        # Normalise patterns (source_type / feature_family) so the UI can filter by family
+        for p in patterns:
+            p["source_type"]    = _st_from_signal_id(p.get("signal_id"), p.get("source_type"))
+            p["feature_family"] = _ff_from_signal_id(p.get("signal_id"), p.get("feature_family"))
+
+        # Lightweight regime analysis using stored episode fields + in-memory regime cache
+        regime_analysis: dict = {}
+        try:
+            from replay.regime_engine import build_regime_analysis as _bra
+
+            ep_regime_map = {
+                ep_id: regime
+                for (rid, ep_id), regime in _episode_regime_cache.items()
+                if rid == run_id
+            }
+
+            pid_cache = _pattern_episode_ids_cache.get(run_id) or {}
+            for p in patterns:
+                sid = p.get("signal_id")
+                if sid and sid in pid_cache and "_matched_by_group" not in p:
+                    p["_matched_by_group"] = pid_cache[sid]
+
+            regime_analysis = _bra(
+                patterns=patterns,
+                episodes=episodes,
+                episode_regime_map=ep_regime_map,
+            )
+        except Exception as _rae:
+            logger.debug("get_discovery_results: regime_engine failed: %s", _rae)
+
         return {
             "run_id":                  run_id,
             "patterns":                patterns,
             "pump_watch_distribution": pw_dist,
             "registry":                _load_registry(),
+            "regime_analysis":         regime_analysis,
         }
     except Exception as exc:
         logger.error(f"get_discovery_results({run_id}): {exc}")
@@ -1363,6 +1427,33 @@ async def build_discovery_export(
             logger.warning("curated_flow_analyzer failed: %s", _cfa_err)
             curated_scored_episodes = flow_scored_episodes if flow_scored_episodes else episodes
 
+    # ── Regime analysis ───────────────────────────────────────────────────────
+    regime_analysis: dict = {}
+    try:
+        from replay.regime_engine import build_regime_analysis as _build_regime_analysis
+
+        # Build episode-ID → regime map from in-memory cache (same-session runs)
+        ep_regime_map: dict[int, dict] = {
+            ep_id: regime
+            for (rid, ep_id), regime in _episode_regime_cache.items()
+            if rid == run_id
+        }
+
+        # Attach _matched_by_group to each pattern from the in-memory cache
+        pid_cache = _pattern_episode_ids_cache.get(run_id) or {}
+        for p in patterns:
+            sid = p.get("signal_id")
+            if sid and sid in pid_cache and "_matched_by_group" not in p:
+                p["_matched_by_group"] = pid_cache[sid]
+
+        regime_analysis = _build_regime_analysis(
+            patterns=patterns,
+            episodes=_ep_src or episodes,
+            episode_regime_map=ep_regime_map,
+        )
+    except Exception as _rae:
+        logger.warning("regime_engine.build_regime_analysis failed: %s", _rae)
+
     top_flow_by_clean_reliability = _top(
         [p for p in flow_working
          if (p.get("split_artifact_exposure") or 0) <= 0.50
@@ -1522,6 +1613,7 @@ async def build_discovery_export(
             "bar_sequence_summary": bar_sequence_summary,
             "flow_replay_analysis": flow_replay_analysis,
             "curated_flow_replay_analysis": curated_flow_analysis,
+            "regime_analysis": regime_analysis,
             "custom_signal_patterns_created":   prog.get("custom_patterns_evaluated", 0),
             "flow_custom_patterns_created":     prog.get("flow_custom_patterns_evaluated", 0),
             "custom_signal_sequences_created":  prog.get("custom_sequences_created", 0),
@@ -1690,6 +1782,7 @@ async def build_discovery_export(
             "top_custom_l43_patterns":           top_custom_l43_patterns,
             "top_custom_d_confluence_patterns":  top_custom_d_confluence_patterns,
             "top_custom_l_series_patterns":      top_custom_l_series_patterns,
+            "regime_analysis":                   regime_analysis,
             "registry_snapshot":                 registry,
             "ranking_formula_version":           _RANKING_FORMULA_VERSION,
             "reliability_score_legend":          _RELIABILITY_SCORE_LEGEND,
@@ -1750,6 +1843,7 @@ async def build_discovery_export(
         "top_custom_l43_patterns":               top_custom_l43_patterns,
         "top_custom_d_confluence_patterns":      top_custom_d_confluence_patterns,
         "top_custom_l_series_patterns":          top_custom_l_series_patterns,
+        "regime_analysis":                       regime_analysis,
         "registry_snapshot":                     registry,
         "ranking_formula_version":               _RANKING_FORMULA_VERSION,
         "reliability_score_legend":              _RELIABILITY_SCORE_LEGEND,
