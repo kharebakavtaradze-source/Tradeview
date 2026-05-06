@@ -1769,6 +1769,7 @@ function PatternDiscoveryPanel({ runId }) {
   const [mode,        setMode]        = useState('both');
   const [windows,     setWindows]     = useState([1, 2, 3, 5, 10]);
   const [excludeSplit, setExcludeSplit] = useState(true);
+  const [saveMode,    setSaveMode]    = useState('compact');
 
   // Launch state
   const [launching,   setLaunching]   = useState(false);
@@ -1884,7 +1885,7 @@ function PatternDiscoveryPanel({ runId }) {
       const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/discover`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ mode, windows, exclude_split_artifacts: excludeSplit }),
+        body:    JSON.stringify({ mode, windows, exclude_split_artifacts: excludeSplit, save_mode: saveMode }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
@@ -2027,7 +2028,28 @@ function PatternDiscoveryPanel({ runId }) {
               Exclude split artifacts from counts
             </label>
           </div>
+
+          {/* Save mode */}
+          <div className={styles.discoveryField}>
+            <label className={styles.discoveryLabel}>Save Mode</label>
+            <select
+              className={styles.discoverySelect}
+              value={saveMode}
+              onChange={e => setSaveMode(e.target.value)}
+              disabled={isRunning || launching}
+            >
+              <option value="compact">Compact (default — drops noise, ≤500 rejects)</option>
+              <option value="research">Research (keeps more rejects, ≤2000)</option>
+              <option value="debug">Debug (saves everything — large storage cost)</option>
+            </select>
+          </div>
         </div>
+
+        {saveMode === 'debug' && (
+          <div className={styles.errorMsg} style={{ marginTop: 8, background: 'var(--yellow-bg, #3a2e00)', borderColor: 'var(--yellow, #f5a623)' }}>
+            Debug mode saves ALL patterns including noise. Expect 5–10× more rows than Compact. Only use for diagnosis.
+          </div>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
           <button
@@ -2125,7 +2147,13 @@ function PatternDiscoveryPanel({ runId }) {
                 {status.patterns_evaluated} ep-patterns · {status.bar_patterns_evaluated} bar ·{' '}
                 {status.flow_patterns_evaluated > 0 ? `${status.flow_patterns_evaluated} flow · ` : ''}
                 {status.combined_patterns_evaluated > 0 ? `${status.combined_patterns_evaluated} combined · ` : ''}
+                {status.patterns_generated > 0
+                  ? <>{status.patterns_generated} generated → </>
+                  : null}
                 {status.patterns_saved} saved
+                {status.patterns_dropped_storage_filter > 0
+                  ? <span style={{ color: 'var(--text-muted)', opacity: 0.7 }}> ({status.patterns_dropped_storage_filter} filtered [{status.storage_mode}])</span>
+                  : null}
               </span>
             )}
           </div>
@@ -2321,9 +2349,167 @@ function PatternDiscoveryPanel({ runId }) {
           )}
         </>
       )}
+
+      {/* ── Cleanup panel ─────────────────────────────────────────────────── */}
+      <CleanupPanel />
     </div>
   );
 }
+
+// ── DB Cleanup Panel ──────────────────────────────────────────────────────────
+
+function CleanupPanel() {
+  const [keepN,      setKeepN]      = useState(5);
+  const [vacuum,     setVacuum]     = useState(false);
+  const [preview,    setPreview]    = useState(null);  // dry-run result
+  const [loading,    setLoading]    = useState(false);
+  const [err,        setErr]        = useState('');
+  const [confirmed,  setConfirmed]  = useState(false);
+  const [deleted,    setDeleted]    = useState(null);  // real delete result
+
+  const runDryRun = async () => {
+    setLoading(true); setErr(''); setPreview(null); setDeleted(null); setConfirmed(false);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/cleanup`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ keep_last_n: keepN, dry_run: true, vacuum: false }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      setPreview(d);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runDelete = async () => {
+    setLoading(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/cleanup`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ keep_last_n: keepN, dry_run: false, vacuum }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      setDeleted(d); setPreview(null); setConfirmed(false);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className={styles.discoveryControls} style={{ marginTop: 16 }}>
+      <div className={styles.discoveryControlsTitle} style={{ color: 'var(--red)' }}>DB Storage Cleanup</div>
+      <div className={styles.discoveryNote}>
+        Deletes older complete runs to reclaim database storage. Keeps the N most-recent runs.
+        Run dry-run first to preview what would be deleted.
+      </div>
+
+      <div className={styles.discoveryRow} style={{ marginTop: 10 }}>
+        <div className={styles.discoveryField}>
+          <label className={styles.discoveryLabel}>Keep last N runs</label>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={keepN}
+            onChange={e => { setKeepN(parseInt(e.target.value) || 1); setPreview(null); setConfirmed(false); }}
+            disabled={loading}
+            style={{ width: 64, padding: '4px 8px', background: 'var(--bg-input, #1a1a1a)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4 }}
+          />
+        </div>
+        <div className={styles.discoveryField}>
+          <label className={styles.windowCheckLabel}>
+            <input
+              type="checkbox"
+              checked={vacuum}
+              onChange={e => setVacuum(e.target.checked)}
+              disabled={loading}
+            />
+            VACUUM after delete (SQLite only — reclaims disk space)
+          </label>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center' }}>
+        <button className={styles.discoveryRefreshBtn} onClick={runDryRun} disabled={loading}>
+          {loading && !preview ? '…' : 'Preview (dry-run)'}
+        </button>
+        {preview && preview.runs_to_delete.length > 0 && !confirmed && (
+          <button
+            className={styles.runBtn}
+            style={{ background: 'var(--red)', minWidth: 0, padding: '6px 14px' }}
+            onClick={() => setConfirmed(true)}
+            disabled={loading}
+          >
+            Delete {preview.runs_to_delete.length} run{preview.runs_to_delete.length !== 1 ? 's' : ''}…
+          </button>
+        )}
+        {confirmed && (
+          <button
+            className={styles.runBtn}
+            style={{ background: 'var(--red)', minWidth: 0, padding: '6px 14px' }}
+            onClick={runDelete}
+            disabled={loading}
+          >
+            {loading ? 'Deleting…' : 'Confirm Delete'}
+          </button>
+        )}
+      </div>
+
+      {err && <div className={styles.errorMsg} style={{ marginTop: 8 }}>{err}</div>}
+
+      {preview && (
+        <div style={{ marginTop: 12 }}>
+          {preview.runs_to_delete.length === 0 ? (
+            <div className={styles.statusMsg}>Nothing to delete — only {preview.runs_kept} complete run(s) exist.</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>
+                Keeping {preview.runs_kept} run(s). Would delete {preview.runs_to_delete.length}:
+              </div>
+              <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                    <th style={{ textAlign: 'left', padding: '2px 8px 4px 0' }}>Run ID</th>
+                    <th style={{ textAlign: 'left', padding: '2px 8px 4px 0' }}>Ticker</th>
+                    <th style={{ textAlign: 'left', padding: '2px 8px 4px 0' }}>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.runs_to_delete.map(r => (
+                    <tr key={r.run_id} style={{ borderBottom: '1px solid var(--border-faint, #2a2a2a)' }}>
+                      <td style={{ padding: '3px 8px 3px 0', color: 'var(--red)' }}>#{r.run_id}</td>
+                      <td style={{ padding: '3px 8px 3px 0' }}>{r.ticker || '—'}</td>
+                      <td style={{ padding: '3px 8px 3px 0', color: 'var(--text-muted)' }}>{r.created_at ? r.created_at.slice(0, 10) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      )}
+
+      {deleted && (
+        <div className={styles.discoveryStatus} style={{ marginTop: 10, borderColor: 'var(--green)' }}>
+          <div style={{ fontWeight: 600, color: 'var(--green)' }}>Deleted {deleted.deleted.runs || 0} run(s)</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            {Object.entries(deleted.deleted).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+            {deleted.vacuum_done ? ' · VACUUM done' : ''}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ── FLOW Impact Tab ───────────────────────────────────────────────────────────
 

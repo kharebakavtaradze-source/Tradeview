@@ -5312,6 +5312,7 @@ async def delete_raw_pattern_run(run_id: int) -> dict:
             (RawPatternEpisodeFeatures,  "ep_features",     RawPatternEpisodeFeatures.run_id),
             (RawPatternDailyFeatures,    "daily_features",  RawPatternDailyFeatures.run_id),
             (RawPatternAISummary,        "ai_summaries",    RawPatternAISummary.run_id),
+            (DiscoveredPattern,          "discovered_patterns", DiscoveredPattern.run_id),
         ]:
             result = await session.execute(select(Model).where(fk == run_id))
             rows   = result.scalars().all()
@@ -5323,6 +5324,95 @@ async def delete_raw_pattern_run(run_id: int) -> dict:
         counts["run"] = 1
         await session.commit()
         return counts
+
+
+async def cleanup_raw_pattern_runs(
+    keep_last_n: int = 5,
+    dry_run: bool = True,
+    vacuum: bool = False,
+) -> dict:
+    """
+    Bulk-delete old raw-pattern-study runs to reclaim DB storage.
+
+    Keeps the `keep_last_n` most-recent complete runs ordered by created_at desc.
+    Deletes all child records (episode_features, daily_features, ai_summaries,
+    discovered_patterns, comparison records) then the run row itself.
+
+    Returns a summary dict with `runs_to_delete` list, `deleted` counts,
+    `dry_run` flag, and `vacuum_done` flag.
+    """
+    async with get_session_factory()() as session:
+        # Load all complete runs ordered newest-first
+        result = await session.execute(
+            select(RawPatternRun)
+            .where(RawPatternRun.status == "complete")
+            .order_by(RawPatternRun.created_at.desc())
+        )
+        complete_runs = result.scalars().all()
+
+        to_delete = complete_runs[keep_last_n:]
+        to_delete_ids = [r.id for r in to_delete]
+
+        preview = [
+            {
+                "run_id":     r.id,
+                "ticker":     r.ticker,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "status":     r.status,
+            }
+            for r in to_delete
+        ]
+
+        if dry_run or not to_delete_ids:
+            return {
+                "dry_run":        dry_run,
+                "keep_last_n":    keep_last_n,
+                "runs_kept":      len(complete_runs) - len(to_delete),
+                "runs_to_delete": preview,
+                "deleted":        {},
+                "vacuum_done":    False,
+            }
+
+        # Hard-delete each run (reuse per-row delete logic)
+        total_counts: dict[str, int] = {}
+        for run_id in to_delete_ids:
+            run_row = (await session.execute(
+                select(RawPatternRun).where(RawPatternRun.id == run_id)
+            )).scalar_one_or_none()
+            if not run_row:
+                continue
+            for Model, label, fk in [
+                (RawPatternComparisonMember, "cmp_members",        RawPatternComparisonMember.run_id),
+                (RawPatternComparison,       "cmp_features",       RawPatternComparison.run_id),
+                (RawPatternEpisodeFeatures,  "ep_features",        RawPatternEpisodeFeatures.run_id),
+                (RawPatternDailyFeatures,    "daily_features",     RawPatternDailyFeatures.run_id),
+                (RawPatternAISummary,        "ai_summaries",       RawPatternAISummary.run_id),
+                (DiscoveredPattern,          "discovered_patterns", DiscoveredPattern.run_id),
+            ]:
+                rows = (await session.execute(select(Model).where(fk == run_id))).scalars().all()
+                for r in rows:
+                    await session.delete(r)
+                total_counts[label] = total_counts.get(label, 0) + len(rows)
+            await session.delete(run_row)
+            total_counts["runs"] = total_counts.get("runs", 0) + 1
+
+        await session.commit()
+
+    vacuum_done = False
+    if vacuum and _IS_SQLITE:
+        engine = get_engine()
+        async with engine.connect() as conn:
+            await conn.execute(text("VACUUM"))
+        vacuum_done = True
+
+    return {
+        "dry_run":        False,
+        "keep_last_n":    keep_last_n,
+        "runs_kept":      len(complete_runs) - len(to_delete),
+        "runs_to_delete": preview,
+        "deleted":        total_counts,
+        "vacuum_done":    vacuum_done,
+    }
 
 
 # ── StockSplitCache CRUD ──────────────────────────────────────────────────────

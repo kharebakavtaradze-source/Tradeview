@@ -2964,7 +2964,7 @@ async def delete_raw_pattern_study_run_endpoint(run_id: int):
     Cascade order:
         raw_pattern_comparison_members → raw_pattern_comparisons
         → raw_pattern_episode_features → raw_pattern_daily_features
-        → raw_pattern_ai_summaries → raw_pattern_runs
+        → raw_pattern_ai_summaries → discovered_patterns → raw_pattern_runs
     """
     from database import delete_raw_pattern_run
     try:
@@ -2979,6 +2979,40 @@ async def delete_raw_pattern_study_run_endpoint(run_id: int):
         "run_id":  run_id,
         "deleted": counts,
     }
+
+
+class CleanupRequest(BaseModel):
+    keep_last_n: int = 5
+    """Keep the N most-recent complete runs; delete older ones (default: 5)."""
+    dry_run: bool = True
+    """If True (default), preview what would be deleted without deleting."""
+    vacuum: bool = False
+    """If True (and not dry_run), run VACUUM after deletion to reclaim disk space."""
+
+
+@app.post("/api/replay/raw-pattern-study/cleanup")
+async def raw_pattern_study_cleanup(body: CleanupRequest = CleanupRequest()):
+    """
+    Admin: bulk-delete old raw-pattern-study runs to reclaim DB storage.
+
+    Keeps the N most-recent complete runs; deletes all older ones including
+    their discovered_patterns, episode_features, daily_features, ai_summaries,
+    and comparison records.
+
+    By default runs as a dry-run (no deletions). Pass dry_run=false to execute.
+    Pass vacuum=true (with dry_run=false) to VACUUM the database afterward.
+    """
+    from database import cleanup_raw_pattern_runs
+    try:
+        result = await cleanup_raw_pattern_runs(
+            keep_last_n=body.keep_last_n,
+            dry_run=body.dry_run,
+            vacuum=body.vacuum and not body.dry_run,
+        )
+    except Exception as exc:
+        logger.exception("raw_pattern_study_cleanup failed")
+        raise HTTPException(500, detail=str(exc))
+    return result
 
 
 async def _build_research_context_text(run_id: int) -> str:
@@ -4172,6 +4206,13 @@ class DiscoverRequest(BaseModel):
     """Window sizes for bar-sequence mining. Only used when mode includes bar_sequence, flow, or combined."""
     exclude_split_artifacts: bool = False
     """If True, exclude split_artifact episodes from episode-level mining counts."""
+    save_mode: str = "compact"
+    """
+    Storage filter mode:
+      compact  — drop CUSTOM_FLAT-only, FLOW_CUSTOM duplicates, low-quality rejects; keep ≤500 rejects (default)
+      research — keep more rejects (≤2000), still drop CUSTOM_FLAT and FLOW_CUSTOM noise
+      debug    — save everything; no filters applied (large storage cost)
+    """
 
 
 @app.post("/api/replay/raw-pattern-study/{run_id}/discover")
@@ -4209,6 +4250,10 @@ async def raw_pattern_discover(
     if bad_w:
         raise HTTPException(400, detail=f"Invalid window sizes {bad_w}. Must be subset of {valid_windows}")
 
+    valid_save_modes = {"compact", "research", "debug"}
+    if body.save_mode not in valid_save_modes:
+        raise HTTPException(400, detail=f"Invalid save_mode '{body.save_mode}'. Must be one of: {valid_save_modes}")
+
     run = await get_raw_pattern_run(run_id)
     if not run:
         raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
@@ -4229,12 +4274,14 @@ async def raw_pattern_discover(
         mode=body.mode,
         windows=tuple(body.windows),
         exclude_split_artifacts=body.exclude_split_artifacts,
+        save_mode=body.save_mode,
     )
     return {
-        "status":  "STARTED",
-        "run_id":  run_id,
-        "mode":    body.mode,
-        "windows": body.windows,
+        "status":    "STARTED",
+        "run_id":    run_id,
+        "mode":      body.mode,
+        "windows":   body.windows,
+        "save_mode": body.save_mode,
     }
 
 

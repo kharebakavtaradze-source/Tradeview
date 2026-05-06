@@ -52,6 +52,121 @@ _episode_regime_cache: dict[tuple[int, int], dict] = {}
 # Populated after mine_bar_patterns() calls. Used for per-pattern regime breakdown.
 _pattern_episode_ids_cache: dict[int, dict[str, dict]] = {}
 
+# ── Storage-filter constants ───────────────────────────────────────────────────
+
+# Real custom tags — patterns missing all of these are FLOW_CUSTOM duplicates
+_REAL_CUSTOM_TAGS: frozenset[str] = frozenset({
+    "L43", "L34", "L64", "L22", "FRI34", "FRI64",
+    "D3_BEUP", "D4_BEUP", "D6_BEUP", "D3_L34", "D4_L34",
+    "VBO", "LVBO", "LD", "G4", "B2",
+})
+
+# Save-mode rejected-pattern limits
+_SAVE_MODE_REJECT_LIMITS: dict[str, Optional[int]] = {
+    "compact":  500,
+    "research": 2000,
+    "debug":    None,   # unlimited
+}
+
+
+def _is_custom_flat_only(pattern: dict) -> bool:
+    """True if a CUSTOM_SIGNAL pattern's signature contains only CUSTOM_FLAT parts."""
+    if (pattern.get("feature_family") or "") != "CUSTOM_SIGNAL":
+        return False
+    sig = pattern.get("sequence_signature") or ""
+    parts = [t.strip() for t in sig.replace("→", "+").split("+") if t.strip()]
+    return bool(parts) and all(t == "CUSTOM_FLAT" for t in parts)
+
+
+def _flow_custom_has_real_tags(pattern: dict) -> bool:
+    """True if a FLOW_CUSTOM_COMBINED pattern contains at least one real custom tag."""
+    if (pattern.get("feature_family") or "") != "FLOW_CUSTOM_COMBINED":
+        return True   # not applicable — don't filter
+    sig  = pattern.get("sequence_signature") or ""
+    tags = {t.strip() for t in sig.replace("→", "+").split("+") if t.strip()}
+    return bool(tags & _REAL_CUSTOM_TAGS)
+
+
+def filter_patterns_for_persistence(
+    patterns: list[dict],
+    save_mode: str = "compact",
+) -> tuple[list[dict], dict]:
+    """
+    Filter pattern candidates before DB persistence.
+
+    Parameters
+    ----------
+    patterns  : all_candidates (accepted + rejected, any order)
+    save_mode : "compact" | "research" | "debug"
+
+    Returns
+    -------
+    (kept_patterns, drop_counts)
+    where drop_counts = {
+        "custom_flat": int,
+        "flow_custom_no_custom_tags": int,
+        "rejected_no_4x_hits": int,
+        "rejected_low_lift": int,
+        "rejected_over_limit": int,
+    }
+    """
+    is_debug = save_mode == "debug"
+    reject_limit = _SAVE_MODE_REJECT_LIMITS.get(save_mode, 500)
+
+    drop_counts: dict[str, int] = {
+        "custom_flat":                0,
+        "flow_custom_no_custom_tags": 0,
+        "rejected_no_4x_hits":        0,
+        "rejected_low_lift":          0,
+        "rejected_over_limit":        0,
+    }
+
+    accepted_kept: list[dict] = []
+    rejected_kept: list[dict] = []
+
+    for p in patterns:
+        ff     = p.get("feature_family") or ""
+        status = p.get("status") or ""
+
+        # Always drop CUSTOM_FLAT-only signatures (unless debug)
+        if not is_debug and _is_custom_flat_only(p):
+            drop_counts["custom_flat"] += 1
+            continue
+
+        # Drop FLOW_CUSTOM_COMBINED without real custom tags (unless debug)
+        if not is_debug and ff == "FLOW_CUSTOM_COMBINED" and not _flow_custom_has_real_tags(p):
+            drop_counts["flow_custom_no_custom_tags"] += 1
+            continue
+
+        # Accepted statuses always pass
+        if status in ("EXPERIMENTAL", "EXPERIMENTAL_RARE", "RESEARCH_ONLY",
+                      "VALIDATED_WATCH", "WATCH_CANDIDATE", "VALIDATED_BUY_SUPPORT"):
+            accepted_kept.append(p)
+            continue
+
+        # REJECT: compact mode drops no-4x-hits and low-lift patterns early
+        if status == "REJECT":
+            if not is_debug and save_mode == "compact":
+                if (p.get("count_all_4x") or 0) == 0:
+                    drop_counts["rejected_no_4x_hits"] += 1
+                    continue
+                if (p.get("lift_vs_false_positive") or 0) < 1.0:
+                    drop_counts["rejected_low_lift"] += 1
+                    continue
+            rejected_kept.append(p)
+        else:
+            # Any other status — keep
+            accepted_kept.append(p)
+
+    # Trim rejected list to the mode limit (sorted by lift desc)
+    if reject_limit is not None and len(rejected_kept) > reject_limit:
+        rejected_kept.sort(key=lambda x: -(x.get("lift_vs_false_positive") or 0))
+        drop_counts["rejected_over_limit"] = len(rejected_kept) - reject_limit
+        rejected_kept = rejected_kept[:reject_limit]
+
+    return accepted_kept + rejected_kept, drop_counts
+
+
 # In-memory progress tracker
 _discovery_progress: dict = {
     "running":    False,
@@ -78,6 +193,10 @@ _discovery_progress: dict = {
     "patterns_rejected_low_count": 0,
     "patterns_rejected_low_lift": 0,
     "patterns_saved": 0,
+    "patterns_generated": 0,
+    "patterns_dropped_storage_filter": 0,
+    "storage_mode": "compact",
+    "drop_reasons": {},
     "episodes_scored": 0,
     "flow_tag_counts": {},
     "error":      None,
@@ -501,6 +620,7 @@ async def run_pattern_discovery(
     mode: str = "both",
     windows: tuple = (1, 2, 3, 5, 10),
     exclude_split_artifacts: bool = False,
+    save_mode: str = "compact",
 ) -> dict:
     """
     Full discovery pipeline for one raw_pattern_study run_id.
@@ -555,6 +675,10 @@ async def run_pattern_discovery(
         "patterns_rejected_low_count": 0,
         "patterns_rejected_low_lift":  0,
         "patterns_saved": 0,
+        "patterns_generated": 0,
+        "patterns_dropped_storage_filter": 0,
+        "storage_mode": save_mode,
+        "drop_reasons": {},
         "flow_tag_counts": {},
         "started_at": datetime.now(tz=timezone.utc).isoformat(),
         "finished_at": None,
@@ -655,7 +779,22 @@ async def run_pattern_discovery(
         # ── Phase 6: Persist pattern candidates ───────────────────────────────
         _discovery_progress["phase"] = "PERSISTING_PATTERNS"
         all_candidates = candidates + bar_candidates
-        saved_patterns = await _persist_pattern_candidates(run_id, all_candidates)
+        _discovery_progress["patterns_generated"] = len(all_candidates)
+
+        # Apply storage filter before persisting
+        filtered_candidates, drop_counts = filter_patterns_for_persistence(
+            all_candidates, save_mode=save_mode
+        )
+        dropped_total = sum(drop_counts.values())
+        _discovery_progress["patterns_dropped_storage_filter"] = dropped_total
+        _discovery_progress["drop_reasons"] = drop_counts
+        logger.info(
+            f"[DISCOVERY] run={run_id}: storage filter ({save_mode}): "
+            f"{len(all_candidates)} generated → {len(filtered_candidates)} kept "
+            f"({dropped_total} dropped: {drop_counts})"
+        )
+
+        saved_patterns = await _persist_pattern_candidates(run_id, filtered_candidates)
         _discovery_progress["patterns_saved"] = saved_patterns
         logger.info(f"[DISCOVERY] run={run_id}: persisted {saved_patterns} pattern rows")
 
@@ -697,6 +836,7 @@ async def run_pattern_discovery(
             "status":                    "COMPLETE",
             "run_id":                    run_id,
             "mode":                      mode,
+            "storage_mode":              save_mode,
             "episodes_loaded":           total_ep,
             "group_counts":              group_counts,
             "pre_daily_rows_loaded":     _discovery_progress["pre_daily_rows_loaded"],
@@ -708,6 +848,9 @@ async def run_pattern_discovery(
             "patterns_rejected_low_lift":  _discovery_progress["patterns_rejected_low_lift"],
             "bar_patterns_evaluated":    len(bar_candidates),
             "bar_patterns_experimental": _discovery_progress["bar_patterns_experimental"],
+            "patterns_generated":        _discovery_progress["patterns_generated"],
+            "patterns_dropped_storage_filter": _discovery_progress["patterns_dropped_storage_filter"],
+            "drop_reasons":              _discovery_progress["drop_reasons"],
             "patterns_saved":            saved_patterns,
             "episodes_scored":           len(scored),
             "pump_watch_distribution":   pw_dist,
