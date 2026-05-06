@@ -1511,7 +1511,14 @@ async def update_portfolio_state(cash: float, total_value: float, invested: floa
         )
         state = result.scalar_one_or_none()
         if not state:
-            state = AIPortfolioState(date=today_str)
+            # Carry forward baseline_value from the most recent row so it doesn't
+            # silently reset to the column default when a new day's row is created.
+            latest_result = await session.execute(
+                select(AIPortfolioState).order_by(AIPortfolioState.id.desc()).limit(1)
+            )
+            latest = latest_result.scalar_one_or_none()
+            baseline_fwd = (latest.baseline_value if latest and latest.baseline_value else 2000.0)
+            state = AIPortfolioState(date=today_str, baseline_value=baseline_fwd)
             session.add(state)
         state.cash = cash
         state.total_value = total_value
