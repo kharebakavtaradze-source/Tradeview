@@ -1649,10 +1649,12 @@ async def build_discovery_export(
                 daily_by_episode=daily_by_episode,
             )
             curated_flow_analysis = build_curated_flow_replay_analysis(
-                curated_scored_episodes, flow_working + combined_working
+                curated_scored_episodes, flow_working + combined_working,
+                daily_by_episode=daily_by_episode,
             )
         except Exception as _cfa_err:
-            logger.warning("curated_flow_analyzer failed: %s", _cfa_err)
+            logger.exception("curated_flow_analyzer failed: %s", _cfa_err)
+            curated_flow_analysis = {"curated_flow_error": str(_cfa_err)}
             curated_scored_episodes = flow_scored_episodes if flow_scored_episodes else episodes
 
     top_flow_by_clean_reliability = _top(
