@@ -1993,7 +1993,7 @@ function PatternDiscoveryPanel({ runId }) {
               <option value="bar_sequence">Bar Sequence only (V1B)</option>
               <option value="flow">Flow Only (V1C — OHLCV proxy)</option>
               <option value="combined">Combined Price+Flow (V1B+V1C)</option>
-              <option value="all">All (V1A + V1B + V1C)</option>
+              <option value="all">All Research Layers (V1A–V1E)</option>
             </select>
           </div>
 
@@ -2963,36 +2963,81 @@ function CustomSignalsTab({ results }) {
   if (!results || Object.keys(results).length === 0)
     return <div className={styles.statusMsg}>No results loaded.</div>;
 
-  const ffCounts  = results.feature_family_counts || {};
-  const csCount   = ffCounts.CUSTOM_SIGNAL || 0;
-  const fccCount  = ffCounts.FLOW_CUSTOM_COMBINED || 0;
-  const hasData   = csCount > 0 || fccCount > 0;
+  // ── Derive counts + pattern lists from results.patterns ───────────────────
+  // results comes from /discover/results which returns {patterns, ...}
+  // The pre-computed top_custom_* arrays from export-full may or may not exist.
+  const allPatterns = results.patterns || [];
 
-  const l43Pats  = results.top_custom_l43_patterns           || [];
-  const lSerPats = results.top_custom_l_series_patterns      || [];
-  const dConfPats= results.top_custom_d_confluence_patterns  || [];
-  const fccPats  = results.top_flow_custom_combined          || [];
-  const topClean = results.top_custom_signal_clean_reliability || [];
+  const csPatterns  = allPatterns.filter(p => p.feature_family === 'CUSTOM_SIGNAL');
+  const fccPatterns = allPatterns.filter(p => p.feature_family === 'FLOW_CUSTOM_COMBINED');
 
+  const csCount  = csPatterns.length;
+  const fccCount = fccPatterns.length;
+  const hasData  = csCount > 0 || fccCount > 0;
+
+  // Detect flat-only CUSTOM_SIGNAL: every pattern's signal_id contains only CUSTOM_FLAT
+  const csFlatOnly = csCount > 0 &&
+    csPatterns.every(p => (p.signal_id || '').includes('CUSTOM_FLAT'));
+  const csWeak = csCount <= 5 && fccCount > 0;
+
+  // Helper: check if pattern signal_id or machine_conditions contain a tag string
+  const sigHasTag = (p, tag) => {
+    if ((p.signal_id || '').includes(tag)) return true;
+    const mc = p.machine_conditions;
+    if (!mc) return false;
+    if (typeof mc === 'string') return mc.includes(tag);
+    if (Array.isArray(mc)) return mc.some(c => String(c).includes(tag));
+    return false;
+  };
+
+  const byReliability = (a, b) => ((b.reliability_score || 0) - (a.reliability_score || 0));
+  const bothFamilies  = [...csPatterns, ...fccPatterns];
+
+  // Pre-computed arrays from export-full if available, else derive from patterns
+  const l43Pats   = (results.top_custom_l43_patterns?.length
+    ? results.top_custom_l43_patterns
+    : bothFamilies.filter(p => sigHasTag(p, 'L43')).sort(byReliability)
+  ).slice(0, 20);
+
+  const lSerPats  = (results.top_custom_l_series_patterns?.length
+    ? results.top_custom_l_series_patterns
+    : bothFamilies.filter(p =>
+        (sigHasTag(p, 'L34') || sigHasTag(p, 'L64') || sigHasTag(p, 'L22')) &&
+        !sigHasTag(p, 'L43')
+      ).sort(byReliability)
+  ).slice(0, 20);
+
+  const dConfPats = (results.top_custom_d_confluence_patterns?.length
+    ? results.top_custom_d_confluence_patterns
+    : bothFamilies.filter(p =>
+        sigHasTag(p, 'D3_BEUP') || sigHasTag(p, 'D4_BEUP') ||
+        sigHasTag(p, 'D6_BEUP') || sigHasTag(p, 'D3_L34')  ||
+        sigHasTag(p, 'D4_L34')
+      ).sort(byReliability)
+  ).slice(0, 20);
+
+  const fccPats   = (results.top_flow_custom_combined?.length
+    ? results.top_flow_custom_combined
+    : fccPatterns.sort(byReliability)
+  ).slice(0, 20);
+
+  const topClean  = (results.top_custom_signal_clean_reliability?.length
+    ? results.top_custom_signal_clean_reliability
+    : csPatterns.filter(p =>
+        (p.split_artifact_exposure || 0) <= 0.50 && (p.count_all_4x || 0) >= 4
+      ).sort(byReliability)
+  ).slice(0, 15);
+
+  // ── Not-yet-mined gate (only when truly nothing present) ──────────────────
   if (!hasData) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div className={styles.discoveryNote} style={{ padding: '10px 14px', fontSize: 12 }}>
-          <strong>Custom Signals not yet mined.</strong> Run pattern discovery with
-          <code style={{ margin: '0 4px' }}>mode=custom</code> or
-          <code style={{ margin: '0 4px' }}>mode=all</code> to populate L43, L34, D4_BEUP and
-          other WLNBB signal patterns.
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 10 }}>
-          {[
-            { label: 'CUSTOM_SIGNAL',       val: csCount },
-            { label: 'FLOW_CUSTOM_COMBINED', val: fccCount },
-          ].map(({ label, val }) => (
-            <div key={label} className={styles.tableCard} style={{ padding: '10px 14px', textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-muted)' }}>{val}</div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
-            </div>
-          ))}
+          <strong>Custom Signals not yet mined.</strong>{' '}
+          Run pattern discovery with{' '}
+          <code style={{ margin: '0 4px' }}>mode=custom</code> or{' '}
+          <code style={{ margin: '0 4px' }}>mode=all (V1A–V1E)</code>{' '}
+          to populate L43, L34, D4_BEUP and other WLNBB signal patterns.
         </div>
       </div>
     );
@@ -3003,57 +3048,83 @@ function CustomSignalsTab({ results }) {
 
       {/* Safety note */}
       <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
-        <strong>RESEARCH ONLY</strong> — Custom D/L/WLNBB signal layer.
+        <strong>RESEARCH ONLY</strong> — Custom D/L/WLNBB signal layer (V1D/V1E).
         No BUY promotion. No Scanner V2 change. All output is experimental.
-        Tags populated from pre-computed feature_json flags (has_l43, has_d4_beup, etc.).
+        Tags read from pre-computed feature_json flags (has_l43, has_d4_beup, etc.).
       </div>
 
+      {/* Weak upstream warning */}
+      {(csWeak || csFlatOnly) && (
+        <div className={styles.tableCard} style={{ padding: '10px 14px', borderLeft: '3px solid var(--yellow)' }}>
+          <div style={{ fontSize: 12, color: 'var(--yellow)', fontWeight: 600, marginBottom: 4 }}>
+            ⚠ Custom signal upstream flags are missing or flat-only
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            CUSTOM_SIGNAL patterns: <strong>{csCount}</strong>
+            {csFlatOnly ? ' (all CUSTOM_FLAT — no real L/D/VBO signals detected)' : ' (very few)'}.
+            FLOW_CUSTOM_COMBINED is active ({fccCount} patterns) but uses FLOW tags only — real
+            L43/D4_BEUP flags are not yet in feature_json.
+            Populate <code>has_l43</code>, <code>has_d4_beup</code>, etc. in
+            raw_pattern_daily_features.feature_json to unlock true custom patterns.
+          </div>
+        </div>
+      )}
+
       {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(145px,1fr))', gap: 10 }}>
         {[
-          { label: 'CUSTOM_SIGNAL patterns',        val: csCount },
-          { label: 'FLOW+Custom combined',          val: fccCount },
-          { label: 'L43 patterns',                  val: l43Pats.length },
-          { label: 'L34/L64/L22 patterns',          val: lSerPats.length },
-          { label: 'D-confluence patterns',         val: dConfPats.length },
-          { label: 'Top clean (cnt≥4, exp≤50%)',    val: topClean.length },
-        ].map(({ label, val }) => (
+          { label: 'CUSTOM_SIGNAL (V1D)',     val: csCount,       note: csFlatOnly ? 'flat-only' : '' },
+          { label: 'FLOW+Custom (V1E)',        val: fccCount,      note: '' },
+          { label: 'L43 patterns',             val: l43Pats.length, note: '' },
+          { label: 'L34/L64/L22 patterns',     val: lSerPats.length, note: '' },
+          { label: 'D-confluence patterns',    val: dConfPats.length, note: '' },
+          { label: 'Top clean (cnt≥4)',         val: topClean.length, note: '' },
+        ].map(({ label, val, note }) => (
           <div key={label} className={styles.tableCard} style={{ padding: '10px 14px', textAlign: 'center' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--blue)' }}>{val}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: val > 0 ? 'var(--blue)' : 'var(--text-muted)' }}>
+              {val}
+            </div>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
+            {note && <div style={{ fontSize: 9, color: 'var(--yellow)', marginTop: 1 }}>{note}</div>}
           </div>
         ))}
       </div>
 
-      {/* L43 patterns */}
+      {/* FLOW + Custom combined — always shown first when FCC is the active layer */}
       <PatternTable
-        title={`L43 Patterns — all families (${l43Pats.length})`}
-        rows={l43Pats.slice(0, 15)}
+        title={`FLOW + Custom Combined (V1E) — ${fccCount} total, showing top ${fccPats.length}`}
+        rows={fccPats}
       />
+
+      {/* L43 patterns */}
+      {l43Pats.length > 0 && (
+        <PatternTable
+          title={`L43 Patterns — all families (${l43Pats.length})`}
+          rows={l43Pats}
+        />
+      )}
 
       {/* L34 / L64 / L22 patterns */}
-      <PatternTable
-        title={`L34 / L64 / L22 Patterns (${lSerPats.length})`}
-        rows={lSerPats.slice(0, 15)}
-      />
+      {lSerPats.length > 0 && (
+        <PatternTable
+          title={`L34 / L64 / L22 Patterns (${lSerPats.length})`}
+          rows={lSerPats}
+        />
+      )}
 
       {/* D-confluence patterns */}
-      <PatternTable
-        title={`D-Confluence Patterns — D3/D4/D6 BEUP + D+L combos (${dConfPats.length})`}
-        rows={dConfPats.slice(0, 15)}
-      />
+      {dConfPats.length > 0 && (
+        <PatternTable
+          title={`D-Confluence Patterns — D3/D4/D6 BEUP + D+L combos (${dConfPats.length})`}
+          rows={dConfPats}
+        />
+      )}
 
-      {/* FLOW + Custom combined */}
-      <PatternTable
-        title={`FLOW + Custom Combined Patterns (${fccPats.length})`}
-        rows={fccPats.slice(0, 15)}
-      />
-
-      {/* Top clean reliability */}
+      {/* Top clean reliability (pure CUSTOM_SIGNAL) */}
       {topClean.length > 0 && (
         <PatternTable
-          title={`Top Custom Signal — Clean Reliability (cnt≥4, exposure≤50%)`}
-          rows={topClean.slice(0, 15)}
+          title="Top Custom Signal (V1D) — Clean Reliability (cnt≥4, exposure≤50%)"
+          rows={topClean}
         />
       )}
     </div>
