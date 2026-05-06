@@ -1205,6 +1205,49 @@ async def build_discovery_export(
     )
     registry = _load_registry() if section in ("full", "compact") else []
 
+    # ── Load daily bars + attach per-episode regime bucket fields ─────────────
+    # Always load from DB so exports work on cold start (no in-memory cache).
+    daily_by_episode: dict[int, list[dict]] = {}
+    ep_regime_map_fresh: dict[int, dict] = {}
+    if need_episodes and episodes:
+        try:
+            from database import get_raw_pattern_daily_features as _get_daily
+            _all_daily = await _get_daily(run_id=run_id, phase="PRE", limit=200_000)
+            for _row in _all_daily:
+                _eid = _row.get("episode_id")
+                if _eid is not None:
+                    daily_by_episode.setdefault(_eid, []).append(_row)
+            logger.debug(
+                "build_discovery_export: loaded %d daily rows for %d episodes",
+                len(_all_daily), len(daily_by_episode),
+            )
+        except Exception as _de:
+            logger.debug("build_discovery_export: daily row load failed: %s", _de)
+
+        try:
+            from replay.regime_engine import (
+                compute_episode_regime,
+                _partial_regime_from_episode,
+            )
+            for ep in episodes:
+                _ep_id = ep.get("episode_id") or ep.get("id")
+                _daily = daily_by_episode.get(_ep_id, []) if _ep_id is not None else []
+                reg = (
+                    compute_episode_regime(ep, _daily)
+                    if _daily
+                    else _partial_regime_from_episode(ep)
+                )
+                ep["price_bucket"]         = reg["price_bucket"]
+                ep["dollar_volume_bucket"] = reg["dollar_volume_bucket"]
+                ep["atr_bucket"]           = reg["atr_bucket"]
+                ep["compression_bucket"]   = reg["compression_bucket"]
+                ep["gap_risk_bucket"]      = reg["gap_risk_bucket"]
+                if _ep_id is not None:
+                    ep_regime_map_fresh[_ep_id] = reg
+                    _episode_regime_cache[(run_id, _ep_id)] = reg
+        except Exception as _re2:
+            logger.debug("build_discovery_export: regime attachment failed: %s", _re2)
+
     # ── Normalise patterns ────────────────────────────────────────────────────
     for p in patterns:
         p["source_type"]       = _st_from_signal_id(p.get("signal_id"), p.get("source_type"))
@@ -1427,33 +1470,6 @@ async def build_discovery_export(
             logger.warning("curated_flow_analyzer failed: %s", _cfa_err)
             curated_scored_episodes = flow_scored_episodes if flow_scored_episodes else episodes
 
-    # ── Regime analysis ───────────────────────────────────────────────────────
-    regime_analysis: dict = {}
-    try:
-        from replay.regime_engine import build_regime_analysis as _build_regime_analysis
-
-        # Build episode-ID → regime map from in-memory cache (same-session runs)
-        ep_regime_map: dict[int, dict] = {
-            ep_id: regime
-            for (rid, ep_id), regime in _episode_regime_cache.items()
-            if rid == run_id
-        }
-
-        # Attach _matched_by_group to each pattern from the in-memory cache
-        pid_cache = _pattern_episode_ids_cache.get(run_id) or {}
-        for p in patterns:
-            sid = p.get("signal_id")
-            if sid and sid in pid_cache and "_matched_by_group" not in p:
-                p["_matched_by_group"] = pid_cache[sid]
-
-        regime_analysis = _build_regime_analysis(
-            patterns=patterns,
-            episodes=_ep_src or episodes,
-            episode_regime_map=ep_regime_map,
-        )
-    except Exception as _rae:
-        logger.warning("regime_engine.build_regime_analysis failed: %s", _rae)
-
     top_flow_by_clean_reliability = _top(
         [p for p in flow_working
          if (p.get("split_artifact_exposure") or 0) <= 0.50
@@ -1587,6 +1603,47 @@ async def build_discovery_export(
             "old_reverse_split_count":   sum(1 for ep in _ep_src if ep.get("split_context") == "OLD_REVERSE_SPLIT"),
             "no_split_count":            sum(1 for ep in _ep_src if not ep.get("split_context") or ep.get("split_context") == "NO_SPLIT"),
         }
+
+    # ── Regime analysis ───────────────────────────────────────────────────────
+    # Runs after _ep_src is defined (avoids NameError) and after episodes have
+    # been enriched with regime bucket fields from the daily-row load above.
+    regime_analysis: dict = {}
+    try:
+        from replay.regime_engine import build_regime_analysis as _build_regime_analysis
+
+        # Merge fresh computations (from daily-row load) over in-memory cache.
+        # Fresh data takes precedence; cache covers same-session patterns not
+        # yet persisted to DB.
+        ep_regime_map: dict[int, dict] = {
+            ep_id: regime
+            for (rid, ep_id), regime in _episode_regime_cache.items()
+            if rid == run_id
+        }
+        ep_regime_map.update(ep_regime_map_fresh)
+
+        # Attach _matched_by_group to patterns from in-memory cache
+        pid_cache = _pattern_episode_ids_cache.get(run_id) or {}
+        for p in patterns:
+            sid = p.get("signal_id")
+            if sid and sid in pid_cache and "_matched_by_group" not in p:
+                p["_matched_by_group"] = pid_cache[sid]
+
+        regime_analysis = _build_regime_analysis(
+            patterns=patterns,
+            episodes=_ep_src,
+            episode_regime_map=ep_regime_map,
+        )
+
+        # Flatten regime_performance sub-keys for direct access
+        _rp = regime_analysis.get("regime_performance") or {}
+        regime_analysis["by_price_bucket"]          = _rp.get("by_price_bucket", {})
+        regime_analysis["by_dollar_volume_bucket"]  = _rp.get("by_dollar_volume_bucket", {})
+        regime_analysis["by_atr_bucket"]            = _rp.get("by_atr_bucket", {})
+        regime_analysis["clean_tradeable_patterns"] = regime_analysis.get(
+            "top_patterns_clean_tradeable", []
+        )
+    except Exception as _rae:
+        logger.warning("regime_engine.build_regime_analysis failed: %s", _rae)
 
     exported_at = datetime.now(tz=timezone.utc).isoformat()
 
