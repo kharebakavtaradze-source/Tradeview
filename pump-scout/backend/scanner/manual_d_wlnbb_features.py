@@ -466,6 +466,8 @@ def compute_wlnbb_features(
             "bucket":         bucket,
             "l34_wlnbb":      l34_raw,
             "l43_wlnbb":      l43_raw,
+            "l22_wlnbb":      l22,
+            "l64_wlnbb":      l64_base,
             "be_up_wlnbb":    be_up,
             "break_up_wlnbb": break_up,
             "bx_up_wlnbb":    bx_up,

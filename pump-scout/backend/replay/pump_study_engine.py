@@ -1363,6 +1363,118 @@ def _fill_prev_bar_flags(row: dict, snap: dict, prev_snap: dict) -> None:
             fj["ema21_support_day"] = bool(l <= curr_ema21 and c >= curr_ema21 and today_bullish)
 
 
+def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
+    """
+    Compute per-bar D/WLNBB/NP custom signal boolean flags for injection into
+    feature_json.  Returns one flag-dict per snap (same length as snaps).
+
+    Flags computed:
+      has_l34, has_l43, has_l22, has_l64  — WLNBB bucket signals
+      has_fri34, has_fri64                — BLUE + L34/L64
+      has_d3_beup, has_d4_beup, has_d6_beup — Manual-D × BE-Up same-bar
+      has_d4_l34, has_d3_l34              — Manual-D × L34 same-bar
+      has_vbo                             — be_up_wlnbb AND bucket in (B, VB)
+      has_lvbo                            — break_up_wlnbb AND bucket == N
+      has_ld                              — not yet implemented (always False)
+      np_is_setup                         — NP-engine L34 or FRI34 on this bar
+      np_is_trigger                       — NP-engine G4 on this bar
+    """
+    if not snaps:
+        return []
+
+    candles = [
+        {
+            "open":   float(s.get("open")   or 0.0),
+            "high":   float(s.get("high")   or 0.0),
+            "low":    float(s.get("low")    or 0.0),
+            "close":  float(s.get("close")  or 0.0),
+            "volume": float(s.get("volume") or 0.0),
+        }
+        for s in snaps
+    ]
+
+    # WLNBB + Manual-D series (oldest→newest)
+    try:
+        from scanner.manual_d_wlnbb_features import (
+            compute_wlnbb_features,
+            compute_manual_d_features,
+        )
+        wlnbb_series = compute_wlnbb_features(candles)
+        d_series     = compute_manual_d_features(candles)
+    except Exception:
+        logger.warning("[CustomFlags] manual_d_wlnbb_features unavailable — skipping")
+        return [{} for _ in snaps]
+
+    # NP-engine signal history: L34/FRI34/G4 bar index sets
+    np_l34_set = np_fri34_set = np_g4_set = frozenset()
+    try:
+        from scanner.new_pump_engine import _build_signal_history
+        hist = _build_signal_history(candles)
+        np_l34_set   = frozenset(hist["l34_bars"])
+        np_fri34_set = frozenset(hist["fri34_bars"])
+        np_g4_set    = frozenset(hist["g4_bars"])
+    except Exception:
+        logger.warning("[CustomFlags] new_pump_engine unavailable — NP flags skipped")
+
+    # FRI64 = BLUE + L64; BLUE reuses NP-engine's volume-z / RSI-range3 logic
+    np_fri64_set: set[int] = set()
+    try:
+        from scanner.new_pump_engine import _compute_rsi, _sma, _std
+        closes  = [b["close"]  for b in candles]
+        volumes = [b["volume"] for b in candles]
+        rsi_s   = _compute_rsi(closes)
+        for i in range(1, len(candles)):
+            if not wlnbb_series[i].get("l64_wlnbb"):
+                continue
+            vol_win = volumes[max(0, i - 19): i + 1]
+            v_mid   = _sma(vol_win, 20)
+            v_std   = _std(vol_win, 20)
+            if v_mid is None or v_std is None or v_std <= 0:
+                continue
+            volume_z = (volumes[i] - v_mid) / v_std
+            if i >= 2:
+                rv = [rsi_s[j] for j in (i - 2, i - 1, i) if rsi_s[j] is not None]
+                if len(rv) == 3 and volume_z >= 1.1 and (max(rv) - min(rv)) <= 5.0:
+                    np_fri64_set.add(i)
+    except Exception:
+        pass
+
+    result: list[dict] = []
+    for i, w in enumerate(wlnbb_series):
+        d    = d_series[i]
+        l34  = w.get("l34_wlnbb",      False)
+        l43  = w.get("l43_wlnbb",      False)
+        l22  = w.get("l22_wlnbb",      False)
+        l64  = w.get("l64_wlnbb",      False)
+        beup = w.get("be_up_wlnbb",    False)
+        bup  = w.get("break_up_wlnbb", False)
+        bkt  = w.get("bucket",         "?")
+        d3   = d.get("d3", False)
+        d4   = d.get("d4", False)
+        d6   = d.get("d6", False)
+
+        result.append({
+            "has_l34":       bool(l34),
+            "has_l43":       bool(l43),
+            "has_l22":       bool(l22),
+            "has_l64":       bool(l64),
+            "has_fri34":     bool(i in np_fri34_set),
+            "has_fri64":     bool(i in np_fri64_set),
+            "has_d3_beup":   bool(d3 and beup),
+            "has_d4_beup":   bool(d4 and beup),
+            "has_d6_beup":   bool(d6 and beup),
+            "has_d4_l34":    bool(d4 and l34),
+            "has_d3_l34":    bool(d3 and l34),
+            "has_vbo":       bool(beup and bkt in ("B", "VB")),
+            "has_lvbo":      bool(bup  and bkt == "N"),
+            "has_ld":        False,
+            "np_is_setup":   bool(i in np_l34_set or i in np_fri34_set),
+            "np_is_trigger": bool(i in np_g4_set),
+        })
+
+    return result
+
+
 async def build_raw_pattern_daily_features(
     raw_run_id: int,
     pump_study_run_id: int,
@@ -1469,6 +1581,19 @@ async def build_raw_pattern_daily_features(
             prev_snap = snap
 
         if rows:
+            # Inject per-bar custom signal flags into each row's feature_json
+            try:
+                custom_flags = _compute_per_bar_custom_flags(snaps)
+                for row, flags in zip(rows, custom_flags):
+                    if flags:
+                        fj = row.get("feature_json")
+                        if fj is None:
+                            fj = {}
+                            row["feature_json"] = fj
+                        fj.update(flags)
+            except Exception as exc:
+                logger.warning("[CustomFlags] injection failed for ep %s: %s", episode_id, exc)
+
             saved = await save_raw_pattern_daily_features(raw_run_id, rows)
             total_rows += saved
 
