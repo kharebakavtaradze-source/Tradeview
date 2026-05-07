@@ -53,6 +53,17 @@ export default function AdminPage() {
   const npPollRef = useRef(null);
   const sectorRefreshPollRef = useRef(null);
 
+  // ── Clean DB state ──────────────────────────────────────────────────────────
+  const [dbResults, setDbResults]       = useState({});
+  const [dbConfirm, setDbConfirm]       = useState({});
+  const [rawKeepN, setRawKeepN]         = useState('0');
+  const [rawDryRun, setRawDryRun]       = useState(true);
+  const [rawVacuum, setRawVacuum]       = useState(false);
+  const [delReplayId, setDelReplayId]   = useState('');
+  const [delPumpId, setDelPumpId]       = useState('');
+  const [delRawId, setDelRawId]         = useState('');
+
+
   // Poll /api/admin/universe-scan/status every 5s
   const startPolling = () => {
     if (pollRef.current) return;
@@ -172,6 +183,30 @@ export default function AdminPage() {
     } finally {
       setLoading(l => ({ ...l, [key]: false }));
     }
+  }
+
+  // ── Clean DB helpers ────────────────────────────────────────────────────────
+  async function dbCall(key, url, method = 'GET', body = null) {
+    setLoading(l => ({ ...l, [key]: true }));
+    setError(e => ({ ...e, [key]: null }));
+    setDbResults(r => ({ ...r, [key]: null }));
+    try {
+      const opts = { method };
+      if (body !== null) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
+      const res = await fetch(url, opts);
+      const data = await res.json();
+      setDbResults(r => ({ ...r, [key]: data }));
+    } catch (err) {
+      setError(e => ({ ...e, [key]: err.message }));
+    } finally {
+      setLoading(l => ({ ...l, [key]: false }));
+      setDbConfirm(c => ({ ...c, [key]: false }));
+    }
+  }
+
+  function requireConfirm(key) {
+    if (!dbConfirm[key]) { setDbConfirm(c => ({ ...c, [key]: true })); return false; }
+    return true;
   }
 
   const card = { marginBottom: 24, background: '#0d0d1e', border: '1px solid #1a1a32', borderRadius: 8, padding: '20px 20px' };
@@ -613,6 +648,131 @@ export default function AdminPage() {
           {recalcResult  && <pre style={pre}>{JSON.stringify(recalcResult,  null, 2)}</pre>}
           {rebuildResult && <pre style={pre}>{JSON.stringify(rebuildResult, null, 2)}</pre>}
         </div>
+
+        {/* ── Clean DB ── */}
+        {(() => {
+          const sectionLabel = { fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', color: '#56567a', textTransform: 'uppercase', marginBottom: 12 };
+          const row = { display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 0', borderBottom: '1px solid #13132a' };
+          const rowTitle = { fontSize: 12, fontWeight: 700, color: '#c8c8e8', marginBottom: 2 };
+          const rowDesc = { fontSize: 10, color: '#56567a', marginBottom: 8, lineHeight: 1.5 };
+          const inputStyle = { background: '#07070f', border: '1px solid #2a2a4a', borderRadius: 4, color: '#eaeaf6', fontSize: 11, padding: '4px 8px', width: 80 };
+          const btn = (danger) => ({
+            padding: '5px 14px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700,
+            background: danger ? 'rgba(239,68,68,0.15)' : 'rgba(124,90,245,0.15)',
+            color: danger ? '#f87171' : '#c084fc',
+            border: `1px solid ${danger ? 'rgba(239,68,68,0.35)' : 'rgba(124,90,245,0.35)'}`,
+          });
+          const confirmBtn = { padding: '5px 14px', borderRadius: 4, border: '1px solid rgba(239,68,68,0.7)', cursor: 'pointer', fontSize: 11, fontWeight: 700, background: 'rgba(239,68,68,0.25)', color: '#fca5a5' };
+          const cancelBtn = { padding: '5px 10px', borderRadius: 4, border: '1px solid #2a2a4a', cursor: 'pointer', fontSize: 11, background: 'transparent', color: '#56567a' };
+          const resultPre = (isDryRun) => ({ margin: '8px 0 0', fontSize: 10, color: isDryRun ? '#00d4f5' : '#f87171', background: 'rgba(0,0,0,0.4)', borderRadius: 4, padding: 10, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: "'SF Mono', monospace" });
+
+          const CleanRow = ({ id, title, desc, danger = true, children, onRun }) => (
+            <div style={row}>
+              <div style={rowTitle}>{title}</div>
+              <div style={rowDesc}>{desc}</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {children}
+                {dbConfirm[id]
+                  ? <>
+                      <span style={{ fontSize: 11, color: '#f87171', fontWeight: 600 }}>Sure?</span>
+                      <button style={confirmBtn} onClick={onRun}>Yes, delete</button>
+                      <button style={cancelBtn} onClick={() => setDbConfirm(c => ({ ...c, [id]: false }))}>Cancel</button>
+                    </>
+                  : <button style={btn(danger)} disabled={loading[id]} onClick={() => { if (danger) { setDbConfirm(c => ({ ...c, [id]: true })); } else { onRun(); } }}>
+                      {loading[id] ? 'Running…' : danger ? 'Run' : 'Run'}
+                    </button>
+                }
+                {error[id] && <span style={{ fontSize: 10, color: '#f87171' }}>{error[id]}</span>}
+              </div>
+              {dbResults[id] && (
+                <pre style={resultPre(dbResults[id].dry_run !== false && (dbResults[id].dry_run === true || dbResults[id].dry_run === undefined))}>
+                  {JSON.stringify(dbResults[id], null, 2)}
+                </pre>
+              )}
+            </div>
+          );
+
+          return (
+            <div style={{ ...card, marginBottom: 24 }}>
+              <p style={{ ...sectionLabel, marginBottom: 16 }}>Clean DB</p>
+
+              {/* 1. Rotate old data */}
+              <CleanRow
+                id="rotate"
+                title="Rotate Old Data"
+                danger={false}
+                desc="Delete rows older than retention limits: scans (30d), scan_candidates (60d), position_snapshots (60d), eod_logs (90d), ribbon_candidates (14d). Journal, watchlist, market_regime are never touched."
+                onRun={() => dbCall('rotate', `${API_URL}/api/admin/rotate-data`)}
+              />
+
+              {/* 2. Raw pattern bulk cleanup */}
+              <CleanRow
+                id="rawBulk"
+                title="Raw Pattern Study — Bulk Cleanup"
+                desc="Delete old complete raw-pattern-study runs (+ all child rows: daily features, episode features, discovered patterns, AI summaries, comparisons). Keep the N most recent. Run dry-run first to preview."
+                onRun={() => {
+                  const n = parseInt(rawKeepN, 10);
+                  dbCall('rawBulk', `${API_URL}/api/replay/raw-pattern-study/cleanup`, 'POST', {
+                    keep_last_n: isNaN(n) ? 0 : n,
+                    dry_run: rawDryRun,
+                    vacuum: rawVacuum && !rawDryRun,
+                  });
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={rawKeepN} onChange={e => setRawKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: rawDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={rawDryRun} onChange={e => setRawDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  <input type="checkbox" checked={rawVacuum} onChange={e => setRawVacuum(e.target.checked)} disabled={rawDryRun} />
+                  Vacuum (SQLite only)
+                </label>
+              </CleanRow>
+
+              {/* 3. Delete single raw pattern run */}
+              <CleanRow
+                id="rawSingle"
+                title="Raw Pattern Study — Delete Single Run"
+                desc="Hard-delete one raw-pattern-study run by ID, including all child records."
+                onRun={() => { if (!delRawId) return; dbCall('rawSingle', `${API_URL}/api/replay/raw-pattern-study/${delRawId}`, 'DELETE'); }}
+              >
+                <input type="number" placeholder="Run ID" value={delRawId} onChange={e => setDelRawId(e.target.value)} style={inputStyle} />
+              </CleanRow>
+
+              {/* 4. Delete single pump study run */}
+              <CleanRow
+                id="pumpSingle"
+                title="Pump Study — Delete Single Run"
+                desc="Hard-delete one pump-study run by ID (episodes, snapshots, events, clusters, comparisons, AI summaries)."
+                onRun={() => { if (!delPumpId) return; dbCall('pumpSingle', `${API_URL}/api/replay/pump-study/${delPumpId}`, 'DELETE'); }}
+              >
+                <input type="number" placeholder="Run ID" value={delPumpId} onChange={e => setDelPumpId(e.target.value)} style={inputStyle} />
+              </CleanRow>
+
+              {/* 5. Delete single replay run */}
+              <CleanRow
+                id="replaySingle"
+                title="Replay Run — Delete Single Run"
+                desc="Hard-delete one replay run by ID (signal candidates, outcomes, missed movers)."
+                onRun={() => { if (!delReplayId) return; dbCall('replaySingle', `${API_URL}/api/replay/${delReplayId}`, 'DELETE'); }}
+              >
+                <input type="number" placeholder="Run ID" value={delReplayId} onChange={e => setDelReplayId(e.target.value)} style={inputStyle} />
+              </CleanRow>
+
+              {/* 6. Journal reset */}
+              <CleanRow
+                id="journal"
+                title="Journal Reset"
+                desc="Delete ALL journal entries and position snapshots. Irreversible."
+                onRun={() => dbCall('journal', `${API_URL}/api/journal/reset`, 'DELETE')}
+              />
+
+            </div>
+          );
+        })()}
 
         {/* ── Quick Links ── */}
         <div style={card}>
