@@ -1798,6 +1798,11 @@ function PatternDiscoveryPanel({ runId }) {
   const [loadingCuratedFlow, setLoadingCuratedFlow] = useState(false);
   const [curatedFlowErr,     setCuratedFlowErr]     = useState('');
 
+  // CFR Selector v1 tab — lazy-loaded from summary export
+  const [cfrData,        setCfrData]        = useState(null);
+  const [loadingCfr,     setLoadingCfr]     = useState(false);
+  const [cfrErr,         setCfrErr]         = useState('');
+
   const stopPoll = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     setPolling(false);
@@ -1832,6 +1837,22 @@ function PatternDiscoveryPanel({ runId }) {
       setCuratedFlowErr(String(e));
     } finally {
       setLoadingCuratedFlow(false);
+    }
+  };
+
+  const fetchCfr = async () => {
+    if (cfrData || loadingCfr) return;
+    setLoadingCfr(true);
+    setCfrErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=summary`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
+      const d = await r.json();
+      setCfrData(d.custom_flow_regime_selector_v1_analysis || {});
+    } catch (e) {
+      setCfrErr(String(e));
+    } finally {
+      setLoadingCfr(false);
     }
   };
 
@@ -2239,6 +2260,7 @@ function PatternDiscoveryPanel({ runId }) {
               { id: 'all',          label: `All (${patterns.length})` },
               { id: 'flow-impact',   label: 'FLOW Impact' },
               { id: 'curated-flow',  label: 'Curated FLOW' },
+              { id: 'cfr-selector',   label: 'CFR Selector v1' },
               { id: 'custom-signals', label: 'Custom Signals' },
               { id: 'regimes',        label: 'Regimes' },
             ].filter(t => !t.hidden).map(({ id, label }) => (
@@ -2249,6 +2271,7 @@ function PatternDiscoveryPanel({ runId }) {
                   setResTab(id);
                   if (id === 'flow-impact')  fetchFlowImpact();
                   if (id === 'curated-flow') fetchCuratedFlow();
+                  if (id === 'cfr-selector') fetchCfr();
                   // custom-signals and regimes read directly from results — no extra fetch
                 }}
               >
@@ -2335,6 +2358,15 @@ function PatternDiscoveryPanel({ runId }) {
               data={curatedFlow}
               loading={loadingCuratedFlow}
               error={curatedFlowErr}
+            />
+          )}
+
+          {/* CFR Selector v1 (research-only) */}
+          {resTab === 'cfr-selector' && (
+            <CfrSelectorTab
+              data={cfrData}
+              loading={loadingCfr}
+              error={cfrErr}
             />
           )}
 
@@ -3413,6 +3445,309 @@ function CustomSignalsTab({ results }) {
           title="Top Custom Signal (V1D) — Clean Reliability (cnt≥4, exposure≤50%)"
           rows={topClean}
         />
+      )}
+    </div>
+  );
+}
+
+// ── CFR Selector v1 Tab ───────────────────────────────────────────────────────
+
+function CfrSelectorTab({ data, loading, error }) {
+  if (loading) return <div className={styles.statusMsg}>Loading CFR Selector analysis…</div>;
+  if (error)   return <div className={styles.errorMsg}>{error}</div>;
+  if (!data || Object.keys(data).length === 0)
+    return <div className={styles.statusMsg}>No CFR Selector data. Run discovery with flow mode first.</div>;
+
+  const fmtPct = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+  const fmtN   = v => (v == null ? '—' : String(v));
+  const fmtNum = v => (v == null ? '—' : (Number.isFinite(+v) ? (+v).toFixed(1) : '—'));
+
+  const summary      = data.summary                  || {};
+  const bucketPerf   = data.bucket_performance       || {};
+  const compareVsPw  = data.compare_vs_pump_watch    || {};
+  const pwMatrix     = data.cfr_x_pump_watch_matrix  || {};
+  const topCfrA      = data.top_cfr_a                || [];
+  const cfrAFp       = data.cfr_a_false_positives    || [];
+  const blocked      = data.blocked_from_a_examples  || [];
+  const topBlockers  = data.top_a_blockers           || {};
+  const recs         = data.recommendations          || [];
+
+  const BUCKET_ORDER  = ['CFR_A', 'CFR_B', 'CFR_C', 'CFR_AVOID'];
+  const BUCKET_COLORS = { CFR_A: 'var(--green)', CFR_B: 'var(--blue)', CFR_C: 'var(--yellow)', CFR_AVOID: 'var(--red)' };
+  const BUCKET_LABELS = { CFR_A: 'CFR_A (≥9 + all gates)', CFR_B: 'CFR_B (score 6-8)', CFR_C: 'CFR_C (score 3-5)', CFR_AVOID: 'CFR_AVOID (<3)' };
+  const PW_ORDER = ['PUMP_WATCH_HIGH', 'PUMP_WATCH_MEDIUM', 'PUMP_SPECULATIVE', 'PUMP_IGNORE'];
+
+  const baseline = compareVsPw.cfr_a_vs_pw_high_baseline || {};
+  const verdict  = compareVsPw.verdict;
+  const verdictColor = verdict === 'CFR_A_BEATS_BASELINE' ? 'var(--green)'
+    : verdict === 'CFR_A_HIGHER_4X_BUT_MORE_FP' ? 'var(--yellow)'
+    : verdict === 'CFR_A_LOWER_FP_BUT_LESS_4X'  ? 'var(--blue)'
+    : 'var(--red)';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* Research / ABR-disabled notice */}
+      <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
+        <strong>RESEARCH ONLY — CFR Selector v1.</strong>{' '}
+        Badge-level + regime-gated ranking. ABR is <strong>DISABLED</strong> in v1 (ABR fields are diagnostic only).
+        L64 / FLOW_BEARISH_STRESS / GAP_RESET are treated as setup context and cannot create CFR_A alone.
+        {data.anti_leakage && <span style={{ color: 'var(--text-muted)' }}> · {data.anti_leakage}</span>}
+      </div>
+
+      {/* Summary cards */}
+      {Object.keys(summary).length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 10 }}>
+          {[
+            { label: 'Total Episodes',   val: fmtN(summary.total_episodes),    color: undefined },
+            { label: 'CFR_A',            val: fmtN(summary.cfr_a_count),        color: 'var(--green)' },
+            { label: 'CFR_B',            val: fmtN(summary.cfr_b_count),        color: 'var(--blue)' },
+            { label: 'CFR_C',            val: fmtN(summary.cfr_c_count),        color: 'var(--yellow)' },
+            { label: 'CFR_AVOID',        val: fmtN(summary.cfr_avoid_count),    color: 'var(--red)' },
+            { label: 'CFR_A 4× Rate',    val: fmtPct(summary.cfr_a_4x_rate),    color: (summary.cfr_a_4x_rate || 0) > 0.35 ? 'var(--green)' : undefined },
+            { label: 'CFR_A FP Rate',    val: fmtPct(summary.cfr_a_fp_rate),    color: (summary.cfr_a_fp_rate || 0) > 0.30 ? 'var(--red)' : undefined },
+            { label: 'Median CFR Score', val: fmtNum(summary.median_cfr_score), color: undefined },
+          ].map(({ label, val, color }) => (
+            <div key={label} className={styles.tableCard} style={{ padding: '10px 14px', textAlign: 'center' }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: color || 'var(--blue)' }}>{val}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Bucket Performance */}
+      {Object.keys(bucketPerf).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>Bucket Performance</span>
+            <span className={styles.tableHint}>score: A≥9+gates / B 6-8 / C 3-5 / AVOID &lt;3</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Bucket</th><th>Count</th><th>4× Rate</th><th>FP Rate</th>
+                  <th>4× Count</th><th>FP Count</th><th>Split Art.</th><th>Med CFR Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {BUCKET_ORDER.map(bk => {
+                  const r = bucketPerf[bk];
+                  if (!r) return null;
+                  return (
+                    <tr key={bk} className={styles.historyRow}>
+                      <td style={{ fontWeight: 600, color: BUCKET_COLORS[bk] }}>{BUCKET_LABELS[bk] || bk}</td>
+                      <td>{fmtN(r.total)}</td>
+                      <td style={{ color: (r['4x_rate'] || 0) > 0.35 ? 'var(--green)' : undefined }}>
+                        {fmtPct(r['4x_rate'])}
+                      </td>
+                      <td style={{ color: (r.false_positive_rate || 0) > 0.30 ? 'var(--red)' : undefined }}>
+                        {fmtPct(r.false_positive_rate)}
+                      </td>
+                      <td>{fmtN(r['4x_count'])}</td>
+                      <td>{fmtN(r.false_positive_count)}</td>
+                      <td>{fmtN(r.split_artifact_count)}</td>
+                      <td>{fmtNum(r.median_cfr_score)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* vs Pump Watch HIGH baseline */}
+      {baseline.total > 0 && (
+        <div className={styles.tableCard} style={{ padding: '12px 16px' }}>
+          <div className={styles.tableHeader} style={{ marginBottom: 8 }}>
+            <span className={styles.tableTitle}>CFR_A vs Pump Watch HIGH Baseline</span>
+            {verdict && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: verdictColor }}>{verdict}</span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 12 }}>
+            <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH N: </span>{fmtN(baseline.total)}</div>
+            <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH 4×: </span>{fmtPct(baseline['4x_rate'])}</div>
+            <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH FP: </span>{fmtPct(baseline.false_positive_rate)}</div>
+          </div>
+        </div>
+      )}
+
+      {/* CFR × Pump Watch matrix */}
+      {Object.keys(pwMatrix).length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>CFR Bucket × Pump Watch Matrix</span>
+            <span className={styles.tableHint}>episode count per cell</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>CFR Bucket</th>
+                  {PW_ORDER.map(pw => <th key={pw} style={{ fontSize: 10 }}>{pw.replace('PUMP_', '').replace('_', ' ')}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {BUCKET_ORDER.map(bk => {
+                  const row = pwMatrix[bk] || {};
+                  return (
+                    <tr key={bk} className={styles.historyRow}>
+                      <td style={{ fontWeight: 600, color: BUCKET_COLORS[bk], fontSize: 11 }}>{bk}</td>
+                      {PW_ORDER.map(pw => (
+                        <td key={pw} style={{ color: row[pw] ? undefined : 'var(--border)' }}>
+                          {row[pw] || 0}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Top CFR_A episodes */}
+      {topCfrA.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle} style={{ color: 'var(--green)' }}>
+              Top CFR_A Episodes (by pump_multiple)
+            </span>
+            <span className={styles.tableHint}>score ≥ 9 + all 5 gates passed</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Symbol</th><th>Pump ×</th><th>CFR Score</th><th>PW Label</th>
+                  <th>Trigger</th><th>Custom</th><th>Risk Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topCfrA.map((ep, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600 }}>{ep.symbol}</td>
+                    <td style={{ color: (ep.pump_multiple || 0) >= 4 ? 'var(--green)' : undefined }}>
+                      {ep.pump_multiple != null ? `${ep.pump_multiple.toFixed(2)}×` : '—'}
+                    </td>
+                    <td style={{ color: 'var(--green)', fontWeight: 600 }}>{fmtNum(ep.cfr_score)}</td>
+                    <td style={{ fontSize: 10, color: 'var(--text-muted)' }}>{ep.pump_watch_label || '—'}</td>
+                    <td style={{ fontSize: 10 }}>{ep.primary_trigger || '—'}</td>
+                    <td style={{ fontSize: 10, color: 'var(--blue)' }}>{ep.custom_confirm || '—'}</td>
+                    <td style={{ fontSize: 10, color: 'var(--red)' }}>
+                      {(ep.risk_flags || []).join(', ') || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* CFR_A false positives */}
+      {cfrAFp.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle} style={{ color: 'var(--red)' }}>
+              CFR_A False Positives ({cfrAFp.length})
+            </span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Symbol</th><th>CFR Score</th><th>Risk Flags</th><th>Reasons</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cfrAFp.map((ep, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600 }}>{ep.symbol}</td>
+                    <td style={{ fontWeight: 600 }}>{fmtNum(ep.cfr_score)}</td>
+                    <td style={{ fontSize: 10, color: 'var(--red)' }}>
+                      {(ep.risk_flags || []).join(', ') || '—'}
+                    </td>
+                    <td style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      {(ep.reasons || []).slice(0, 3).join(' · ') || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Blocked from A */}
+      {blocked.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle} style={{ color: 'var(--yellow)' }}>
+              Blocked From CFR_A (score ≥ 6 but gates failed, {blocked.length})
+            </span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Symbol</th><th>CFR Score</th><th>Bucket</th><th>Pump ×</th><th>Blockers</th>
+                </tr>
+              </thead>
+              <tbody>
+                {blocked.map((ep, i) => (
+                  <tr key={i} className={styles.historyRow}>
+                    <td style={{ fontWeight: 600 }}>{ep.symbol}</td>
+                    <td>{fmtNum(ep.cfr_score)}</td>
+                    <td style={{ color: BUCKET_COLORS[ep.cfr_bucket] || undefined }}>{ep.cfr_bucket || '—'}</td>
+                    <td>{ep.pump_multiple != null ? `${ep.pump_multiple.toFixed(2)}×` : '—'}</td>
+                    <td style={{ fontSize: 10, color: 'var(--yellow)' }}>
+                      {(ep.a_blockers || []).join(', ') || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Top A-gate blockers */}
+      {Object.keys(topBlockers).length > 0 && (
+        <div className={styles.tableCard} style={{ padding: '10px 16px' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em',
+                        color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Top A-Gate Blockers
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {Object.entries(topBlockers).map(([blocker, count]) => (
+              <span key={blocker} style={{ fontSize: 11, color: 'var(--yellow)',
+                                           fontFamily: 'var(--font-mono)',
+                                           background: 'var(--card-bg)',
+                                           padding: '2px 6px', borderRadius: 4 }}>
+                {blocker} <span style={{ color: 'var(--text-muted)' }}>×{count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recommendations */}
+      {recs.length > 0 && (
+        <div className={styles.tableCard} style={{ padding: '10px 16px' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em',
+                        color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Recommendations
+          </div>
+          {recs.map((r, i) => (
+            <div key={i} style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6,
+                                  fontFamily: 'var(--font-mono)' }}>{r}</div>
+          ))}
+        </div>
       )}
     </div>
   );
