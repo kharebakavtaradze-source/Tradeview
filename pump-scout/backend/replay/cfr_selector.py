@@ -547,23 +547,55 @@ def _bucket_performance(episodes: list[dict]) -> dict:
     """
     Per-CFR-bucket outcome stats.
     Outcome fields (pump_multiple, group_type) used here for analysis ONLY.
+
+    Two parallel metric families:
+      outcome_*  — derived from pump_multiple (continuous outcome)
+      group_*    — derived from group_type label (categorical label)
+
+    They answer different questions:
+      outcome_4x_rate          — what fraction achieved ≥4× pump_multiple?
+      group_false_positive_rate — what fraction were labelled false_positive?
+    These differ when pump_multiple is missing or labelling is imprecise.
     """
+    # group_type label sets (all lowercase — matches DB values)
+    _GT_4X   = {"4x_pump", "missed_4x_pump", "detected_4x_pump"}
+    _GT_FP   = {"false_positive"}
+    _GT_NW   = {"normal_winner"}
+    _GT_SA   = {"split_artifact"}
+
     by_bucket: dict[str, list[dict]] = defaultdict(list)
     for ep in episodes:
         b = ep.get("custom_flow_regime_bucket_v1") or "CFR_AVOID"
         by_bucket[b].append(ep)
 
     result = {}
+    warnings: list[str] = []
+
     for bucket, eps in by_bucket.items():
         pms  = [ep["pump_multiple"] for ep in eps if ep.get("pump_multiple") is not None]
         pws  = [_num(ep.get("pump_watch_score")) for ep in eps if ep.get("pump_watch_score") is not None]
         cfrs = [_num(ep.get("custom_flow_regime_score_v1")) for ep in eps]
-        gts  = Counter(ep.get("group_type") or "?" for ep in eps)
+        gts  = Counter((ep.get("group_type") or "?").lower() for ep in eps)
 
         n = len(eps)
-        splits = sum(1 for e in eps if e.get("split_artifact_risk"))
-        n_4x = sum(1 for pm in pms if pm >= 4.0)
-        n_fp  = sum(1 for e in eps if e.get("group_type") in ("FALSE_POSITIVE",))
+
+        # Outcome-based (pump_multiple)
+        outcome_4x_count  = sum(1 for pm in pms if pm >= 4.0)
+
+        # Group-type-based (label)
+        group_4x_count           = sum(1 for e in eps if (e.get("group_type") or "").lower() in _GT_4X)
+        group_false_positive_count = sum(1 for e in eps if (e.get("group_type") or "").lower() in _GT_FP)
+        normal_winner_count      = sum(1 for e in eps if (e.get("group_type") or "").lower() in _GT_NW)
+        split_artifact_count     = sum(1 for e in eps if (e.get("group_type") or "").lower() in _GT_SA
+                                       or e.get("split_artifact_risk"))
+
+        # Sanity check: group_type_distribution shows FP but count is 0
+        gt_dist_fp = gts.get("false_positive", 0)
+        if gt_dist_fp > 0 and group_false_positive_count == 0:
+            warnings.append(
+                f"SANITY WARNING [{bucket}]: group_type_distribution shows false_positive={gt_dist_fp} "
+                f"but group_false_positive_count=0 — check group_type casing in episode data."
+            )
 
         examples_4x = [
             {"symbol": _sym(e), "pump_multiple": e.get("pump_multiple"),
@@ -579,21 +611,30 @@ def _bucket_performance(episodes: list[dict]) -> dict:
              "risk_flags": e.get("custom_flow_regime_risk_flags_v1") or [],
              "a_blockers": e.get("custom_flow_regime_a_blockers") or [],
              "reasons": (e.get("custom_flow_regime_reasons_v1") or [])[:4]}
-            for e in eps if e.get("group_type") in ("FALSE_POSITIVE",)
+            for e in eps if (e.get("group_type") or "").lower() in _GT_FP
         ][:5]
 
         result[bucket] = {
-            "total":                  n,
-            "4x_count":               n_4x,
-            "false_positive_count":   n_fp,
-            "split_artifact_count":   splits,
-            "4x_rate":                _pct(n_4x, n),
-            "false_positive_rate":    _pct(n_fp, n),
-            "median_pump_watch_score":  _median(pws),
-            "median_cfr_score":         _median(cfrs),
-            "group_type_distribution":  dict(gts.most_common()),
-            "examples_4x":            examples_4x,
-            "examples_false_positive": examples_fp,
+            "total":                      n,
+            # outcome-based
+            "outcome_4x_count":           outcome_4x_count,
+            "outcome_4x_rate":            _pct(outcome_4x_count, n),
+            # group_type-based
+            "group_4x_count":             group_4x_count,
+            "group_4x_rate":              _pct(group_4x_count, n),
+            "group_false_positive_count": group_false_positive_count,
+            "group_false_positive_rate":  _pct(group_false_positive_count, n),
+            "normal_winner_count":        normal_winner_count,
+            "split_artifact_count":       split_artifact_count,
+            # medians
+            "median_pump_watch_score":    _median(pws),
+            "median_cfr_score":           _median(cfrs),
+            "group_type_distribution":    dict(gts.most_common()),
+            # examples (analysis-only, uses outcome fields)
+            "examples_4x":                examples_4x,
+            "examples_false_positive":    examples_fp,
+            # sanity
+            "_warnings":                  warnings if warnings else None,
         }
     return result
 
@@ -675,34 +716,56 @@ def build_cfr_selector_analysis(
         for bl in (ep.get("custom_flow_regime_a_blockers") or []):
             all_blockers[bl] += 1
 
+    _GT_4X = {"4x_pump", "missed_4x_pump", "detected_4x_pump"}
+    _GT_FP = {"false_positive"}
+
     cfr_a_eps = [e for e in scored if e.get("custom_flow_regime_bucket_v1") == "CFR_A"]
     cfr_a_pms = [e.get("pump_multiple") for e in cfr_a_eps if e.get("pump_multiple") is not None]
-    cfr_a_4x  = sum(1 for pm in cfr_a_pms if pm >= 4.0)
-    cfr_a_fp  = sum(1 for e in cfr_a_eps if e.get("group_type") in ("FALSE_POSITIVE",))
     cfr_a_n   = len(cfr_a_eps)
+
+    # Outcome-based: pump_multiple >= 4
+    cfr_a_outcome_4x = sum(1 for pm in cfr_a_pms if pm >= 4.0)
+    # Group-type-based: label == false_positive / 4x_pump family
+    cfr_a_group_4x   = sum(1 for e in cfr_a_eps if (e.get("group_type") or "").lower() in _GT_4X)
+    cfr_a_group_fp   = sum(1 for e in cfr_a_eps if (e.get("group_type") or "").lower() in _GT_FP)
+
+    # Sanity check on CFR_A aggregate
+    global_warnings: list[str] = []
+    cfr_a_gt_dist    = Counter((e.get("group_type") or "?").lower() for e in cfr_a_eps)
+    if cfr_a_gt_dist.get("false_positive", 0) > 0 and cfr_a_group_fp == 0:
+        global_warnings.append(
+            f"SANITY WARNING [CFR_A summary]: group_type_distribution shows "
+            f"false_positive={cfr_a_gt_dist['false_positive']} but group_fp_count=0 "
+            f"— check group_type casing in episode data."
+        )
+    if global_warnings:
+        for w in global_warnings:
+            logger.warning(w)
 
     # ── Pump Watch HIGH baseline ────────────────────────────────────────────
     pw_high = [e for e in scored if e.get("pump_watch_label") == "PUMP_WATCH_HIGH"]
     pw_high_pms = [e.get("pump_multiple") for e in pw_high if e.get("pump_multiple") is not None]
-    pw_high_4x  = sum(1 for pm in pw_high_pms if pm >= 4.0)
-    pw_high_fp  = sum(1 for e in pw_high if e.get("group_type") in ("FALSE_POSITIVE",))
     pw_high_n   = len(pw_high)
 
+    pw_high_outcome_4x = sum(1 for pm in pw_high_pms if pm >= 4.0)
+    pw_high_group_fp   = sum(1 for e in pw_high if (e.get("group_type") or "").lower() in _GT_FP)
+
     baseline = {
-        "total":               pw_high_n,
-        "4x_count":            pw_high_4x,
-        "false_positive_count": pw_high_fp,
-        "4x_rate":             _pct(pw_high_4x, pw_high_n),
-        "false_positive_rate": _pct(pw_high_fp, pw_high_n),
-        "label":               "PUMP_WATCH_HIGH from run data",
+        "total":                      pw_high_n,
+        "outcome_4x_count":           pw_high_outcome_4x,
+        "outcome_4x_rate":            _pct(pw_high_outcome_4x, pw_high_n),
+        "group_false_positive_count": pw_high_group_fp,
+        "group_false_positive_rate":  _pct(pw_high_group_fp, pw_high_n),
+        "label":                      "PUMP_WATCH_HIGH from run data",
     }
 
+    # Verdict uses outcome_4x_rate (performance) and group_false_positive_rate (contamination)
     cfr_a_verdict = "insufficient_data"
     if cfr_a_n > 0 and pw_high_n > 0:
-        cfr_4x_r  = _pct(cfr_a_4x, cfr_a_n) or 0.0
-        cfr_fp_r  = _pct(cfr_a_fp, cfr_a_n) or 0.0
-        pw_4x_r   = _pct(pw_high_4x, pw_high_n) or 0.0
-        pw_fp_r   = _pct(pw_high_fp, pw_high_n) or 0.0
+        cfr_4x_r  = _pct(cfr_a_outcome_4x, cfr_a_n) or 0.0
+        cfr_fp_r  = _pct(cfr_a_group_fp, cfr_a_n)   or 0.0
+        pw_4x_r   = _pct(pw_high_outcome_4x, pw_high_n) or 0.0
+        pw_fp_r   = _pct(pw_high_group_fp, pw_high_n)   or 0.0
         if cfr_4x_r >= pw_4x_r and cfr_fp_r <= pw_fp_r:
             cfr_a_verdict = "CFR_A_BEATS_BASELINE"
         elif cfr_4x_r >= pw_4x_r:
@@ -731,28 +794,30 @@ def build_cfr_selector_analysis(
         for e in top_cfr_a
     ]
 
-    # ── CFR_A false positives ───────────────────────────────────────────────
+    # ── CFR_A false positives (group_type label-based) ─────────────────────
     cfr_a_fp_list = [
         {
-            "symbol":       _sym(e),
-            "cfr_score":    _num(e.get("custom_flow_regime_score_v1")),
-            "reasons":      (e.get("custom_flow_regime_reasons_v1") or [])[:6],
-            "risk_flags":   e.get("custom_flow_regime_risk_flags_v1") or [],
+            "symbol":        _sym(e),
+            "group_type":    e.get("group_type"),
+            "cfr_score":     _num(e.get("custom_flow_regime_score_v1")),
+            "reasons":       (e.get("custom_flow_regime_reasons_v1") or [])[:6],
+            "risk_flags":    e.get("custom_flow_regime_risk_flags_v1") or [],
             "a_gate_passed": e.get("custom_flow_regime_a_gate_passed"),
-            "components":   e.get("custom_flow_regime_components_v1"),
+            "components":    e.get("custom_flow_regime_components_v1"),
         }
-        for e in cfr_a_eps if e.get("group_type") in ("FALSE_POSITIVE",)
+        for e in cfr_a_eps if (e.get("group_type") or "").lower() in _GT_FP
     ]
 
-    # ── CFR_A 4x examples ──────────────────────────────────────────────────
+    # ── CFR_A 4x examples (outcome-based: pump_multiple >= 4) ─────────────
     cfr_a_4x_list = [
         {
-            "symbol":        _sym(e),
-            "pump_multiple": e.get("pump_multiple"),
-            "cfr_score":     _num(e.get("custom_flow_regime_score_v1")),
+            "symbol":          _sym(e),
+            "pump_multiple":   e.get("pump_multiple"),
+            "group_type":      e.get("group_type"),
+            "cfr_score":       _num(e.get("custom_flow_regime_score_v1")),
             "primary_trigger": e.get("custom_flow_regime_primary_trigger"),
-            "reasons":       (e.get("custom_flow_regime_reasons_v1") or [])[:5],
-            "components":    e.get("custom_flow_regime_components_v1"),
+            "reasons":         (e.get("custom_flow_regime_reasons_v1") or [])[:5],
+            "components":      e.get("custom_flow_regime_components_v1"),
         }
         for e in cfr_a_eps if (e.get("pump_multiple") or 0) >= 4.0
     ]
@@ -779,25 +844,36 @@ def build_cfr_selector_analysis(
         "L64/FLOW_BEARISH_STRESS/GAP_RESET cannot create CFR_A alone.",
         "PUMP_SPECULATIVE can reach CFR_A only with strong trigger + clean regime + custom confirm.",
         "PUMP_IGNORE max bucket is CFR_C unless exception path passes (future v2).",
+        "Metric families: outcome_* uses pump_multiple (continuous); group_* uses group_type label.",
+        "Use group_false_positive_rate (not outcome_4x_rate) to measure FP contamination.",
     ]
     if cfr_a_n > 10:
-        recs.append(f"CFR_A count={cfr_a_n} — consider tightening thresholds if FP rate is high.")
+        recs.append(f"CFR_A count={cfr_a_n} — consider tightening thresholds if group_fp_rate is high.")
     if cfr_a_n == 0:
         recs.append("No CFR_A episodes found — check if trigger badges are present in curated_flow_badges.")
+    if global_warnings:
+        recs.extend(global_warnings)
 
     analysis = {
         "summary": {
-            "total_episodes":        len(scored),
-            "cfr_a_count":           bucket_counts.get("CFR_A", 0),
-            "cfr_b_count":           bucket_counts.get("CFR_B", 0),
-            "cfr_c_count":           bucket_counts.get("CFR_C", 0),
-            "cfr_avoid_count":       bucket_counts.get("CFR_AVOID", 0),
-            "cfr_a_4x_rate":         _pct(cfr_a_4x, cfr_a_n),
-            "cfr_a_fp_rate":         _pct(cfr_a_fp, cfr_a_n),
-            "median_cfr_score":      _median(score_list),
-            "bucket_counts":         dict(bucket_counts.most_common()),
-            "abr_disabled":          True,
-            "use_abr_in_cfr_v1":     False,
+            "total_episodes":                len(scored),
+            "cfr_a_count":                   bucket_counts.get("CFR_A", 0),
+            "cfr_b_count":                   bucket_counts.get("CFR_B", 0),
+            "cfr_c_count":                   bucket_counts.get("CFR_C", 0),
+            "cfr_avoid_count":               bucket_counts.get("CFR_AVOID", 0),
+            # CFR_A outcome metrics (pump_multiple-based)
+            "cfr_a_outcome_4x_count":        cfr_a_outcome_4x,
+            "cfr_a_outcome_4x_rate":         _pct(cfr_a_outcome_4x, cfr_a_n),
+            # CFR_A group_type metrics (label-based)
+            "cfr_a_group_4x_count":          cfr_a_group_4x,
+            "cfr_a_group_4x_rate":           _pct(cfr_a_group_4x, cfr_a_n),
+            "cfr_a_group_false_positive_count": cfr_a_group_fp,
+            "cfr_a_group_false_positive_rate":  _pct(cfr_a_group_fp, cfr_a_n),
+            "median_cfr_score":              _median(score_list),
+            "bucket_counts":                 dict(bucket_counts.most_common()),
+            "abr_disabled":                  True,
+            "use_abr_in_cfr_v1":             False,
+            "sanity_warnings":               global_warnings or None,
         },
         "bucket_performance":         _bucket_performance(scored),
         "compare_vs_pump_watch":      {"cfr_a_vs_pw_high_baseline": baseline, "verdict": cfr_a_verdict},
