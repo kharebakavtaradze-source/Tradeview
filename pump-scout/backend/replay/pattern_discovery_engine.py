@@ -1657,6 +1657,19 @@ async def build_discovery_export(
             curated_flow_analysis = {"curated_flow_error": str(_cfa_err)}
             curated_scored_episodes = flow_scored_episodes if flow_scored_episodes else episodes
 
+    # ABR/TZ quality analysis (research-only, Part 14-19)
+    abr_analysis: dict = {}
+    if episodes:
+        try:
+            from replay.abr_quality_analyzer import build_abr_quality_replay_analysis
+            abr_analysis = build_abr_quality_replay_analysis(
+                curated_scored_episodes if curated_scored_episodes else episodes,
+                daily_by_episode=daily_by_episode,
+            )
+        except Exception as _abr_err:
+            logger.exception("abr_quality_analyzer failed: %s", _abr_err)
+            abr_analysis = {"abr_error": str(_abr_err)}
+
     top_flow_by_clean_reliability = _top(
         [p for p in flow_working
          if (p.get("split_artifact_exposure") or 0) <= 0.50
@@ -1857,6 +1870,9 @@ async def build_discovery_export(
             "bar_sequence_summary": bar_sequence_summary,
             "flow_replay_analysis": flow_replay_analysis,
             "curated_flow_replay_analysis": curated_flow_analysis,
+            "abr_quality_analysis":         abr_analysis.get("abr_quality_analysis"),
+            "abr_debug":                    abr_analysis.get("abr_debug"),
+            "watch_rank_v2_analysis":       abr_analysis.get("watch_rank_v2_analysis"),
             "regime_analysis": regime_analysis,
             "custom_signal_patterns_created":   prog.get("custom_patterns_evaluated", 0),
             "flow_custom_patterns_created":     prog.get("flow_custom_patterns_evaluated", 0),
@@ -1958,6 +1974,8 @@ async def build_discovery_export(
             "pump_watch_summary": pw_dist,
             "split_summary": split_summary,
             "curated_flow_replay_analysis": curated_flow_analysis,
+            "abr_quality_analysis":         abr_analysis.get("abr_quality_analysis"),
+            "watch_rank_v2_analysis":       abr_analysis.get("watch_rank_v2_analysis"),
             "notes": _notes(),
         }
 
@@ -2021,6 +2039,9 @@ async def build_discovery_export(
             "sample_episodes":                   sample_episodes,
             "flow_replay_analysis":              flow_replay_analysis,
             "curated_flow_replay_analysis":      curated_flow_analysis,
+            "abr_quality_analysis":              abr_analysis.get("abr_quality_analysis"),
+            "abr_debug":                         abr_analysis.get("abr_debug"),
+            "watch_rank_v2_analysis":            abr_analysis.get("watch_rank_v2_analysis"),
             "top_custom_signal_clean_reliability": top_custom_signal_clean_reliability,
             "top_flow_custom_combined":          top_flow_custom_combined,
             "top_custom_l43_patterns":           top_custom_l43_patterns,
@@ -2082,6 +2103,9 @@ async def build_discovery_export(
         "bar_sequence_summary":                  bar_sequence_summary,
         "flow_replay_analysis":                  flow_replay_analysis,
         "curated_flow_replay_analysis":          curated_flow_analysis,
+        "abr_quality_analysis":                  abr_analysis.get("abr_quality_analysis"),
+        "abr_debug":                             abr_analysis.get("abr_debug"),
+        "watch_rank_v2_analysis":                abr_analysis.get("watch_rank_v2_analysis"),
         "top_custom_signal_clean_reliability":   top_custom_signal_clean_reliability,
         "top_flow_custom_combined":              top_flow_custom_combined,
         "top_custom_l43_patterns":               top_custom_l43_patterns,

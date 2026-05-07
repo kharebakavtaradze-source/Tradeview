@@ -1439,6 +1439,14 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
     except Exception:
         pass
 
+    # ABR/TZ quality series
+    abr_series: list[dict] = []
+    try:
+        from replay.abr_tz_engine import compute_abr_tz_features
+        abr_series = compute_abr_tz_features(candles)
+    except Exception:
+        logger.warning("[CustomFlags] abr_tz_engine unavailable — ABR fields skipped")
+
     result: list[dict] = []
     for i, w in enumerate(wlnbb_series):
         d    = d_series[i]
@@ -1453,7 +1461,7 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
         d4   = d.get("d4", False)
         d6   = d.get("d6", False)
 
-        result.append({
+        flags: dict = {
             "has_l34":       bool(l34),
             "has_l43":       bool(l43),
             "has_l22":       bool(l22),
@@ -1470,7 +1478,10 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
             "has_ld":        False,
             "np_is_setup":   bool(i in np_l34_set or i in np_fri34_set),
             "np_is_trigger": bool(i in np_g4_set),
-        })
+        }
+        if i < len(abr_series) and abr_series[i]:
+            flags.update(abr_series[i])
+        result.append(flags)
 
     return result
 

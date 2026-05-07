@@ -1295,6 +1295,21 @@ def build_bar_feature_snapshots_for_episode(
             "has_vbo":     fj.get("has_vbo"),
             "has_lvbo":    fj.get("has_lvbo"),
             "has_ld":      fj.get("has_ld"),
+            # ABR/TZ quality fields (research-only)
+            "abr_sp500":               fj.get("abr_sp500"),
+            "abr_nasdaq":              fj.get("abr_nasdaq"),
+            "tz_quality_tier_sp500":   fj.get("tz_quality_tier_sp500"),
+            "tz_quality_tier_nasdaq":  fj.get("tz_quality_tier_nasdaq"),
+            "tz_quality_score":        fj.get("tz_quality_score"),
+            "preup_primary":           fj.get("preup_primary"),
+            "predn_primary":           fj.get("predn_primary"),
+            "abr_z8":                  fj.get("has_z8"),
+            "abr_l1":                  fj.get("has_l1"),
+            "abr_l2":                  fj.get("has_l2"),
+            "abr_l3":                  fj.get("has_l3"),
+            "abr_l4":                  fj.get("has_l4"),
+            "abr_l5":                  fj.get("has_l5"),
+            "abr_l6":                  fj.get("has_l6"),
         }
 
         snap["tags"]          = bars_to_tags(snap)
