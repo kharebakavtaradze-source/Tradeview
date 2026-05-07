@@ -3504,8 +3504,9 @@ function CfrSelectorTab({ data, loading, error }) {
             { label: 'CFR_B',            val: fmtN(summary.cfr_b_count),        color: 'var(--blue)' },
             { label: 'CFR_C',            val: fmtN(summary.cfr_c_count),        color: 'var(--yellow)' },
             { label: 'CFR_AVOID',        val: fmtN(summary.cfr_avoid_count),    color: 'var(--red)' },
-            { label: 'CFR_A 4× Rate',    val: fmtPct(summary.cfr_a_4x_rate),    color: (summary.cfr_a_4x_rate || 0) > 0.35 ? 'var(--green)' : undefined },
-            { label: 'CFR_A FP Rate',    val: fmtPct(summary.cfr_a_fp_rate),    color: (summary.cfr_a_fp_rate || 0) > 0.30 ? 'var(--red)' : undefined },
+            { label: 'CFR_A 4× Rate (outcome)',    val: fmtPct(summary.cfr_a_outcome_4x_rate),            color: (summary.cfr_a_outcome_4x_rate || 0) > 0.35 ? 'var(--green)' : undefined },
+            { label: 'CFR_A 4× Rate (group)',      val: fmtPct(summary.cfr_a_group_4x_rate),              color: undefined },
+            { label: 'CFR_A FP Rate (group)',       val: fmtPct(summary.cfr_a_group_false_positive_rate),  color: (summary.cfr_a_group_false_positive_rate || 0) > 0.30 ? 'var(--red)' : undefined },
             { label: 'Median CFR Score', val: fmtNum(summary.median_cfr_score), color: undefined },
           ].map(({ label, val, color }) => (
             <div key={label} className={styles.tableCard} style={{ padding: '10px 14px', textAlign: 'center' }}>
@@ -3513,6 +3514,20 @@ function CfrSelectorTab({ data, loading, error }) {
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{label}</div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Sanity warnings */}
+      {(summary.sanity_warnings || []).length > 0 && (
+        <div className={styles.tableCard} style={{ borderColor: 'var(--yellow)' }}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle} style={{ color: 'var(--yellow)' }}>⚠ Sanity Warnings</span>
+          </div>
+          <div style={{ padding: '8px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {summary.sanity_warnings.map((w, i) => (
+              <div key={i} style={{ fontSize: 11, color: 'var(--yellow)', fontFamily: 'var(--font-mono)' }}>{w}</div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -3527,8 +3542,11 @@ function CfrSelectorTab({ data, loading, error }) {
             <table className={styles.historyTable} style={{ width: '100%' }}>
               <thead>
                 <tr className={styles.historyHead}>
-                  <th>Bucket</th><th>Count</th><th>4× Rate</th><th>FP Rate</th>
-                  <th>4× Count</th><th>FP Count</th><th>Split Art.</th><th>Med CFR Score</th>
+                  <th>Bucket</th><th>N</th>
+                  <th title="pump_multiple ≥ 4">4× Rate (outcome)</th>
+                  <th title="group_type in 4x_pump family">4× Rate (group)</th>
+                  <th title="group_type == false_positive">FP Rate (group)</th>
+                  <th>FP Count</th><th>Normal Win</th><th>Split Art.</th><th>Med CFR</th>
                 </tr>
               </thead>
               <tbody>
@@ -3539,14 +3557,17 @@ function CfrSelectorTab({ data, loading, error }) {
                     <tr key={bk} className={styles.historyRow}>
                       <td style={{ fontWeight: 600, color: BUCKET_COLORS[bk] }}>{BUCKET_LABELS[bk] || bk}</td>
                       <td>{fmtN(r.total)}</td>
-                      <td style={{ color: (r['4x_rate'] || 0) > 0.35 ? 'var(--green)' : undefined }}>
-                        {fmtPct(r['4x_rate'])}
+                      <td style={{ color: (r.outcome_4x_rate || 0) > 0.35 ? 'var(--green)' : undefined }}>
+                        {fmtPct(r.outcome_4x_rate)}
                       </td>
-                      <td style={{ color: (r.false_positive_rate || 0) > 0.30 ? 'var(--red)' : undefined }}>
-                        {fmtPct(r.false_positive_rate)}
+                      <td style={{ color: (r.group_4x_rate || 0) > 0.35 ? 'var(--green)' : undefined }}>
+                        {fmtPct(r.group_4x_rate)}
                       </td>
-                      <td>{fmtN(r['4x_count'])}</td>
-                      <td>{fmtN(r.false_positive_count)}</td>
+                      <td style={{ color: (r.group_false_positive_rate || 0) > 0.30 ? 'var(--red)' : undefined }}>
+                        {fmtPct(r.group_false_positive_rate)}
+                      </td>
+                      <td>{fmtN(r.group_false_positive_count)}</td>
+                      <td>{fmtN(r.normal_winner_count)}</td>
                       <td>{fmtN(r.split_artifact_count)}</td>
                       <td>{fmtNum(r.median_cfr_score)}</td>
                     </tr>
@@ -3569,8 +3590,8 @@ function CfrSelectorTab({ data, loading, error }) {
           </div>
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 12 }}>
             <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH N: </span>{fmtN(baseline.total)}</div>
-            <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH 4×: </span>{fmtPct(baseline['4x_rate'])}</div>
-            <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH FP: </span>{fmtPct(baseline.false_positive_rate)}</div>
+            <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH 4× (outcome): </span>{fmtPct(baseline.outcome_4x_rate)}</div>
+            <div><span style={{ color: 'var(--text-muted)' }}>PW HIGH FP (group): </span>{fmtPct(baseline.group_false_positive_rate)}</div>
           </div>
         </div>
       )}
