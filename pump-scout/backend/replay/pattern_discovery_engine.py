@@ -1670,6 +1670,19 @@ async def build_discovery_export(
             logger.exception("abr_quality_analyzer failed: %s", _abr_err)
             abr_analysis = {"abr_error": str(_abr_err)}
 
+    # CFR Selector v1 analysis (research-only, ABR disabled)
+    cfr_analysis: dict = {}
+    if episodes:
+        try:
+            from replay.cfr_selector import build_cfr_selector_analysis
+            cfr_analysis = build_cfr_selector_analysis(
+                curated_scored_episodes if curated_scored_episodes else episodes,
+                daily_by_episode=daily_by_episode,
+            )
+        except Exception as _cfr_err:
+            logger.exception("cfr_selector failed: %s", _cfr_err)
+            cfr_analysis = {"cfr_error": str(_cfr_err)}
+
     top_flow_by_clean_reliability = _top(
         [p for p in flow_working
          if (p.get("split_artifact_exposure") or 0) <= 0.50
@@ -1873,6 +1886,7 @@ async def build_discovery_export(
             "abr_quality_analysis":         abr_analysis.get("abr_quality_analysis"),
             "abr_debug":                    abr_analysis.get("abr_debug"),
             "watch_rank_v2_analysis":       abr_analysis.get("watch_rank_v2_analysis"),
+            "custom_flow_regime_selector_v1_analysis": cfr_analysis.get("custom_flow_regime_selector_v1_analysis"),
             "regime_analysis": regime_analysis,
             "custom_signal_patterns_created":   prog.get("custom_patterns_evaluated", 0),
             "flow_custom_patterns_created":     prog.get("flow_custom_patterns_evaluated", 0),
@@ -1976,6 +1990,7 @@ async def build_discovery_export(
             "curated_flow_replay_analysis": curated_flow_analysis,
             "abr_quality_analysis":         abr_analysis.get("abr_quality_analysis"),
             "watch_rank_v2_analysis":       abr_analysis.get("watch_rank_v2_analysis"),
+            "custom_flow_regime_selector_v1_analysis": cfr_analysis.get("custom_flow_regime_selector_v1_analysis"),
             "notes": _notes(),
         }
 
@@ -2042,6 +2057,7 @@ async def build_discovery_export(
             "abr_quality_analysis":              abr_analysis.get("abr_quality_analysis"),
             "abr_debug":                         abr_analysis.get("abr_debug"),
             "watch_rank_v2_analysis":            abr_analysis.get("watch_rank_v2_analysis"),
+            "custom_flow_regime_selector_v1_analysis": cfr_analysis.get("custom_flow_regime_selector_v1_analysis"),
             "top_custom_signal_clean_reliability": top_custom_signal_clean_reliability,
             "top_flow_custom_combined":          top_flow_custom_combined,
             "top_custom_l43_patterns":           top_custom_l43_patterns,
@@ -2106,6 +2122,7 @@ async def build_discovery_export(
         "abr_quality_analysis":                  abr_analysis.get("abr_quality_analysis"),
         "abr_debug":                             abr_analysis.get("abr_debug"),
         "watch_rank_v2_analysis":                abr_analysis.get("watch_rank_v2_analysis"),
+        "custom_flow_regime_selector_v1_analysis": cfr_analysis.get("custom_flow_regime_selector_v1_analysis"),
         "top_custom_signal_clean_reliability":   top_custom_signal_clean_reliability,
         "top_flow_custom_combined":              top_flow_custom_combined,
         "top_custom_l43_patterns":               top_custom_l43_patterns,
