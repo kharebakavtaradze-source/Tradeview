@@ -61,6 +61,46 @@ CTAG_VBO  = "VBO"
 CTAG_LVBO = "LVBO"
 CTAG_LD   = "LD"
 
+# ABR/TZ quality tags (research-only)
+CTAG_ABR_A      = "ABR_A"       # ABR classification A (strongest)
+CTAG_ABR_B_PLUS = "ABR_B_PLUS"  # ABR classification B+
+CTAG_ABR_B      = "ABR_B"       # ABR classification B
+CTAG_ABR_R      = "ABR_R"       # ABR classification R (reject)
+CTAG_ABR_SP500  = "ABR_SP500"   # tier: SP500
+CTAG_ABR_NASDAQ = "ABR_NASDAQ"  # tier: NASDAQ (weaker)
+
+# ABR quality tiers
+CTAG_ABR_STRONG  = "ABR_STRONG"
+CTAG_ABR_GOOD    = "ABR_GOOD"
+CTAG_ABR_AVERAGE = "ABR_AVERAGE"
+CTAG_ABR_REJECT  = "ABR_REJECT"
+
+# PREUP / PREDN EMA-cross tags
+CTAG_PREUP_P66 = "PREUP_P66"
+CTAG_PREUP_P55 = "PREUP_P55"
+CTAG_PREUP_P89 = "PREUP_P89"
+CTAG_PREUP_P3  = "PREUP_P3"
+CTAG_PREUP_P2  = "PREUP_P2"
+CTAG_PREUP_P50 = "PREUP_P50"
+
+CTAG_PREDN_P66 = "PREDN_P66"
+CTAG_PREDN_P55 = "PREDN_P55"
+CTAG_PREDN_P89 = "PREDN_P89"
+CTAG_PREDN_P3  = "PREDN_P3"
+CTAG_PREDN_P2  = "PREDN_P2"
+CTAG_PREDN_P50 = "PREDN_P50"
+
+# Z8 pattern tag
+CTAG_Z8 = "Z8"
+
+# ABR L-signals (volDownAdapted path)
+CTAG_ABR_L1 = "ABR_L1"
+CTAG_ABR_L2 = "ABR_L2"
+CTAG_ABR_L3 = "ABR_L3"
+CTAG_ABR_L4 = "ABR_L4"
+CTAG_ABR_L5 = "ABR_L5"
+CTAG_ABR_L6 = "ABR_L6"
+
 # Fallback (no custom signal active)
 CTAG_CUSTOM_FLAT = "CUSTOM_FLAT"
 
@@ -74,6 +114,14 @@ ALL_CUSTOM_TAGS: list[str] = [
     CTAG_TRIGGER_AFTER_L34, CTAG_TRIGGER_AFTER_FRI34,
     CTAG_FULL_L34_G4_B2, CTAG_FULL_FRI34_G4_B2, CTAG_CONFIRM_AFTER_G4,
     CTAG_VBO, CTAG_LVBO, CTAG_LD,
+    # ABR/TZ
+    CTAG_ABR_A, CTAG_ABR_B_PLUS, CTAG_ABR_B, CTAG_ABR_R,
+    CTAG_ABR_SP500, CTAG_ABR_NASDAQ,
+    CTAG_ABR_STRONG, CTAG_ABR_GOOD, CTAG_ABR_AVERAGE, CTAG_ABR_REJECT,
+    CTAG_PREUP_P66, CTAG_PREUP_P55, CTAG_PREUP_P89, CTAG_PREUP_P3, CTAG_PREUP_P2, CTAG_PREUP_P50,
+    CTAG_PREDN_P66, CTAG_PREDN_P55, CTAG_PREDN_P89, CTAG_PREDN_P3, CTAG_PREDN_P2, CTAG_PREDN_P50,
+    CTAG_Z8,
+    CTAG_ABR_L1, CTAG_ABR_L2, CTAG_ABR_L3, CTAG_ABR_L4, CTAG_ABR_L5, CTAG_ABR_L6,
 ]
 
 # Tags that indicate a bullish breakout entry (any D-level signal)
@@ -139,6 +187,56 @@ def bars_to_custom_tags(snap: dict) -> list[str]:
     if snap.get("has_vbo"):  tags.append(CTAG_VBO)
     if snap.get("has_lvbo"): tags.append(CTAG_LVBO)
     if snap.get("has_ld"):   tags.append(CTAG_LD)
+
+    # ABR classification (research-only) — prefer SP500 rules, fall back to NASDAQ
+    abr_sp500  = snap.get("abr_sp500")
+    abr_nasdaq = snap.get("abr_nasdaq")
+    abr_cls    = abr_sp500 or abr_nasdaq
+    if abr_cls == "A":    tags.append(CTAG_ABR_A)
+    elif abr_cls == "B+": tags.append(CTAG_ABR_B_PLUS)
+    elif abr_cls == "B":  tags.append(CTAG_ABR_B)
+    elif abr_cls == "R":  tags.append(CTAG_ABR_R)
+
+    # Tier tags: ABR_SP500 when SP500-rule quality is STRONG/GOOD, else NASDAQ
+    sp_grade  = snap.get("tz_quality_tier_sp500")
+    nas_grade = snap.get("tz_quality_tier_nasdaq")
+    if sp_grade  in ("STRONG", "GOOD"): tags.append(CTAG_ABR_SP500)
+    if nas_grade in ("STRONG", "GOOD"): tags.append(CTAG_ABR_NASDAQ)
+
+    # Quality grade tag (SP500 rules primary, NASDAQ fallback)
+    abr_grade = sp_grade or nas_grade
+    if abr_grade == "STRONG":    tags.append(CTAG_ABR_STRONG)
+    elif abr_grade == "GOOD":    tags.append(CTAG_ABR_GOOD)
+    elif abr_grade == "AVERAGE": tags.append(CTAG_ABR_AVERAGE)
+    elif abr_grade == "REJECT":  tags.append(CTAG_ABR_REJECT)
+
+    # PREUP / PREDN EMA-cross signals
+    preup = snap.get("preup_primary")
+    if preup == "P66": tags.append(CTAG_PREUP_P66)
+    elif preup == "P55": tags.append(CTAG_PREUP_P55)
+    elif preup == "P89": tags.append(CTAG_PREUP_P89)
+    elif preup == "P3":  tags.append(CTAG_PREUP_P3)
+    elif preup == "P2":  tags.append(CTAG_PREUP_P2)
+    elif preup == "P50": tags.append(CTAG_PREUP_P50)
+
+    predn = snap.get("predn_primary")
+    if predn == "P66": tags.append(CTAG_PREDN_P66)
+    elif predn == "P55": tags.append(CTAG_PREDN_P55)
+    elif predn == "P89": tags.append(CTAG_PREDN_P89)
+    elif predn == "P3":  tags.append(CTAG_PREDN_P3)
+    elif predn == "P2":  tags.append(CTAG_PREDN_P2)
+    elif predn == "P50": tags.append(CTAG_PREDN_P50)
+
+    # Z8 pattern
+    if snap.get("abr_z8"): tags.append(CTAG_Z8)
+
+    # ABR L-signals (volDownAdapted path, stored with abr_ prefix in snap)
+    if snap.get("abr_l1"): tags.append(CTAG_ABR_L1)
+    if snap.get("abr_l2"): tags.append(CTAG_ABR_L2)
+    if snap.get("abr_l3"): tags.append(CTAG_ABR_L3)
+    if snap.get("abr_l4"): tags.append(CTAG_ABR_L4)
+    if snap.get("abr_l5"): tags.append(CTAG_ABR_L5)
+    if snap.get("abr_l6"): tags.append(CTAG_ABR_L6)
 
     result = sorted(set(tags))
     return result if result else [CTAG_CUSTOM_FLAT]
