@@ -717,3 +717,147 @@ class TestAggregateCustomSignals:
         rows = [{"other_field": "x"}]
         result = _aggregate_custom_signals(rows)
         assert result["l34"] == 0
+
+
+# ── Metric family separation (outcome vs group_type) ──────────────────────────
+
+class TestMetricFamilySeparation:
+    """
+    Verifies that bucket_performance and the top-level summary expose
+    both metric families correctly:
+      outcome_*  — derived from pump_multiple
+      group_*    — derived from group_type label (lowercase)
+
+    Root bug fixed: old code compared group_type against "FALSE_POSITIVE"
+    (uppercase) while the DB stores "false_positive" (lowercase), yielding
+    group_false_positive_count=0 even when the distribution showed 14 FPs.
+    """
+
+    def _make_cfr_a_eps(self, *, group_types, pump_multiples):
+        eps = []
+        for i, (gt, pm) in enumerate(zip(group_types, pump_multiples)):
+            ep = dict(_ep(
+                "PUMP_WATCH_HIGH",
+                subtypes=["FLOW_DIVERGENCE"],
+                badges=[_B_ABSORB_PRESSURE],
+                price_bucket="PRICE_1_TO_3",
+                atr_bucket="ATR_NORMAL_5_15",
+                dv_bucket="DV_OK_250K_1M",
+                split_ctx="NO_SPLIT",
+                pump_multiple=pm,
+                group_type=gt,
+            ), episode_id=i)
+            eps.append(ep)
+        return eps
+
+    def test_group_fp_count_uses_lowercase(self):
+        # 2 false_positive (lowercase), 1 4x_pump
+        eps = self._make_cfr_a_eps(
+            group_types=["false_positive", "false_positive", "4x_pump"],
+            pump_multiples=[1.1, 1.2, 5.0],
+        )
+        result = build_cfr_selector_analysis(eps)
+        ana    = result["custom_flow_regime_selector_v1_analysis"]
+        s      = ana["summary"]
+        assert s["cfr_a_group_false_positive_count"] == 2
+        assert s["cfr_a_group_4x_count"] == 1
+
+    def test_group_fp_rate_correct(self):
+        eps = self._make_cfr_a_eps(
+            group_types=["false_positive"] * 14 + ["4x_pump"] * 6,
+            pump_multiples=[1.0] * 14 + [5.0] * 6,
+        )
+        result = build_cfr_selector_analysis(eps)
+        ana    = result["custom_flow_regime_selector_v1_analysis"]
+        s      = ana["summary"]
+        assert s["cfr_a_group_false_positive_count"] == 14
+        assert s["cfr_a_group_false_positive_rate"] is not None
+        assert abs(s["cfr_a_group_false_positive_rate"] - 14 / 20) < 0.001
+
+    def test_outcome_4x_rate_independent_of_group_type(self):
+        # pump_multiple >= 4 for 3 episodes, group_type is "false_positive" for all
+        eps = self._make_cfr_a_eps(
+            group_types=["false_positive"] * 5,
+            pump_multiples=[5.0, 4.1, 4.5, 2.0, 1.0],
+        )
+        result = build_cfr_selector_analysis(eps)
+        ana    = result["custom_flow_regime_selector_v1_analysis"]
+        s      = ana["summary"]
+        # 3 episodes have pm>=4, all are false_positive by group
+        assert s["cfr_a_outcome_4x_count"] == 3
+        assert s["cfr_a_group_false_positive_count"] == 5
+
+    def test_bucket_performance_has_new_fields(self):
+        eps = self._make_cfr_a_eps(
+            group_types=["4x_pump", "false_positive"],
+            pump_multiples=[5.0, 1.0],
+        )
+        result = build_cfr_selector_analysis(eps)
+        bp     = result["custom_flow_regime_selector_v1_analysis"]["bucket_performance"]
+        cfr_a  = bp.get("CFR_A") or {}
+        required = [
+            "outcome_4x_count", "outcome_4x_rate",
+            "group_4x_count",   "group_4x_rate",
+            "group_false_positive_count", "group_false_positive_rate",
+            "normal_winner_count", "split_artifact_count",
+        ]
+        for field in required:
+            assert field in cfr_a, f"Missing field in bucket_performance: {field}"
+
+    def test_bucket_performance_no_old_fields(self):
+        # Old fields ('4x_count', 'false_positive_count', 'false_positive_rate')
+        # must not appear — they were misleading / wrong-case
+        eps = self._make_cfr_a_eps(
+            group_types=["4x_pump"],
+            pump_multiples=[5.0],
+        )
+        result = build_cfr_selector_analysis(eps)
+        bp     = result["custom_flow_regime_selector_v1_analysis"]["bucket_performance"]
+        cfr_a  = bp.get("CFR_A") or {}
+        assert "4x_count"           not in cfr_a
+        assert "false_positive_count" not in cfr_a
+        assert "false_positive_rate"  not in cfr_a
+        assert "4x_rate"            not in cfr_a
+
+    def test_sanity_warning_triggered_on_uppercase_gt(self):
+        # Simulate the run-149 bug: group_type_distribution shows fp=14 but
+        # uppercase "FALSE_POSITIVE" would produce count=0.
+        # The fix lowercases internally so count should now be >0 and no warning.
+        eps = self._make_cfr_a_eps(
+            group_types=["false_positive"] * 3,
+            pump_multiples=[1.0, 1.1, 1.2],
+        )
+        result = build_cfr_selector_analysis(eps)
+        ana    = result["custom_flow_regime_selector_v1_analysis"]
+        s      = ana["summary"]
+        # No sanity warning because count is correct
+        assert s["cfr_a_group_false_positive_count"] == 3
+        assert not s.get("sanity_warnings")
+
+    def test_baseline_uses_renamed_fields(self):
+        eps = self._make_cfr_a_eps(
+            group_types=["4x_pump", "false_positive", "normal_winner"],
+            pump_multiples=[5.0, 1.0, 2.0],
+        )
+        result = build_cfr_selector_analysis(eps)
+        ana    = result["custom_flow_regime_selector_v1_analysis"]
+        baseline = ana["compare_vs_pump_watch"]["cfr_a_vs_pw_high_baseline"]
+        assert "outcome_4x_rate" in baseline
+        assert "group_false_positive_rate" in baseline
+        assert "4x_rate"           not in baseline
+        assert "false_positive_rate" not in baseline
+
+    def test_summary_has_all_new_fields(self):
+        eps = self._make_cfr_a_eps(
+            group_types=["4x_pump"],
+            pump_multiples=[5.0],
+        )
+        result = build_cfr_selector_analysis(eps)
+        s      = result["custom_flow_regime_selector_v1_analysis"]["summary"]
+        new_fields = [
+            "cfr_a_outcome_4x_count", "cfr_a_outcome_4x_rate",
+            "cfr_a_group_4x_count",   "cfr_a_group_4x_rate",
+            "cfr_a_group_false_positive_count", "cfr_a_group_false_positive_rate",
+        ]
+        for f in new_fields:
+            assert f in s, f"Missing summary field: {f}"
