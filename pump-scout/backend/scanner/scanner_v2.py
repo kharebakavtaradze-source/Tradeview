@@ -260,7 +260,8 @@ def _map_v2_decision(
 
     # AVOID_DEAD upgrade: strong D confluence + non-impulse phase → WATCH_LOW
     # Excluded: IMPULSE_ONLY, BROKEN_STRUCTURE (data shows catastrophic returns)
-    _bad_phases = {"IMPULSE_ONLY", "BROKEN_STRUCTURE", "DEGRADED", "TRUE_NONE"}
+    # DEGRADED removed — R35: AVOID_DEAD|D6_BEUP+DEGRADED = +3.37% 5d 72.2% WR (n=36)
+    _bad_phases = {"IMPULSE_ONLY", "BROKEN_STRUCTURE", "TRUE_NONE"}
     if (d_conf in _AVOID_UPGRADE_DCONF
             and structure_phase not in _bad_phases
             and exp_risk != "HIGH"):
