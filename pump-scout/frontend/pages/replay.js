@@ -855,6 +855,10 @@ export default function ReplayPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [error, setError]             = useState('');
 
+  // ── Recalculate state ────────────────────────────────────────────────────────
+  const [recalculating,  setRecalculating]  = useState(false);
+  const [recalcStatus,   setRecalcStatus]   = useState(null);   // null | {ok, updated, total, error}
+
   // ── Delete state ────────────────────────────────────────────────────────────
   const [deleteTarget,   setDeleteTarget]   = useState(null);   // run object to confirm
   const [deleting,       setDeleting]       = useState(false);
@@ -1045,8 +1049,37 @@ export default function ReplayPage() {
     setMissed([]);
     setSummary(null);
     setBundle(null);
+    setRecalcStatus(null);
     setTab('candidates');
     loadRunDetail(run.id);
+  }
+
+  async function handleRecalculate() {
+    if (!activeRun || recalculating) return;
+    setRecalculating(true);
+    setRecalcStatus(null);
+    try {
+      const r = await fetch(
+        `${API_URL}/api/replay/${activeRun.id}/recalculate-scanner-v2`,
+        { method: 'POST' },
+      );
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+      setRecalcStatus({
+        ok:      true,
+        updated: data.updated_candidate_count,
+        total:   data.candidate_count_total,
+        bundle:  data.research_bundle_rebuilt,
+      });
+      // Reload candidates list and research bundle with new data
+      loadRunDetail(activeRun.id);
+      setBundle(null);
+      loadBundle(activeRun.id);
+    } catch (e) {
+      setRecalcStatus({ ok: false, error: String(e) });
+    } finally {
+      setRecalculating(false);
+    }
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────────
@@ -1281,10 +1314,39 @@ export default function ReplayPage() {
             {/* Detail panel */}
             {activeRun && (
               <div>
-                <div className={styles.sectionTitle}>
-                  Run #{activeRun.id} — {activeRun.mode === 'single_day'
-                    ? activeRun.as_of_date
-                    : `${activeRun.start_date} → ${activeRun.end_date}`}
+                <div className={styles.sectionTitle} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <span>
+                    Run #{activeRun.id} — {activeRun.mode === 'single_day'
+                      ? activeRun.as_of_date
+                      : `${activeRun.start_date} → ${activeRun.end_date}`}
+                  </span>
+                  <button
+                    onClick={handleRecalculate}
+                    disabled={recalculating || isRunning}
+                    title="Re-run priority scoring + Scanner v2 routing on stored candidates using current engine code, then rebuild research bundle"
+                    style={{
+                      padding: '4px 12px', fontSize: 10, fontWeight: 700,
+                      background: recalculating ? '#1a1a1a' : '#1a2a1a',
+                      color: recalculating ? '#666' : '#4caf50',
+                      border: `1px solid ${recalculating ? '#333' : '#4caf5055'}`,
+                      borderRadius: 4, cursor: recalculating ? 'default' : 'pointer',
+                      letterSpacing: '0.05em', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {recalculating ? '⟳ Recalculating…' : '⟳ Recalculate Analytics'}
+                  </button>
+                  {recalcStatus && (
+                    recalcStatus.ok ? (
+                      <span style={{ fontSize: 10, color: '#4caf50' }}>
+                        ✓ Updated {recalcStatus.updated}/{recalcStatus.total} candidates
+                        {recalcStatus.bundle ? ' · bundle rebuilt' : ''}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 10, color: '#f44336' }}>
+                        ✗ {recalcStatus.error}
+                      </span>
+                    )
+                  )}
                 </div>
 
                 {/* Tabs */}
