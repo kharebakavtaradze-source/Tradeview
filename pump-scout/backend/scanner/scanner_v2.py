@@ -14,6 +14,10 @@ CRITICAL RULES — read before modifying:
   3. HYPE / SYMPATHY / sector / macro CANNOT create BUY alone.
   4. HIGH expansion_timing_risk CANNOT produce BUY_CANDIDATE_HIGH.
   5. AVOID cannot be upgraded to BUY/WATCH_HIGH/WATCH_MEDIUM.
+  8. OVERHEATED_EXPANSION hard-blocks ALL BUY (→ AVOID_RISK) and ALL WATCH (→ AVOID_LOTTERY).
+     R35 data: -4.28% 5d 36.4% WR across all phases/sequences.
+  9. expansion_timing_risk=HIGH hard-blocks WATCH_HIGH and WATCH_MEDIUM (→ AVOID_LOTTERY).
+     R35 data: -3.61% 5d 39.0% WR.
      Exception 1: AVOID_DEAD + strong D confluence (D4/D6 BEUP or D4/D3 L34) + non-impulse
      phase → WATCH_LOW (data-driven: these combos avg +2–4% 5d with 60-73% win rate).
      Exception 2: AVOID_RISK (soft risk only — no expansion_risk_high/overheated) + strong
@@ -44,7 +48,11 @@ V2_LABELS = frozenset({
 #   D4_BEUP avg +4.31% 5d 60% win; D6_BEUP avg +3.8% 63% win
 #   D4_L34  avg +2.1% 65% win;     D3_L34  avg +2.9% 73% win
 #   L34_THEN_D4_3B: run_id=32 avg +5.13% 5d, alpha +4.97%, FP 8.5%
-_AVOID_UPGRADE_DCONF = frozenset({"D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34", "L34_THEN_D4_3B"})
+#   D4_THEN_BEUP_5B: run_id=30 avg +4.31% 5d — R35 promoted to upgrade set
+_AVOID_UPGRADE_DCONF = frozenset({
+    "D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34",
+    "L34_THEN_D4_3B", "D4_THEN_BEUP_5B",
+})
 
 # ── Negative priority flags that signal meaningful risk ───────────────────────
 _HIGH_RISK_FLAGS = frozenset({
@@ -159,6 +167,7 @@ def _map_v2_decision(
     exp_risk: str,
     d_conf: str = "NONE",
     structure_phase: str = "NONE",
+    ce_state: str = "NONE",
 ) -> tuple[str, str, list[str]]:
     """
     Map np_decision + priority context → (v2_decision, reason, v2_flags).
@@ -176,6 +185,13 @@ def _map_v2_decision(
 
     # ── BUY tier ──────────────────────────────────────────────────────────────
     if np_decision == "BUY_CANDIDATE":
+        # R35: OVERHEATED_EXPANSION -4.28% 5d 36.4% WR — hard block, no BUY of any kind
+        if "overheated" in pf_set:
+            return (
+                "AVOID_RISK",
+                f"BUY_CANDIDATE blocked: overheated_expansion — R35 -4.28% 5d",
+                ["np_buy", "overheated", "hard_block"],
+            )
         if (priority_label == "PRIORITY_HIGH"
                 and priority_score >= 85
                 and exp_risk != "HIGH"):
@@ -193,17 +209,23 @@ def _map_v2_decision(
 
     # ── WATCH tier ────────────────────────────────────────────────────────────
     if np_decision == "WATCH":
-        if priority_label == "PRIORITY_HIGH":
-            return ("WATCH_HIGH", "WATCH + PRIORITY_HIGH", ["np_watch", "priority_high"])
-        if priority_label == "PRIORITY_MEDIUM":
-            return ("WATCH_MEDIUM", "WATCH + PRIORITY_MEDIUM", ["np_watch", "priority_medium"])
-        # LOW/RISKY + HIGH expansion risk = overextended with no structure = lottery profile
+        # R35: OVERHEATED -4.28% 5d / exp_risk=HIGH -3.61% 5d — lottery profile at any priority
+        if "overheated" in pf_set:
+            return (
+                "AVOID_LOTTERY",
+                f"WATCH blocked: overheated_expansion — R35 -4.28% 5d",
+                ["np_watch", "overheated", "lottery_profile"],
+            )
         if exp_risk == "HIGH":
             return (
                 "AVOID_LOTTERY",
                 f"WATCH priority={priority_label} + exp_risk=HIGH — lottery profile",
                 ["np_watch", "expansion_risk_high", "lottery_profile"],
             )
+        if priority_label == "PRIORITY_HIGH":
+            return ("WATCH_HIGH", "WATCH + PRIORITY_HIGH", ["np_watch", "priority_high"])
+        if priority_label == "PRIORITY_MEDIUM":
+            return ("WATCH_MEDIUM", "WATCH + PRIORITY_MEDIUM", ["np_watch", "priority_medium"])
         return ("WATCH_LOW", f"WATCH priority={priority_label}", ["np_watch"])
 
     # ── AVOID tier (AVOID + IMPULSE_RISK) ────────────────────────────────────
@@ -238,13 +260,25 @@ def _map_v2_decision(
 
     # AVOID_DEAD upgrade: strong D confluence + non-impulse phase → WATCH_LOW
     # Excluded: IMPULSE_ONLY, BROKEN_STRUCTURE (data shows catastrophic returns)
+    _bad_phases = {"IMPULSE_ONLY", "BROKEN_STRUCTURE", "DEGRADED", "TRUE_NONE"}
     if (d_conf in _AVOID_UPGRADE_DCONF
-            and structure_phase not in {"IMPULSE_ONLY", "BROKEN_STRUCTURE"}
+            and structure_phase not in _bad_phases
             and exp_risk != "HIGH"):
         return (
             "WATCH_LOW",
             f"AVOID (no risk) + {d_conf} + {structure_phase} → WATCH_LOW",
             ["np_avoid", "d_conf_upgrade"],
+        )
+
+    # R35: ACCUMULATION_READY +1.15% 5d 58.6% WR — rescue even without D confluence
+    if (ce_state == "ACCUMULATION_READY"
+            and structure_phase not in _bad_phases
+            and exp_risk != "HIGH"
+            and not (pf_set & _HARD_RISK_FLAGS)):
+        return (
+            "WATCH_LOW",
+            f"AVOID (no risk) + ACCUMULATION_READY + {structure_phase} → WATCH_LOW",
+            ["np_avoid", "accumulation_ready_rescue"],
         )
 
     return (
@@ -313,9 +347,10 @@ def _build_inner(row: dict, rank: int) -> dict:
     d_family       = _dconf_family(d_conf)
     d_timing       = _dconf_timing(row)
     structure_phase = row.get("structure_phase") or "NONE"
+    ce_state       = row.get("compression_expansion_state") or "NONE"
 
     v2_decision, v2_reason, v2_flags = _map_v2_decision(
-        np_decision, p_label, p_score, p_flags, exp_risk, d_conf, structure_phase
+        np_decision, p_label, p_score, p_flags, exp_risk, d_conf, structure_phase, ce_state
     )
     v2_score = _v2_score(p_score, v2_decision)
 

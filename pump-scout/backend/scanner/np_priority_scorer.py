@@ -117,11 +117,13 @@ def _inner(row: dict) -> dict:
         score += 2
 
     # ── Compression / expansion state ─────────────────────────────────────────
+    # R35: ACCUMULATION_READY +1.15% 5d 58.6% WR — boosted from +8
     if ce_state == "ACCUMULATION_READY":
-        score += 8
+        score += 10
         flags.append("accumulation_ready")
+    # R35: OVERHEATED_EXPANSION -4.28% 5d 36.4% WR — hard-block weight
     elif ce_state == "OVERHEATED_EXPANSION":
-        score -= 15
+        score -= 30
         flags.append("overheated")
 
     # ── D/WLNBB confluence ────────────────────────────────────────────────────
@@ -147,8 +149,12 @@ def _inner(row: dict) -> dict:
         score -= 5
         flags.append("d_standalone")
 
-    # ── Sequence penalty ──────────────────────────────────────────────────────
-    if seq == "SETUP_ONLY_L34":
+    # ── Sequence bonus / penalty ──────────────────────────────────────────────
+    # R35: TRIGGER_AFTER_L34 +1.01% 5d 60.6% WR n=109 — strongest validated sequence
+    if seq == "TRIGGER_AFTER_L34":
+        score += 10
+        flags.append("trigger_after_l34")
+    elif seq == "SETUP_ONLY_L34":
         score -= 8
         flags.append("setup_only_l34")
     # CONFIRM_AFTER_G4: run_id=30 avg -2.12% 5d / -2.42% alpha (n=20 in BUY bucket)
