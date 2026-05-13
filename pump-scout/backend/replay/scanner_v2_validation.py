@@ -76,6 +76,10 @@ def resolve_scanner_v2_decision(c: dict, cget: Callable) -> tuple[Optional[str],
 
     Conservative: when np_decision is missing or unrecognized, returns UNKNOWN.
     Never defaults to AVOID for missing fields.
+
+    Mirrors scanner_v2._map_v2_decision logic including R35 hard-block rules:
+      - OVERHEATED_EXPANSION: BUY→AVOID_RISK, WATCH→AVOID_LOTTERY
+      - exp_risk=HIGH in WATCH: AVOID_LOTTERY at any priority label
     """
     direct = cget(c, "scanner_v2_decision")
     if direct in V2_LABELS:
@@ -92,12 +96,23 @@ def resolve_scanner_v2_decision(c: dict, cget: Callable) -> tuple[Optional[str],
                 or cget(c, "np_expansion_timing_risk")
                 or "LOW")
 
+    decision_flags = cget(c, "decision_flags") or []
+    priority_flags = cget(c, "priority_flags") or []
+    all_flags = set(list(decision_flags) + list(priority_flags))
+    is_overheated = "overheated" in all_flags
+
     if np_decision == "BUY_CANDIDATE":
+        # R35: OVERHEATED hard-blocks all BUY outcomes
+        if is_overheated:
+            return "AVOID_RISK", "reconstructed"
         if p_label == "PRIORITY_HIGH" and exp_risk != "HIGH":
             return "BUY_CANDIDATE_HIGH", "reconstructed"
         return "BUY_CANDIDATE_NORMAL", "reconstructed"
 
     if np_decision == "WATCH":
+        # R35: OVERHEATED and exp_risk=HIGH both route to AVOID_LOTTERY at any priority
+        if is_overheated or exp_risk == "HIGH":
+            return "AVOID_LOTTERY", "reconstructed"
         if p_label == "PRIORITY_HIGH":   return "WATCH_HIGH",   "reconstructed"
         if p_label == "PRIORITY_MEDIUM": return "WATCH_MEDIUM", "reconstructed"
         return "WATCH_LOW", "reconstructed"
@@ -106,9 +121,6 @@ def resolve_scanner_v2_decision(c: dict, cget: Callable) -> tuple[Optional[str],
         return "AVOID_LOTTERY", "reconstructed"
 
     # AVOID
-    decision_flags = cget(c, "decision_flags") or []
-    priority_flags = cget(c, "priority_flags") or []
-    all_flags = set(list(decision_flags) + list(priority_flags))
     if exp_risk == "HIGH" or (all_flags & _RISK_FLAGS):
         return "AVOID_RISK", "reconstructed"
     return "AVOID_DEAD", "reconstructed"
