@@ -119,6 +119,28 @@ function V2Badge({ decision }) {
   );
 }
 
+function SplitBadge({ splitStatus }) {
+  if (!splitStatus) return <span style={{ color: '#333', fontSize: 9 }}>—</span>;
+  const { has_upcoming_split, has_recent_split, split_window_label,
+          upcoming_split_type, recent_split_type, upcoming_split_ratio, recent_split_ratio } = splitStatus;
+  if (!has_upcoming_split && !has_recent_split) return <span style={{ color: '#333', fontSize: 9 }}>—</span>;
+  const isUpcoming = has_upcoming_split;
+  const isReverse  = (isUpcoming ? upcoming_split_type : recent_split_type || '').toUpperCase().includes('REVERSE');
+  const color      = isUpcoming
+    ? (isReverse ? '#ff5252' : '#ffd600')
+    : (isReverse ? '#ff9800' : '#90a4ae');
+  const ratio      = isUpcoming ? upcoming_split_ratio : recent_split_ratio;
+  const tip        = ratio ? `${split_window_label} (${ratio})` : split_window_label;
+  return (
+    <span title={tip} style={{
+      display: 'inline-block', padding: '2px 7px', borderRadius: 3,
+      fontSize: 9, fontWeight: 800, letterSpacing: '0.05em',
+      color, background: color + '22', border: `1px solid ${color}55`,
+      whiteSpace: 'nowrap', cursor: 'default',
+    }}>{split_window_label}</span>
+  );
+}
+
 function NpBadge({ decision }) {
   if (!decision) return <span style={{ color: '#333', fontSize: 9 }}>—</span>;
   const cfg = NP_DECISION_CFG[decision] || { color: '#888', label: decision };
@@ -252,6 +274,7 @@ function V2Drawer({ row, onClose }) {
   const syc = ctx.sympathy_context  || {};
   const lc  = ctx.legacy_context    || null;
   const v2cfg = V2_CFG[row.scanner_v2_decision] || { color: '#888', label: row.scanner_v2_decision || '—' };
+  const sp  = row.split_status || {};
 
   return (
     <>
@@ -432,7 +455,55 @@ function V2Drawer({ row, onClose }) {
             </DRow>
           </SecCard>
 
-          {/* 10. Suggested Action */}
+          {/* 10. Split Status */}
+          <SecCard title="Split Status (±30d / +7d)">
+            {!sp.has_recent_split && !sp.has_upcoming_split ? (
+              <div style={{ fontSize: 10, color: '#444' }}>No splits in window</div>
+            ) : (
+              <>
+                {sp.has_upcoming_split && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 3 }}>Upcoming</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <SplitBadge splitStatus={{ ...sp, has_recent_split: false }} />
+                      <span style={{ fontSize: 10, color: '#ddd', fontWeight: 700 }}>
+                        {sp.upcoming_split_date}
+                      </span>
+                      <span style={{ fontSize: 10, color: '#aaa' }}>
+                        in {sp.upcoming_split_days_ahead}d
+                      </span>
+                      {sp.upcoming_split_ratio && (
+                        <span style={{ fontSize: 10, color: '#888', fontFamily: 'monospace' }}>
+                          {sp.upcoming_split_ratio}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {sp.has_recent_split && (
+                  <div>
+                    <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 3 }}>Recent</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <SplitBadge splitStatus={{ ...sp, has_upcoming_split: false }} />
+                      <span style={{ fontSize: 10, color: '#ddd', fontWeight: 700 }}>
+                        {sp.recent_split_date}
+                      </span>
+                      <span style={{ fontSize: 10, color: '#aaa' }}>
+                        {sp.recent_split_days_ago}d ago
+                      </span>
+                      {sp.recent_split_ratio && (
+                        <span style={{ fontSize: 10, color: '#888', fontFamily: 'monospace' }}>
+                          {sp.recent_split_ratio}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </SecCard>
+
+          {/* 11. Suggested Action */}
           <SecCard title="Suggested Action">
             <div style={{ fontSize: 12, color: v2cfg.color, fontWeight: 700, lineHeight: 1.4 }}>
               {row.suggested_action || '—'}
@@ -679,6 +750,7 @@ export default function ScannerV2Page() {
                   <th>Phase</th>
                   <SortTh col="structure_score" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort}>SS</SortTh>
                   <th>D/W</th>
+                  <th title="Split within ±30d past / +7d ahead">Split</th>
                   <th>Sector</th>
                   <th>Subsector</th>
                   <th>Macro</th>
@@ -716,6 +788,7 @@ export default function ScannerV2Page() {
                         {np.structure_score ?? '—'}
                       </td>
                       <td><DConfBadge row={r} /></td>
+                      <td><SplitBadge splitStatus={r.split_status} /></td>
                       <td className={styles.seqCell} style={{ color: '#aaa', fontSize: 10 }}>
                         {r.sector || '—'}
                       </td>
