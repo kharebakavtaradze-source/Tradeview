@@ -45,12 +45,12 @@ V2_LABELS = frozenset({
 
 # ── D confluence labels that allow AVOID_DEAD → WATCH_LOW upgrade ────────────
 # Data from run_id=30 (2343 candidates, 85 days):
-#   D4_BEUP avg +4.31% 5d 60% win; D6_BEUP avg +3.8% 63% win
-#   D4_L34  avg +2.1% 65% win;     D3_L34  avg +2.9% 73% win
+#   D6_BEUP avg +3.8% 5d 63% win; D4_L34 avg +2.1% 65% win; D3_L34 avg +2.9% 73% win
 #   L34_THEN_D4_3B: run_id=32 avg +5.13% 5d, alpha +4.97%, FP 8.5%
 #   D4_THEN_BEUP_5B: run_id=30 avg +4.31% 5d — R35 promoted to upgrade set
+#   D4_BEUP removed: R35 WATCH_LOW|D4_BEUP -3.03% 5d (n=13), AVOID_DEAD|D4_BEUP -0.88% (n=65)
 _AVOID_UPGRADE_DCONF = frozenset({
-    "D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34",
+    "D6_BEUP", "D4_L34", "D3_L34",
     "L34_THEN_D4_3B", "D4_THEN_BEUP_5B",
 })
 
@@ -260,7 +260,8 @@ def _map_v2_decision(
 
     # AVOID_DEAD upgrade: strong D confluence + non-impulse phase → WATCH_LOW
     # Excluded: IMPULSE_ONLY, BROKEN_STRUCTURE (data shows catastrophic returns)
-    _bad_phases = {"IMPULSE_ONLY", "BROKEN_STRUCTURE", "DEGRADED", "TRUE_NONE"}
+    # DEGRADED removed — R35: AVOID_DEAD|D6_BEUP+DEGRADED = +3.37% 5d 72.2% WR (n=36)
+    _bad_phases = {"IMPULSE_ONLY", "BROKEN_STRUCTURE", "TRUE_NONE"}
     if (d_conf in _AVOID_UPGRADE_DCONF
             and structure_phase not in _bad_phases
             and exp_risk != "HIGH"):
