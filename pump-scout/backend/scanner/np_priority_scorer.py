@@ -24,11 +24,11 @@ logger = logging.getLogger(__name__)
 # L34_THEN_D4_3B: run_id=32 avg +5.13% 5d, alpha +4.97%, FP 8.5% — promoted to HIGH
 _D_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME", "L34_THEN_D4_3B"})
 # D4_THEN_BEUP_5B: run_id=30 data avg +4.31% 5d — promoted from WEAK to MED_BP
-_D_MED_BP = frozenset({"D4_BEUP", "D4_BEUP_SAME", "D4_THEN_BEUP_5B"})
+# D4_BEUP / D4_BEUP_SAME: R35 -2.59% 5d, 40.4% WR, n=144, FP 31.2% — demoted to POOR
+_D_MED_BP = frozenset({"D4_THEN_BEUP_5B"})
 # SECONDARY_D_CONFLUENCE: avg +4.78% 5d — promoted from SOLO (-5) to MED_L (+5)
 _D_MED_L  = frozenset({
     "D4_L34", "D4_L34_SAME",
-    "D3_L34", "D3_L34_SAME",
     "SECONDARY_D_CONFLUENCE",
 })
 # D3_BEUP / D3_BEUP_SAME: run_id=32 avg -7.13% 5d, 49.2% FP — toxic signal
@@ -37,7 +37,12 @@ _D_TOXIC  = frozenset({"D3_BEUP", "D3_BEUP_SAME"})
 _D_WEAK   = frozenset({"D3_THEN_BEUP_5B"})
 # L34_THEN_D3_3B: run_id=32 avg -3.35% 5d, FP 37.1% — demoted from MED_L
 # D6_THEN_BEUP_5B: avg -4.06% 5d; SECONDARY_D_WINDOW: avg -3.53% 5d
-_D_POOR   = frozenset({"D6_L34", "D6_L34_SAME", "D6_THEN_BEUP_5B", "SECONDARY_D_WINDOW", "L34_THEN_D3_3B"})
+# D3_L34 / D3_L34_SAME: R35 avg -2.04% / -1.84% 5d — demoted from MED_L
+_D_POOR   = frozenset({
+    "D6_L34", "D6_L34_SAME", "D6_THEN_BEUP_5B", "SECONDARY_D_WINDOW", "L34_THEN_D3_3B",
+    "D3_L34", "D3_L34_SAME",
+    "D4_BEUP", "D4_BEUP_SAME",  # R35 -2.59% 5d, 40.4% WR, FP 31.2%
+})
 _D_SOLO   = frozenset({
     "D9", "D11",
     "SECONDARY_D_BEUP_SAME", "SECONDARY_D_L34_SAME", "SECONDARY_D_L43_SAME",
@@ -157,9 +162,13 @@ def _inner(row: dict) -> dict:
     elif seq == "SETUP_ONLY_L34":
         score -= 8
         flags.append("setup_only_l34")
-    # CONFIRM_AFTER_G4: run_id=30 avg -2.12% 5d / -2.42% alpha (n=20 in BUY bucket)
+    # R35: TRIGGER_AFTER_FRI34 -3.76% 5d 42.4% WR n=33 — catastrophic
+    elif seq == "TRIGGER_AFTER_FRI34":
+        score -= 15
+        flags.append("trigger_after_fri34_toxic")
+    # CONFIRM_AFTER_G4: R35 +0.90% 5d 52.8% WR n=54 — penalty reduced from -10
     elif seq == "CONFIRM_AFTER_G4":
-        score -= 10
+        score -= 3
         flags.append("confirm_after_g4_late")
 
     # ── Sector / subsector ────────────────────────────────────────────────────
