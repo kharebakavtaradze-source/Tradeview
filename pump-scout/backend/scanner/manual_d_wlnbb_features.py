@@ -645,6 +645,7 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     elif d6_l43:                 type_v2 = "D6_L43"
     elif d3_l43:                 type_v2 = "D3_L43"
     elif secondary_d_window:     type_v2 = "SECONDARY_D_WINDOW"
+    elif d1_beup_same:           type_v2 = "D1_BEUP"
     elif secondary_d_confluence: type_v2 = "SECONDARY_D_CONFLUENCE"
     elif d_core_any or d_secondary_any: type_v2 = "D_ONLY"
     else:                        type_v2 = "NONE"
@@ -751,6 +752,7 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     elif type_v2 == "D6_L43":           expl = "D6 + L43 same bar"
     elif type_v2 == "D3_L43":           expl = "D3 + L43 same bar"
     elif type_v2 == "SECONDARY_D_WINDOW":     expl = "Secondary D in window confluence"
+    elif type_v2 == "D1_BEUP":               expl = "D1 + BE Up same bar"
     elif type_v2 == "SECONDARY_D_CONFLUENCE": expl = "Secondary D + WLNBB same bar"
     elif type_v2 == "D_ONLY":                 expl = "D signal present, no WLNBB"
     else:                                      expl = ""
@@ -765,6 +767,7 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     elif d4_l43:                 d_confluence_type = "D4_L43"
     elif d6_l43:                 d_confluence_type = "D6_L43"
     elif d3_l43:                 d_confluence_type = "D3_L43"
+    elif d1_beup_same:           d_confluence_type = "D1_BEUP"
     elif secondary_d_confluence: d_confluence_type = "SECONDARY_D_CONFLUENCE"
     else:                        d_confluence_type = "NONE"
 
