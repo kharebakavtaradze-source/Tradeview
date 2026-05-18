@@ -42,10 +42,12 @@ _D_WEAK   = frozenset({"D3_THEN_BEUP_5B"})
 # L34_THEN_D3_3B: run_id=32 avg -3.35% 5d, FP 37.1% — demoted from MED_L
 # D6_THEN_BEUP_5B: avg -4.06% 5d; SECONDARY_D_WINDOW: avg -3.53% 5d
 # D3_L34 / D3_L34_SAME: R35 avg -2.04% / -1.84% 5d — demoted from MED_L
+# L34_THEN_D6_3B: R35 -0.74% 5d, alpha -0.86%, n=43 — 3d WR misleading, 5d+ negative
 _D_POOR   = frozenset({
     "D6_L34", "D6_L34_SAME", "D6_THEN_BEUP_5B", "SECONDARY_D_WINDOW", "L34_THEN_D3_3B",
     "D3_L34", "D3_L34_SAME",
     "D4_BEUP", "D4_BEUP_SAME",  # R35 -2.59% 5d, 40.4% WR, FP 31.2%
+    "L34_THEN_D6_3B",
 })
 _D_SOLO   = frozenset({
     "D9", "D11",
