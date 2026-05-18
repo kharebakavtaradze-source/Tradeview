@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 # ── D/WLNBB confluence groups ────────────────────────────────────────────────
 # L34_THEN_D4_3B: run_id=32 avg +5.13% 5d, alpha +4.97%, FP 8.5% — promoted to HIGH
 _D_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME", "L34_THEN_D4_3B"})
-# D4_THEN_BEUP_5B: run_id=30 data avg +4.31% 5d — promoted from WEAK to MED_BP
 # D4_BEUP / D4_BEUP_SAME: R35 -2.59% 5d, 40.4% WR, n=144, FP 31.2% — demoted to POOR
 # D1_BEUP: R35 +6.45% 5d, 85.7% WR, alpha +5.34%, n=7 — small sample, MED_BP pending validation
-_D_MED_BP = frozenset({"D4_THEN_BEUP_5B", "D1_BEUP"})
+# D4_THEN_BEUP_5B removed from MED_BP: r30 +4.31% 5d; R35 bundle v2 n=127 +0.55% 5d, 43.7% WR — too weak for +5
+_D_MED_BP = frozenset({"D1_BEUP"})
 # SECONDARY_D_CONFLUENCE: avg +4.78% 5d — promoted from SOLO (-5) to MED_L (+5)
 # D11_L34: R35 +4.87% 5d, 56.5% WR, n=23 — promoted from neutral to MED_L
 _D_MED_L  = frozenset({
@@ -40,14 +40,18 @@ _D_TOXIC  = frozenset({"D3_BEUP", "D3_BEUP_SAME", "L43_THEN_D3_3B", "L43_THEN_D6
 # D3_THEN_BEUP_5B: avg -2.38% 5d
 _D_WEAK   = frozenset({"D3_THEN_BEUP_5B"})
 # L34_THEN_D3_3B: run_id=32 avg -3.35% 5d, FP 37.1% — demoted from MED_L
-# D6_THEN_BEUP_5B: avg -4.06% 5d; SECONDARY_D_WINDOW: avg -3.53% 5d
+# SECONDARY_D_WINDOW: R35 bundle v2 n=457 -0.87% 5d, alpha -1.11%
 # D3_L34 / D3_L34_SAME: R35 avg -2.04% / -1.84% 5d — demoted from MED_L
 # L34_THEN_D6_3B: R35 -0.74% 5d, alpha -0.86%, n=43 — 3d WR misleading, 5d+ negative
+# D_ONLY: R35 bundle v2 n=883 -1.46% 5d, alpha -1.74% — large sample, clearly negative
+# D6_THEN_BEUP_5B removed from POOR: R35 bundle v2 n=54 +1.39% 5d, alpha +0.89% — positive, was wrongly penalised
+# D6_L34 / D6_L34_SAME removed from POOR: R35 bundle v1 n=58 +0.29% 5d, alpha +0.41% — neutral, penalty was wrong
 _D_POOR   = frozenset({
-    "D6_L34", "D6_L34_SAME", "D6_THEN_BEUP_5B", "SECONDARY_D_WINDOW", "L34_THEN_D3_3B",
+    "SECONDARY_D_WINDOW", "L34_THEN_D3_3B",
     "D3_L34", "D3_L34_SAME",
     "D4_BEUP", "D4_BEUP_SAME",  # R35 -2.59% 5d, 40.4% WR, FP 31.2%
     "L34_THEN_D6_3B",
+    "D_ONLY",                    # R35 bundle v2 n=883 -1.46% 5d, alpha -1.74%
 })
 _D_SOLO   = frozenset({
     "D9", "D11",
