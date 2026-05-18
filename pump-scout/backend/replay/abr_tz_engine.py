@@ -1,7 +1,7 @@
 """
 ABR / TZ Quality Engine — Research Only.
 
-Ports the logical layer from Pine Script: 260507_TZ_F_WLNBB_CMB — ABR.
+Ports the logical layer from Pine Script: 260519_TZ_F_WLNBB_CMB — ABR.
 
 Computes per-bar:
   - Suffix logic (NE, wick, penetration)
@@ -207,9 +207,11 @@ def compute_abr_tz_features(candles: list[dict]) -> list[dict]:
 
         # ── Suffix logic ──────────────────────────────────────────────────────
         if i == 0:
-            ne_suf   = "N"
-            wick_suf = ""
-            pen_suf  = ""
+            ne_suf       = "N"
+            wick_suf     = ""
+            pen_suf      = ""
+            close_suf    = ""
+            append_close = False
         else:
             o1 = opens[i-1];  c1 = closes[i-1]
             h1 = highs[i-1];  l1 = lows[i-1]
@@ -243,7 +245,24 @@ def compute_abr_tz_features(candles: list[dict]) -> list[dict]:
             else:
                 pen_suf = ""
 
-        full_suf = ne_suf + wick_suf + pen_suf
+            # Close-position suffix (where close lands vs prev body)
+            if c > prev_body_top:
+                close_suf = "A"
+            elif c < prev_body_bot:
+                close_suf = "O"
+            else:
+                close_suf = "I"
+
+            # Pine: appendClose decides whether close_suf is shown
+            append_close = (
+                (ne_suf == "E" and wick_suf == "B")
+                or (ne_suf == "N" and (wick_suf != "" or pen_suf != ""))
+            )
+
+        # Core suffix used for scoring (matches legacy 2-3 char map)
+        core_suf = ne_suf + wick_suf + pen_suf
+        # Full suffix matches Pine display: appends close_suf when append_close
+        full_suf = core_suf + (close_suf if append_close else "")
 
         # ── Z8 (missing from compute_tz_selected) ────────────────────────────
         # Z8 requires prev bar info and other Z flags NOT being set
@@ -390,8 +409,8 @@ def compute_abr_tz_features(candles: list[dict]) -> list[dict]:
         else:
             l_score = 0
 
-        # Suffix score
-        suf = full_suf
+        # Suffix score — keyed on core (ne+wick+pen), close_suf is display-only
+        suf = core_suf
         if suf in ("EB", "NB"):
             suf_score = 2
         elif suf in ("EU", "NU", "EDP", "NDP"):
@@ -418,6 +437,9 @@ def compute_abr_tz_features(candles: list[dict]) -> list[dict]:
             "tz_ne_suffix":     ne_suf,
             "tz_wick_suffix":   wick_suf,
             "tz_pen_suffix":    pen_suf,
+            "tz_close_suffix":  close_suf,
+            "tz_append_close":  append_close,
+            "tz_core_suffix":   core_suf,
             "tz_full_suffix":   full_suf,
             # T/Z signal flags
             "tz_primary_signal": tz_signal,
@@ -549,7 +571,9 @@ def compute_abr_tz_features(candles: list[dict]) -> list[dict]:
 def _feature_json_fields() -> list[str]:
     """Return the list of field names written into feature_json by this engine."""
     return [
-        "tz_ne_suffix", "tz_wick_suffix", "tz_pen_suffix", "tz_full_suffix",
+        "tz_ne_suffix", "tz_wick_suffix", "tz_pen_suffix",
+        "tz_close_suffix", "tz_append_close",
+        "tz_core_suffix", "tz_full_suffix",
         "tz_primary_signal", "tz_side",
         "has_t4", "has_t6", "has_t1g", "has_t2g", "has_t1", "has_t2",
         "has_t9", "has_t10", "has_t3", "has_t11", "has_t5", "has_t12",

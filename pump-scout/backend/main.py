@@ -2110,11 +2110,15 @@ async def replay_get_summary(run_id: int):
 # Read-only reporting layer. Never modifies live scanner, scoring, or journal.
 
 @app.get("/api/replay/{run_id}/research-bundle")
-async def replay_research_bundle(run_id: int):
+async def replay_research_bundle(run_id: int, raw_pattern_run_id: Optional[int] = None):
     """
     Build and return the full structured research bundle for a replay run.
     Covers: summary, performance by bucket, false positives, missed movers,
     pattern review, and suggested experiments (proposals only).
+
+    ?raw_pattern_run_id=X  — include ABR/TZ signal quality analysis (Section K)
+      from the specified raw_pattern_run. If omitted, auto-detects the most
+      recent completed run whose date range overlaps this replay run.
     """
     run = await get_replay_run(run_id)
     if not run:
@@ -2122,7 +2126,7 @@ async def replay_research_bundle(run_id: int):
 
     from replay.research_bundle import build_research_bundle
     try:
-        bundle = await build_research_bundle(run_id)
+        bundle = await build_research_bundle(run_id, raw_pattern_run_id=raw_pattern_run_id)
         return bundle
     except Exception as exc:
         logger.error(f"[BUNDLE] run_id={run_id} build failed: {exc}", exc_info=True)
@@ -2130,10 +2134,12 @@ async def replay_research_bundle(run_id: int):
 
 
 @app.get("/api/replay/{run_id}/research-bundle/markdown")
-async def replay_research_bundle_markdown(run_id: int):
+async def replay_research_bundle_markdown(run_id: int, raw_pattern_run_id: Optional[int] = None):
     """
     Return the research bundle as a human-readable Markdown report.
     Suitable for pasting into AI chat or saving as a .md file.
+
+    ?raw_pattern_run_id=X  — include ABR/TZ signal quality analysis (Section K).
     """
     from fastapi.responses import PlainTextResponse
     run = await get_replay_run(run_id)
@@ -2142,7 +2148,7 @@ async def replay_research_bundle_markdown(run_id: int):
 
     from replay.research_bundle import build_research_bundle, render_research_bundle_markdown
     try:
-        bundle   = await build_research_bundle(run_id)
+        bundle   = await build_research_bundle(run_id, raw_pattern_run_id=raw_pattern_run_id)
         markdown = render_research_bundle_markdown(bundle)
         return PlainTextResponse(content=markdown, media_type="text/markdown")
     except Exception as exc:
@@ -2151,11 +2157,16 @@ async def replay_research_bundle_markdown(run_id: int):
 
 
 @app.get("/api/replay/{run_id}/research-bundle/download")
-async def replay_research_bundle_download(run_id: int, format: str = "json"):
+async def replay_research_bundle_download(
+    run_id: int,
+    format: str = "json",
+    raw_pattern_run_id: Optional[int] = None,
+):
     """
     Download the research bundle as a JSON or Markdown file.
     ?format=json  (default) — downloads bundle.json
     ?format=markdown         — downloads bundle.md
+    ?raw_pattern_run_id=X   — include ABR/TZ signal quality analysis (Section K).
     """
     import json as _json
     from fastapi.responses import Response
@@ -2165,7 +2176,7 @@ async def replay_research_bundle_download(run_id: int, format: str = "json"):
 
     from replay.research_bundle import build_research_bundle, render_research_bundle_markdown
     try:
-        bundle = await build_research_bundle(run_id)
+        bundle = await build_research_bundle(run_id, raw_pattern_run_id=raw_pattern_run_id)
         if format == "markdown":
             content  = render_research_bundle_markdown(bundle)
             filename = f"replay_{run_id}_research_bundle.md"
