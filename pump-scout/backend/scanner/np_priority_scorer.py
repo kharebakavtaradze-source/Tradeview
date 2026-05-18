@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 _D_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME", "L34_THEN_D4_3B"})
 # D4_THEN_BEUP_5B: run_id=30 data avg +4.31% 5d — promoted from WEAK to MED_BP
 # D4_BEUP / D4_BEUP_SAME: R35 -2.59% 5d, 40.4% WR, n=144, FP 31.2% — demoted to POOR
-_D_MED_BP = frozenset({"D4_THEN_BEUP_5B"})
+# D1_BEUP: R35 +6.45% 5d, 85.7% WR, alpha +5.34%, n=7 — small sample, MED_BP pending validation
+_D_MED_BP = frozenset({"D4_THEN_BEUP_5B", "D1_BEUP"})
 # SECONDARY_D_CONFLUENCE: avg +4.78% 5d — promoted from SOLO (-5) to MED_L (+5)
 # D11_L34: R35 +4.87% 5d, 56.5% WR, n=23 — promoted from neutral to MED_L
 _D_MED_L  = frozenset({
