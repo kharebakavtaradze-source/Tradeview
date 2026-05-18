@@ -1884,6 +1884,11 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_scanner_v2_decision_sector_strength":  scanner_v2_validation.get("performance_by_scanner_v2_decision_sector_strength"),
         "performance_by_scanner_v2_decision_macro_regime":     scanner_v2_validation.get("performance_by_scanner_v2_decision_macro_regime"),
         "missed_movers_by_scanner_v2_decision":        scanner_v2_validation.get("missed_movers_by_scanner_v2_decision"),
+        # ── D-confluence priority group validation (sections 12-15) ──────────
+        "performance_by_d_confluence_priority_group":         scanner_v2_validation.get("performance_by_d_confluence_priority_group"),
+        "mfe_by_d_confluence_priority_group":                 scanner_v2_validation.get("mfe_by_d_confluence_priority_group"),
+        "false_positive_by_d_confluence_priority_group":      scanner_v2_validation.get("false_positive_by_d_confluence_priority_group"),
+        "performance_by_scanner_v2_decision_x_dconf_group":   scanner_v2_validation.get("performance_by_scanner_v2_decision_x_dconf_group"),
         "scanner_v2_validation_debug":                 scanner_v2_validation.get("_debug"),
         # ── Section J: Scanner v2 auto-evaluation findings ────────────────────
         "scanner_v2_acceptance_checks":    scanner_v2_findings.get("acceptance_checks"),
