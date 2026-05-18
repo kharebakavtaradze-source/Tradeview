@@ -27,12 +27,15 @@ _D_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME", "L34_THEN_D4_3B"})
 # D4_BEUP / D4_BEUP_SAME: R35 -2.59% 5d, 40.4% WR, n=144, FP 31.2% — demoted to POOR
 _D_MED_BP = frozenset({"D4_THEN_BEUP_5B"})
 # SECONDARY_D_CONFLUENCE: avg +4.78% 5d — promoted from SOLO (-5) to MED_L (+5)
+# D11_L34: R35 +4.87% 5d, 56.5% WR, n=23 — promoted from neutral to MED_L
 _D_MED_L  = frozenset({
     "D4_L34", "D4_L34_SAME",
     "SECONDARY_D_CONFLUENCE",
+    "D11_L34",
 })
 # D3_BEUP / D3_BEUP_SAME: run_id=32 avg -7.13% 5d, 49.2% FP — toxic signal
-_D_TOXIC  = frozenset({"D3_BEUP", "D3_BEUP_SAME"})
+# L43_THEN_D3_3B: R35 -13.68% 5d, 80% FP; L43_THEN_D6_3B: R35 -7.34% 5d — toxic
+_D_TOXIC  = frozenset({"D3_BEUP", "D3_BEUP_SAME", "L43_THEN_D3_3B", "L43_THEN_D6_3B"})
 # D3_THEN_BEUP_5B: avg -2.38% 5d
 _D_WEAK   = frozenset({"D3_THEN_BEUP_5B"})
 # L34_THEN_D3_3B: run_id=32 avg -3.35% 5d, FP 37.1% — demoted from MED_L
