@@ -1966,9 +1966,23 @@ async def build_research_bundle(
         "scanner_v2_statistical_verdict":  scanner_v2_findings.get("statistical_verdict"),
         "scanner_v2_recommendations":      scanner_v2_findings.get("recommendations"),
         # ── Section K: ABR / TZ signal quality analysis (raw_pattern_run) ────────
+        # Standalone stats
         "abr_debug":                       abr_analysis.get("abr_debug"),
         "abr_quality_analysis":            abr_analysis.get("abr_quality_analysis"),
         "watch_rank_v2_analysis":          abr_analysis.get("watch_rank_v2_analysis"),
+        "tz_signal_frequency":             abr_analysis.get("tz_signal_frequency"),
+        "performance_by_tz_signal":        abr_analysis.get("performance_by_tz_signal"),
+        "performance_by_preup_type":       abr_analysis.get("performance_by_preup_type"),
+        "performance_by_l_signal":         abr_analysis.get("performance_by_l_signal"),
+        # TZ combination tables
+        "performance_by_tz_x_preup":       abr_analysis.get("performance_by_tz_x_preup"),
+        "performance_by_tz_high_x_preup":  abr_analysis.get("performance_by_tz_high_x_preup"),
+        "performance_by_abr_x_preup":      abr_analysis.get("performance_by_abr_x_preup"),
+        "performance_by_abr_x_l":          abr_analysis.get("performance_by_abr_x_l"),
+        # D-confluence × TZ/PREUP cross (combination with replay D-signals)
+        "performance_by_d_x_abr":          abr_analysis.get("performance_by_d_x_abr"),
+        "performance_by_d_x_preup":        abr_analysis.get("performance_by_d_x_preup"),
+        "performance_by_d_x_tz_high":      abr_analysis.get("performance_by_d_x_tz_high"),
         "abr_anti_leakage":                abr_analysis.get("anti_leakage"),
         "abr_section_meta": {
             k: v for k, v in abr_analysis.items()
