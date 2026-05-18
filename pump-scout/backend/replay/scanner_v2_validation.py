@@ -53,7 +53,12 @@ _DCONF_V2_TO_SIMPLE: dict[str, str] = {
 # Keep in sync with pump-scout/backend/scanner/np_priority_scorer.py
 _DG_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME", "L34_THEN_D4_3B"})
 _DG_MED_BP = frozenset({"D1_BEUP"})
-_DG_MED_L  = frozenset({"D4_L34", "D4_L34_SAME", "SECONDARY_D_CONFLUENCE", "D11_L34"})
+_DG_MED_L  = frozenset({
+    "D4_L34", "D4_L34_SAME", "SECONDARY_D_CONFLUENCE",
+    "D11_L34", "D1_L34", "D9_L34",
+    "D11_BEUP", "D9_BEUP",
+    "D1_L43", "D11_L43", "D9_L43",
+})
 _DG_TOXIC  = frozenset({"D3_BEUP", "D3_BEUP_SAME", "L43_THEN_D3_3B", "L43_THEN_D6_3B"})
 _DG_WEAK   = frozenset({"D3_THEN_BEUP_5B"})
 _DG_POOR   = frozenset({
