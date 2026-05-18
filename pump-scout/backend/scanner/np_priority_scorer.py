@@ -29,10 +29,14 @@ _D_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME", "L34_THEN_D4_3B"})
 _D_MED_BP = frozenset({"D1_BEUP"})
 # SECONDARY_D_CONFLUENCE: avg +4.78% 5d — promoted from SOLO (-5) to MED_L (+5)
 # D11_L34: R35 +4.87% 5d, 56.5% WR, n=23 — promoted from neutral to MED_L
+# D{1,9,11}_BEUP / D{1,9,11}_L34 / D{1,9,11}_L43: specific secondary-D labels now emitted;
+# score unchanged vs SECONDARY_D_CONFLUENCE (+5). D1_BEUP stays in MED_BP.
 _D_MED_L  = frozenset({
     "D4_L34", "D4_L34_SAME",
     "SECONDARY_D_CONFLUENCE",
-    "D11_L34",
+    "D11_L34", "D1_L34", "D9_L34",
+    "D11_BEUP", "D9_BEUP",
+    "D1_L43", "D11_L43", "D9_L43",
 })
 # D3_BEUP / D3_BEUP_SAME: run_id=32 avg -7.13% 5d, 49.2% FP — toxic signal
 # L43_THEN_D3_3B: R35 -13.68% 5d, 80% FP; L43_THEN_D6_3B: R35 -7.34% 5d — toxic
@@ -147,7 +151,7 @@ def _inner(row: dict) -> dict:
         flags.append("d6_beup")
     elif d_conf in _D_MED_BP:
         score += 5
-        flags.append("d4_beup")
+        flags.append("d1_beup")
     elif d_conf in _D_MED_L:
         score += 5
         flags.append("d_l34")
