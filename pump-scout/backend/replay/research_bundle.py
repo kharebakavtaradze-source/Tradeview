@@ -962,14 +962,14 @@ def _build_mfe_sections(
             return v1
         v2 = _cg(c, "d_confluence_type_v2")
         if v2 and v2 != "NONE":
-            return _DCONF_V2_TO_SIMPLE.get(v2, "NONE")
+            return _DCONF_V2_TO_SIMPLE.get(v2, v2)
         return "NONE"
 
     def _dc_v2_label(c: dict) -> str:
         """v2 preferred; falls back to v1 when v2 absent."""
         v2 = _cg(c, "d_confluence_type_v2")
         if v2 and v2 != "NONE":
-            return _DCONF_V2_TO_SIMPLE.get(v2, "NONE")
+            return _DCONF_V2_TO_SIMPLE.get(v2, v2)
         v1 = _cg(c, "d_confluence_type")
         return v1 if v1 and v1 != "NONE" else "NONE"
 
