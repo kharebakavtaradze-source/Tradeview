@@ -18,8 +18,8 @@ CRITICAL RULES — read before modifying:
      R35 data: -4.28% 5d 36.4% WR across all phases/sequences.
   9. expansion_timing_risk=HIGH hard-blocks WATCH_HIGH and WATCH_MEDIUM (→ AVOID_LOTTERY).
      R35 data: -3.61% 5d 39.0% WR.
-     Exception 1: AVOID_DEAD + strong D confluence (D4/D6 BEUP or D4/D3 L34) + non-impulse
-     phase → WATCH_LOW (data-driven: these combos avg +2–4% 5d with 60-73% win rate).
+     Exception 1: AVOID_DEAD + strong D confluence (D6/D4/D3 BEUP, D4/D3 L34, or any
+     secondary D+BEUP/L34) + non-impulse phase → WATCH_LOW (avg +2–6% 5d 60-86% WR).
      Exception 2: AVOID_RISK (soft risk only — no expansion_risk_high/overheated) + strong
      D confluence + non-impulse phase → WATCH_LOW (rescues 16.4% routing-miss leakage;
      run_id=30: 128/781 AVOID_RISK stocks moved ≥10% 5d with avg +44.18%).
@@ -49,9 +49,16 @@ V2_LABELS = frozenset({
 #   L34_THEN_D4_3B: run_id=32 avg +5.13% 5d, alpha +4.97%, FP 8.5%
 #   D4_THEN_BEUP_5B: run_id=30 avg +4.31% 5d — R35 promoted to upgrade set
 #   D4_BEUP removed: R35 WATCH_LOW|D4_BEUP -3.03% 5d (n=13), AVOID_DEAD|D4_BEUP -0.88% (n=65)
+#   D1_BEUP: R35 +6.45% 5d, 85.7% WR, n=7 — best stat in set, small sample
+#   D11_L34: R35 +4.87% 5d, 56.5% WR, n=23 — validated, added with BEUP/L34 secondary family
+#   D{9,11}_BEUP / D{1,9}_L34: same BEUP/L34 family as existing members, no specific n yet
 _AVOID_UPGRADE_DCONF = frozenset({
     "D6_BEUP", "D4_L34", "D3_L34",
     "L34_THEN_D4_3B", "D4_THEN_BEUP_5B",
+    # secondary D + BEUP family
+    "D1_BEUP", "D11_BEUP", "D9_BEUP",
+    # secondary D + L34 family
+    "D1_L34", "D11_L34", "D9_L34",
 })
 
 # ── Negative priority flags that signal meaningful risk ───────────────────────
