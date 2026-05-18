@@ -1,0 +1,147 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// at https://mozilla.org/MPL/2.0/
+//@version=5
+indicator("Pump Scout Oscillator", overlay=false, max_lines_count=200)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SETTINGS
+// ══════════════════════════════════════════════════════════════════════════════
+
+vol_len  = input.int(20, "Volume MA",  group="Volume")
+cmf_len  = input.int(20, "CMF Length", group="Flow")
+bb_len   = input.int(20, "BB Length",  group="Compression")
+bb_mult  = input.float(2.0, "BB StdDev", group="Compression")
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  RECOMPUTE (mirrors pump-scout-signals.pine — keep in sync)
+// ══════════════════════════════════════════════════════════════════════════════
+
+vol_ma     = ta.sma(volume, vol_len)
+bar_range  = high - low + 1e-9
+atr14      = ta.atr(14)
+atr_ma     = ta.sma(atr14, 30)
+is_dryup   = volume < vol_ma * 0.55
+
+// Bar patterns
+is_strong_close  = close >= (low + bar_range * 0.70) and bar_range > atr14 * 0.3
+is_reclaim       = open < low[1] and close > low[1]
+is_reclaim_strong = is_reclaim and is_strong_close
+
+// CMF
+mfm = bar_range > 0 ? ((close - low) - (high - close)) / bar_range : 0.0
+cmf = ta.sma(mfm * volume, cmf_len) / (ta.sma(volume, cmf_len) + 1e-9)
+
+// OBV
+obv     = ta.obv
+obv_ma  = ta.sma(obv, 20)
+obv_norm = (obv - ta.lowest(obv, 50)) / (ta.highest(obv, 50) - ta.lowest(obv, 50) + 1e-9) * 10 - 5
+
+// ADL
+adl_mult = bar_range > 0 ? ((close - low) - (high - close)) / bar_range : 0.0
+adl      = ta.cum(adl_mult * volume)
+adl_ma   = ta.sma(adl, 20)
+
+// Compression
+[bb_mid, bb_upper, bb_lower] = ta.bb(close, bb_len, bb_mult)
+bb_width     = (bb_upper - bb_lower) / (bb_mid + 1e-9)
+bb_width_ma  = ta.sma(bb_width, 50)
+bb_squeeze   = 1.0 - math.min(bb_width / (bb_width_ma + 1e-9), 1.5) / 1.5
+
+// EMAs
+ema9  = ta.ema(close, 9)
+ema21 = ta.ema(close, 21)
+ema50 = ta.ema(close, 50)
+bull_stack  = ema9 > ema21 and ema21 > ema50
+above_ema50 = close > ema50
+near_ema50  = math.abs(close - ema50) / ema50 < 0.03
+
+buy_pressure_high = close > (low + bar_range * 0.60) and volume > vol_ma * 1.2
+upper_wick_supply = (high - math.max(close, open)) > bar_range * 0.40
+lower_wick_absorb = (math.min(close, open) - low) > bar_range * 0.40
+obv_accum = obv > obv_ma
+cmf_pos   = cmf > 0.05
+
+// ── Pump Watch Score (0-10 scale, mirrors pump-scout-signals.pine)
+pump_score = 0
+bc_days_proxy = ta.barssince(not (close > ema50 and is_strong_close and volume > vol_ma))
+if bc_days_proxy <= 3
+    pump_score += 2
+    pump_score
+if bull_stack
+    pump_score += 1
+    pump_score
+if above_ema50
+    pump_score += 1
+    pump_score
+
+is_compressed = bb_width < bb_width_ma * 0.75
+atr_contracted = atr14 < atr_ma * 0.75
+compression = is_compressed or atr_contracted
+if compression
+    pump_score += 2
+    pump_score
+if is_dryup
+    pump_score += 1
+    pump_score
+
+d4_l34_proxy  = bull_stack and near_ema50 and is_strong_close and obv_accum and not upper_wick_supply
+d6_beup_proxy = d4_l34_proxy and (cmf_pos or buy_pressure_high) and
+     ta.valuewhen(is_dryup, bar_index, 0) >= bar_index - 10
+if d6_beup_proxy
+    pump_score += 3
+    pump_score
+else if d4_l34_proxy
+    pump_score += 2
+    pump_score
+if cmf_pos and obv_accum
+    pump_score += 2
+    pump_score
+else if cmf_pos or obv_accum
+    pump_score += 1
+    pump_score
+if is_strong_close
+    pump_score += 1
+    pump_score
+if is_reclaim_strong
+    pump_score += 1
+    pump_score
+if upper_wick_supply and not lower_wick_absorb
+    pump_score -= 1
+    pump_score
+pump_score := math.max(pump_score, 0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  PLOTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Threshold lines
+hline(7, "PUMP_WATCH_HIGH",   color=color.new(color.purple, 30), linestyle=hline.style_dashed)
+hline(5, "PUMP_WATCH_MEDIUM", color=color.new(color.blue,   50), linestyle=hline.style_dotted)
+hline(3, "PUMP_SPECULATIVE",  color=color.new(color.gray,   50), linestyle=hline.style_dotted)
+hline(0, "Zero",              color=color.new(color.gray,   80))
+
+// Pump Watch Score bars
+score_color = pump_score >= 7 ? color.new(color.purple, 0) :
+     pump_score >= 5 ? color.new(color.blue, 20) :
+     pump_score >= 3 ? color.new(color.teal, 30) :
+     color.new(color.gray, 60)
+
+plot(pump_score, "Pump Watch Score", color=score_color, style=plot.style_columns, linewidth=1)
+
+// CMF overlay (scaled to 0-10 range for readability)
+cmf_scaled = cmf * 20 + 5   // center at 5, range roughly 0-10 for cmf ±0.25
+plot(cmf_scaled, "CMF (scaled)", color=color.new(color.orange, 30), linewidth=1)
+
+// OBV trend (normalized to 0-10)
+plot(obv_norm + 5, "OBV Trend (norm)", color=color.new(color.yellow, 40), linewidth=1)
+
+// BB squeeze intensity (0 = expanded, 10 = maximally squeezed)
+plot(bb_squeeze * 10, "BB Squeeze", color=color.new(color.blue, 50), linewidth=1, style=plot.style_area)
+
+// Signal dots at top of panel
+plotshape(d6_beup_proxy ? 9.5 : na, "D6-BEUP Proxy", style=shape.diamond, size=size.small,
+     location=location.absolute, color=color.new(color.blue, 0))
+plotshape(d4_l34_proxy and not d6_beup_proxy ? 9.0 : na, "D4-L34 Proxy", style=shape.circle, size=size.tiny,
+     location=location.absolute, color=color.new(color.blue, 40))
+plotshape(is_reclaim_strong ? 8.5 : na, "Reclaim+SC", style=shape.triangleup, size=size.tiny,
+     location=location.absolute, color=color.new(color.green, 0))

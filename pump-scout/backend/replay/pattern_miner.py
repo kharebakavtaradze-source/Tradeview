@@ -582,8 +582,11 @@ def _evaluate_pattern(
         status = "REJECT"
 
     recommendation: str
-    if status == "EXPERIMENTAL" and false_positive_rate is not None and false_positive_rate < 0.60:
+    if status == "EXPERIMENTAL" and false_positive_rate is not None and false_positive_rate < 0.40:
         recommendation = "add_to_pump_watch"
+    elif status == "EXPERIMENTAL" and (false_positive_rate is None or false_positive_rate >= 0.40):
+        # High-FP EXPERIMENTAL: hold for research, not pump watch deployment
+        recommendation = "keep_research"
     elif status == "EXPERIMENTAL_RARE":
         recommendation = "needs_more_data"
     elif status == "RESEARCH_ONLY":
@@ -896,8 +899,13 @@ def mine_bar_patterns(
             else:
                 status = "REJECT"
 
-            if status == "EXPERIMENTAL" and (fp_rate or 1.0) < 0.60:
+            if status == "EXPERIMENTAL" and fp_rate is not None and fp_rate < 0.40:
+                # fp_rate is not None guards against None; fp_rate < 0.40 (not "or 1.0")
+                # fixes Python truthiness: (0.0 or 1.0) == 1.0 caused zero-FP to become "reject"
                 recommendation = "add_to_pump_watch"
+            elif status == "EXPERIMENTAL" and (fp_rate is None or fp_rate >= 0.40):
+                # High-FP or uncomputable FP EXPERIMENTAL: research only, not pump watch
+                recommendation = "keep_research"
             elif status == "EXPERIMENTAL_RARE":
                 recommendation = "needs_more_data"
             elif status == "RESEARCH_ONLY":

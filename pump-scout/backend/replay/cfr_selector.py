@@ -193,16 +193,18 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
     split_art    = bool(ep.get("split_artifact_risk"))
 
     # ── 1. Pump Watch base ──────────────────────────────────────────────────
+    # R152 calibration: SPECULATIVE 4x rate (0.287) > HIGH (0.250) = MEDIUM (0.250)
+    # Compress HIGH/MEDIUM spread; give SPECULATIVE unconditional base point
     pw_pts = 0
     speculative_base = False
     if pw_label == "PUMP_WATCH_HIGH":
-        pw_pts = 4
+        pw_pts = 3              # was 4 — HIGH/MEDIUM parity on 4x rate doesn't justify +4
         reasons.append("pump_watch_high")
     elif pw_label == "PUMP_WATCH_MEDIUM":
-        pw_pts = 3
+        pw_pts = 2              # was 3
         reasons.append("pump_watch_medium")
     elif pw_label == "PUMP_SPECULATIVE":
-        speculative_base = True   # conditional +1 added after trigger check
+        speculative_base = True  # +1 unconditional (trigger still earns extra via speculative block)
     elif pw_label == "PUMP_IGNORE":
         pw_pts = -3
         risk_flags.append("pump_ignore")
@@ -266,14 +268,14 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
     if _B_GAP_RESET in badges and not has_strong_trigger:
         reasons.append("gap_reset_context_only")
 
-    # PUMP_SPECULATIVE: +1 only if strong trigger
+    # PUMP_SPECULATIVE: +1 unconditional (R152: highest 4x rate 0.287 > HIGH/MEDIUM 0.250)
     if speculative_base:
+        pw_pts_spec = 1
+        components["pump_watch_base"] = float(pw_pts_spec)
+        score += pw_pts_spec
+        reasons.append("pump_speculative_base")
         if has_strong_trigger:
-            pw_pts_spec = 1
-            components["pump_watch_base"] = float(pw_pts_spec)
-            score += pw_pts_spec
             reasons.append("pump_speculative_with_trigger")
-        # else: 0 pts for speculative without trigger
 
     components["trigger_confirmation"] = float(trigger_pts)
     score += trigger_pts
