@@ -49,6 +49,38 @@ _DCONF_V2_TO_SIMPLE: dict[str, str] = {
     "SECONDARY_D_L43_SAME":  "SECONDARY_D_CONFLUENCE",
 }
 
+# ── D-confluence priority groups — mirrors np_priority_scorer._D_* ────────────
+# Keep in sync with pump-scout/backend/scanner/np_priority_scorer.py
+_DG_HIGH   = frozenset({"D6_BEUP", "D6_BEUP_SAME", "L34_THEN_D4_3B"})
+_DG_MED_BP = frozenset({"D1_BEUP"})
+_DG_MED_L  = frozenset({"D4_L34", "D4_L34_SAME", "SECONDARY_D_CONFLUENCE", "D11_L34"})
+_DG_TOXIC  = frozenset({"D3_BEUP", "D3_BEUP_SAME", "L43_THEN_D3_3B", "L43_THEN_D6_3B"})
+_DG_WEAK   = frozenset({"D3_THEN_BEUP_5B"})
+_DG_POOR   = frozenset({
+    "SECONDARY_D_WINDOW", "L34_THEN_D3_3B",
+    "D3_L34", "D3_L34_SAME",
+    "D4_BEUP", "D4_BEUP_SAME",
+    "L34_THEN_D6_3B",
+    "D_ONLY",
+})
+_DG_SOLO   = frozenset({"D9", "D11", "SECONDARY_D_BEUP_SAME", "SECONDARY_D_L34_SAME", "SECONDARY_D_L43_SAME"})
+
+_DCONF_GROUP_ORDER = ["HIGH", "MED_BP", "MED_L", "WEAK", "SOLO", "POOR", "TOXIC", "NEUTRAL"]
+
+
+def _dconf_priority_group(dconf: str) -> str:
+    """Map a resolved d_confluence label to its scoring tier name."""
+    if not dconf or dconf == "NONE":
+        return "NEUTRAL"
+    if dconf in _DG_HIGH:   return "HIGH"
+    if dconf in _DG_MED_BP: return "MED_BP"
+    if dconf in _DG_MED_L:  return "MED_L"
+    if dconf in _DG_TOXIC:  return "TOXIC"
+    if dconf in _DG_WEAK:   return "WEAK"
+    if dconf in _DG_POOR:   return "POOR"
+    if dconf in _DG_SOLO:   return "SOLO"
+    return "NEUTRAL"
+
 
 # ── Resolvers ────────────────────────────────────────────────────────────────
 
@@ -508,6 +540,32 @@ def build_scanner_v2_validation(
         ),
     }
 
+    # ── 12. performance_by_d_confluence_priority_group ──────────────────────────
+    # Groups candidates by the scoring tier their d_confluence label falls into.
+    # Directly validates np_priority_scorer group assignments — HIGH/MED_BP/MED_L
+    # should show positive alpha; POOR/TOXIC should be negative.
+    def _dg_key(r):
+        return _dconf_priority_group(_resolve_dconf(r["candidate"], cget))
+
+    perf_dconf_group = _section(cand_ids_for(_dg_key), bs, order=_DCONF_GROUP_ORDER)
+
+    # ── 13. mfe_by_d_confluence_priority_group ───────────────────────────────
+    mfe_dconf_group = _section(cand_ids_for(_dg_key), ms, order=_DCONF_GROUP_ORDER)
+
+    # ── 14. false_positive_by_d_confluence_priority_group ────────────────────
+    fp_dg_groups = cand_ids_for(_dg_key)
+    fp_dconf_group = [
+        {"bucket": k, **_fp_stats(fp_dg_groups[k], outcome_map, total_fp)}
+        for k in _DCONF_GROUP_ORDER if k in fp_dg_groups
+    ]
+
+    # ── 15. performance_by_scanner_v2_decision_x_dconf_group ─────────────────
+    # Cross-section: scanner_v2_decision × priority group.
+    # Reveals which WATCH_LOW upgrades are driven by which group.
+    def _v2_x_dg(r):
+        return f"{r['scanner_v2_decision']}|{_dg_key(r)}"
+    perf_v2_dconf_group = _section(cand_ids_for(_v2_x_dg), bs)
+
     return {
         "performance_by_scanner_v2_decision":           perf_v2,
         "mfe_by_scanner_v2_decision":                   mfe_v2,
@@ -520,5 +578,9 @@ def build_scanner_v2_validation(
         "performance_by_scanner_v2_decision_sector_strength":  perf_v2_sector,
         "performance_by_scanner_v2_decision_macro_regime":     perf_v2_macro,
         "missed_movers_by_scanner_v2_decision":         missed_v2,
+        "performance_by_d_confluence_priority_group":          perf_dconf_group,
+        "mfe_by_d_confluence_priority_group":                  mfe_dconf_group,
+        "false_positive_by_d_confluence_priority_group":       fp_dconf_group,
+        "performance_by_scanner_v2_decision_x_dconf_group":    perf_v2_dconf_group,
         "_debug":                                       debug,
     }

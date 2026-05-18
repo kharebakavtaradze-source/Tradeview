@@ -126,7 +126,7 @@ def compute_tz_selected(candles: list[dict]) -> list[dict]:
         t6_raw  = (prev_bull and is_bull and fully_engulfs)
         t9_raw  = (prev1_is_bear and is_bull and is_inside)
         t10_raw = (prev1_is_bull and is_bull and is_inside)
-        t11_raw = (prev1_is_bull and is_bull and (o < o1) and (c >= o1) and (c < c1))
+        t11_raw = (prev1_is_bull and (o < o1) and ((c < c1) or (c < o1)) and is_bull)
         t12_raw = (prev1_is_bull and is_bull and (o < o1) and (c < o1))
 
         # ── Raw bearish Z patterns ────────────────────────────────────────────

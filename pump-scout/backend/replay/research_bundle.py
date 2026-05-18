@@ -1085,11 +1085,19 @@ def _build_mfe_sections(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-async def build_research_bundle(run_id: int) -> dict:
+async def build_research_bundle(
+    run_id: int,
+    raw_pattern_run_id: Optional[int] = None,
+) -> dict:
     """
     Build and return the full research bundle for a replay run.
     All data is loaded from replay-scoped DB tables only.
     Returns a stable dict shape regardless of data completeness.
+
+    raw_pattern_run_id (optional): pass a raw_pattern_run id to include
+      ABR / TZ signal quality analysis (Section K) in the bundle.
+      If omitted, the bundle auto-detects the most recent completed
+      raw_pattern_run whose date range overlaps the replay run.
     """
     from database import (
         get_replay_run, get_replay_candidates,
@@ -1803,6 +1811,67 @@ async def build_research_bundle(run_id: int) -> dict:
         logger.warning(f"[BUNDLE] scanner_v2 findings skipped: {exc}")
         scanner_v2_findings = {"_error": str(exc)}
 
+    # ── Section K: ABR / TZ signal quality analysis ──────────────────────────
+    # Uses raw_pattern_run daily features (feature_json contains ABR/TZ data
+    # pre-computed by abr_tz_engine). Completely separate from replay candidates;
+    # this section shows TZ signal quality for pump episodes in the same date range.
+    # Anti-leakage: abr_quality_analyzer uses only pre-window feature_json fields
+    # for scoring; pump_multiple/group_type appear only in reporting sections.
+    abr_analysis: dict = {}
+    try:
+        from database import (
+            get_raw_pattern_runs,
+            get_raw_pattern_episode_features,
+            get_raw_pattern_daily_features,
+        )
+        from replay.abr_quality_analyzer import build_abr_quality_replay_analysis
+
+        _rp_run_id = raw_pattern_run_id
+        if _rp_run_id is None:
+            _rp_runs   = await get_raw_pattern_runs(limit=30)
+            _run_start = run.get("start_date") or run.get("as_of_date")
+            _run_end   = run.get("end_date")   or run.get("as_of_date")
+            for _rpr in _rp_runs:
+                if _rpr.get("status") != "completed":
+                    continue
+                _s = _rpr.get("start_date")
+                _e = _rpr.get("end_date")
+                if _s and _e and _run_start and _run_end and _s <= _run_end and _e >= _run_start:
+                    _rp_run_id = _rpr["id"]
+                    break
+
+        if _rp_run_id is not None:
+            _episodes  = await get_raw_pattern_episode_features(_rp_run_id, limit=10_000)
+            _all_daily = await get_raw_pattern_daily_features(
+                _rp_run_id, phase="PRE", limit=300_000
+            )
+            _dbe: dict = defaultdict(list)
+            for _row in _all_daily:
+                _eid = _row.get("episode_id")
+                if _eid is not None:
+                    _dbe[_eid].append(_row)
+            abr_analysis = build_abr_quality_replay_analysis(
+                _episodes,
+                daily_by_episode=dict(_dbe),
+            )
+            abr_analysis["_raw_pattern_run_id"] = _rp_run_id
+            abr_analysis["_episode_count"]      = len(_episodes)
+            abr_analysis["_daily_rows_loaded"]  = len(_all_daily)
+            logger.info(
+                "[BUNDLE] ABR section: raw_pattern_run_id=%d, %d episodes, %d daily rows",
+                _rp_run_id, len(_episodes), len(_all_daily),
+            )
+        else:
+            abr_analysis = {
+                "_note": (
+                    "No matching raw_pattern_run found for this replay date range. "
+                    "Pass ?raw_pattern_run_id=X to include ABR/TZ signal analysis."
+                )
+            }
+    except Exception as _abr_exc:
+        logger.warning("[BUNDLE] ABR section skipped: %s", _abr_exc)
+        abr_analysis = {"_error": str(_abr_exc)}
+
     bundle = {
         "run":                              run,
         "summary":                          summary,
@@ -1884,6 +1953,11 @@ async def build_research_bundle(run_id: int) -> dict:
         "performance_by_scanner_v2_decision_sector_strength":  scanner_v2_validation.get("performance_by_scanner_v2_decision_sector_strength"),
         "performance_by_scanner_v2_decision_macro_regime":     scanner_v2_validation.get("performance_by_scanner_v2_decision_macro_regime"),
         "missed_movers_by_scanner_v2_decision":        scanner_v2_validation.get("missed_movers_by_scanner_v2_decision"),
+        # ── D-confluence priority group validation (sections 12-15) ──────────
+        "performance_by_d_confluence_priority_group":         scanner_v2_validation.get("performance_by_d_confluence_priority_group"),
+        "mfe_by_d_confluence_priority_group":                 scanner_v2_validation.get("mfe_by_d_confluence_priority_group"),
+        "false_positive_by_d_confluence_priority_group":      scanner_v2_validation.get("false_positive_by_d_confluence_priority_group"),
+        "performance_by_scanner_v2_decision_x_dconf_group":   scanner_v2_validation.get("performance_by_scanner_v2_decision_x_dconf_group"),
         "scanner_v2_validation_debug":                 scanner_v2_validation.get("_debug"),
         # ── Section J: Scanner v2 auto-evaluation findings ────────────────────
         "scanner_v2_acceptance_checks":    scanner_v2_findings.get("acceptance_checks"),
@@ -1891,6 +1965,29 @@ async def build_research_bundle(run_id: int) -> dict:
         "scanner_v2_regressions":          scanner_v2_findings.get("regressions"),
         "scanner_v2_statistical_verdict":  scanner_v2_findings.get("statistical_verdict"),
         "scanner_v2_recommendations":      scanner_v2_findings.get("recommendations"),
+        # ── Section K: ABR / TZ signal quality analysis (raw_pattern_run) ────────
+        # Standalone stats
+        "abr_debug":                       abr_analysis.get("abr_debug"),
+        "abr_quality_analysis":            abr_analysis.get("abr_quality_analysis"),
+        "watch_rank_v2_analysis":          abr_analysis.get("watch_rank_v2_analysis"),
+        "tz_signal_frequency":             abr_analysis.get("tz_signal_frequency"),
+        "performance_by_tz_signal":        abr_analysis.get("performance_by_tz_signal"),
+        "performance_by_preup_type":       abr_analysis.get("performance_by_preup_type"),
+        "performance_by_l_signal":         abr_analysis.get("performance_by_l_signal"),
+        # TZ combination tables
+        "performance_by_tz_x_preup":       abr_analysis.get("performance_by_tz_x_preup"),
+        "performance_by_tz_high_x_preup":  abr_analysis.get("performance_by_tz_high_x_preup"),
+        "performance_by_abr_x_preup":      abr_analysis.get("performance_by_abr_x_preup"),
+        "performance_by_abr_x_l":          abr_analysis.get("performance_by_abr_x_l"),
+        # D-confluence × TZ/PREUP cross (combination with replay D-signals)
+        "performance_by_d_x_abr":          abr_analysis.get("performance_by_d_x_abr"),
+        "performance_by_d_x_preup":        abr_analysis.get("performance_by_d_x_preup"),
+        "performance_by_d_x_tz_high":      abr_analysis.get("performance_by_d_x_tz_high"),
+        "abr_anti_leakage":                abr_analysis.get("anti_leakage"),
+        "abr_section_meta": {
+            k: v for k, v in abr_analysis.items()
+            if k.startswith("_")
+        },
     }
 
     logger.info(
