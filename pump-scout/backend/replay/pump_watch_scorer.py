@@ -109,7 +109,8 @@ def _apply_diagnostic_labels(ep: dict, label: str, score: int,
     bull_stack = ep.get("bull_stack_days_pre") or 0
     days_ema50 = ep.get("days_above_ema50_pre") or 0
 
-    _STRONG_D_TYPES = {"D4_BEUP", "D6_BEUP", "D4_L34", "D3_L34", "D4_THEN_BEUP_5B"}
+    # D4_BEUP removed: R152 -2.59% 5d, 40.4% WR — consistent with np_priority_scorer demotion
+    _STRONG_D_TYPES = {"D6_BEUP", "D4_L34", "D3_L34", "D4_THEN_BEUP_5B"}
 
     has_raw_dryup = (8 <= dryup <= 30) or compression >= 6 or atr_contraction >= 10
     has_raw_dconf = d_days >= 4 or ep.get("had_d_confluence_pre") or d_best in _STRONG_D_TYPES
@@ -324,6 +325,26 @@ def compute_pump_watch_score(ep: dict) -> dict:
     if ema50_reclaims >= 2:
         score += 5
         reasons.append(f"ema50_reclaim_count={ema50_reclaims}")
+
+    # ── R152 bar quality signals ───────────────────────────────────────────────
+    # Episode-level aggregates that map to top Run 152 EXPERIMENTAL discoveries.
+    # Only applied when the scanner was absent (no_scanner_pressure) to avoid
+    # double-counting with buy_candidate_day_count scoring above.
+    _r152_no_scanner = bc_days <= 1 and (ep.get("watch_day_count_pre") or 0) <= 1
+    strong_close_ct = ep.get("strong_close_count_pre") or 0
+    reclaim_bar_ct  = ep.get("reclaim_bar_count_pre")  or 0
+    # DISC_BAR_SINGLE_BAR_STRONG_CLOSE: reliability 0.709, precision 0.296
+    if strong_close_ct >= 5:
+        score += 4
+        reasons.append(f"r152_strong_close_bars={strong_close_ct}")
+    elif strong_close_ct >= 3:
+        score += 2
+    # DISC_BAR_SINGLE_BAR_RECLAIM_BAR_STRONG_CLOSE: reliability 0.628
+    if reclaim_bar_ct >= 3 and strong_close_ct >= 3:
+        score += 3
+        reasons.append(f"r152_reclaim_strong_close={reclaim_bar_ct}")
+    elif reclaim_bar_ct >= 2 and _r152_no_scanner:
+        score += 2
 
     # ── Penalties ─────────────────────────────────────────────────────────────
 

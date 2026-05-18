@@ -1176,8 +1176,11 @@ def _reliability_score(p: dict) -> float:
         score = min(score, 0.35)
     elif cnt <= 7:
         score = min(score, 0.55)
-    if fpr > 0.25:
-        score = min(score, 0.60)
+    # FP caps — raise the floor by separating moderate from high FP
+    if fpr > 0.40:
+        score = min(score, 0.55)   # worst tier: FP > 40% → cap at 0.55
+    elif fpr > 0.25:
+        score = min(score, 0.65)   # moderate tier: 25–40% FP → cap at 0.65 (was 0.60)
     if art > 0.50:
         score = min(score, 0.45)
 

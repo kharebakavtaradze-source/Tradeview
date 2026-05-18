@@ -1,0 +1,147 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// at https://mozilla.org/MPL/2.0/
+//@version=5
+indicator("Pump Signal", overlay=true, max_labels_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SETTINGS
+// ══════════════════════════════════════════════════════════════════════════════
+
+vol_ma_len      = input.int(20,   "Volume MA",              group="Volume")
+vol_spike_mult  = input.float(2.0,"Spike: × of vol MA",     group="Volume", minval=1.2, maxval=5.0, step=0.1)
+dryup_pct       = input.float(0.5,"Dry-up: % of vol MA",    group="Volume", minval=0.2, maxval=0.8, step=0.05)
+
+breakout_len    = input.int(20,   "Breakout lookback bars",  group="Price")
+atr_len         = input.int(14,   "ATR Length",              group="Price")
+
+show_setup      = input.bool(true, "Show Setup phase",       group="Display")
+show_trigger    = input.bool(true, "Show Trigger / PUMP",    group="Display")
+show_emas       = input.bool(true, "Show EMAs",              group="Display")
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  CORE CALCULATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+vol_ma    = ta.sma(volume, vol_ma_len)
+atr       = ta.atr(atr_len)
+bar_range = high - low + 1e-9
+
+ema9   = ta.ema(close, 9)
+ema21  = ta.ema(close, 21)
+ema50  = ta.ema(close, 50)
+
+// ── Volume conditions
+vol_spike    = volume > vol_ma * vol_spike_mult
+is_dryup     = volume < vol_ma * dryup_pct
+
+// ── Price action
+strong_close  = close >= low + bar_range * 0.65        // closes in top 35% of range
+is_gap_up     = open  > high[1]                        // true gap up
+is_reclaim    = open  < low[1] and close > low[1]      // reclaim of prior low
+is_wide_range = bar_range > atr * 1.6                  // wide expansion bar
+breakout_high = ta.highest(high[1], breakout_len)       // highest high excluding current bar
+is_breakout   = close > breakout_high                   // closing above N-bar high
+
+// ── Trend / structure
+bull_stack    = ema9 > ema21 and ema21 > ema50
+above_ema50   = close > ema50
+near_ema50    = math.abs(close - ema50) / ema50 < 0.04  // within 4% of EMA50
+
+// ── Compression (quiet coil before launch)
+bb_width     = ta.sma((ta.highest(high, 20) - ta.lowest(low, 20)) / (ta.sma(close, 20) + 1e-9), 1)
+bb_width_avg = ta.sma(bb_width, 50)
+compressed   = bb_width < bb_width_avg * 0.70
+
+// ── Recent dry-up (within last 10 bars)
+recent_dryup = ta.barssince(is_dryup) <= 10
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SETUP PHASE  — accumulation / coil before a move
+//  Fires when the stock is building a base: quiet volume, compressed range,
+//  holding above key levels.  No pump yet — just "watch this".
+// ══════════════════════════════════════════════════════════════════════════════
+
+setup_signal = compressed and recent_dryup and above_ema50 and not vol_spike
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  TRIGGER — volume + price action confirms the move is starting
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Strong trigger: volume spike + closing breakout + strong close
+trigger_strong = vol_spike and is_breakout and strong_close
+
+// Moderate trigger: volume spike + strong close + gap or reclaim
+trigger_mod = vol_spike and strong_close and (is_gap_up or is_reclaim or is_wide_range)
+              and not trigger_strong
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  PUMP SIGNAL  — the full setup + trigger confluence
+//  Setup phase within last 15 bars + trigger firing now = highest conviction
+// ══════════════════════════════════════════════════════════════════════════════
+
+had_setup_recently = ta.barssince(setup_signal) <= 15
+pump_strong = trigger_strong and had_setup_recently
+pump_mod    = trigger_strong and not had_setup_recently
+pump_any    = trigger_strong or trigger_mod
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  PLOTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// EMAs
+plot(show_emas ? ema9  : na, "EMA 9",  color=color.new(color.white,  50), linewidth=1)
+plot(show_emas ? ema21 : na, "EMA 21", color=color.new(color.yellow, 30), linewidth=1)
+plot(show_emas ? ema50 : na, "EMA 50", color=color.new(color.orange, 20), linewidth=2)
+
+// Setup zone background (subtle blue)
+bgcolor(show_setup and setup_signal ? color.new(color.blue, 88) : na, title="Setup Zone")
+
+// Setup dot (below bar, small)
+plotshape(show_setup and setup_signal and not pump_any ? low : na,
+     title="Setup",
+     style=shape.circle, size=size.tiny, location=location.belowbar,
+     color=color.new(color.aqua, 40))
+
+// ── Pump labels
+if show_trigger and pump_strong
+    label.new(bar_index, low * 0.993,
+         "🚀 PUMP",
+         style=label.style_label_up,
+         color=color.new(color.red, 0),
+         textcolor=color.white,
+         size=size.normal)
+
+if show_trigger and pump_mod
+    label.new(bar_index, low * 0.993,
+         "PUMP",
+         style=label.style_label_up,
+         color=color.new(color.orange, 10),
+         textcolor=color.white,
+         size=size.normal)
+
+if show_trigger and trigger_mod and not trigger_strong
+    label.new(bar_index, low * 0.993,
+         "▲ vol+move",
+         style=label.style_label_up,
+         color=color.new(color.teal, 20),
+         textcolor=color.white,
+         size=size.small)
+
+// Volume spike bar highlight
+barcolor(vol_spike and strong_close ? color.new(color.red, 30) : na, title="Pump Bar")
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(pump_strong, "🚀 PUMP (setup + trigger)",
+     "PUMP SIGNAL on {{ticker}} — {{interval}} — vol spike + breakout after base")
+
+alertcondition(pump_mod,    "PUMP (trigger, no prior base)",
+     "PUMP SIGNAL on {{ticker}} — {{interval}} — vol spike + breakout (no base)")
+
+alertcondition(trigger_mod, "Volume + Move",
+     "Vol+Move on {{ticker}} — {{interval}} — spike + gap/reclaim/wide-range")
+
+alertcondition(setup_signal, "Setup / Coil",
+     "Setup detected on {{ticker}} — {{interval}} — compressed + dryup + above EMA50")
