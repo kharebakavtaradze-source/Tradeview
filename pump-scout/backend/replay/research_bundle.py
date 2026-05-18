@@ -884,8 +884,14 @@ _DCONF_V2_TO_SIMPLE: dict[str, str] = {
     "SECONDARY_D_L43_SAME":  "SECONDARY_D_CONFLUENCE",
 }
 
-_DCONF_BEUP_LABELS: frozenset[str] = frozenset({"D6_BEUP", "D4_BEUP", "D3_BEUP"})
-_DCONF_L34_LABELS:  frozenset[str] = frozenset({"D4_L34", "D3_L34", "D6_L34"})
+_DCONF_BEUP_LABELS: frozenset[str] = frozenset({
+    "D6_BEUP", "D4_BEUP", "D3_BEUP",
+    "D1_BEUP", "D11_BEUP", "D9_BEUP",
+})
+_DCONF_L34_LABELS:  frozenset[str] = frozenset({
+    "D4_L34", "D3_L34", "D6_L34",
+    "D1_L34", "D11_L34", "D9_L34",
+})
 
 
 def _build_mfe_sections(
@@ -1511,8 +1517,11 @@ async def build_research_bundle(
 
     _DCONF_ORDER = [
         "D4_BEUP", "D6_BEUP", "D3_BEUP",
+        "D1_BEUP", "D11_BEUP", "D9_BEUP",
         "D4_L34",  "D6_L34",  "D3_L34",
+        "D1_L34",  "D11_L34", "D9_L34",
         "D4_L43",  "D6_L43",  "D3_L43",
+        "D1_L43",  "D11_L43", "D9_L43",
         "SECONDARY_D_CONFLUENCE", "NONE",
     ]
     perf_d_confluence_type = _build_perf_buckets(
@@ -1555,10 +1564,13 @@ async def build_research_bundle(
     _DCONF_V2_ORDER = [
         "D4_THEN_BEUP_5B", "D6_THEN_BEUP_5B", "D3_THEN_BEUP_5B",
         "D4_BEUP", "D6_BEUP", "D3_BEUP",
+        "D1_BEUP", "D11_BEUP", "D9_BEUP",
         "L34_THEN_D4_3B", "L34_THEN_D6_3B", "L34_THEN_D3_3B",
         "D4_L34", "D6_L34", "D3_L34",
+        "D1_L34", "D11_L34", "D9_L34",
         "L43_THEN_D4_3B", "L43_THEN_D6_3B", "L43_THEN_D3_3B",
         "D4_L43", "D6_L43", "D3_L43",
+        "D1_L43", "D11_L43", "D9_L43",
         "SECONDARY_D_WINDOW", "SECONDARY_D_CONFLUENCE", "D_ONLY", "NONE",
     ]
     perf_d_confluence_type_v2 = _build_perf_buckets(

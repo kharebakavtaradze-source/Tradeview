@@ -2830,15 +2830,24 @@ _EXPANSION_RISK_RANK = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3, "NONE": 
 
 _D_BEST_TYPE_RANK = {
     "D6_BEUP":                0,
-    "L34_THEN_D4_3B":         1,
-    "D4_BEUP":                2,
-    "D4_L34":                 3,
-    "D3_L34":                 4,
-    "D4_THEN_BEUP_5B":        5,
-    "D3_BEUP":                6,
-    "D6_L34":                 7,
-    "SECONDARY_D_CONFLUENCE": 8,
-    "NONE":                   9,
+    "D1_BEUP":                1,   # R35 +6.45% 5d 85.7% WR
+    "L34_THEN_D4_3B":         2,
+    "D4_BEUP":                3,
+    "D4_L34":                 4,
+    "D11_L34":                5,   # R35 +4.87% 5d 56.5% WR
+    "D3_L34":                 6,
+    "D4_THEN_BEUP_5B":        7,
+    "D3_BEUP":                8,
+    "D6_L34":                 9,
+    "D11_BEUP":               10,
+    "D9_BEUP":                11,
+    "D1_L34":                 12,
+    "D9_L34":                 13,
+    "D1_L43":                 14,
+    "D11_L43":                15,
+    "D9_L43":                 16,
+    "SECONDARY_D_CONFLUENCE": 17,
+    "NONE":                   18,
 }
 
 
