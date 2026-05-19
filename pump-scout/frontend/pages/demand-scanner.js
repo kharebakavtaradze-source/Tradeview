@@ -784,27 +784,33 @@ function AtsExplainer() {
 
 // ── AI Trading Journal ────────────────────────────────────────────────────────
 
+const CONFIDENCE_COLOR = { HIGH: '#34d399', MEDIUM: '#fbbf24', LOW: '#f87171' };
+
 function AIJournal() {
   const [state,       setState]       = useState(null);
   const [positions,   setPositions]   = useState([]);
   const [entries,     setEntries]     = useState([]);
   const [running,     setRunning]     = useState(false);
   const [expanded,    setExpanded]    = useState(true);
-  const [tab,         setTab]         = useState('journal');  // journal | positions | history | patterns
+  const [tab,         setTab]         = useState('journal');
   const [perfStats,   setPerfStats]   = useState(null);
   const [patterns,    setPatterns]    = useState([]);
+  const [lessons,     setLessons]     = useState([]);
+  const [blacklist,   setBlacklist]   = useState([]);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState(null);
 
   const reload = async () => {
     try {
-      const [s, p, e, h, stats, pats] = await Promise.all([
+      const [s, p, e, h, stats, pats, les, bl] = await Promise.all([
         fetch(`${API_URL}/api/ai-journal/state`).then(r => r.json()),
         fetch(`${API_URL}/api/ai-journal/positions?status=OPEN`).then(r => r.json()),
         fetch(`${API_URL}/api/ai-journal/entries?limit=8`).then(r => r.json()),
         fetch(`${API_URL}/api/ai-journal/positions?status=CLOSED`).then(r => r.json()),
         fetch(`${API_URL}/api/ai-journal/stats`).then(r => r.json()).catch(() => null),
         fetch(`${API_URL}/api/ai-journal/patterns`).then(r => r.json()).catch(() => ({ patterns: [] })),
+        fetch(`${API_URL}/api/ai-journal/lessons?limit=15`).then(r => r.json()).catch(() => ({ lessons: [] })),
+        fetch(`${API_URL}/api/ai-journal/blacklist`).then(r => r.json()).catch(() => ({ blacklist: [] })),
       ]);
       setState(s);
       setPositions(p.positions || []);
@@ -812,6 +818,8 @@ function AIJournal() {
       setState(prev => ({ ...prev, _closed: h.positions || [] }));
       if (stats) setPerfStats(stats);
       setPatterns(pats.patterns || []);
+      setLessons(les.lessons || []);
+      setBlacklist(bl.blacklist || []);
     } catch {}
   };
 
@@ -986,16 +994,22 @@ function AIJournal() {
           </div>
 
           {/* Tabs */}
-          <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 12, flexWrap: 'wrap' }}>
             {[
               ['journal',   'Journal'],
               ['positions', `Positions (${positions.length})`],
               ['history',   'History'],
               ['patterns',  `Patterns (${patterns.length})`],
+              ['lessons',   `Lessons (${lessons.length})`],
+              ['blacklist', blacklist.filter(b => b.active).length > 0
+                ? `Blacklist ⚠ ${blacklist.filter(b => b.active).length}`
+                : 'Blacklist'],
             ].map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)} style={{
                 background: tab === id ? '#1e3a5f' : 'transparent',
-                color: tab === id ? '#60a5fa' : '#6b7280',
+                color: tab === id ? '#60a5fa'
+                  : id === 'blacklist' && blacklist.filter(b => b.active).length > 0 ? '#fbbf24'
+                  : '#6b7280',
                 border: `1px solid ${tab === id ? '#1e3a5f' : '#1f2937'}`,
                 borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 10, fontWeight: 600,
               }}>{label}</button>
@@ -1172,6 +1186,124 @@ function AIJournal() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Lessons tab */}
+          {tab === 'lessons' && (
+            <div>
+              {lessons.length === 0 ? (
+                <div style={{ color: '#4b5563', fontSize: 12, padding: '20px 0', textAlign: 'center' }}>
+                  No trade lessons yet. Lessons are generated automatically when positions close.
+                </div>
+              ) : lessons.map(l => {
+                const pnlColor2 = l.pnl_pct > 0 ? '#34d399' : l.pnl_pct < 0 ? '#f87171' : '#9ca3af';
+                const confColor = CONFIDENCE_COLOR[l.confidence] || '#9ca3af';
+                return (
+                  <div key={l.id} style={{
+                    background: '#111827', borderRadius: 6, padding: '10px 12px',
+                    marginBottom: 8, border: `1px solid ${l.pnl_pct > 0 ? '#14532d40' : '#4b182840'}`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 12, color: '#f9fafb' }}>
+                          {l.symbol}
+                        </span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: pnlColor2 }}>
+                          {l.pnl_pct > 0 ? '+' : ''}{fmt(l.pnl_pct, 1)}%
+                        </span>
+                        <span style={{ fontSize: 9, color: '#4b5563', background: '#1f2937', padding: '1px 5px', borderRadius: 3 }}>
+                          {l.exit_reason}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {l.confidence && (
+                          <span style={{ fontSize: 9, color: confColor, border: `1px solid ${confColor}40`, padding: '1px 5px', borderRadius: 3 }}>
+                            {l.confidence}
+                          </span>
+                        )}
+                        <span style={{ fontSize: 9, color: '#4b5563' }}>
+                          {l.created_at?.slice(0, 10)}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                      {l.scan_tier && (
+                        <span style={{ fontSize: 9, color: '#60a5fa', background: 'rgba(96,165,250,0.1)', padding: '1px 5px', borderRadius: 3 }}>
+                          {l.scan_tier.replace('_BUY', '')}
+                        </span>
+                      )}
+                      {l.ats_signal && l.ats_signal !== 'ATS_NONE' && (
+                        <span style={{ fontSize: 9, color: '#fbbf24', background: 'rgba(251,191,36,0.1)', padding: '1px 5px', borderRadius: 3 }}>
+                          {l.ats_signal}
+                        </span>
+                      )}
+                      {(l.tags || []).map(t => (
+                        <span key={t} style={{ fontSize: 9, color: '#9ca3af', background: '#1f2937', padding: '1px 5px', borderRadius: 3 }}>{t}</span>
+                      ))}
+                    </div>
+                    {l.what_worked && (
+                      <div style={{ fontSize: 10, color: '#86efac', marginBottom: 3 }}>
+                        <span style={{ color: '#4b5563' }}>✓ </span>{l.what_worked}
+                      </div>
+                    )}
+                    {l.what_failed && (
+                      <div style={{ fontSize: 10, color: '#fca5a5', marginBottom: 3 }}>
+                        <span style={{ color: '#4b5563' }}>✗ </span>{l.what_failed}
+                      </div>
+                    )}
+                    {l.lesson && (
+                      <div style={{
+                        marginTop: 6, padding: '5px 8px', background: 'rgba(96,165,250,0.06)',
+                        border: '1px solid rgba(96,165,250,0.12)', borderRadius: 4,
+                        fontSize: 10, color: '#93c5fd', fontStyle: 'italic',
+                      }}>
+                        {l.lesson}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Blacklist tab */}
+          {tab === 'blacklist' && (
+            <div>
+              {blacklist.length === 0 ? (
+                <div style={{ color: '#4b5563', fontSize: 12, padding: '20px 0', textAlign: 'center' }}>
+                  No blacklisted patterns. The AI will add patterns here when it identifies repeated failures.
+                </div>
+              ) : blacklist.map(b => (
+                <div key={b.pattern_key} style={{
+                  background: b.active ? 'rgba(239,68,68,0.05)' : 'rgba(17,24,39,0.5)',
+                  border: `1px solid ${b.active ? 'rgba(239,68,68,0.25)' : '#1f2937'}`,
+                  borderRadius: 6, padding: '10px 12px', marginBottom: 8,
+                  opacity: b.active ? 1 : 0.5,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700, color: b.active ? '#fca5a5' : '#6b7280' }}>
+                      {fmtPatternKey(b.pattern_key)}
+                    </span>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 9, color: '#ef4444', background: 'rgba(239,68,68,0.1)', padding: '1px 6px', borderRadius: 3 }}>
+                        {b.n_failures} failure{b.n_failures !== 1 ? 's' : ''}
+                      </span>
+                      <span style={{ fontSize: 9, color: b.active ? '#f87171' : '#4b5563' }}>
+                        {b.active
+                          ? (b.suspended_until ? `until ${b.suspended_until?.slice(0,10)}` : 'permanent')
+                          : 'expired'}
+                      </span>
+                    </div>
+                  </div>
+                  {b.reason && (
+                    <p style={{ fontSize: 10, color: '#9ca3af', margin: 0, lineHeight: 1.5 }}>{b.reason}</p>
+                  )}
+                </div>
+              ))}
+              <div style={{ fontSize: 10, color: '#374151', marginTop: 8 }}>
+                The AI automatically manages this list based on pattern performance. Entries expire after their suspension period.
+              </div>
             </div>
           )}
 

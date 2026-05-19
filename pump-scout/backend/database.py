@@ -352,6 +352,40 @@ class AIPatternMemory(Base):
     notes         = Column(Text, nullable=True)    # AI's written insight
 
 
+class TradeLesson(Base):
+    """AI-generated structured lesson from each closed trade."""
+    __tablename__ = "ai_trade_lesson"
+
+    id            = Column(Integer, primary_key=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    position_id   = Column(Integer, nullable=True, index=True)
+    symbol        = Column(String(10), nullable=False, index=True)
+    pnl_pct       = Column(Float, nullable=True)
+    exit_reason   = Column(String(50), nullable=True)
+    scan_tier     = Column(String(20), nullable=True)
+    ats_signal    = Column(String(20), nullable=True)
+    readiness_tier = Column(String(10), nullable=True)
+    flow_signals  = Column(Text, nullable=True)   # JSON list
+    what_worked   = Column(Text, nullable=True)
+    what_failed   = Column(Text, nullable=True)
+    lesson        = Column(Text, nullable=True)   # 1-sentence key takeaway
+    confidence    = Column(String(10), nullable=True)   # HIGH|MEDIUM|LOW
+    tags          = Column(Text, nullable=True)   # JSON list
+
+
+class SignalBlacklist(Base):
+    """Patterns the AI has decided to avoid based on repeated failures."""
+    __tablename__ = "ai_signal_blacklist"
+
+    id              = Column(Integer, primary_key=True)
+    pattern_key     = Column(String(120), nullable=False, unique=True, index=True)
+    reason          = Column(Text, nullable=True)
+    n_failures      = Column(Integer, default=1)
+    suspended_until = Column(DateTime, nullable=True)   # None = permanent block
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow)
+
+
 class SectorCache(Base):
     """Persistent sector cache — avoids repeated Yahoo Finance / Massive API calls."""
     __tablename__ = "sector_cache"
@@ -6357,4 +6391,115 @@ async def get_recent_signal_outcomes(limit: int = 20) -> list[dict]:
                 "signal_date":   r.signal_date.isoformat() if r.signal_date else None,
             }
             for r in result.scalars().all()
+        ]
+
+
+# ── Trade Lessons ──────────────────────────────────────────────────────────────
+
+async def save_trade_lesson(lesson: dict) -> int:
+    async with get_session_factory()() as session:
+        row = TradeLesson(
+            position_id    = lesson.get("position_id"),
+            symbol         = lesson.get("symbol", ""),
+            pnl_pct        = lesson.get("pnl_pct"),
+            exit_reason    = lesson.get("exit_reason"),
+            scan_tier      = lesson.get("scan_tier"),
+            ats_signal     = lesson.get("ats_signal"),
+            readiness_tier = lesson.get("readiness_tier"),
+            flow_signals   = json.dumps(lesson.get("flow_signals") or []),
+            what_worked    = lesson.get("what_worked"),
+            what_failed    = lesson.get("what_failed"),
+            lesson         = lesson.get("lesson"),
+            confidence     = lesson.get("confidence"),
+            tags           = json.dumps(lesson.get("tags") or []),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row.id
+
+
+async def get_trade_lessons(limit: int = 20) -> list[dict]:
+    async with get_session_factory()() as session:
+        q = select(TradeLesson).order_by(TradeLesson.created_at.desc()).limit(limit)
+        result = await session.execute(q)
+        return [
+            {
+                "id":            r.id,
+                "created_at":    r.created_at.isoformat() if r.created_at else None,
+                "position_id":   r.position_id,
+                "symbol":        r.symbol,
+                "pnl_pct":       r.pnl_pct,
+                "exit_reason":   r.exit_reason,
+                "scan_tier":     r.scan_tier,
+                "ats_signal":    r.ats_signal,
+                "readiness_tier": r.readiness_tier,
+                "flow_signals":  json.loads(r.flow_signals or "[]"),
+                "what_worked":   r.what_worked,
+                "what_failed":   r.what_failed,
+                "lesson":        r.lesson,
+                "confidence":    r.confidence,
+                "tags":          json.loads(r.tags or "[]"),
+            }
+            for r in result.scalars().all()
+        ]
+
+
+# ── Signal Blacklist ───────────────────────────────────────────────────────────
+
+async def upsert_signal_blacklist(
+    pattern_key: str,
+    reason: str,
+    n_failures: int = 1,
+    suspended_until: datetime | None = None,
+) -> None:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(SignalBlacklist).where(SignalBlacklist.pattern_key == pattern_key)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.reason          = reason
+            row.n_failures      = n_failures
+            row.suspended_until = suspended_until
+            row.updated_at      = datetime.utcnow()
+        else:
+            row = SignalBlacklist(
+                pattern_key     = pattern_key,
+                reason          = reason,
+                n_failures      = n_failures,
+                suspended_until = suspended_until,
+            )
+            session.add(row)
+        await session.commit()
+
+
+async def remove_signal_blacklist(pattern_key: str) -> None:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(SignalBlacklist).where(SignalBlacklist.pattern_key == pattern_key)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            await session.delete(row)
+            await session.commit()
+
+
+async def get_blacklisted_patterns() -> list[dict]:
+    """Return all active blacklist entries (expired suspensions excluded)."""
+    now = datetime.utcnow()
+    async with get_session_factory()() as session:
+        q = select(SignalBlacklist).order_by(SignalBlacklist.n_failures.desc())
+        result = await session.execute(q)
+        rows = result.scalars().all()
+        return [
+            {
+                "pattern_key":     r.pattern_key,
+                "reason":          r.reason,
+                "n_failures":      r.n_failures,
+                "suspended_until": r.suspended_until.isoformat() if r.suspended_until else None,
+                "active":          r.suspended_until is None or r.suspended_until > now,
+                "created_at":      r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
         ]
