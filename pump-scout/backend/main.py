@@ -1238,6 +1238,101 @@ async def demand_scanner_latest(
     }
 
 
+@app.post("/api/demand-scanner/narrative")
+async def demand_scanner_narrative(request: Request):
+    """Generate an AI setup narrative for a single demand scanner result."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    result    = await request.json()
+    symbol    = result.get("symbol", "UNKNOWN")
+    tier      = result.get("demand_composite_tier", "UNKNOWN")
+    score     = result.get("demand_composite_score", 0)
+    breakdown = result.get("demand_score_breakdown", {})
+    reasons   = result.get("demand_buy_reasons", [])
+    risks     = result.get("demand_risk_flags", [])
+    ats       = result.get("ats_signal", "ATS_NONE")
+    ats_met   = result.get("ats_conditions_met", [])
+    ats_miss  = result.get("ats_conditions_missing", [])
+    price     = result.get("price") or 0.0
+    dryup     = result.get("dc_dryup_streak", 0)
+    ema_dist  = result.get("dc_ema_dist_pct")
+    max_gain  = result.get("dc_max_gain_10d", 0)
+    vol_ratio = result.get("dc_vol_ratio", 1.0)
+    tight     = result.get("dc_tight_range", False)
+    atr_pct   = result.get("dc_atr_bucket", "")
+    cfr_tags  = result.get("cfr_reasons", []) or []
+    np_dec    = result.get("new_pump_label", "") or result.get("np_decision", "")
+    v2_dec    = result.get("scanner_v2_decision", "")
+    has_l34   = result.get("has_l34_np_ld", False)
+    has_wc    = result.get("has_wc_gap_ld", False)
+    l34_wlnbb = result.get("l34_wlnbb", False)
+
+    _SYSTEM = (
+        "You are a quantitative trading analyst specializing in small-cap momentum setups. "
+        "You interpret pump scanner signals grounded in real backtested research.\n\n"
+        "SCORING SYSTEM (R156 research baseline):\n"
+        "  demand_composite_score: 0–20 scale. Tiers: PRIME_BUY≥13, HIGH_CONF_BUY≥9, BUY_WATCH≥6, SETUP_MONITOR≥3, SKIP<3.\n"
+        "  Score components: regime(max5) + base_pump(max4) + demand_bars(max5) + ATS(max5) + context(±2).\n\n"
+        "ATS — ACCUMULATION TRAP SIGNAL (5 conditions):\n"
+        "  vol_dryup_3d     = last 3 bars all <55% of 20-day avg volume (accumulation silence)\n"
+        "  atr_contracting  = 5d ATR <70% of 20d ATR (coil forming)\n"
+        "  demand_bar       = L34/NP or lower-wick reclaim in last 5 days (buyers stepped in)\n"
+        "  near_ema50       = price within -5%/+8% of EMA50 (support zone)\n"
+        "  not_pumped       = max gain last 10 days <35% (fresh setup, not extended)\n"
+        "  ATS_PRIME=5/5, ATS_SETUP=4/5, ATS_WATCH=3/5.\n\n"
+        "KEY RESEARCH FINDINGS (R156):\n"
+        "  - CFR_A: 33.1% 4x rate, best selector in system.\n"
+        "  - dryup+compression+LD: rank #1 overall, rel=0.82, lift=11.67x (gold standard).\n"
+        "  - L34_NP_LD (lower-wick reclaim after NP+L34): rank #13, rel=0.77, lift=10.8x.\n"
+        "  - WC_GAP_LD (weak-close -> gap-up + reclaim): rank #8, rel=0.77, lift=10.5x.\n\n"
+        "Write a 3-4 sentence setup narrative. Be direct and specific. No fluff.\n"
+        "Structure: (1) what the signal stack shows, (2) what the ATS conditions mean for timing, "
+        "(3) key risk or invalidation, (4) one-line action summary."
+    )
+
+    _user_prompt = (
+        f"TICKER: {symbol}\n"
+        f"Price: ${price:.2f}  |  Tier: {tier}  |  Score: {score}/20\n"
+        f"ATR bucket: {atr_pct}  |  EMA50 distance: {f'{ema_dist:+.1f}%' if ema_dist is not None else 'N/A'}\n"
+        f"Volume ratio (today/20d): {vol_ratio:.2f}x  |  Dryup streak: {dryup} bars\n"
+        f"Max gain last 10d: {max_gain:.1f}%  |  Tight range: {tight}\n\n"
+        f"SCORE BREAKDOWN: {json.dumps(breakdown)}\n"
+        f"BUY REASONS: {', '.join(reasons) or 'none'}\n"
+        f"RISK FLAGS: {', '.join(risks) or 'none'}\n\n"
+        f"ATS SIGNAL: {ats}\n"
+        f"  Conditions met:     {', '.join(ats_met) or 'none'}\n"
+        f"  Conditions missing: {', '.join(ats_miss) or 'none'}\n\n"
+        f"DEMAND BAR FLAGS:\n"
+        f"  has_l34_np_ld={has_l34}  has_wc_gap_ld={has_wc}  l34_wlnbb={l34_wlnbb}\n\n"
+        f"NP ENGINE: {np_dec}  |  Scanner v2: {v2_dec}\n"
+        f"CFR tags: {', '.join(cfr_tags[:5]) if cfr_tags else 'none'}\n\n"
+        "Write the setup narrative now."
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
+    try:
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": _user_prompt}],
+        )
+        return {
+            "symbol":    symbol,
+            "narrative": response.content[0].text,
+            "usage": {
+                "input_tokens":                response.usage.input_tokens,
+                "cache_read_input_tokens":     getattr(response.usage, "cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
+                "output_tokens":               response.usage.output_tokens,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── Scanner v2 — New Pump as structural core ─────────────────────────────────
 
 @app.get("/api/scanner/v2/latest")

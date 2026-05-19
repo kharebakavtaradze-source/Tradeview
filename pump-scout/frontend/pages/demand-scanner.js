@@ -174,7 +174,7 @@ function ScoreBreakdown({ bd = {} }) {
 
 // ── Drawer ────────────────────────────────────────────────────────────────────
 
-function DetailDrawer({ row, onClose }) {
+function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrative }) {
   if (!row) return null;
   const tier = TIER_META[row.demand_composite_tier] || TIER_META.SKIP;
   return (
@@ -293,7 +293,7 @@ function DetailDrawer({ row, onClose }) {
       </div>
 
       {/* NP engine */}
-      <div style={{ background: '#1f2937', borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ background: '#1f2937', borderRadius: 8, padding: '12px 14px', marginBottom: 12 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
           NP Engine
         </div>
@@ -310,6 +310,35 @@ function DetailDrawer({ row, onClose }) {
             <span style={{ fontSize: 11, color: '#f9fafb' }}>{val ?? '—'}</span>
           </div>
         ))}
+      </div>
+
+      {/* AI Analysis */}
+      <div style={{ background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 8, padding: '12px 14px' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#60a5fa', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          AI Setup Analysis
+        </div>
+        {!narrative && !narrativeLoading && (
+          <button
+            onClick={() => onFetchNarrative(row)}
+            style={{
+              background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 6,
+              padding: '7px 14px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+              width: '100%',
+            }}
+          >
+            Generate AI Analysis
+          </button>
+        )}
+        {narrativeLoading && (
+          <div style={{ color: '#9ca3af', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
+            Generating…
+          </div>
+        )}
+        {narrative && (
+          <p style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.7, margin: 0 }}>
+            {narrative}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -455,9 +484,30 @@ export default function DemandScannerPage() {
   const [minScore, setMinScore] = useState(0);
   const [limit,    setLimit]    = useState(200);
 
-  const [drawerRow, setDrawerRow] = useState(null);
+  const [drawerRow,        setDrawerRow]        = useState(null);
+  const [narratives,       setNarratives]       = useState({});
+  const [narrativeLoading, setNarrativeLoading] = useState(null);
   const [sortCol,   setSortCol]   = useState('demand_composite_score');
   const [sortDir,   setSortDir]   = useState('desc');
+
+  const fetchNarrative = useCallback(async (row) => {
+    const sym = row.symbol;
+    if (narratives[sym] || narrativeLoading === sym) return;
+    setNarrativeLoading(sym);
+    try {
+      const res  = await fetch('/api/demand-scanner/narrative', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      const json = await res.json();
+      setNarratives(prev => ({ ...prev, [sym]: json.narrative || json.detail || 'No narrative returned.' }));
+    } catch (e) {
+      setNarratives(prev => ({ ...prev, [sym]: `Error: ${e}` }));
+    } finally {
+      setNarrativeLoading(null);
+    }
+  }, [narratives, narrativeLoading]);
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null);
@@ -668,7 +718,13 @@ export default function DemandScannerPage() {
             onClick={() => setDrawerRow(null)}
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 999 }}
           />
-          <DetailDrawer row={drawerRow} onClose={() => setDrawerRow(null)} />
+          <DetailDrawer
+            row={drawerRow}
+            onClose={() => setDrawerRow(null)}
+            narrative={narratives[drawerRow?.symbol]}
+            narrativeLoading={narrativeLoading === drawerRow?.symbol}
+            onFetchNarrative={fetchNarrative}
+          />
         </>
       )}
     </>
