@@ -195,44 +195,6 @@ function SignalRow({ e }) {
   );
 }
 
-function AIBox({ analysis }) {
-  const [expanded, setExpanded] = useState(false);
-  if (!analysis) return null;
-  let parsed = null;
-  try { parsed = JSON.parse(analysis); } catch { return null; }
-  if (!parsed) return null;
-
-  const timingColor = parsed.exit_timing === 'OPTIMAL' ? 'var(--green)'
-    : parsed.exit_timing === 'TOO_EARLY' ? '#ffa500'
-    : parsed.exit_timing === 'TOO_LATE' ? 'var(--red)'
-    : 'var(--text-muted)';
-
-  return (
-    <div style={{ marginTop: 6, fontSize: 10, background: 'rgba(100,200,255,0.05)', borderRadius: 4, padding: '6px 8px', border: '1px solid rgba(100,200,255,0.12)' }}>
-      <div style={{ fontWeight: 700, color: 'var(--cyan)', marginBottom: 3 }}>
-        🤖 AI Analysis
-        <button onClick={() => setExpanded(!expanded)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 9, color: 'var(--text-muted)', marginLeft: 6 }}>
-          {expanded ? '▲ collapse' : '▼ expand'}
-        </button>
-      </div>
-      {parsed.what_worked && <div>✅ {parsed.what_worked}</div>}
-      {parsed.key_lesson && <div style={{ marginTop: 3, color: 'var(--gold)' }}>💡 {parsed.key_lesson}</div>}
-      {parsed.exit_timing && (
-        <div style={{ marginTop: 3 }}>
-          <span style={{ color: 'var(--text-muted)' }}>Exit timing: </span>
-          <span style={{ color: timingColor, fontWeight: 700 }}>{parsed.exit_timing}</span>
-        </div>
-      )}
-      {parsed.alpha_comment && <div style={{ marginTop: 3, color: 'var(--cyan)', opacity: 0.8 }}>α {parsed.alpha_comment}</div>}
-      {expanded && (
-        <>
-          {parsed.what_failed && <div style={{ marginTop: 3, color: 'var(--red)' }}>❌ {parsed.what_failed}</div>}
-          {parsed.suggestion && <div style={{ marginTop: 3, color: 'var(--text-muted)' }}>→ {parsed.suggestion}</div>}
-        </>
-      )}
-    </div>
-  );
-}
 
 function isMarketHours() {
   const now = new Date();
@@ -593,12 +555,12 @@ export default function Journal() {
               </div>
             )}
 
-            {/* AI Coaching Insights */}
-            {insights && !insights.message && (
+            {/* AI Coaching Insights — removed, see Demand Scanner AI Journal */}
+            {false && insights && !insights.message && (
               <div style={{ display: 'grid', gap: 12, marginBottom: 20 }}>
                 {/* Header row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>🤖 AI COACHING</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>AI COACHING</div>
                   {insights.has_research && insights.research_context?.length > 0 && (
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       {insights.research_context.map((src, i) => (
@@ -958,9 +920,6 @@ export default function Journal() {
                       {e.missed_exit_pct > 0 && <span>Left <b style={{ color: '#ffa500' }}>{e.missed_exit_pct.toFixed(1)}%</b></span>}
                     </div>
                   )}
-
-                  {/* ── AI analysis (closed) ── */}
-                  {!isOpen && e.ai_analysis && <AIBox analysis={e.ai_analysis} />}
 
                   {/* ── Action bar ── */}
                   <div className={styles.cardActions}>

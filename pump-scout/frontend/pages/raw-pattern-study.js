@@ -990,138 +990,7 @@ function TopSchemesPanel({ runId }) {
   );
 }
 
-// ── AI summary card ───────────────────────────────────────────────────────────
-
-const AI_SECTIONS = [
-  { key: 'repeated_patterns',           label: 'Patterns before 4× pumps' },
-  { key: 'separators_vs_normal_winner', label: '4× pump vs normal winner' },
-  { key: 'separators_vs_false_positive',label: '4× pump vs false positive' },
-  { key: 'noisy_features',              label: 'Noisy / low-signal features' },
-  { key: 'scanner_v2_changes',          label: 'Scanner v2 improvements' },
-];
-
-function AISummaryCard({ runId }) {
-  const [data,     setData]     = useState(null);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState('');
-  const [fetched,  setFetched]  = useState(false);
-
-  const generate = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const r    = await fetch(`${API_URL}/api/replay/raw-pattern-study/${runId}/ai-summary`);
-      const json = await r.json();
-      if (!r.ok) throw new Error(json.detail || `HTTP ${r.status}`);
-      setData(json);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-      setFetched(true);
-    }
-  };
-
-  if (!fetched) {
-    return (
-      <div className={styles.aiCard}>
-        <div className={styles.aiCardHeader}>
-          <span className={styles.aiCardTitle}>AI Pattern Analysis</span>
-          <span className={styles.aiPowered}>claude haiku</span>
-        </div>
-        <p className={styles.aiCardHint}>
-          Evidence-only analysis of stored raw features. No catalyst or news data.
-        </p>
-        <button className={styles.aiGenBtn} onClick={generate}>
-          Generate AI Summary
-        </button>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className={styles.aiCard}>
-        <div className={styles.aiCardHeader}>
-          <span className={styles.aiCardTitle}>AI Pattern Analysis</span>
-          <span className={styles.pulsingDot} />
-        </div>
-        <div className={styles.statusMsg}>Generating analysis…</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.aiCard}>
-        <div className={styles.aiErrorMsg}>{error}</div>
-        <button className={styles.aiGenBtn} onClick={() => { setFetched(false); setError(''); }}>
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  if (data?.parse_failed) {
-    return (
-      <div className={styles.aiCard}>
-        <div className={styles.aiErrorMsg}>
-          AI output could not be parsed.{data.parse_error ? ` (${data.parse_error})` : ''}
-        </div>
-        {data.raw_text && (
-          <pre className={styles.aiRaw}>{data.raw_text.slice(0, 400)}</pre>
-        )}
-      </div>
-    );
-  }
-
-  const analysis = data?.analysis || {};
-  const rec       = analysis.recommendation || data?.recommendation || '';
-  const limits    = analysis.limitations || [];
-
-  return (
-    <div className={styles.aiCard}>
-      <div className={styles.aiCardHeader}>
-        <span className={styles.aiCardTitle}>AI Pattern Analysis</span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span className={styles.aiPowered}>{data?.model_used || 'claude haiku'}</span>
-          {data?.cached && <span className={styles.aiCachedBadge}>cached</span>}
-        </div>
-      </div>
-
-      {rec && (
-        <div className={styles.aiRecommendation}>
-          <span className={styles.aiRecLabel}>Recommendation</span>
-          <span className={styles.aiRecText}>{rec}</span>
-        </div>
-      )}
-
-      <div className={styles.aiSections}>
-        {AI_SECTIONS.map(({ key, label }) => {
-          const items = analysis[key];
-          if (!Array.isArray(items) || items.length === 0) return null;
-          return (
-            <div key={key} className={styles.aiSection}>
-              <div className={styles.aiSectionLabel}>{label}</div>
-              <ul className={styles.aiList}>
-                {items.map((item, i) => (
-                  <li key={i} className={styles.aiListItem}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          );
-        })}
-      </div>
-
-      {limits.length > 0 && (
-        <div className={styles.aiLimitations}>
-          <span className={styles.aiLimLabel}>Limitations</span>
-          {limits.map((l, i) => <p key={i} className={styles.aiLimText}>{l}</p>)}
-        </div>
-      )}
-    </div>
-  );
-}
+// AISummaryCard removed — AI features consolidated into Demand Scanner
 
 // ── Engine Patch Plan ─────────────────────────────────────────────────────────
 
@@ -4500,7 +4369,6 @@ export default function RawPatternStudy() {
                     { id: 'np-bundle',     label: 'NP Bundle' },
                     { id: 'split-impact', label: 'Split Impact' },
                     { id: 'discovery',    label: 'Pattern Discovery' },
-                    { id: 'ai',           label: 'AI Summary' },
                     { id: 'patch-plan',   label: 'Engine Plan' },
                     { id: 'bar-labels',   label: 'Bar Labels' },
                   ].map(({ id, label }) => (
@@ -4568,13 +4436,6 @@ export default function RawPatternStudy() {
                   run.status !== 'complete'
                     ? <div className={styles.statusMsg}>Pattern Discovery available after run completes.</div>
                     : <PatternDiscoveryPanel key={selectedId} runId={selectedId} />
-                )}
-
-                {/* AI tab */}
-                {activeTab === 'ai' && (
-                  run.status !== 'complete'
-                    ? <div className={styles.statusMsg}>AI summary available after run completes.</div>
-                    : <AISummaryCard key={selectedId} runId={selectedId} />
                 )}
 
                 {/* Engine Patch Plan tab */}

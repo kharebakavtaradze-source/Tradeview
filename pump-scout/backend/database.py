@@ -252,6 +252,58 @@ class AIPortfolioState(Base):
     daily_report = Column(Text, nullable=True)     # JSON
 
 
+class AIJournalPosition(Base):
+    """Virtual position in the $500 AI Trading Journal account."""
+    __tablename__ = "ai_journal_position"
+
+    id             = Column(Integer, primary_key=True)
+    symbol         = Column(String(10), nullable=False, index=True)
+    entry_date     = Column(DateTime, default=datetime.utcnow)
+    entry_price    = Column(Float, nullable=False)
+    shares         = Column(Float, nullable=False)
+    cost_basis     = Column(Float, nullable=False)
+    target_price   = Column(Float, nullable=True)
+    stop_price     = Column(Float, nullable=True)
+    entry_rationale = Column(Text, nullable=True)
+    status         = Column(String(10), default="OPEN")    # OPEN / CLOSED
+    exit_date      = Column(DateTime, nullable=True)
+    exit_price     = Column(Float, nullable=True)
+    pnl_usd        = Column(Float, default=0.0)
+    pnl_pct        = Column(Float, default=0.0)
+    exit_reason    = Column(String(50), nullable=True)
+    scan_tier      = Column(String(20), nullable=True)
+    scan_score     = Column(Float, nullable=True)
+    ats_signal     = Column(String(20), nullable=True)
+    current_price  = Column(Float, nullable=True)
+    current_value  = Column(Float, nullable=True)
+
+
+class AIJournalEntry(Base):
+    """A journal entry written by the AI after each review session."""
+    __tablename__ = "ai_journal_entry"
+
+    id               = Column(Integer, primary_key=True)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+    journal_text     = Column(Text, nullable=False)
+    strategy_notes   = Column(Text, nullable=True)
+    capital_before   = Column(Float, nullable=False)
+    capital_after    = Column(Float, nullable=False)
+    positions_opened = Column(Integer, default=0)
+    positions_closed = Column(Integer, default=0)
+    decisions_json   = Column(Text, nullable=True)   # JSON array of decision objects
+
+
+class AIJournalState(Base):
+    """Single-row state for the AI Journal virtual account."""
+    __tablename__ = "ai_journal_state"
+
+    id               = Column(Integer, primary_key=True)
+    capital          = Column(Float, default=500.0)
+    starting_capital = Column(Float, default=500.0)
+    updated_at       = Column(DateTime, default=datetime.utcnow)
+    learned_strategy = Column(Text, nullable=True)   # JSON — evolves over sessions
+
+
 class SectorCache(Base):
     """Persistent sector cache — avoids repeated Yahoo Finance / Massive API calls."""
     __tablename__ = "sector_cache"
@@ -5832,4 +5884,174 @@ async def get_discovered_patterns(run_id: int) -> list[dict]:
                 "created_at":            r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows
+        ]
+
+
+# ── AI Journal CRUD ───────────────────────────────────────────────────────────
+
+async def get_ai_journal_state() -> dict:
+    """Return (or initialise) the single AI Journal state row."""
+    async with get_session_factory()() as session:
+        result = await session.execute(select(AIJournalState).limit(1))
+        state = result.scalar_one_or_none()
+        if not state:
+            state = AIJournalState()
+            session.add(state)
+            await session.commit()
+            await session.refresh(state)
+        return {
+            "capital":          state.capital,
+            "starting_capital": state.starting_capital,
+            "updated_at":       state.updated_at.isoformat() if state.updated_at else None,
+            "learned_strategy": json.loads(state.learned_strategy or "null"),
+        }
+
+
+async def update_ai_journal_capital(new_capital: float, strategy_json: str | None = None):
+    async with get_session_factory()() as session:
+        result = await session.execute(select(AIJournalState).limit(1))
+        state = result.scalar_one_or_none()
+        if not state:
+            state = AIJournalState()
+            session.add(state)
+        state.capital = new_capital
+        state.updated_at = datetime.utcnow()
+        if strategy_json is not None:
+            state.learned_strategy = strategy_json
+        await session.commit()
+
+
+async def reset_ai_journal(new_capital: float = 500.0):
+    async with get_session_factory()() as session:
+        # Close all open positions at 0 P&L
+        pos_result = await session.execute(
+            select(AIJournalPosition).where(AIJournalPosition.status == "OPEN")
+        )
+        for pos in pos_result.scalars().all():
+            pos.status = "CLOSED"
+            pos.exit_date = datetime.utcnow()
+            pos.exit_reason = "RESET"
+            pos.pnl_usd = 0.0
+            pos.pnl_pct = 0.0
+        # Reset state
+        state_result = await session.execute(select(AIJournalState).limit(1))
+        state = state_result.scalar_one_or_none()
+        if not state:
+            state = AIJournalState()
+            session.add(state)
+        state.capital = new_capital
+        state.starting_capital = new_capital
+        state.updated_at = datetime.utcnow()
+        state.learned_strategy = None
+        await session.commit()
+    return {"ok": True, "capital": new_capital}
+
+
+async def get_ai_journal_positions(status: str = "OPEN") -> list[dict]:
+    async with get_session_factory()() as session:
+        q = select(AIJournalPosition).where(AIJournalPosition.status == status)\
+              .order_by(AIJournalPosition.entry_date.desc())
+        result = await session.execute(q)
+        return [
+            {
+                "id":              p.id,
+                "symbol":          p.symbol,
+                "entry_date":      p.entry_date.isoformat() if p.entry_date else None,
+                "entry_price":     p.entry_price,
+                "shares":          p.shares,
+                "cost_basis":      p.cost_basis,
+                "target_price":    p.target_price,
+                "stop_price":      p.stop_price,
+                "entry_rationale": p.entry_rationale,
+                "status":          p.status,
+                "exit_date":       p.exit_date.isoformat() if p.exit_date else None,
+                "exit_price":      p.exit_price,
+                "pnl_usd":         p.pnl_usd,
+                "pnl_pct":         p.pnl_pct,
+                "exit_reason":     p.exit_reason,
+                "scan_tier":       p.scan_tier,
+                "scan_score":      p.scan_score,
+                "ats_signal":      p.ats_signal,
+                "current_price":   p.current_price,
+                "current_value":   p.current_value,
+            }
+            for p in result.scalars().all()
+        ]
+
+
+async def open_ai_journal_position(pos: dict) -> int:
+    async with get_session_factory()() as session:
+        p = AIJournalPosition(
+            symbol          = pos["symbol"],
+            entry_price     = pos["entry_price"],
+            shares          = pos["shares"],
+            cost_basis      = pos["cost_basis"],
+            target_price    = pos.get("target_price"),
+            stop_price      = pos.get("stop_price"),
+            entry_rationale = pos.get("entry_rationale"),
+            scan_tier       = pos.get("scan_tier"),
+            scan_score      = pos.get("scan_score"),
+            ats_signal      = pos.get("ats_signal"),
+            status          = "OPEN",
+        )
+        session.add(p)
+        await session.commit()
+        await session.refresh(p)
+        return p.id
+
+
+async def close_ai_journal_position(position_id: int, exit_price: float, reason: str):
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIJournalPosition).where(AIJournalPosition.id == position_id)
+        )
+        pos = result.scalar_one_or_none()
+        if not pos:
+            return None
+        pnl_usd = (exit_price - pos.entry_price) * pos.shares
+        pnl_pct = (exit_price / pos.entry_price - 1) * 100 if pos.entry_price else 0
+        pos.status     = "CLOSED"
+        pos.exit_date  = datetime.utcnow()
+        pos.exit_price = exit_price
+        pos.pnl_usd    = round(pnl_usd, 2)
+        pos.pnl_pct    = round(pnl_pct, 2)
+        pos.exit_reason = reason
+        await session.commit()
+        return {"pnl_usd": pos.pnl_usd, "pnl_pct": pos.pnl_pct}
+
+
+async def save_ai_journal_entry(entry: dict) -> int:
+    async with get_session_factory()() as session:
+        e = AIJournalEntry(
+            journal_text     = entry["journal_text"],
+            strategy_notes   = entry.get("strategy_notes"),
+            capital_before   = entry["capital_before"],
+            capital_after    = entry["capital_after"],
+            positions_opened = entry.get("positions_opened", 0),
+            positions_closed = entry.get("positions_closed", 0),
+            decisions_json   = json.dumps(entry.get("decisions", [])),
+        )
+        session.add(e)
+        await session.commit()
+        await session.refresh(e)
+        return e.id
+
+
+async def get_ai_journal_entries(limit: int = 10) -> list[dict]:
+    async with get_session_factory()() as session:
+        q = select(AIJournalEntry).order_by(AIJournalEntry.created_at.desc()).limit(limit)
+        result = await session.execute(q)
+        return [
+            {
+                "id":               e.id,
+                "created_at":       e.created_at.isoformat() if e.created_at else None,
+                "journal_text":     e.journal_text,
+                "strategy_notes":   e.strategy_notes,
+                "capital_before":   e.capital_before,
+                "capital_after":    e.capital_after,
+                "positions_opened": e.positions_opened,
+                "positions_closed": e.positions_closed,
+                "decisions":        json.loads(e.decisions_json or "[]"),
+            }
+            for e in result.scalars().all()
         ]
