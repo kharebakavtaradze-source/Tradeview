@@ -88,6 +88,9 @@ from database import (
     get_ai_performance_stats,
     get_trade_lessons,
     get_blacklisted_patterns,
+    backfill_replay_demand_scores,
+    backfill_pump_episode_demand_scores,
+    backfill_raw_pattern_demand_scores,
 )
 from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
@@ -2308,6 +2311,23 @@ async def admin_rotate_data():
     return {"ok": True, "total_deleted": total, "breakdown": deleted}
 
 
+@app.post("/api/admin/backfill-demand-scores")
+async def admin_backfill_demand_scores(background_tasks: BackgroundTasks):
+    """Backfill demand composite scores into replay, pump, and raw-pattern tables."""
+    from database import (
+        backfill_replay_demand_scores,
+        backfill_pump_episode_demand_scores,
+        backfill_raw_pattern_demand_scores,
+    )
+    async def _run():
+        r1 = await backfill_replay_demand_scores()
+        r2 = await backfill_pump_episode_demand_scores()
+        r3 = await backfill_raw_pattern_demand_scores()
+        logger.info(f"[Backfill] replay={r1} pump={r2} raw={r3}")
+    background_tasks.add_task(_run)
+    return {"status": "started", "message": "Backfill running in background"}
+
+
 # ─── Historical Replay Layer ──────────────────────────────────────────────────
 # Research-only mode. Completely isolated from live production data.
 # Results stored in replay_* tables only. Live scan/journal never touched.
@@ -2443,6 +2463,60 @@ async def replay_get_candidates(run_id: int, limit: int = 500):
         raise HTTPException(404, detail=f"Replay run {run_id} not found")
     candidates = await get_replay_candidates(run_id, limit=min(limit, 1000))
     return {"run_id": run_id, "candidates": candidates, "count": len(candidates)}
+
+
+@app.get("/api/replay/{run_id}/export")
+async def replay_export_candidates(run_id: int, format: str = "csv"):
+    """
+    Download replay candidates as CSV or JSON.
+    ?format=csv   Flat CSV of all candidates.
+    ?format=json  Full JSON list.
+    """
+    from fastapi.responses import Response
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    candidates = await get_replay_candidates(run_id, limit=10000)
+
+    fmt = format.lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(400, detail="format must be csv or json")
+
+    if fmt == "json":
+        import json as _json
+        return Response(
+            content=_json.dumps(candidates, default=str),
+            media_type="application/json",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="replay_{run_id}_candidates.json"'
+            },
+        )
+
+    # CSV
+    fieldnames = [
+        "id", "scan_date", "symbol", "price", "tier", "total_score",
+        "wyckoff_state", "sector",
+        "new_pump_score", "new_pump_label", "new_pump_sequence_label",
+        "np_decision", "priority_score", "priority_label",
+        "scanner_v2_decision", "scanner_v2_score", "scanner_v2_rank",
+        "d_confluence_family", "d_confluence_timing",
+        "demand_composite_score", "demand_composite_tier",
+        "ats_signal", "readiness_score", "readiness_tier", "flow_score",
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(candidates)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="replay_{run_id}_candidates.csv"'
+        },
+    )
 
 
 @app.get("/api/replay/{run_id}/outcomes")
@@ -3298,6 +3372,8 @@ async def pump_study_export(run_id: int, format: str = "json"):
             "strongest_wyckoff_state", "max_volume_anomaly", "largest_gap_pct",
             "was_in_universe", "was_flagged_by_scanner",
             "sector", "industry",
+            "demand_score_at_breakout", "demand_tier_at_breakout",
+            "ats_at_breakout", "readiness_at_breakout", "readiness_tier_at_breakout",
         ]
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")

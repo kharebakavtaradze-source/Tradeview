@@ -25,6 +25,42 @@ function pctCell(v) {
   return <span style={{ color, fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{v >= 0 ? '+' : ''}{fmt(v)}%</span>;
 }
 
+const DEMAND_TIER_COLORS = {
+  PRIME_BUY:      '#34d399',
+  HIGH_CONF_BUY:  '#60a5fa',
+  BUY_WATCH:      '#fbbf24',
+  SETUP_MONITOR:  '#a78bfa',
+  SKIP:           '#6b7280',
+};
+
+function DemandTierBadge({ tier }) {
+  if (!tier) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  const color = DEMAND_TIER_COLORS[tier] || '#6b7280';
+  const short = { PRIME_BUY: 'PRIME', HIGH_CONF_BUY: 'HIGH', BUY_WATCH: 'WATCH', SETUP_MONITOR: 'MONITOR', SKIP: 'SKIP' }[tier] || tier;
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.06em',
+      padding: '1px 5px', borderRadius: 3,
+      background: color + '18', border: `1px solid ${color}44`,
+      whiteSpace: 'nowrap',
+    }}>{short}</span>
+  );
+}
+
+function AtsBadge({ sig }) {
+  if (!sig) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  const color = sig === 'ATS_PRIME' ? '#34d399' : sig === 'ATS_SETUP' ? '#60a5fa' : sig === 'ATS_WATCH' ? '#fbbf24' : '#6b7280';
+  const short = { ATS_PRIME: 'PRIME', ATS_SETUP: 'SETUP', ATS_WATCH: 'WATCH', ATS_NONE: 'NONE' }[sig] || sig;
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.06em',
+      padding: '1px 5px', borderRadius: 3,
+      background: color + '18', border: `1px solid ${color}44`,
+      whiteSpace: 'nowrap',
+    }}>{short}</span>
+  );
+}
+
 const NP_LABEL_COLORS = {
   NEW_PUMP_FIRE:         '#ff4400',
   NEW_PUMP_STRONG:       '#ff8800',
@@ -865,6 +901,11 @@ export default function ReplayPage() {
   const [deleting,       setDeleting]       = useState(false);
   const [deleteError,    setDeleteError]    = useState('');
 
+  // ── Demand filter state ──────────────────────────────────────────────────────
+  const [demandTierF,    setDemandTierF]    = useState('');
+  const [atsF,           setAtsF]           = useState('');
+  const [readyF,         setReadyF]         = useState('');
+
   // ── Bar labels panel ─────────────────────────────────────────────────────────
   const [selectedCand,   setSelectedCand]   = useState(null);   // candidate with .symbol
 
@@ -1380,6 +1421,47 @@ export default function ReplayPage() {
                     <div className={styles.emptyMsg}>No candidates for this run.</div>
                   ) : (
                     <>
+                      {/* Demand filter controls */}
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8, padding: '6px 0' }}>
+                        {(() => {
+                          const selectStyle = { background: '#13132a', border: '1px solid #242438', color: '#aaa', fontSize: 10, borderRadius: 3, padding: '3px 8px', fontFamily: 'inherit' };
+                          return (
+                            <>
+                              <span style={{ fontSize: 10, color: '#666', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>Demand</span>
+                              <select value={demandTierF} onChange={e => setDemandTierF(e.target.value)} style={selectStyle}>
+                                <option value="">All tiers</option>
+                                <option value="PRIME_BUY">PRIME BUY</option>
+                                <option value="HIGH_CONF_BUY">HIGH CONF</option>
+                                <option value="BUY_WATCH">BUY WATCH</option>
+                                <option value="SETUP_MONITOR">MONITOR</option>
+                                <option value="SKIP">SKIP</option>
+                              </select>
+                              <select value={atsF} onChange={e => setAtsF(e.target.value)} style={selectStyle}>
+                                <option value="">All ATS</option>
+                                <option value="ATS_PRIME">ATS PRIME</option>
+                                <option value="ATS_SETUP">ATS SETUP</option>
+                                <option value="ATS_WATCH">ATS WATCH</option>
+                                <option value="ATS_NONE">ATS NONE</option>
+                              </select>
+                              <select value={readyF} onChange={e => setReadyF(e.target.value)} style={selectStyle}>
+                                <option value="">All readiness</option>
+                                <option value="HOT">HOT</option>
+                                <option value="WARM">WARM</option>
+                                <option value="COOL">COOL</option>
+                                <option value="COLD">COLD</option>
+                              </select>
+                              {(demandTierF || atsF || readyF) && (
+                                <button
+                                  onClick={() => { setDemandTierF(''); setAtsF(''); setReadyF(''); }}
+                                  style={{ fontSize: 10, color: '#888', background: 'transparent', border: '1px solid #333', borderRadius: 3, padding: '2px 8px', cursor: 'pointer' }}
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
                       <table className={styles.candidateTable}>
                         <thead>
                           <tr>
@@ -1391,12 +1473,21 @@ export default function ReplayPage() {
                             <th>NP Score</th>
                             <th>NP Label</th>
                             <th>NP Sequence</th>
+                            <th>Demand</th>
+                            <th>ATS</th>
                             <th>Wyckoff</th>
                             <th>Sector</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {candidates.map(c => (
+                          {candidates
+                            .filter(c => {
+                              if (demandTierF && c.demand_composite_tier !== demandTierF) return false;
+                              if (atsF && c.ats_signal !== atsF) return false;
+                              if (readyF && c.readiness_tier !== readyF) return false;
+                              return true;
+                            })
+                            .map(c => (
                             <tr
                               key={c.id}
                               style={{
@@ -1424,6 +1515,17 @@ export default function ReplayPage() {
                               </td>
                               <td style={{ fontSize: 9, color: 'var(--text-muted)', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {c.new_pump_sequence_label || '—'}
+                              </td>
+                              <td style={{ fontSize: 9 }}>
+                                <DemandTierBadge tier={c.demand_composite_tier} />
+                                {c.demand_composite_score != null && (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: 8, marginLeft: 3, fontFamily: 'var(--font-mono)' }}>
+                                    {Number(c.demand_composite_score).toFixed(1)}
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ fontSize: 9 }}>
+                                <AtsBadge sig={c.ats_signal} />
                               </td>
                               <td style={{ fontSize: 9, color: 'var(--text-muted)' }}>
                                 {c.wyckoff_state || '—'}

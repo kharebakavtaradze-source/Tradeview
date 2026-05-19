@@ -324,6 +324,11 @@ const EP_COLS = [
   // ── Split context ────────────────────────────────────────────────────────────
   { key: 'split_context',                           label: 'SplitCtx',        mono: false },
   { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠ YES' : '—', colorFn: v => v ? '#fb7185' : undefined },
+  // ── Demand composite signals ──────────────────────────────────────────────────
+  { key: 'demand_tier_at_breakout',                 label: 'DemandTier',      mono: false },
+  { key: 'ats_at_breakout',                         label: 'ATS',             mono: true,  fmt: v => v || '—', small: true },
+  { key: 'had_prime_buy_pre',                       label: 'Prime7d?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#34d399' : undefined },
+  { key: 'had_ats_prime_pre',                       label: 'ATS7d?',          mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#60a5fa' : undefined },
   // ── Demand bar flags ─────────────────────────────────────────────────────────
   { key: 'has_ld',                                  label: 'LD?',             mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
   { key: 'has_wc_gap_ld',                           label: 'WcGapLD?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#6ee7b7' : undefined },
@@ -420,6 +425,17 @@ function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroup
                           <StructurePhaseBadge phase={raw} />
                         </td>
                       );
+                      if (c.key === 'demand_tier_at_breakout') {
+                        const demandTierColor = { PRIME_BUY: '#34d399', HIGH_CONF_BUY: '#60a5fa', BUY_WATCH: '#fbbf24', SETUP_MONITOR: '#a78bfa', SKIP: '#6b7280' }[raw] || undefined;
+                        const demandShort = { PRIME_BUY: 'PRIME', HIGH_CONF_BUY: 'HIGH', BUY_WATCH: 'WATCH', SETUP_MONITOR: 'MONITOR', SKIP: 'SKIP' }[raw] || raw;
+                        return (
+                          <td key={c.key} className={styles.dataCell}>
+                            {raw ? (
+                              <span style={{ color: demandTierColor, fontWeight: 700, fontSize: 9 }}>{demandShort}</span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        );
+                      }
 
                       const color = c.colorFn
                         ? (c.colorFn(raw) ?? (val === '—' ? 'var(--text-muted)' : undefined))
@@ -4397,13 +4413,57 @@ export default function RawPatternStudy() {
                       ? <div className={styles.errorMsg}>{episodesError}</div>
                       : run.status !== 'complete'
                         ? <div className={styles.statusMsg}>Episodes available after run completes.</div>
-                        : <EpisodeTable
-                            episodes={episodes}
-                            symFilter={symFilter}
-                            setSymFilter={setSymFilter}
-                            groupFilter={groupFilter}
-                            setGroupFilter={setGroupFilter}
-                          />
+                        : <>
+                            {/* Demand Signal Coverage stats */}
+                            {episodes.length > 0 && (() => {
+                              const GROUPS_LIST = ['4x_pump', 'normal_winner', 'false_positive', 'missed_mover'];
+                              const demandStats = GROUPS_LIST.map(g => {
+                                const grpEps = episodes.filter(e => e.group_type === g);
+                                const n = grpEps.length;
+                                if (!n) return { group: g, n: 0, primePct: null, atsPct: null };
+                                const primePct = Math.round((grpEps.filter(e => e.had_prime_buy_pre === true).length / n) * 100);
+                                const atsPct   = Math.round((grpEps.filter(e => e.had_ats_prime_pre === true).length / n) * 100);
+                                return { group: g, n, primePct, atsPct };
+                              }).filter(s => s.n > 0);
+                              const hasDemandData = episodes.some(e => e.had_prime_buy_pre != null || e.demand_tier_at_breakout != null);
+                              if (!hasDemandData) return null;
+                              const GROUP_COLOR = { '4x_pump': '#22d3ee', 'normal_winner': '#86efac', 'false_positive': '#fca5a5', 'missed_mover': '#fde68a' };
+                              return (
+                                <div style={{ marginBottom: 14, padding: '10px 14px', background: '#0e0e1e', border: '1px solid #1e1e38', borderRadius: 6 }}>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: '#34d399', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 8 }}>
+                                    Demand Signal Coverage
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                                    {demandStats.map(s => (
+                                      <div key={s.group} style={{ minWidth: 130 }}>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: GROUP_COLOR[s.group] || '#aaa', marginBottom: 4 }}>
+                                          {s.group} <span style={{ color: '#555', fontWeight: 400 }}>(n={s.n})</span>
+                                        </div>
+                                        <div style={{ fontSize: 11, color: '#ccc' }}>
+                                          <span style={{ color: '#34d399', fontWeight: 700 }}>{s.primePct ?? '—'}%</span>
+                                          <span style={{ color: '#555', marginLeft: 4, fontSize: 9 }}>PRIME_BUY</span>
+                                        </div>
+                                        <div style={{ fontSize: 11, color: '#ccc' }}>
+                                          <span style={{ color: '#60a5fa', fontWeight: 700 }}>{s.atsPct ?? '—'}%</span>
+                                          <span style={{ color: '#555', marginLeft: 4, fontSize: 9 }}>ATS_PRIME</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div style={{ fontSize: 9, color: '#444', marginTop: 6 }}>
+                                    % of episodes per group that had PRIME_BUY or ATS_PRIME in DemandTickerHistory within 7d before breakout
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                            <EpisodeTable
+                              episodes={episodes}
+                              symFilter={symFilter}
+                              setSymFilter={setSymFilter}
+                              groupFilter={groupFilter}
+                              setGroupFilter={setGroupFilter}
+                            />
+                          </>
                 )}
 
                 {/* Comparisons tab */}
