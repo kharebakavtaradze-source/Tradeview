@@ -471,6 +471,25 @@ class DemandTickerHistory(Base):
     confluence_signals    = Column(String(120), nullable=True)   # comma-separated list
 
 
+class CandleCache(Base):
+    """Per-ticker daily OHLCV bar store for incremental scanning."""
+    __tablename__ = "candle_cache"
+
+    id     = Column(Integer,    primary_key=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    date   = Column(String(10), nullable=False)          # YYYY-MM-DD
+    o      = Column(Float,      nullable=True)
+    h      = Column(Float,      nullable=True)
+    l      = Column(Float,      nullable=True)
+    c      = Column(Float,      nullable=True)
+    v      = Column(BigInteger, nullable=True)
+    t      = Column(BigInteger, nullable=True)            # epoch ms
+
+    __table_args__ = (
+        UniqueConstraint("symbol", "date", name="uq_candle_symbol_date"),
+    )
+
+
 _SCAN_CANDIDATE_MIGRATIONS = [
     ("vol_score",       "FLOAT"),
     ("accum_score",     "FLOAT"),
@@ -1097,6 +1116,68 @@ async def get_demand_ticker_history(symbol: str, limit: int = 30) -> list[dict]:
         }
         for r in rows
     ]
+
+
+async def get_candle_cache(symbol: str) -> list[dict]:
+    """Return all cached bars for symbol, sorted oldest→newest."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(CandleCache)
+            .where(CandleCache.symbol == symbol.upper())
+            .order_by(CandleCache.date.asc())
+        )
+        rows = result.scalars().all()
+    return [
+        {"o": r.o, "h": r.h, "l": r.l, "c": r.c,
+         "v": r.v, "t": r.t, "date": r.date}
+        for r in rows
+    ]
+
+
+async def save_candle_cache(symbol: str, bars: list[dict]) -> None:
+    """
+    Upsert bars into candle_cache for symbol. Bars older than 260 days are pruned.
+    Each bar dict must have keys: date (YYYY-MM-DD), o, h, l, c, v, t.
+    """
+    if not bars:
+        return
+    from datetime import date as _date, timedelta
+    sym     = symbol.upper()
+    cutoff  = (_date.today() - timedelta(days=260)).strftime("%Y-%m-%d")
+
+    async with get_session_factory()() as session:
+        # Upsert each bar
+        for b in bars:
+            d = b.get("date", "")
+            if not d or d < cutoff:
+                continue
+            existing = await session.execute(
+                select(CandleCache).where(
+                    CandleCache.symbol == sym,
+                    CandleCache.date   == d,
+                )
+            )
+            row = existing.scalar_one_or_none()
+            if row:
+                row.o = b.get("o"); row.h = b.get("h")
+                row.l = b.get("l"); row.c = b.get("c")
+                row.v = b.get("v"); row.t = b.get("t")
+            else:
+                session.add(CandleCache(
+                    symbol=sym, date=d,
+                    o=b.get("o"), h=b.get("h"), l=b.get("l"),
+                    c=b.get("c"), v=b.get("v"), t=b.get("t"),
+                ))
+        # Prune rows older than cutoff
+        old_result = await session.execute(
+            select(CandleCache).where(
+                CandleCache.symbol == sym,
+                CandleCache.date   <  cutoff,
+            )
+        )
+        for old_row in old_result.scalars():
+            await session.delete(old_row)
+        await session.commit()
 
 
 async def get_demand_all_histories(limit_per_sym: int = 10) -> list[dict]:

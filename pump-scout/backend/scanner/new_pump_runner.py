@@ -220,9 +220,19 @@ async def run_new_pump_scan(
         # Snapshot mode uses FAST_SCAN_BARS for first pass; EOD uses full depth.
         first_pass_days = FAST_SCAN_BARS if use_snapshot else CANDLES_DAYS
 
+        from scanner.candle_store import fetch_incremental as _fetch_incremental
+
+        # In EOD mode, all_bars has the latest grouped_daily bar for each ticker —
+        # pass it to fetch_incremental so cached tickers need zero extra API calls.
+        _grouped = all_bars if not use_snapshot else {}
+
         async def _fetch_one(sym: str, days: int = first_pass_days) -> None:
             try:
-                bars = await fetch_candles_massive(sym, days=days)
+                bars = await _fetch_incremental(
+                    sym,
+                    target_days=days,
+                    grouped_bar=_grouped.get(sym),
+                )
                 if bars and len(bars) >= MIN_CANDLES:
                     all_candles[sym] = bars
             except Exception as exc:
@@ -389,7 +399,11 @@ async def run_new_pump_scan(
 
                 async def _fetch_deep(sym: str) -> None:
                     try:
-                        bars = await fetch_candles_massive(sym, days=DEEP_SCAN_BARS)
+                        bars = await _fetch_incremental(
+                            sym,
+                            target_days=DEEP_SCAN_BARS,
+                            grouped_bar=_grouped.get(sym),
+                        )
                         if bars and len(bars) >= MIN_LONG_CONTEXT:
                             deep_candles[sym] = bars
                     except Exception as _exc:
