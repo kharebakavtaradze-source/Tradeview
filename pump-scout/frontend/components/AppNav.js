@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { href: '/replay',            label: 'Replay' },
   { href: '/pump-study',        label: 'Pump Study' },
   { href: '/raw-pattern-study', label: 'Raw Patterns' },
+  { href: '/demand-scanner',    label: 'Demand Scanner' },
   { href: '/admin',             label: 'Admin' },
   { href: '/design-system',  label: 'Design System' },
 ];
