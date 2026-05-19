@@ -3215,6 +3215,16 @@ class ReplaySignalCandidate(Base):
     np_structure_score    = Column(Float,      nullable=True)            # 0–100 from new_pump_engine
     d_confluence_family   = Column(String(20), nullable=True)            # D6/D4/D3/SECONDARY/NONE — from scanner_v2
     d_confluence_timing   = Column(String(20), nullable=True)            # SAME_BAR/LAGGED/NONE — from scanner_v2
+    demand_composite_score  = Column(Float,      nullable=True)
+    demand_composite_tier   = Column(String(20), nullable=True)
+    ats_signal              = Column(String(20), nullable=True)
+    readiness_score         = Column(Float,      nullable=True)
+    readiness_tier          = Column(String(10), nullable=True)
+    flow_score              = Column(Float,      nullable=True)
+    flow_signals_json       = Column(Text,       nullable=True)   # JSON list
+    flow_risks_json         = Column(Text,       nullable=True)   # JSON list
+    demand_breakdown_json   = Column(Text,       nullable=True)   # JSON dict
+    demand_risk_flags_json  = Column(Text,       nullable=True)   # JSON list
     scanner_v2_rank       = Column(Integer,    nullable=True)            # rank within scan batch
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -3452,6 +3462,16 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 np_structure_score             = c.get("np_structure_score"),
                 d_confluence_family            = c.get("d_confluence_family"),
                 d_confluence_timing            = c.get("d_confluence_timing"),
+                demand_composite_score  = c.get("demand_composite_score"),
+                demand_composite_tier   = c.get("demand_composite_tier"),
+                ats_signal              = c.get("ats_signal"),
+                readiness_score         = c.get("readiness_score"),
+                readiness_tier          = c.get("readiness_tier"),
+                flow_score              = c.get("flow_score"),
+                flow_signals_json       = json.dumps(c.get("flow_signals") or []),
+                flow_risks_json         = json.dumps(c.get("flow_risks") or []),
+                demand_breakdown_json   = json.dumps(c.get("demand_score_breakdown") or {}),
+                demand_risk_flags_json  = json.dumps(c.get("demand_risk_flags") or []),
                 scanner_v2_rank                = c.get("scanner_v2_rank"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
@@ -3738,6 +3758,16 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "d_confluence_family":            r.d_confluence_family,
         "d_confluence_timing":            r.d_confluence_timing,
         "scanner_v2_rank":                r.scanner_v2_rank,
+        "demand_composite_score":  r.demand_composite_score,
+        "demand_composite_tier":   r.demand_composite_tier,
+        "ats_signal":              r.ats_signal,
+        "readiness_score":         r.readiness_score,
+        "readiness_tier":          r.readiness_tier,
+        "flow_score":              r.flow_score,
+        "flow_signals":            json.loads(r.flow_signals_json or "[]"),
+        "flow_risks":              json.loads(r.flow_risks_json or "[]"),
+        "demand_breakdown":        json.loads(r.demand_breakdown_json or "{}"),
+        "demand_risk_flags":       json.loads(r.demand_risk_flags_json or "[]"),
         "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":              r.created_at.isoformat() if r.created_at else None,
     }
@@ -3848,6 +3878,11 @@ class PumpEpisode(Base):
     sector                   = Column(String(60), nullable=True)
     industry                 = Column(String(60), nullable=True)
     summary_json             = Column(Text,       nullable=True)
+    demand_score_at_breakout  = Column(Float,      nullable=True)
+    demand_tier_at_breakout   = Column(String(20), nullable=True)
+    ats_at_breakout           = Column(String(20), nullable=True)
+    readiness_at_breakout     = Column(Float,      nullable=True)
+    readiness_tier_at_breakout = Column(String(10), nullable=True)
     created_at               = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -4339,6 +4374,13 @@ class RawPatternEpisodeFeatures(Base):
     pump_watch_diagnostic_labels      = Column(Text,       nullable=True)   # JSON list
     pump_watch_pattern_id             = Column(String(60), nullable=True)
     pump_watch_rescue_reason          = Column(String(80), nullable=True)
+    demand_score_at_breakout   = Column(Float,      nullable=True)
+    demand_tier_at_breakout    = Column(String(20), nullable=True)
+    ats_at_breakout            = Column(String(20), nullable=True)
+    readiness_at_breakout      = Column(Float,      nullable=True)
+    readiness_tier_at_breakout = Column(String(10), nullable=True)
+    had_prime_buy_pre          = Column(Boolean,    nullable=True)  # any PRIME_BUY in DemandTickerHistory within 7d before breakout
+    had_ats_prime_pre          = Column(Boolean,    nullable=True)
 
 
 class RawPatternComparison(Base):
@@ -4998,6 +5040,11 @@ def _pump_episode_to_dict(r: PumpEpisode) -> dict:
         "sector":                   r.sector,
         "industry":                 r.industry,
         "summary":                  json.loads(r.summary_json or "{}"),
+        "demand_score_at_breakout":  r.demand_score_at_breakout,
+        "demand_tier_at_breakout":   r.demand_tier_at_breakout,
+        "ats_at_breakout":           r.ats_at_breakout,
+        "readiness_at_breakout":     r.readiness_at_breakout,
+        "readiness_tier_at_breakout": r.readiness_tier_at_breakout,
         "created_at":               r.created_at.isoformat() if r.created_at else None,
     }
 
@@ -6503,3 +6550,388 @@ async def get_blacklisted_patterns() -> list[dict]:
             }
             for r in rows
         ]
+
+
+# ── Demand Composite Backfill Functions ───────────────────────────────────────
+
+async def backfill_replay_demand_scores(limit: int = 2000) -> dict:
+    """
+    For ReplaySignalCandidate rows missing demand_composite_score,
+    look up DemandTickerHistory by symbol + closest scan_date match.
+    Returns {"updated": n, "skipped": m}.
+    """
+    from datetime import date as date_type, timedelta
+    updated = 0
+    skipped = 0
+
+    async with get_session_factory()() as session:
+        # Get rows where demand_composite_score is NULL
+        result = await session.execute(
+            select(ReplaySignalCandidate)
+            .where(ReplaySignalCandidate.demand_composite_score.is_(None))
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+
+    batch = []
+    for row in rows:
+        try:
+            scan_dt = date_type.fromisoformat(row.scan_date)
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+
+        low  = datetime.combine(scan_dt - timedelta(days=3), datetime.min.time())
+        high = datetime.combine(scan_dt + timedelta(days=3), datetime.max.time())
+
+        # First check the snapshot blob for demand fields
+        snap_demand_score = None
+        snap_demand_tier  = None
+        snap_ats_signal   = None
+        snap_readiness_score = None
+        snap_readiness_tier  = None
+        try:
+            snap = json.loads(row.candidate_snapshot_json or "{}")
+            if "demand_composite_score" in snap:
+                snap_demand_score    = snap.get("demand_composite_score")
+                snap_demand_tier     = snap.get("demand_composite_tier")
+                snap_ats_signal      = snap.get("ats_signal")
+                snap_readiness_score = snap.get("readiness_score")
+                snap_readiness_tier  = snap.get("readiness_tier")
+        except Exception:
+            pass
+
+        if snap_demand_score is not None:
+            batch.append({
+                "id":                    row.id,
+                "demand_composite_score": snap_demand_score,
+                "demand_composite_tier":  snap_demand_tier,
+                "ats_signal":             snap_ats_signal,
+                "readiness_score":        snap_readiness_score,
+                "readiness_tier":         snap_readiness_tier,
+            })
+        else:
+            async with get_session_factory()() as s2:
+                dth_result = await s2.execute(
+                    select(DemandTickerHistory)
+                    .where(
+                        DemandTickerHistory.symbol == row.symbol,
+                        DemandTickerHistory.scanned_at >= low,
+                        DemandTickerHistory.scanned_at <= high,
+                    )
+                    .order_by(DemandTickerHistory.scanned_at)
+                    .limit(10)
+                )
+                dth_rows = dth_result.scalars().all()
+
+            if not dth_rows:
+                skipped += 1
+                continue
+
+            # Pick closest by absolute day difference
+            best = min(
+                dth_rows,
+                key=lambda r: abs((r.scanned_at.date() - scan_dt).days)
+            )
+            batch.append({
+                "id":                    row.id,
+                "demand_composite_score": best.demand_composite_score,
+                "demand_composite_tier":  best.demand_composite_tier,
+                "ats_signal":             best.ats_signal,
+                "readiness_score":        best.readiness_score,
+                "readiness_tier":         best.readiness_tier,
+            })
+
+        if len(batch) >= 100:
+            async with get_session_factory()() as s3:
+                for item in batch:
+                    res = await s3.execute(
+                        select(ReplaySignalCandidate).where(ReplaySignalCandidate.id == item["id"])
+                    )
+                    r2 = res.scalar_one_or_none()
+                    if r2:
+                        r2.demand_composite_score = item["demand_composite_score"]
+                        r2.demand_composite_tier  = item["demand_composite_tier"]
+                        r2.ats_signal             = item["ats_signal"]
+                        r2.readiness_score        = item["readiness_score"]
+                        r2.readiness_tier         = item["readiness_tier"]
+                        updated += 1
+                await s3.commit()
+            batch = []
+
+    if batch:
+        async with get_session_factory()() as s3:
+            for item in batch:
+                res = await s3.execute(
+                    select(ReplaySignalCandidate).where(ReplaySignalCandidate.id == item["id"])
+                )
+                r2 = res.scalar_one_or_none()
+                if r2:
+                    r2.demand_composite_score = item["demand_composite_score"]
+                    r2.demand_composite_tier  = item["demand_composite_tier"]
+                    r2.ats_signal             = item["ats_signal"]
+                    r2.readiness_score        = item["readiness_score"]
+                    r2.readiness_tier         = item["readiness_tier"]
+                    updated += 1
+            await s3.commit()
+
+    return {"updated": updated, "skipped": skipped}
+
+
+async def backfill_pump_episode_demand_scores(limit: int = 2000) -> dict:
+    """
+    For PumpEpisode rows missing demand_score_at_breakout,
+    look up DemandTickerHistory by symbol + pump_start_date match.
+    pump_start_date in PumpEpisode is stored as String "YYYY-MM-DD".
+    Returns {"updated": n, "skipped": m}.
+    """
+    from datetime import date as date_type, timedelta
+    updated = 0
+    skipped = 0
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpEpisode)
+            .where(PumpEpisode.demand_score_at_breakout.is_(None))
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+
+    batch = []
+    for row in rows:
+        try:
+            breakout_dt = date_type.fromisoformat(row.pump_start_date)
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+
+        low  = datetime.combine(breakout_dt - timedelta(days=3), datetime.min.time())
+        high = datetime.combine(breakout_dt + timedelta(days=3), datetime.max.time())
+
+        async with get_session_factory()() as s2:
+            dth_result = await s2.execute(
+                select(DemandTickerHistory)
+                .where(
+                    DemandTickerHistory.symbol == row.symbol,
+                    DemandTickerHistory.scanned_at >= low,
+                    DemandTickerHistory.scanned_at <= high,
+                )
+                .order_by(DemandTickerHistory.scanned_at)
+                .limit(10)
+            )
+            dth_rows = dth_result.scalars().all()
+
+        if not dth_rows:
+            skipped += 1
+            continue
+
+        best = min(
+            dth_rows,
+            key=lambda r: abs((r.scanned_at.date() - breakout_dt).days)
+        )
+        batch.append({
+            "id":                     row.id,
+            "demand_score_at_breakout":  best.demand_composite_score,
+            "demand_tier_at_breakout":   best.demand_composite_tier,
+            "ats_at_breakout":           best.ats_signal,
+            "readiness_at_breakout":     best.readiness_score,
+            "readiness_tier_at_breakout": best.readiness_tier,
+        })
+
+        if len(batch) >= 100:
+            async with get_session_factory()() as s3:
+                for item in batch:
+                    res = await s3.execute(
+                        select(PumpEpisode).where(PumpEpisode.id == item["id"])
+                    )
+                    r2 = res.scalar_one_or_none()
+                    if r2:
+                        r2.demand_score_at_breakout   = item["demand_score_at_breakout"]
+                        r2.demand_tier_at_breakout    = item["demand_tier_at_breakout"]
+                        r2.ats_at_breakout            = item["ats_at_breakout"]
+                        r2.readiness_at_breakout      = item["readiness_at_breakout"]
+                        r2.readiness_tier_at_breakout = item["readiness_tier_at_breakout"]
+                        updated += 1
+                await s3.commit()
+            batch = []
+
+    if batch:
+        async with get_session_factory()() as s3:
+            for item in batch:
+                res = await s3.execute(
+                    select(PumpEpisode).where(PumpEpisode.id == item["id"])
+                )
+                r2 = res.scalar_one_or_none()
+                if r2:
+                    r2.demand_score_at_breakout   = item["demand_score_at_breakout"]
+                    r2.demand_tier_at_breakout    = item["demand_tier_at_breakout"]
+                    r2.ats_at_breakout            = item["ats_at_breakout"]
+                    r2.readiness_at_breakout      = item["readiness_at_breakout"]
+                    r2.readiness_tier_at_breakout = item["readiness_tier_at_breakout"]
+                    updated += 1
+            await s3.commit()
+
+    return {"updated": updated, "skipped": skipped}
+
+
+async def backfill_raw_pattern_demand_scores(limit: int = 2000) -> dict:
+    """
+    For RawPatternEpisodeFeatures rows missing demand_score_at_breakout,
+    join through pump_episodes to get the breakout date, then look up DemandTickerHistory.
+    Also sets had_prime_buy_pre and had_ats_prime_pre based on DemandTickerHistory within
+    7 days before breakout.
+    Returns {"updated": n, "skipped": m}.
+    """
+    from datetime import date as date_type, timedelta
+    updated = 0
+    skipped = 0
+    episode_cache: dict = {}  # episode_id -> PumpEpisode row snapshot
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(RawPatternEpisodeFeatures)
+            .where(RawPatternEpisodeFeatures.demand_score_at_breakout.is_(None))
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+
+    batch = []
+    for row in rows:
+        ep_id = row.episode_id
+
+        # Get the PumpEpisode for this feature row (cached)
+        if ep_id not in episode_cache:
+            async with get_session_factory()() as s2:
+                ep_result = await s2.execute(
+                    select(PumpEpisode).where(PumpEpisode.id == ep_id)
+                )
+                ep = ep_result.scalar_one_or_none()
+            if not ep:
+                skipped += 1
+                continue
+            episode_cache[ep_id] = {"symbol": ep.symbol, "pump_start_date": ep.pump_start_date}
+
+        ep_info = episode_cache[ep_id]
+        sym = ep_info["symbol"]
+
+        try:
+            breakout_dt = date_type.fromisoformat(ep_info["pump_start_date"])
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+
+        low  = datetime.combine(breakout_dt - timedelta(days=3), datetime.min.time())
+        high = datetime.combine(breakout_dt + timedelta(days=3), datetime.max.time())
+        pre_low = datetime.combine(breakout_dt - timedelta(days=7), datetime.min.time())
+
+        async with get_session_factory()() as s2:
+            dth_result = await s2.execute(
+                select(DemandTickerHistory)
+                .where(
+                    DemandTickerHistory.symbol == sym,
+                    DemandTickerHistory.scanned_at >= low,
+                    DemandTickerHistory.scanned_at <= high,
+                )
+                .order_by(DemandTickerHistory.scanned_at)
+                .limit(10)
+            )
+            dth_rows = dth_result.scalars().all()
+
+            # Query for pre-breakout PRIME_BUY
+            prime_result = await s2.execute(
+                select(DemandTickerHistory.id)
+                .where(
+                    DemandTickerHistory.symbol == sym,
+                    DemandTickerHistory.scanned_at >= pre_low,
+                    DemandTickerHistory.scanned_at <= high,
+                    DemandTickerHistory.demand_composite_tier == "PRIME_BUY",
+                )
+                .limit(1)
+            )
+            had_prime = prime_result.scalar_one_or_none() is not None
+
+            # Query for pre-breakout ATS_PRIME
+            ats_result = await s2.execute(
+                select(DemandTickerHistory.id)
+                .where(
+                    DemandTickerHistory.symbol == sym,
+                    DemandTickerHistory.scanned_at >= pre_low,
+                    DemandTickerHistory.scanned_at <= high,
+                    DemandTickerHistory.ats_signal == "ATS_PRIME",
+                )
+                .limit(1)
+            )
+            had_ats_prime = ats_result.scalar_one_or_none() is not None
+
+        if not dth_rows:
+            # Still update had_prime_buy_pre and had_ats_prime_pre even without score match
+            batch.append({
+                "id":                      row.id,
+                "demand_score_at_breakout":  None,
+                "demand_tier_at_breakout":   None,
+                "ats_at_breakout":           None,
+                "readiness_at_breakout":     None,
+                "readiness_tier_at_breakout": None,
+                "had_prime_buy_pre":         had_prime,
+                "had_ats_prime_pre":         had_ats_prime,
+                "_no_score":                 True,
+            })
+            skipped += 1
+            continue
+
+        best = min(
+            dth_rows,
+            key=lambda r: abs((r.scanned_at.date() - breakout_dt).days)
+        )
+        batch.append({
+            "id":                      row.id,
+            "demand_score_at_breakout":  best.demand_composite_score,
+            "demand_tier_at_breakout":   best.demand_composite_tier,
+            "ats_at_breakout":           best.ats_signal,
+            "readiness_at_breakout":     best.readiness_score,
+            "readiness_tier_at_breakout": best.readiness_tier,
+            "had_prime_buy_pre":         had_prime,
+            "had_ats_prime_pre":         had_ats_prime,
+            "_no_score":                 False,
+        })
+
+        if len(batch) >= 100:
+            async with get_session_factory()() as s3:
+                for item in batch:
+                    res = await s3.execute(
+                        select(RawPatternEpisodeFeatures).where(RawPatternEpisodeFeatures.id == item["id"])
+                    )
+                    r2 = res.scalar_one_or_none()
+                    if r2:
+                        if not item["_no_score"]:
+                            r2.demand_score_at_breakout   = item["demand_score_at_breakout"]
+                            r2.demand_tier_at_breakout    = item["demand_tier_at_breakout"]
+                            r2.ats_at_breakout            = item["ats_at_breakout"]
+                            r2.readiness_at_breakout      = item["readiness_at_breakout"]
+                            r2.readiness_tier_at_breakout = item["readiness_tier_at_breakout"]
+                            updated += 1
+                        r2.had_prime_buy_pre  = item["had_prime_buy_pre"]
+                        r2.had_ats_prime_pre  = item["had_ats_prime_pre"]
+                await s3.commit()
+            batch = []
+
+    if batch:
+        async with get_session_factory()() as s3:
+            for item in batch:
+                res = await s3.execute(
+                    select(RawPatternEpisodeFeatures).where(RawPatternEpisodeFeatures.id == item["id"])
+                )
+                r2 = res.scalar_one_or_none()
+                if r2:
+                    if not item["_no_score"]:
+                        r2.demand_score_at_breakout   = item["demand_score_at_breakout"]
+                        r2.demand_tier_at_breakout    = item["demand_tier_at_breakout"]
+                        r2.ats_at_breakout            = item["ats_at_breakout"]
+                        r2.readiness_at_breakout      = item["readiness_at_breakout"]
+                        r2.readiness_tier_at_breakout = item["readiness_tier_at_breakout"]
+                        updated += 1
+                    r2.had_prime_buy_pre  = item["had_prime_buy_pre"]
+                    r2.had_ats_prime_pre  = item["had_ats_prime_pre"]
+            await s3.commit()
+
+    return {"updated": updated, "skipped": skipped}
