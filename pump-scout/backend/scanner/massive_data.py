@@ -213,6 +213,13 @@ _HARDCODED_EXCLUSIONS: set[str] = {
     "TLT",  "IEF",  "SHY",  "HYG",  "LQD",  "AGG",  "BND",
     "EEM",  "EFA",  "VWO",  "VEA",  "VTI",  "VOO",  "VXF",
     "ARKK", "ARKG", "ARKF", "ARKQ", "ARKX", "ARKW",
+    # ── Nasdaq / exchange LULD test tickers ──────────────────────────────────
+    # These are official exchange test symbols used during Limit Up/Limit Down
+    # band adjustment tests.  They trade at artificially extreme prices (e.g.
+    # ZWZZT has appeared at $12,999.87 intraday) that generate false pump
+    # signals.  Polygon classifies them as CS (common stock) so they bypass
+    # the Polygon type filter and must be hardcoded here.
+    "ZWZZT", "ZAZZT", "ZBZX", "ZXZZT",
 }
 
 _excluded_cache: set[str] = set()

@@ -149,7 +149,14 @@ def _dconf_timing(row: dict) -> Optional[str]:
     v2 = row.get("d_confluence_type_v2") or "NONE"
     if v2 == "NONE":
         return None
-    return "SAME_BAR" if v2.endswith("_SAME") else "LAGGED"
+    # Old-format labels used explicit _SAME suffix
+    if v2.endswith("_SAME"):
+        return "SAME_BAR"
+    # Window/lagged patterns contain THEN_ or are SECONDARY_D_WINDOW
+    if "THEN_" in v2 or v2 == "SECONDARY_D_WINDOW":
+        return "LAGGED"
+    # Everything else (D4_BEUP, D1_BEUP, D1_L34, SECONDARY_D_CONFLUENCE, D_ONLY…) is same-bar
+    return "SAME_BAR"
 
 
 def _ss_bucket(ss: Optional[float]) -> str:
