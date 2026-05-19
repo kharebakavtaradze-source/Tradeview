@@ -803,10 +803,10 @@ function AIJournal() {
   const reload = async () => {
     try {
       const [s, p, e, h, stats, pats, les, bl] = await Promise.all([
-        fetch(`${API_URL}/api/ai-journal/state`).then(r => r.json()),
-        fetch(`${API_URL}/api/ai-journal/positions?status=OPEN`).then(r => r.json()),
-        fetch(`${API_URL}/api/ai-journal/entries?limit=8`).then(r => r.json()),
-        fetch(`${API_URL}/api/ai-journal/positions?status=CLOSED`).then(r => r.json()),
+        fetch(`${API_URL}/api/ai-journal/state`).then(r => { if (!r.ok) throw new Error(`state ${r.status}`); return r.json(); }),
+        fetch(`${API_URL}/api/ai-journal/positions?status=OPEN`).then(r => r.json()).catch(() => ({ positions: [] })),
+        fetch(`${API_URL}/api/ai-journal/entries?limit=8`).then(r => r.json()).catch(() => ({ entries: [] })),
+        fetch(`${API_URL}/api/ai-journal/positions?status=CLOSED`).then(r => r.json()).catch(() => ({ positions: [] })),
         fetch(`${API_URL}/api/ai-journal/stats`).then(r => r.json()).catch(() => null),
         fetch(`${API_URL}/api/ai-journal/patterns`).then(r => r.json()).catch(() => ({ patterns: [] })),
         fetch(`${API_URL}/api/ai-journal/lessons?limit=15`).then(r => r.json()).catch(() => ({ lessons: [] })),
@@ -820,7 +820,9 @@ function AIJournal() {
       setPatterns(pats.patterns || []);
       setLessons(les.lessons || []);
       setBlacklist(bl.blacklist || []);
-    } catch {}
+    } catch (err) {
+      console.error('AIJournal reload failed:', err);
+    }
   };
 
   useEffect(() => { reload(); }, []);
@@ -864,7 +866,22 @@ function AIJournal() {
     return key.split('|').map(p => p.replace(/_/g, ' ')).join(' + ');
   };
 
-  if (!state) return null;
+  if (!state) return (
+    <div style={{
+      background: '#0a0f1a', border: '1px solid #1e3a5f', borderRadius: 10,
+      marginTop: 20, padding: '16px 18px', color: '#6b7280', fontSize: 12,
+      display: 'flex', alignItems: 'center', gap: 10,
+    }}>
+      <span style={{ fontSize: 13, fontWeight: 800, color: '#60a5fa', letterSpacing: '0.04em' }}>AI TRADING JOURNAL</span>
+      <span>— connecting to journal API…</span>
+      <button
+        onClick={reload}
+        style={{ marginLeft: 'auto', background: '#1e3a5f', border: 'none', color: '#93c5fd', borderRadius: 5, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
+      >
+        Retry
+      </button>
+    </div>
+  );
 
   const pnlPct  = state.starting_capital > 0
     ? ((state.capital - state.starting_capital) / state.starting_capital * 100).toFixed(1)
@@ -1637,10 +1654,10 @@ export default function DemandScannerPage() {
             </table>
           </div>
         )}
-      </div>
 
-      {/* AI Trading Journal */}
-      <AIJournal />
+        {/* AI Trading Journal */}
+        <AIJournal />
+      </div>
 
       {/* Detail drawer */}
       {drawerRow && (
