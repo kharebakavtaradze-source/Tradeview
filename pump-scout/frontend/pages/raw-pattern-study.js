@@ -323,6 +323,10 @@ const EP_COLS = [
   // ── Split context ────────────────────────────────────────────────────────────
   { key: 'split_context',                           label: 'SplitCtx',        mono: false },
   { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠ YES' : '—', colorFn: v => v ? '#fb7185' : undefined },
+  // ── Demand bar flags ─────────────────────────────────────────────────────────
+  { key: 'has_ld',                                  label: 'LD?',             mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
+  { key: 'has_wc_gap_ld',                           label: 'WcGapLD?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#6ee7b7' : undefined },
+  { key: 'has_l34_np_ld',                           label: 'L34NpLD?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#6ee7b7' : undefined },
   // ── Scanner / structure signals ──────────────────────────────────────────────
   { key: 'dominant_structure_phase_pre',            label: 'StrPhase',        mono: false },
   { key: 'had_np_buy_candidate_pre',                label: 'NPBuy?',          mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
@@ -478,7 +482,6 @@ const COMP_FEATURES = [
   'days_from_breakout_to_peak',
   'compression_days_pre',
   'days_from_first_compression_to_breakout',
-  'days_from_first_abnormal_volume_to_breakout',
   'dryup_day_count_pre',
   'days_in_base',
   'atr_contraction_days_pre',
@@ -507,20 +510,21 @@ const COMP_FEATURES = [
   'abnormal_volume_day_count_pre',
   'max_dollar_volume_pre',
   // SECONDARY — candle / bar patterns
-  'bullish_engulfing_count_pre',
   'expansion_bar_count_pre',
   'strong_close_count_pre',
   'wide_range_bar_count_pre',
   // LOW_SIGNAL
   'had_compression',
-  'avg_body_pct_pre',
   'avg_upper_wick_pct_pre',
   'avg_lower_wick_pct_pre',
   'bearish_engulfing_count_pre',
   'inside_bar_count_pre',
   'outside_bar_count_pre',
+  // PRIMARY — demand bar flags (per-episode aggregates)
+  'has_ld',
+  'has_wc_gap_ld',
+  'has_l34_np_ld',
   // PRIMARY — Scanner v2 structural (Phase 2B-7)
-  'had_confirmed_structure_pre',
   'had_triggered_structure_pre',
   'max_structure_score_pre',
   'avg_structure_score_pre',
@@ -564,7 +568,6 @@ const COMP_FEATURES = [
   'has_reverse_split_near_episode',
   'split_artifact_risk',
   'reverse_split_event_count',
-  'nearest_split_days_from_breakout',
 ];
 
 // Used to derive badge when stats_json priority is absent (legacy runs)
@@ -601,7 +604,6 @@ const FEATURE_PRIORITY = {
   days_from_breakout_to_peak:                  'PRIMARY',
   compression_days_pre:                        'PRIMARY',
   days_from_first_compression_to_breakout:     'PRIMARY',
-  days_from_first_abnormal_volume_to_breakout: 'PRIMARY',
   dryup_day_count_pre:                         'PRIMARY',
   days_in_base:                                'PRIMARY',
   atr_contraction_days_pre:                    'PRIMARY',
@@ -625,19 +627,20 @@ const FEATURE_PRIORITY = {
   median_volume_anomaly_pre:                   'SECONDARY',
   abnormal_volume_day_count_pre:               'SECONDARY',
   max_dollar_volume_pre:                       'SECONDARY',
-  bullish_engulfing_count_pre:                 'SECONDARY',
   expansion_bar_count_pre:                     'SECONDARY',
   strong_close_count_pre:                      'SECONDARY',
   wide_range_bar_count_pre:                    'SECONDARY',
   had_compression:                             'LOW_SIGNAL',
-  avg_body_pct_pre:                            'LOW_SIGNAL',
   avg_upper_wick_pct_pre:                      'LOW_SIGNAL',
   avg_lower_wick_pct_pre:                      'LOW_SIGNAL',
   bearish_engulfing_count_pre:                 'LOW_SIGNAL',
   inside_bar_count_pre:                        'LOW_SIGNAL',
   outside_bar_count_pre:                       'LOW_SIGNAL',
+  // Demand bar flags (per-episode aggregates from feature_json)
+  has_ld:                                      'PRIMARY',
+  has_wc_gap_ld:                               'PRIMARY',
+  has_l34_np_ld:                               'PRIMARY',
   // Scanner v2 structural (Phase 2B-7)
-  had_confirmed_structure_pre:                 'PRIMARY',
   had_triggered_structure_pre:                 'PRIMARY',
   max_structure_score_pre:                     'PRIMARY',
   avg_structure_score_pre:                     'PRIMARY',
@@ -680,7 +683,6 @@ const FEATURE_PRIORITY = {
   has_reverse_split_near_episode:              'SECONDARY',
   split_artifact_risk:                         'SECONDARY',
   reverse_split_event_count:                   'SECONDARY',
-  nearest_split_days_from_breakout:            'SECONDARY',
 };
 
 const TIER_ORDER = { PRIMARY: 0, SECONDARY: 1, LOW_SIGNAL: 2 };
@@ -3354,6 +3356,13 @@ function CustomSignalsTab({ results }) {
       ).sort(byReliability)
   ).slice(0, 15);
 
+  const demandPats = (results.top_custom_demand_patterns?.length
+    ? results.top_custom_demand_patterns
+    : bothFamilies.filter(p =>
+        sigHasTag(p, 'LD') || sigHasTag(p, 'WC_GAP_LD') || sigHasTag(p, 'L34_NP_LD')
+      ).sort(byReliability)
+  ).slice(0, 20);
+
   // ── Not-yet-mined gate (only when truly nothing present) ──────────────────
   if (!hasData) {
     return (
@@ -3399,11 +3408,12 @@ function CustomSignalsTab({ results }) {
       {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(145px,1fr))', gap: 10 }}>
         {[
-          { label: 'CUSTOM_SIGNAL (V1D)',     val: csCount,       note: csFlatOnly ? 'flat-only' : '' },
-          { label: 'FLOW+Custom (V1E)',        val: fccCount,      note: '' },
-          { label: 'L43 patterns',             val: l43Pats.length, note: '' },
+          { label: 'CUSTOM_SIGNAL (V1D)',     val: csCount,         note: csFlatOnly ? 'flat-only' : '' },
+          { label: 'FLOW+Custom (V1E)',        val: fccCount,        note: '' },
+          { label: 'L43 patterns',             val: l43Pats.length,  note: '' },
           { label: 'L34/L64/L22 patterns',     val: lSerPats.length, note: '' },
           { label: 'D-confluence patterns',    val: dConfPats.length, note: '' },
+          { label: 'Demand (LD/WcGap/NpLD)',   val: demandPats.length, note: '' },
           { label: 'Top clean (cnt≥4)',         val: topClean.length, note: '' },
         ].map(({ label, val, note }) => (
           <div key={label} className={styles.tableCard} style={{ padding: '10px 14px', textAlign: 'center' }}>
@@ -3443,6 +3453,14 @@ function CustomSignalsTab({ results }) {
         <PatternTable
           title={`D-Confluence Patterns — D3/D4/D6 BEUP + D+L combos (${dConfPats.length})`}
           rows={dConfPats}
+        />
+      )}
+
+      {/* Demand bar patterns: LD / WC_GAP_LD / L34_NP_LD */}
+      {demandPats.length > 0 && (
+        <PatternTable
+          title={`Demand Bar Patterns — LD / WC_GAP_LD / L34_NP_LD (${demandPats.length})`}
+          rows={demandPats}
         />
       )}
 
