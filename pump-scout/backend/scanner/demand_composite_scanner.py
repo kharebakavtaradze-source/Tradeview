@@ -332,8 +332,36 @@ def _compute_readiness(
             elif rs_during_dryup_pct < -3.0:
                 rs_score = -1
 
+    # ── Gap 6: Signal confluence (TZ / WLNBB / PREUP) ────────────────────────
+    # PREUP = EMA stack aligning bullish during compression (timing signal).
+    # T1/T2 bar = strong demand candle on low volume = accumulation in action.
+    # L-bucket = still inside Bollinger squeeze = coiled energy.
+    conf_score = 0
+    confluence_signals: list[str] = []
+    if candles and len(candles) >= 5:
+        try:
+            from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+            labels = compute_combined_bar_labels(candles, last_n=5)
+            if labels:
+                last  = labels[-1]
+                prev  = labels[-2] if len(labels) >= 2 else {}
+                prev2 = labels[-3] if len(labels) >= 3 else {}
+                # PREUP: EMA stack aligning bullish
+                if last.get("preup"):
+                    conf_score += 2; confluence_signals.append("PREUP_NOW")
+                elif prev.get("preup") or prev2.get("preup"):
+                    conf_score += 1; confluence_signals.append("PREUP_RECENT")
+                # T1/T2 demand bar in last 3 bars
+                if any(l.get("t_signal") in ("T1", "T2") for l in (last, prev, prev2)):
+                    conf_score += 1; confluence_signals.append("T1T2_BAR")
+                # Still in Bollinger squeeze (L bucket)
+                if last.get("bucket") == "L":
+                    conf_score += 1; confluence_signals.append("WLNBB_L")
+        except Exception:
+            pass
+
     # ── Combine ───────────────────────────────────────────────────────────────
-    total = cat_score + brk_score + flt_score + frsh_score + rs_score
+    total = cat_score + brk_score + flt_score + frsh_score + rs_score + conf_score
     readiness_score = max(0, min(10, total))
 
     if readiness_score >= 7:
@@ -349,12 +377,14 @@ def _compute_readiness(
         "readiness_score":     readiness_score,
         "readiness_tier":      readiness_tier,
         "readiness_breakdown": {
-            "catalyst":  cat_score,
-            "breakout":  brk_score,
-            "float":     flt_score,
-            "freshness": frsh_score,
-            "rs":        rs_score,
+            "catalyst":    cat_score,
+            "breakout":    brk_score,
+            "float":       flt_score,
+            "freshness":   frsh_score,
+            "rs":          rs_score,
+            "confluence":  conf_score,
         },
+        "confluence_signals":  confluence_signals,
         "breakout_signal":     breakout_signal,
         "catalyst_proxy":      catalyst_proxy,
         "float_proxy_tier":    float_proxy_tier,
@@ -630,7 +660,7 @@ def score_demand_composite(
         "dc_atr_bucket":            a_bucket,
         "dc_dv_bucket":             d_bucket,
         "dc_tight_range":           m.get("tight_range", False),
-        # Readiness layer
+        # Readiness layer (includes confluence_signals, confluence sub-score)
         **readiness,
         "combined_score":           round(final + readiness["readiness_score"], 2),
     }
