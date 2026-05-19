@@ -212,14 +212,22 @@ function ReadinessBadge({ tier, score }) {
   );
 }
 
-function ReadinessBreakdown({ bd = {}, breakoutSignal, freshness, rsPct, floatTier, catalyst }) {
+const CONFLUENCE_META = {
+  PREUP_NOW:    { label: 'PREUP ▲',   color: '#4ade80', title: 'EMA stack aligning bullish right now' },
+  PREUP_RECENT: { label: 'PREUP~',    color: '#86efac', title: 'PREUP signal in last 2–3 bars' },
+  T1T2_BAR:     { label: 'T1/T2',     color: '#34d399', title: 'Strong demand bar (T1 or T2) in last 3 days' },
+  WLNBB_L:      { label: 'BB-L',      color: '#22d3ee', title: 'Inside low Bollinger Band compression (L bucket)' },
+};
+
+function ReadinessBreakdown({ bd = {}, breakoutSignal, freshness, rsPct, floatTier, catalyst, confluenceSignals = [] }) {
   const bm = BREAKOUT_META[breakoutSignal] || BREAKOUT_META.COILING;
   const items = [
-    { key: 'catalyst',  label: 'Catalyst',  color: '#a78bfa' },
-    { key: 'breakout',  label: 'Breakout',  color: '#34d399' },
-    { key: 'float',     label: 'Float',     color: '#60a5fa' },
-    { key: 'freshness', label: 'Freshness', color: '#fbbf24' },
-    { key: 'rs',        label: 'RS',        color: '#f472b6' },
+    { key: 'catalyst',   label: 'Catalyst',   color: '#a78bfa' },
+    { key: 'breakout',   label: 'Breakout',   color: '#34d399' },
+    { key: 'float',      label: 'Float',      color: '#60a5fa' },
+    { key: 'freshness',  label: 'Freshness',  color: '#fbbf24' },
+    { key: 'rs',         label: 'RS',         color: '#f472b6' },
+    { key: 'confluence', label: 'Confluence', color: '#4ade80' },
   ];
   return (
     <div>
@@ -235,6 +243,19 @@ function ReadinessBreakdown({ bd = {}, breakoutSignal, freshness, rsPct, floatTi
           </div>
         ))}
       </div>
+      {confluenceSignals.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+          {confluenceSignals.map(sig => {
+            const m = CONFLUENCE_META[sig] || { label: sig, color: '#9ca3af', title: '' };
+            return (
+              <span key={sig} title={m.title} style={{
+                background: 'rgba(74,222,128,0.1)', border: `1px solid ${m.color}`,
+                color: m.color, borderRadius: 4, padding: '1px 6px', fontSize: 9, fontWeight: 700,
+              }}>{m.label}</span>
+            );
+          })}
+        </div>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 10 }}>
         <span style={{ color: bm.color, fontWeight: 600 }}>{bm.label}</span>
         {freshness && (
@@ -317,6 +338,7 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
             rsPct={row.rs_during_dryup_pct}
             floatTier={row.float_proxy_tier}
             catalyst={row.catalyst_proxy}
+            confluenceSignals={row.confluence_signals || []}
           />
         </div>
       )}
