@@ -394,12 +394,18 @@ async def _run_bar_sequence_pipeline(
     include_flow: bool = False,
     include_combined: bool = False,
     include_custom: bool = False,
+    exclude_split_artifacts: bool = True,
 ) -> tuple[list[dict], dict]:
     """
     Load daily bar rows, build snapshots + sequences, mine bar patterns.
 
     Returns (all_bar_candidates, bar_sequences_by_group).
     bar_sequences_by_group uses price-action sequences (backward compat).
+
+    exclude_split_artifacts: if True (default), split_artifact episodes are
+        excluded from bar sequence building so general bar features do not
+        inflate split_artifact_exposure to 1.0, which would block all clean
+        price-action patterns from promotion.
     """
     from database import get_raw_pattern_daily_features
     from replay.bar_feature_engine import (
@@ -432,6 +438,9 @@ async def _run_bar_sequence_pipeline(
 
     _GROUPS = ["missed_4x_pump", "detected_4x_pump", "false_positive",
                "normal_winner", "split_artifact"]
+    # When excluding split artifacts, omit them from sequence building so that
+    # split_artifact_exposure stays None (not inflated to 1.0 by general features).
+    _MINE_GROUPS = [g for g in _GROUPS if not (exclude_split_artifacts and g == "split_artifact")]
 
     # Build price-action sequences (V1B) — always
     bar_sequences_by_group:              dict[str, list[dict]] = {g: [] for g in _GROUPS}
@@ -444,7 +453,7 @@ async def _run_bar_sequence_pipeline(
     # Accumulate flow tag counts for debug
     flow_tag_counts: dict[str, int] = {}
 
-    for grp in _GROUPS:
+    for grp in _MINE_GROUPS:
         episodes = dataset.get(grp) or []
         for ep in episodes:
             ep_id      = ep.get("episode_id") or ep.get("id")
@@ -619,7 +628,7 @@ async def run_pattern_discovery(
     run_id: int,
     mode: str = "both",
     windows: tuple = (1, 2, 3, 5, 10),
-    exclude_split_artifacts: bool = False,
+    exclude_split_artifacts: bool = True,
     save_mode: str = "compact",
 ) -> dict:
     """
@@ -633,9 +642,12 @@ async def run_pattern_discovery(
                             "all" = episode_aggregate + bar_sequence + flow + combined
     windows               : bar-sequence window sizes (only used when mode
                             includes bar_sequence or flow)
-    exclude_split_artifacts : if True, split_artifact episodes are excluded
-                              from episode-level mining counts (still kept
-                              in a separate group for exposure stats)
+    exclude_split_artifacts : if True (default), split_artifact episodes are
+                              excluded from bar sequence building.  This
+                              prevents general bar features (ADL_DISTRIB,
+                              WEAK_CLOSE etc.) from inflating
+                              split_artifact_exposure to 1.0 and blocking
+                              all clean price-action patterns from promotion.
 
     Returns
     -------
@@ -758,6 +770,7 @@ async def run_pattern_discovery(
                 include_flow=_run_flow,
                 include_combined=_run_combined,
                 include_custom=_run_custom,
+                exclude_split_artifacts=exclude_split_artifacts,
             )
 
         # ── Phase 4: Pump Watch scoring ───────────────────────────────────────

@@ -119,6 +119,7 @@ def _aggregate_custom_signals(daily_rows: list[dict]) -> dict:
         "d3_beup": 0, "d4_beup": 0, "d6_beup": 0,
         "d4_l34": 0, "d3_l34": 0,
         "vbo": 0, "lvbo": 0,
+        "ld": 0, "wc_gap_ld": 0,
     }
     for row in daily_rows:
         fj = row.get("feature_json") or {}
@@ -328,6 +329,24 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
         custom_pts += 1
         has_custom_confirm = True
         reasons.append("fri64_volume_confirmation")
+
+    # WC_GAP_LD (two-bar): prev weak-close → gap-up + lower-wick reclaim.
+    # R154 Tier-1: rel=0.814, add_to_pump_watch.  Needs flow or clean regime.
+    has_wc_gap_ld = custom.get("wc_gap_ld", 0) > 0
+    if has_wc_gap_ld and (has_flow_setup or clean):
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("wc_gap_ld_two_bar")
+
+    # Dryup+L34+LD triple: quiet compression day with setup bar and demand wick.
+    # R154 Tier-1: rel=0.738, add_to_pump_watch.
+    has_ld_any   = custom.get("ld", 0) > 0
+    has_l34_any  = custom.get("l34", 0) > 0
+    dryup_pre    = int(ep.get("dryup_day_count_pre") or 0)
+    if dryup_pre >= 2 and has_l34_any and has_ld_any and not toxic:
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("dryup_l34_ld_triple")
 
     # DISC_EMA_CLUSTER_RECLAIM_001: EMA50 reclaim + bull stack = structural
     # momentum alignment. R154: rel=0.709, 18×4x, 0% split, add_to_pump_watch.
