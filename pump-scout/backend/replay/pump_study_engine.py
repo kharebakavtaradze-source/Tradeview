@@ -1533,6 +1533,11 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
             # has_wc_gap_ld: Two-bar pattern. Prev bar weak-close → cur bar gaps
             # up and reclaims lower wick (demand). R154: rel=0.814, Tier-1 clean.
             "has_wc_gap_ld":  _wc_gap_ld,
+            # has_l34_np_ld: L34 setup + NP engine in setup state + lower-wick
+            # reclaim on same bar. R155 #1 PRICE_ACTION: rel=0.766, 10×4x, 3×FP.
+            "has_l34_np_ld":  bool(l34
+                                   and (i in np_l34_set or i in np_fri34_set)
+                                   and _pos >= 0.50 and _lwk >= 0.20),
             "np_is_setup":    bool(i in np_l34_set or i in np_fri34_set),
             "np_is_trigger":  bool(i in np_g4_set),
         }
