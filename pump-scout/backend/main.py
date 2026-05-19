@@ -1167,6 +1167,77 @@ async def get_pump_scan():
     _retired_scan_endpoint("Pump Engine")
 
 
+# ─── Demand Composite Scanner ─────────────────────────────────────────────────
+
+@app.get("/api/demand-scanner/latest")
+async def demand_scanner_latest(
+    tier:       str   = "",    # PRIME_BUY | HIGH_CONF_BUY | BUY_WATCH | SETUP_MONITOR | SKIP
+    ats_signal: str   = "",    # ATS_PRIME | ATS_SETUP | ATS_WATCH | ATS_NONE
+    min_score:  float = 0.0,
+    limit:      int   = 300,
+):
+    """
+    Demand Composite Scanner — returns results pre-scored with demand_composite_score,
+    demand_composite_tier, and ATS signal. Results are sorted PRIME_BUY first.
+
+    demand_composite_tier:
+      PRIME_BUY      score >= 13  (all systems go)
+      HIGH_CONF_BUY  score 9–12   (strong stack, low FP risk)
+      BUY_WATCH      score 6–8    (setup forming)
+      SETUP_MONITOR  score 3–5    (early)
+      SKIP           score < 3 or toxic regime
+
+    ATS (Accumulation Trap Signal): 5-condition candle-level composite.
+    """
+    from scanner.new_pump_runner import get_latest
+    from scanner.demand_composite_scanner import apply_demand_composite, TIER_ORDER
+
+    data    = get_latest()
+    results = data.get("results", [])
+
+    exclusions = await _get_exclusion_set()
+    results    = _strip_non_stocks(results, exclusions)
+
+    # Apply demand composite if not already applied (e.g. from cached run)
+    if results and "demand_composite_score" not in results[0]:
+        results = apply_demand_composite(results)
+    else:
+        # Re-sort cached results by tier+score
+        results = sorted(results, key=lambda r: (
+            TIER_ORDER.get(r.get("demand_composite_tier") or "SKIP", 4),
+            -(r.get("demand_composite_score") or 0.0),
+        ))
+
+    if tier:
+        results = [r for r in results if r.get("demand_composite_tier") == tier]
+    if ats_signal:
+        results = [r for r in results if r.get("ats_signal") == ats_signal]
+    if min_score > 0:
+        results = [r for r in results if (r.get("demand_composite_score") or 0) >= min_score]
+
+    from collections import Counter
+    tier_counts = dict(Counter(r.get("demand_composite_tier") or "SKIP" for r in results))
+    ats_counts  = dict(Counter(r.get("ats_signal") or "ATS_NONE" for r in results))
+
+    return {
+        "results":        results[:min(limit, 1000)],
+        "total":          len(results),
+        "tier_counts":    tier_counts,
+        "ats_counts":     ats_counts,
+        "scanned_at":     data.get("scanned_at"),
+        "universe":       data.get("universe", 0),
+        "elapsed_secs":   data.get("elapsed_secs"),
+        "demand_prime_count":  data.get("demand_prime_count", 0),
+        "demand_high_count":   data.get("demand_high_count", 0),
+        "demand_watch_count":  data.get("demand_watch_count", 0),
+        "ats_prime_count":     data.get("ats_prime_count", 0),
+        "filters": {
+            "tier": tier, "ats_signal": ats_signal,
+            "min_score": min_score, "limit": limit,
+        },
+    }
+
+
 # ─── Scanner v2 — New Pump as structural core ─────────────────────────────────
 
 @app.get("/api/scanner/v2/latest")

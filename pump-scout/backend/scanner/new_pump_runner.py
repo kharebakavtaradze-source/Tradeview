@@ -498,6 +498,26 @@ async def run_new_pump_scan(
         except Exception as _ctx_exc:
             logger.warning(f"[NpRunner] Context enrichment failed (non-fatal): {_ctx_exc}")
 
+        # ── Step 8: Demand Composite scoring (ATS + signal fusion) ───────────
+        _np_progress["phase"] = "demand_composite"
+        try:
+            from scanner.demand_composite_scanner import apply_demand_composite
+            # Merge shallow + deep candles so ATS has best available bars
+            merged_candles = {**all_candles}
+            if use_snapshot:
+                merged_candles.update(deep_candles if "deep_candles" in dir() else {})
+            results = apply_demand_composite(results, merged_candles)
+            prime   = sum(1 for r in results if r.get("demand_composite_tier") == "PRIME_BUY")
+            high    = sum(1 for r in results if r.get("demand_composite_tier") == "HIGH_CONF_BUY")
+            logger.info(f"[NpRunner] Demand composite: PRIME={prime}, HIGH_CONF={high}")
+        except Exception as _dc_exc:
+            logger.warning(f"[NpRunner] Demand composite failed (non-fatal): {_dc_exc}")
+
+        _prime_count = sum(1 for r in results if r.get("demand_composite_tier") == "PRIME_BUY")
+        _high_count  = sum(1 for r in results if r.get("demand_composite_tier") == "HIGH_CONF_BUY")
+        _watch_count = sum(1 for r in results if r.get("demand_composite_tier") == "BUY_WATCH")
+        _ats_prime   = sum(1 for r in results if r.get("ats_signal") == "ATS_PRIME")
+
         _latest = {
             "results":        results,
             "total":          len(results),
@@ -508,6 +528,10 @@ async def run_new_pump_scan(
             "fire_count":     _np_progress["fire_count"],
             "strong_count":   _np_progress["strong_count"],
             "setup_count":    _np_progress["setup_count"],
+            "demand_prime_count":    _prime_count,
+            "demand_high_count":     _high_count,
+            "demand_watch_count":    _watch_count,
+            "ats_prime_count":       _ats_prime,
             "excluded_non_common_stock_count": excluded_non_common_stock_count,
             "excluded_non_common_stock_examples": excluded_non_common_stock_examples[:20],
             "scanned_at":     started_at.isoformat(),
