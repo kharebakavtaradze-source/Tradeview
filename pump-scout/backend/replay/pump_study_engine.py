@@ -49,6 +49,12 @@ _MAX_PRICE:  float = 500.0
 # How many grouped_daily sample dates to collect the universe from
 _UNIVERSE_SAMPLE_COUNT: int = 5
 
+# Hard ceiling on pump_multiple recorded in raw detections.  Multiples above
+# this threshold indicate corrupted candle data (e.g. a sub-penny open that
+# the universe filter missed because the stock traded higher on sample dates).
+# No real stock has ever returned 10 000× in a 14-day window.
+_MAX_RAW_MULTIPLE: float = 10_000.0
+
 # Two raw detections for the same symbol are merged into one cluster when their
 # [window_start, window_peak] intervals overlap or are within this many calendar
 # days of each other.  Catches consecutive start-dates that all observe the same
@@ -204,6 +210,12 @@ def _detect_raw_pumps(
 
         multiple = peak_high / start_price
         if multiple < min_multiple:
+            continue
+        if multiple > _MAX_RAW_MULTIPLE:
+            logger.debug(
+                f"[PUMP_STUDY] {symbol} {t0_date}: multiple={multiple:.1f}× "
+                f"exceeds _MAX_RAW_MULTIPLE — skipping (corrupt candle data)"
+            )
             continue
 
         # days_to_peak: 1-based trading-day count from t0 to peak bar
@@ -4574,6 +4586,11 @@ async def _build_universe(
     etf_set: set = set()
     try:
         etf_set = await get_us_etf_symbols()
+    except Exception:
+        pass
+    try:
+        from scanner.sector_map import NON_STOCK_SECURITIES
+        etf_set = etf_set | NON_STOCK_SECURITIES
     except Exception:
         pass
 
