@@ -1942,6 +1942,44 @@ async def admin_universe_scan_status():
     return get_progress()
 
 
+# ─── Candle Cache admin routes ─────────────────────────────────────────────────
+
+@app.post("/api/admin/candle-cache/clear/{symbol}")
+async def clear_candle_cache(symbol: str):
+    """Force-clear candle cache for one ticker (use after known split/bad data)."""
+    from database import get_session_factory, CandleCache
+    from sqlalchemy import delete
+    async with get_session_factory()() as session:
+        await session.execute(
+            delete(CandleCache).where(CandleCache.symbol == symbol.upper())
+        )
+        await session.commit()
+    return {"status": "cleared", "symbol": symbol.upper()}
+
+
+@app.get("/api/admin/candle-cache/status")
+async def candle_cache_status():
+    """Return cache coverage stats."""
+    from database import get_session_factory, CandleCache
+    from sqlalchemy import select, func
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(
+                func.count(func.distinct(CandleCache.symbol)).label("symbols"),
+                func.count(CandleCache.id).label("total_bars"),
+                func.max(CandleCache.date).label("latest_date"),
+                func.min(CandleCache.date).label("oldest_date"),
+            )
+        )
+        row = result.one()
+    return {
+        "cached_symbols": row.symbols,
+        "total_bars":     row.total_bars,
+        "latest_date":    row.latest_date,
+        "oldest_date":    row.oldest_date,
+    }
+
+
 # ─── EOD Log routes ────────────────────────────────────────────────────────────
 
 @app.get("/api/eod-log/latest")
