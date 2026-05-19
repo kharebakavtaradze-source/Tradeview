@@ -1371,8 +1371,11 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
     Flags computed:
       has_l34, has_l43, has_l22, has_l64  — WLNBB bucket signals
       has_fri34, has_fri64                — BLUE + L34/L64
-      has_d3_beup, has_d4_beup, has_d6_beup — Manual-D × BE-Up same-bar
-      has_d4_l34, has_d3_l34              — Manual-D × L34 same-bar
+      has_d3_beup, has_d4_beup, has_d6_beup — Manual-D × BE-Up same-bar (core)
+      has_d1_beup, has_d9_beup, has_d11_beup — Manual-D × BE-Up same-bar (secondary)
+      has_d4_l34, has_d3_l34              — Manual-D × L34 same-bar (core)
+      has_d1_l34, has_d9_l34, has_d11_l34 — Manual-D × L34 same-bar (secondary)
+      has_d1_l43, has_d9_l43, has_d11_l43 — Manual-D × L43 same-bar (secondary)
       has_vbo                             — be_up_wlnbb AND bucket in (B, VB)
       has_lvbo                            — break_up_wlnbb AND bucket == N
       has_ld                              — not yet implemented (always False)
@@ -1457,27 +1460,41 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
         beup = w.get("be_up_wlnbb",    False)
         bup  = w.get("break_up_wlnbb", False)
         bkt  = w.get("bucket",         "?")
-        d3   = d.get("d3", False)
-        d4   = d.get("d4", False)
-        d6   = d.get("d6", False)
+        d1   = d.get("d1",  False)
+        d3   = d.get("d3",  False)
+        d4   = d.get("d4",  False)
+        d6   = d.get("d6",  False)
+        d9   = d.get("d9",  False)
+        d11  = d.get("d11", False)
 
         flags: dict = {
-            "has_l34":       bool(l34),
-            "has_l43":       bool(l43),
-            "has_l22":       bool(l22),
-            "has_l64":       bool(l64),
-            "has_fri34":     bool(i in np_fri34_set),
-            "has_fri64":     bool(i in np_fri64_set),
-            "has_d3_beup":   bool(d3 and beup),
-            "has_d4_beup":   bool(d4 and beup),
-            "has_d6_beup":   bool(d6 and beup),
-            "has_d4_l34":    bool(d4 and l34),
-            "has_d3_l34":    bool(d3 and l34),
-            "has_vbo":       bool(beup and bkt in ("B", "VB")),
-            "has_lvbo":      bool(bup  and bkt == "N"),
-            "has_ld":        False,
-            "np_is_setup":   bool(i in np_l34_set or i in np_fri34_set),
-            "np_is_trigger": bool(i in np_g4_set),
+            "has_l34":        bool(l34),
+            "has_l43":        bool(l43),
+            "has_l22":        bool(l22),
+            "has_l64":        bool(l64),
+            "has_fri34":      bool(i in np_fri34_set),
+            "has_fri64":      bool(i in np_fri64_set),
+            # core D × WLNBB
+            "has_d3_beup":    bool(d3 and beup),
+            "has_d4_beup":    bool(d4 and beup),
+            "has_d6_beup":    bool(d6 and beup),
+            "has_d4_l34":     bool(d4 and l34),
+            "has_d3_l34":     bool(d3 and l34),
+            # secondary D × WLNBB
+            "has_d1_beup":    bool(d1  and beup),
+            "has_d9_beup":    bool(d9  and beup),
+            "has_d11_beup":   bool(d11 and beup),
+            "has_d1_l34":     bool(d1  and l34),
+            "has_d9_l34":     bool(d9  and l34),
+            "has_d11_l34":    bool(d11 and l34),
+            "has_d1_l43":     bool(d1  and l43),
+            "has_d9_l43":     bool(d9  and l43),
+            "has_d11_l43":    bool(d11 and l43),
+            "has_vbo":        bool(beup and bkt in ("B", "VB")),
+            "has_lvbo":       bool(bup  and bkt == "N"),
+            "has_ld":         False,
+            "np_is_setup":    bool(i in np_l34_set or i in np_fri34_set),
+            "np_is_trigger":  bool(i in np_g4_set),
         }
         if i < len(abr_series) and abr_series[i]:
             flags.update(abr_series[i])
