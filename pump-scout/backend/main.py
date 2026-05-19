@@ -86,6 +86,8 @@ from database import (
     reset_ai_journal,
     get_pattern_memory,
     get_ai_performance_stats,
+    get_trade_lessons,
+    get_blacklisted_patterns,
 )
 from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
@@ -1492,6 +1494,20 @@ async def ai_journal_patterns():
 async def ai_journal_stats():
     """Return overall performance stats."""
     return await get_ai_performance_stats()
+
+
+@app.get("/api/ai-journal/lessons")
+async def ai_journal_lessons(limit: int = 20):
+    """Return AI-generated trade lessons from closed positions."""
+    lessons = await get_trade_lessons(min(limit, 50))
+    return {"lessons": lessons}
+
+
+@app.get("/api/ai-journal/blacklist")
+async def ai_journal_blacklist():
+    """Return signal blacklist entries."""
+    entries = await get_blacklisted_patterns()
+    return {"blacklist": entries}
 
 
 @app.get("/api/demand-scanner/similar/{symbol}")
