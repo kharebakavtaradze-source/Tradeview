@@ -80,6 +80,10 @@ from database import (
     save_pump_ai_summary,
     save_demand_ticker_history,
     get_demand_ticker_history,
+    get_ai_journal_state,
+    get_ai_journal_positions,
+    get_ai_journal_entries,
+    reset_ai_journal,
 )
 from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
@@ -1378,6 +1382,60 @@ async def demand_scanner_narrative(request: Request):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── AI Trading Journal endpoints ──────────────────────────────────────────────
+
+@app.get("/api/ai-journal/state")
+async def ai_journal_state_route():
+    state    = await get_ai_journal_state()
+    positions = await get_ai_journal_positions("OPEN")
+    invested = sum(p["cost_basis"] for p in positions)
+    closed   = await get_ai_journal_positions("CLOSED")
+    total_pnl = sum(p["pnl_usd"] for p in closed)
+    wins      = sum(1 for p in closed if p["pnl_usd"] > 0)
+    win_rate  = round(wins / len(closed) * 100, 1) if closed else 0
+    return {
+        **state,
+        "open_positions": len(positions),
+        "invested":        round(invested, 2),
+        "cash":            round(state["capital"] - invested, 2),
+        "total_pnl_usd":   round(total_pnl, 2),
+        "closed_trades":   len(closed),
+        "win_rate_pct":    win_rate,
+    }
+
+
+@app.get("/api/ai-journal/positions")
+async def ai_journal_positions_route(status: str = "OPEN"):
+    return {"positions": await get_ai_journal_positions(status)}
+
+
+@app.get("/api/ai-journal/entries")
+async def ai_journal_entries_route(limit: int = 10):
+    limit = min(limit, 30)
+    return {"entries": await get_ai_journal_entries(limit)}
+
+
+@app.post("/api/ai-journal/run")
+async def ai_journal_run(background_tasks: BackgroundTasks):
+    """Trigger an AI journal session using the latest demand scan data."""
+    latest = await get_latest_scan()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No scan data — run a demand scan first")
+    results = latest.get("results", [])
+    if not results:
+        raise HTTPException(status_code=404, detail="Scan has no results")
+    from ai_journal import run_journal_session
+    summary = await run_journal_session(results)
+    if "error" in summary:
+        raise HTTPException(status_code=503, detail=summary["error"])
+    return summary
+
+
+@app.post("/api/ai-journal/reset")
+async def ai_journal_reset_route(capital: float = 500.0):
+    return await reset_ai_journal(new_capital=capital)
 
 
 @app.get("/api/demand-scanner/similar/{symbol}")
