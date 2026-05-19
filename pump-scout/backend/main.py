@@ -1167,6 +1167,36 @@ async def get_pump_scan():
     _retired_scan_endpoint("Pump Engine")
 
 
+# ─── Bar Labels endpoint ───────────────────────────────────────────────────────
+
+@app.get("/api/bar-labels/{symbol}")
+async def bar_labels(symbol: str, bars: int = 60):
+    """Per-bar T/Z/WLNBB/PREUP combined signal labels for a symbol."""
+    from scanner.massive_data import fetch_candles_massive
+    from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+
+    candles_raw = await fetch_candles_massive(symbol.upper(), days=max(bars + 50, 120))
+    if not candles_raw:
+        raise HTTPException(status_code=404, detail=f"No candles for {symbol}")
+
+    # Convert from Polygon format {o,h,l,c,v,t} to {open,high,low,close,volume,date}
+    candles = []
+    for bar in candles_raw:
+        d = None
+        if bar.get("t"):
+            from datetime import datetime, timezone
+            d = datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        candles.append({
+            "date":   d,
+            "open":   bar["o"], "high": bar["h"],
+            "low":    bar["l"], "close": bar["c"],
+            "volume": bar["v"],
+        })
+
+    labels = compute_combined_bar_labels(candles, last_n=bars)
+    return {"symbol": symbol.upper(), "bars": labels, "total": len(labels)}
+
+
 # ─── Demand Composite Scanner ─────────────────────────────────────────────────
 
 @app.get("/api/demand-scanner/latest")

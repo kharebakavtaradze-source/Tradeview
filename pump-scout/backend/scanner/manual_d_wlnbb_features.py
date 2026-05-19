@@ -22,6 +22,22 @@ def _sma_series(values: list[float], period: int) -> list[Optional[float]]:
     return out
 
 
+def _ema_series(values: list[float], period: int) -> list[Optional[float]]:
+    """Standard EMA with k=2/(period+1), matching Pine's ta.ema(). None during warmup."""
+    out: list[Optional[float]] = [None] * len(values)
+    if len(values) < period:
+        return out
+    k = 2.0 / (period + 1)
+    # Seed with SMA of first `period` values
+    seed = sum(values[:period]) / period
+    out[period - 1] = seed
+    prev = seed
+    for i in range(period, len(values)):
+        prev = values[i] * k + prev * (1.0 - k)
+        out[i] = prev
+    return out
+
+
 def _std_series(values: list[float], period: int) -> list[Optional[float]]:
     out: list[Optional[float]] = [None] * len(values)
     for i in range(period - 1, len(values)):
@@ -1075,3 +1091,320 @@ def compute_d_wlnbb_pre_counts(
                 counts[f] += 1
 
     return {f"{f}_count_pre": counts[f] for f in _D_COUNT_FIELDS}
+
+
+# ── Part 5: Combined bar labels (T/Z + WLNBB + PREUP/PREDN + suffix) ─────────
+
+def compute_combined_bar_labels(
+    candles: list[dict],
+    last_n:  int = 60,
+) -> list[dict]:
+    """
+    Per-bar combined T/Z + WLNBB + PREUP/PREDN signal labels.
+
+    Returns a list of per-bar dicts (oldest→newest), limited to the most recent
+    `last_n` bars.  Each dict contains all signal fields plus a human-readable
+    `label` string mirroring what TradingView shows in the oscillator pane.
+
+    No future leakage: every computation uses only bars[0..i].
+    """
+    n = len(candles)
+    if n == 0:
+        return []
+
+    # ── Pre-compute full series ───────────────────────────────────────────────
+    closes  = [float(b["close"])  for b in candles]
+    opens_  = [float(b["open"])   for b in candles]
+    highs   = [float(b["high"])   for b in candles]
+    lows    = [float(b["low"])    for b in candles]
+    volumes = [float(b["volume"]) for b in candles]
+
+    # EMAs for PREUP/PREDN
+    ema9   = _ema_series(closes,  9)
+    ema20  = _ema_series(closes, 20)
+    ema34  = _ema_series(closes, 34)
+    ema50  = _ema_series(closes, 50)
+    ema89  = _ema_series(closes, 89)
+    ema200 = _ema_series(closes, 200)
+
+    # T/Z signals (full series)
+    tz_all = compute_tz_selected(candles)
+
+    # WLNBB signals (full series) — we need to recompute bucket + vol fields inline
+    # for the extended L1-L6 digits (vol_down_adapted not in compute_wlnbb_features output)
+    # Use the existing function for l34/l43/l64/be_up, add digits separately.
+    wlnbb_all = compute_wlnbb_features(candles)
+
+    # ── T/Z priority code → label string ─────────────────────────────────────
+    _BULL_LABELS = {
+        1: "T4", 2: "T6", 3: "T1G", 4: "T2G",
+        5: "T1", 6: "T2", 7: "T9",  8: "T10",
+        9: "T3", 10: "T11", 11: "T5", 12: "T12",
+    }
+    _BEAR_LABELS = {
+        1: "Z4", 2: "Z6", 3: "Z1G", 4: "Z2G",
+        5: "Z1", 6: "Z2", 7: "Z9",  8: "Z10",
+        9: "Z3", 10: "Z11", 11: "Z5", 12: "Z12",
+        13: "Z7",
+    }
+
+    # ── WLNBB bucket helpers (needed for vol_down_adapted) ────────────────────
+    _bucket_order = {"W": 0, "L": 1, "N": 2, "B": 3, "VB": 4}
+    ma_period = 20
+    sma_v = _sma_series(volumes, ma_period)
+    std_v = _std_series(volumes, ma_period)
+
+    # Pre-compute bucket per bar
+    buckets: list[str] = []
+    for i in range(n):
+        v   = volumes[i]
+        mid = sma_v[i]
+        std = std_v[i]
+        if mid is not None and std is not None:
+            is_w  = v < (mid - std)
+            is_l  = (not is_w) and (v < mid)
+            is_n  = (not is_w) and (not is_l) and (v < mid + std)
+            is_b  = (not is_w) and (not is_l) and (not is_n) and (v < mid + std + mid)
+            is_vb = not (is_w or is_l or is_n or is_b)
+            buckets.append("W" if is_w else "L" if is_l else "N" if is_n
+                           else "B" if is_b else "VB" if is_vb else "?")
+        else:
+            buckets.append("?")
+
+    # ── Main per-bar loop ─────────────────────────────────────────────────────
+    result: list[dict] = []
+
+    for i in range(n):
+        o = opens_[i]; c = closes[i]; h = highs[i]; l = lows[i]; v = volumes[i]
+        date_val = candles[i].get("date")
+
+        # ── Basic bar direction ───────────────────────────────────────────────
+        is_bull = c > o
+        is_bear = c < o
+
+        # ── Bucket ───────────────────────────────────────────────────────────
+        bucket = buckets[i]
+
+        # ── T/Z signals ───────────────────────────────────────────────────────
+        tz  = tz_all[i]
+        bc  = tz["bull_code"]
+        zc  = tz["bear_code"]
+        t_signal: Optional[str] = _BULL_LABELS.get(bc)
+        z_signal: Optional[str] = _BEAR_LABELS.get(zc)
+
+        # ── WLNBB signals ─────────────────────────────────────────────────────
+        wf = wlnbb_all[i]
+        l34  = wf["l34_wlnbb"]
+        l43  = wf["l43_wlnbb"]
+        l64  = wf["l64_wlnbb"]
+        be_up = wf["be_up_wlnbb"]
+
+        # ── L1-L6 digits (extended, needs vol_down_adapted) ──────────────────
+        prev_bucket = buckets[i - 1] if i > 0 else None
+        pv          = volumes[i - 1] if i > 0 else None
+        same_bucket = (bucket == prev_bucket) if prev_bucket else False
+        vol_up_raw  = (v > pv)  if pv is not None else False
+        vol_down_raw = (v < pv) if pv is not None else False
+
+        if prev_bucket and prev_bucket != "?" and bucket != "?":
+            pb_ord = _bucket_order.get(prev_bucket, -1)
+            cb_ord = _bucket_order.get(bucket, -1)
+            bucket_up_b   = cb_ord > pb_ord
+            bucket_down_b = cb_ord < pb_ord
+        else:
+            bucket_up_b = bucket_down_b = False
+
+        vol_up_adapted   = bucket_up_b   or (same_bucket and vol_up_raw)
+        vol_down_adapted = bucket_down_b or (same_bucket and vol_down_raw)
+
+        prev_c = closes[i - 1] if i > 0 else None
+        prev_h = highs[i - 1]  if i > 0 else None
+        prev_l = lows[i - 1]   if i > 0 else None
+
+        up_close           = (c > prev_c)   if prev_c is not None else False
+        down_close         = (c < prev_c)   if prev_c is not None else False
+        no_new_high_close  = (c <= prev_h)  if prev_h is not None else False
+        no_new_low_close   = (c >= prev_l)  if prev_l is not None else False
+
+        l1 = vol_down_adapted and up_close
+        l2 = vol_down_adapted and no_new_low_close
+        l3 = vol_up_adapted   and up_close
+        l4 = vol_up_adapted   and no_new_high_close
+        l5 = vol_down_adapted and down_close
+        l6 = vol_up_adapted   and down_close
+
+        l_digits = "".join(
+            d for d, flag in [("1", l1), ("2", l2), ("3", l3),
+                               ("4", l4), ("5", l5), ("6", l6)]
+            if flag
+        )
+
+        # ── PREUP / PREDN (EMA multi-cross) ───────────────────────────────────
+        def _cross(e_ser: list[Optional[float]]) -> bool:
+            ev = e_ser[i]
+            if ev is None:
+                return False
+            return opens_[i] < ev and closes[i] > ev
+
+        def _drop(e_ser: list[Optional[float]]) -> bool:
+            ev = e_ser[i]
+            if ev is None:
+                return False
+            return opens_[i] > ev and closes[i] < ev
+
+        cross9   = _cross(ema9)
+        cross20  = _cross(ema20)
+        cross34  = _cross(ema34)
+        cross50  = _cross(ema50)
+        cross89  = _cross(ema89)
+        cross200 = _cross(ema200)
+
+        drop9   = _drop(ema9)
+        drop20  = _drop(ema20)
+        drop34  = _drop(ema34)
+        drop50  = _drop(ema50)
+        drop89  = _drop(ema89)
+        drop200 = _drop(ema200)
+
+        # PREUP priority
+        raw_p66 = cross200 and (cross9 or cross20 or cross34 or cross50 or cross89)
+        raw_p55 = cross89  and (cross9 or cross20 or cross34 or cross50 or cross200)
+        raw_p3  = cross9 and cross20 and cross50
+        raw_p2  = cross9 and cross20
+        raw_p50 = cross50
+
+        if   raw_p66:
+            preup: Optional[str] = "P66"
+        elif raw_p55 and not raw_p66:
+            preup = "P55"
+        elif cross89 and not raw_p55 and not raw_p66:
+            preup = "P89"
+        elif raw_p3  and not raw_p55 and not raw_p66 and not cross89:
+            preup = "P3"
+        elif raw_p2  and not raw_p3 and not raw_p55 and not raw_p66 and not cross89:
+            preup = "P2"
+        elif raw_p50 and not raw_p2 and not raw_p3 and not raw_p55 and not raw_p66 and not cross89:
+            preup = "P50"
+        else:
+            preup = None
+
+        # PREDN priority (mirror with drop)
+        raw_d66 = drop200 and (drop9 or drop20 or drop34 or drop50 or drop89)
+        raw_d55 = drop89  and (drop9 or drop20 or drop34 or drop50 or drop200)
+        raw_d3  = drop9 and drop20 and drop50
+        raw_d2  = drop9 and drop20
+        raw_d50 = drop50
+
+        if   raw_d66:
+            predn: Optional[str] = "D66"
+        elif raw_d55 and not raw_d66:
+            predn = "D55"
+        elif drop89 and not raw_d55 and not raw_d66:
+            predn = "D89"
+        elif raw_d3  and not raw_d55 and not raw_d66 and not drop89:
+            predn = "D3"
+        elif raw_d2  and not raw_d3 and not raw_d55 and not raw_d66 and not drop89:
+            predn = "D2"
+        elif raw_d50 and not raw_d2 and not raw_d3 and not raw_d55 and not raw_d66 and not drop89:
+            predn = "D50"
+        else:
+            predn = None
+
+        # ── Suffix system ─────────────────────────────────────────────────────
+        if prev_h is not None and prev_l is not None:
+            ne_suffix = "E" if (c > prev_h or c < prev_l) else "N"
+
+            wick_ext_up   = h > prev_h
+            wick_ext_down = l < prev_l
+            if wick_ext_up and wick_ext_down:
+                wick_suffix = "B"
+            elif wick_ext_up:
+                wick_suffix = "U"
+            elif wick_ext_down:
+                wick_suffix = "D"
+            else:
+                wick_suffix = ""
+
+            prev_o1 = opens_[i - 1]
+            prev_c1 = closes[i - 1]
+            prev_body_top = max(prev_o1, prev_c1)
+            prev_body_bot = min(prev_o1, prev_c1)
+
+            wick_in_upper = (h >= prev_body_top) and (h <= prev_h)
+            wick_in_lower = (l <= prev_body_bot) and (l >= prev_l)
+            if wick_in_upper and wick_in_lower:
+                pen_suffix = "H"
+            elif wick_in_upper:
+                pen_suffix = "P"
+            elif wick_in_lower:
+                pen_suffix = "R"
+            else:
+                pen_suffix = ""
+
+            close_above = c > prev_body_top
+            close_below = c < prev_body_bot
+            close_suffix = "A" if close_above else "O" if close_below else "I"
+
+            append_close = (
+                (ne_suffix == "E" and wick_suffix == "B") or
+                (ne_suffix == "N" and (wick_suffix != "" or pen_suffix != ""))
+            )
+        else:
+            ne_suffix    = "N"
+            wick_suffix  = ""
+            pen_suffix   = ""
+            close_suffix = "I"
+            append_close = False
+
+        # ── Label construction ────────────────────────────────────────────────
+        l_part = ("L" + l_digits) if l_digits else ""
+
+        if t_signal:
+            lane_core = t_signal + l_part
+        elif not z_signal:
+            lane_core = l_part
+        else:
+            lane_core = ""
+
+        z_core = (z_signal + l_part) if z_signal else ""
+
+        if lane_core:
+            suffix_line = ne_suffix + wick_suffix + pen_suffix + (close_suffix if append_close else "")
+            label = lane_core + "\n" + suffix_line
+        elif z_core:
+            suffix_line = ne_suffix + wick_suffix + pen_suffix + (close_suffix if append_close else "")
+            label = z_core + "\n" + suffix_line
+        else:
+            label = ""
+
+        result.append({
+            "date":     date_val,
+            "o": o, "h": h, "l": l, "c": c, "v": int(v),
+            "is_bull":  is_bull,
+            "is_bear":  is_bear,
+            "bucket":   bucket,
+            # T/Z
+            "t_signal": t_signal,
+            "z_signal": z_signal,
+            # WLNBB
+            "l34":    l34,
+            "l43":    l43,
+            "l64":    l64,
+            "be_up":  be_up,
+            # Full L-digits
+            "l_digits": l_digits,
+            # PREUP / PREDN
+            "preup":  preup,
+            "predn":  predn,
+            # Suffix
+            "ne":           ne_suffix,
+            "wick":         wick_suffix,
+            "pen":          pen_suffix,
+            "close_suf":    close_suffix,
+            "append_close": append_close,
+            # Combined label
+            "label": label,
+        })
+
+    # Return only last `last_n` bars (oldest → newest)
+    return result[-last_n:] if last_n < n else result

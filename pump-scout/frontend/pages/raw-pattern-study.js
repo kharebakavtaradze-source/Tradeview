@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import AppNav from '../components/AppNav';
+import BarLabels from '../components/BarLabels';
 import styles from '../styles/RawPatternStudy.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -4194,6 +4195,10 @@ export default function RawPatternStudy() {
   // Active tab in main panel
   const [activeTab, setActiveTab] = useState('episodes');
 
+  // Bar labels symbol lookup
+  const [barLabelsSym, setBarLabelsSym] = useState('');
+  const [barLabelsInput, setBarLabelsInput] = useState('');
+
   // Launch form
   const [psRunId,   setPsRunId]   = useState('');
   const [notes,     setNotes]     = useState('');
@@ -4497,6 +4502,7 @@ export default function RawPatternStudy() {
                     { id: 'discovery',    label: 'Pattern Discovery' },
                     { id: 'ai',           label: 'AI Summary' },
                     { id: 'patch-plan',   label: 'Engine Plan' },
+                    { id: 'bar-labels',   label: 'Bar Labels' },
                   ].map(({ id, label }) => (
                     <button
                       key={id}
@@ -4576,6 +4582,50 @@ export default function RawPatternStudy() {
                   run.status !== 'complete'
                     ? <div className={styles.statusMsg}>Engine plan available after run completes.</div>
                     : <EnginePatchPlan key={selectedId} runId={selectedId} />
+                )}
+
+                {/* Bar Labels tab */}
+                {activeTab === 'bar-labels' && (
+                  <div style={{ padding: '12px 0' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+                      <input
+                        style={{
+                          background: '#0d1117',
+                          border: '1px solid #374151',
+                          borderRadius: 4,
+                          color: '#e5e7eb',
+                          padding: '5px 10px',
+                          fontSize: 12,
+                          fontFamily: 'var(--font-mono, monospace)',
+                          width: 100,
+                          textTransform: 'uppercase',
+                        }}
+                        placeholder="Symbol…"
+                        value={barLabelsInput}
+                        onChange={e => setBarLabelsInput(e.target.value.toUpperCase())}
+                        onKeyDown={e => e.key === 'Enter' && setBarLabelsSym(barLabelsInput.trim())}
+                      />
+                      <button
+                        style={{
+                          background: '#1a2a1a',
+                          border: '1px solid #4caf5055',
+                          color: '#4caf50',
+                          borderRadius: 4,
+                          padding: '5px 12px',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => setBarLabelsSym(barLabelsInput.trim())}
+                      >
+                        Load
+                      </button>
+                    </div>
+                    {barLabelsSym
+                      ? <BarLabels symbol={barLabelsSym} />
+                      : <div className={styles.statusMsg}>Enter a symbol to view bar labels.</div>
+                    }
+                  </div>
                 )}
               </>
             )}
