@@ -1277,6 +1277,14 @@ async def demand_scanner_latest(
     }
 
 
+@app.get("/api/demand-scanner/history/{symbol}")
+async def demand_ticker_history(symbol: str, limit: int = 30):
+    """Per-scan score trajectory for a single ticker."""
+    from database import get_demand_ticker_history as _gdth
+    rows = await _gdth(symbol.upper(), limit=min(limit, 60))
+    return {"symbol": symbol.upper(), "history": rows}
+
+
 @app.post("/api/demand-scanner/narrative")
 async def demand_scanner_narrative(request: Request):
     """Generate an AI setup narrative for a single demand scanner result."""
@@ -1370,6 +1378,36 @@ async def demand_scanner_narrative(request: Request):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/demand-scanner/similar/{symbol}")
+async def demand_similar_pumps(symbol: str, top_n: int = 5):
+    """Find historical pump episodes most similar to this ticker's current setup."""
+    from scanner.demand_similarity import find_similar
+
+    # Get current scanner result for this symbol
+    latest = await get_latest_scan()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No scan data available")
+
+    results = latest.get("results", [])
+    candidate = next((r for r in results if r.get("symbol") == symbol.upper()), None)
+    if not candidate:
+        raise HTTPException(status_code=404, detail=f"{symbol} not in latest scan")
+
+    # Get all pump episodes from DB
+    from database import get_pump_study_runs, get_pump_episodes
+    runs = await get_pump_study_runs(limit=5)
+    episodes = []
+    for run in runs:
+        eps = await get_pump_episodes(run["id"], limit=300)
+        episodes.extend(eps)
+
+    if not episodes:
+        return {"symbol": symbol.upper(), "similar": [], "note": "No pump study data available"}
+
+    similar = find_similar(candidate, episodes, top_n=min(top_n, 10))
+    return {"symbol": symbol.upper(), "similar": similar, "candidate_score": candidate.get("demand_composite_score")}
 
 
 # ─── Scanner v2 — New Pump as structural core ─────────────────────────────────
