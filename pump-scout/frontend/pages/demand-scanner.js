@@ -5,7 +5,8 @@ import AppNav from '../components/AppNav';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const API = '/api/demand-scanner/latest';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API = `${API_URL}/api/demand-scanner/latest`;
 
 const TIER_META = {
   PRIME_BUY:     { label: 'PRIME',      color: '#34d399', bg: 'rgba(52,211,153,0.15)' },
@@ -495,7 +496,7 @@ export default function DemandScannerPage() {
     if (narratives[sym] || narrativeLoading === sym) return;
     setNarrativeLoading(sym);
     try {
-      const res  = await fetch('/api/demand-scanner/narrative', {
+      const res  = await fetch(`${API_URL}/api/demand-scanner/narrative`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(row),
