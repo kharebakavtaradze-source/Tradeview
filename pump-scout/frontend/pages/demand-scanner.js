@@ -275,6 +275,113 @@ function ReadinessBreakdown({ bd = {}, breakoutSignal, freshness, rsPct, floatTi
   );
 }
 
+// ── Score History ─────────────────────────────────────────────────────────────
+
+const TIER_COLORS_MINI = {
+  PRIME_BUY:     '#4ade80',
+  HIGH_CONF_BUY: '#fbbf24',
+  BUY_WATCH:     '#60a5fa',
+  SETUP_MONITOR: '#9ca3af',
+  SKIP:          '#374151',
+};
+
+function ScoreHistory({ symbol }) {
+  const [hist, setHist] = useState([]);
+  useEffect(() => {
+    if (!symbol) return;
+    fetch(`${API_URL}/api/demand-scanner/history/${symbol}?limit=20`)
+      .then(r => r.json())
+      .then(d => setHist((d.history || []).reverse()))
+      .catch(() => {});
+  }, [symbol]);
+  if (hist.length < 2) return null;
+  const maxScore = Math.max(...hist.map(h => h.combined_score || 0), 10);
+  const W = 300, H = 48, pad = 4;
+  const pts = hist.map((h, i) => {
+    const x = pad + (i / (hist.length - 1)) * (W - pad * 2);
+    const y = H - pad - ((h.combined_score || 0) / maxScore) * (H - pad * 2);
+    return [x, y, h];
+  });
+  const pathD = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const latest = hist[hist.length - 1];
+  return (
+    <div style={{ marginTop: 8 }}>
+      <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
+        <path d={pathD} fill="none" stroke="#374151" strokeWidth={1.5} />
+        {pts.map(([x, y, h], i) => (
+          <circle key={i} cx={x} cy={y} r={3}
+            fill={TIER_COLORS_MINI[h.demand_composite_tier] || '#374151'}
+            title={`${h.scanned_at?.slice(0,10)} score:${h.combined_score} ${h.demand_composite_tier}`}
+          />
+        ))}
+      </svg>
+      <div style={{ display: 'flex', gap: 12, fontSize: 9, color: '#6b7280', marginTop: 2 }}>
+        <span>↑ Combined score over {hist.length} scans</span>
+        <span>Latest: <span style={{ color: TIER_COLORS_MINI[latest?.demand_composite_tier] || '#9ca3af', fontWeight: 700 }}>{latest?.demand_composite_tier}</span> {latest?.combined_score}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Similar Pumps ─────────────────────────────────────────────────────────────
+
+function SimilarPumps({ symbol }) {
+  const [data, setData]   = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = () => {
+    if (loading || data) return;
+    setLoading(true);
+    fetch(`${API_URL}/api/demand-scanner/similar/${symbol}?top_n=5`)
+      .then(r => r.json())
+      .then(d => setData(d))
+      .catch(() => setData({ similar: [] }))
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <div>
+      {!data && !loading && (
+        <button onClick={load} style={{
+          background: '#1f2937', border: '1px solid #374151', color: '#9ca3af',
+          borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 11,
+        }}>Find Similar Pumps</button>
+      )}
+      {loading && <div style={{ color: '#6b7280', fontSize: 11 }}>Searching...</div>}
+      {data?.note && <div style={{ color: '#6b7280', fontSize: 11 }}>{data.note}</div>}
+      {data?.similar?.length > 0 && (
+        <div>
+          {data.similar.map((ep, i) => (
+            <div key={i} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '5px 0', borderBottom: '1px solid #1f2937',
+            }}>
+              <div>
+                <span style={{ color: '#f9fafb', fontWeight: 700, fontSize: 12 }}>{ep.symbol}</span>
+                <span style={{ color: '#9ca3af', fontSize: 10, marginLeft: 6 }}>{ep.pump_start_date}</span>
+                {ep.pump_type && (
+                  <span style={{ color: '#6b7280', fontSize: 9, marginLeft: 6 }}>{ep.pump_type}</span>
+                )}
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <span style={{ color: '#4ade80', fontWeight: 700, fontSize: 13 }}>
+                  {ep.pump_multiple ? `${ep.pump_multiple.toFixed(1)}×` : '?'}
+                </span>
+                <span style={{ color: '#9ca3af', fontSize: 9, marginLeft: 6 }}>
+                  sim:{(ep.similarity * 100).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          ))}
+          {data.similar.length === 0 && (
+            <div style={{ color: '#6b7280', fontSize: 11 }}>No similar episodes found</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Drawer ────────────────────────────────────────────────────────────────────
 
 function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrative }) {
@@ -314,6 +421,14 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
         <div style={{ marginTop: 10 }}>
           <ScoreBreakdown bd={row.demand_score_breakdown || {}} />
         </div>
+      </div>
+
+      {/* Score trajectory */}
+      <div style={{ background: '#1f2937', borderRadius: 8, padding: '12px 14px', marginBottom: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          Score History
+        </div>
+        <ScoreHistory symbol={row.symbol} />
       </div>
 
       {/* Readiness */}
@@ -469,6 +584,14 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
             {narrative}
           </p>
         )}
+      </div>
+
+      {/* Similar historical pumps */}
+      <div style={{ background: '#1f2937', borderRadius: 8, padding: '12px 14px', marginBottom: 12, marginTop: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          Historical Analogues
+        </div>
+        <SimilarPumps symbol={row.symbol} />
       </div>
     </div>
   );

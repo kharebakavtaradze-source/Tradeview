@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, select, text
+from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -451,6 +451,24 @@ class StockSplitCache(Base):
     __table_args__ = (
         UniqueConstraint("symbol", "execution_date", name="uq_split_symbol_date"),
     )
+
+
+class DemandTickerHistory(Base):
+    """Per-ticker demand score snapshot saved after each scan run."""
+    __tablename__ = "demand_ticker_history"
+
+    id                    = Column(Integer, primary_key=True)
+    scanned_at            = Column(DateTime, default=datetime.utcnow, index=True)
+    symbol                = Column(String(10), nullable=False, index=True)
+    demand_composite_score= Column(Float,   nullable=True)
+    demand_composite_tier = Column(String(20), nullable=True)
+    readiness_score       = Column(Float,   nullable=True)
+    readiness_tier        = Column(String(10), nullable=True)
+    combined_score        = Column(Float,   nullable=True)
+    ats_signal            = Column(String(20), nullable=True)
+    dryup_streak          = Column(Integer, nullable=True)
+    vol_ratio             = Column(Float,   nullable=True)
+    confluence_signals    = Column(String(120), nullable=True)   # comma-separated list
 
 
 _SCAN_CANDIDATE_MIGRATIONS = [
@@ -1007,6 +1025,97 @@ async def get_scan_history(days: int = 30) -> List[dict]:
             logger.warning(f"Error parsing scan #{scan.id}: {e}")
 
     return history
+
+
+async def save_demand_ticker_history(results: list[dict], scanned_at=None) -> int:
+    """Save per-ticker demand scores from a scan. Keeps 30 days of history per symbol."""
+    from datetime import datetime as _dt
+    ts = scanned_at or _dt.utcnow()
+    if not results:
+        return 0
+    saved = 0
+    async with get_session_factory()() as session:
+        for r in results:
+            sym  = r.get("symbol")
+            tier = r.get("demand_composite_tier", "SKIP")
+            if not sym or tier == "SKIP":
+                continue
+            row = DemandTickerHistory(
+                scanned_at             = ts,
+                symbol                 = sym,
+                demand_composite_score = r.get("demand_composite_score"),
+                demand_composite_tier  = tier,
+                readiness_score        = r.get("readiness_score"),
+                readiness_tier         = r.get("readiness_tier"),
+                combined_score         = r.get("combined_score"),
+                ats_signal             = r.get("ats_signal"),
+                dryup_streak           = r.get("dc_dryup_streak"),
+                vol_ratio              = r.get("dc_vol_ratio"),
+                confluence_signals     = ",".join(r.get("confluence_signals") or []),
+            )
+            session.add(row)
+            saved += 1
+        await session.commit()
+    # Prune rows older than 30 days
+    try:
+        from datetime import timedelta
+        cutoff = ts - timedelta(days=30)
+        async with get_session_factory()() as session:
+            old = await session.execute(
+                select(DemandTickerHistory).where(DemandTickerHistory.scanned_at < cutoff)
+            )
+            for row in old.scalars():
+                await session.delete(row)
+            await session.commit()
+    except Exception:
+        pass
+    return saved
+
+
+async def get_demand_ticker_history(symbol: str, limit: int = 30) -> list[dict]:
+    """Return per-scan score history for one symbol, newest first."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(DemandTickerHistory)
+            .where(DemandTickerHistory.symbol == symbol.upper())
+            .order_by(DemandTickerHistory.scanned_at.desc())
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+    return [
+        {
+            "scanned_at":             r.scanned_at.isoformat(),
+            "demand_composite_score": r.demand_composite_score,
+            "demand_composite_tier":  r.demand_composite_tier,
+            "readiness_score":        r.readiness_score,
+            "readiness_tier":         r.readiness_tier,
+            "combined_score":         r.combined_score,
+            "ats_signal":             r.ats_signal,
+            "dryup_streak":           r.dryup_streak,
+            "vol_ratio":              r.vol_ratio,
+            "confluence_signals":     [s for s in (r.confluence_signals or "").split(",") if s],
+        }
+        for r in rows
+    ]
+
+
+async def get_demand_all_histories(limit_per_sym: int = 10) -> list[dict]:
+    """Return recent history rows for all symbols that appeared in last scan (for timeline view)."""
+    async with get_session_factory()() as session:
+        # Get distinct symbols that have appeared recently
+        result = await session.execute(
+            select(DemandTickerHistory.symbol)
+            .group_by(DemandTickerHistory.symbol)
+            .order_by(func.max(DemandTickerHistory.scanned_at).desc())
+            .limit(200)
+        )
+        syms = [r[0] for r in result.fetchall()]
+
+    all_rows = []
+    for sym in syms:
+        rows = await get_demand_ticker_history(sym, limit=limit_per_sym)
+        all_rows.extend(rows)
+    return all_rows
 
 
 async def get_watchlist() -> List[dict]:
