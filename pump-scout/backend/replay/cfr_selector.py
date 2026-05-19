@@ -329,6 +329,15 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
         has_custom_confirm = True
         reasons.append("fri64_volume_confirmation")
 
+    # DISC_EMA_CLUSTER_RECLAIM_001: EMA50 reclaim + bull stack = structural
+    # momentum alignment. R154: rel=0.709, 18×4x, 0% split, add_to_pump_watch.
+    ema50_reclaim_pre  = int(ep.get("ema50_reclaim_count_pre")  or 0)
+    bull_stack_days_pre = int(ep.get("bull_stack_days_pre")     or 0)
+    if ema50_reclaim_pre >= 2 and bull_stack_days_pre >= 3:
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("ema_cluster_reclaim")
+
     # Penalty: repeated L64 without trigger
     if has_l64_many and not has_strong_trigger:
         custom_pts -= 1
