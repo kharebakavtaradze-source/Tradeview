@@ -1,7 +1,7 @@
 """
 Demand Composite Scanner — pump-scout signal fusion layer.
 
-Combines all research signals from R154–R156 into a single composite score
+Combines all research signals from R154–R157 into a single composite score
 with a custom ACCUMULATION_TRAP_SIGNAL (ATS) and tiered BUY recommendations.
 
 Signal stack:
@@ -10,6 +10,7 @@ Signal stack:
   Tier 3 — Demand bar signals      (has_l34_np_ld, has_wc_gap_ld, D-confluence)
   Tier 4 — ATS composite signal    (custom — see below)
   Tier 5 — Context modifiers       (sector, macro, sympathy, hype)
+  Tier 6 — CFR_A flow signals      (OBV accumulation, lower-wick absorption)
 
 ACCUMULATION_TRAP_SIGNAL (ATS):
   Fires when ALL 5 conditions hold on the current bar:
@@ -209,6 +210,7 @@ def _compute_readiness(
     m: dict,
     result: dict,
     candles: Optional[list[dict]] = None,
+    bar_labels: Optional[list[dict]] = None,
 ) -> dict:
     """
     5-gap readiness layer — answers "is this ready to MOVE, not just to set up?"
@@ -338,27 +340,28 @@ def _compute_readiness(
     # L-bucket = still inside Bollinger squeeze = coiled energy.
     conf_score = 0
     confluence_signals: list[str] = []
-    if candles and len(candles) >= 5:
+    _labels = bar_labels  # use pre-computed labels if caller already fetched them
+    if _labels is None and candles and len(candles) >= 5:
         try:
             from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
-            labels = compute_combined_bar_labels(candles, last_n=5)
-            if labels:
-                last  = labels[-1]
-                prev  = labels[-2] if len(labels) >= 2 else {}
-                prev2 = labels[-3] if len(labels) >= 3 else {}
-                # PREUP: EMA stack aligning bullish
-                if last.get("preup"):
-                    conf_score += 2; confluence_signals.append("PREUP_NOW")
-                elif prev.get("preup") or prev2.get("preup"):
-                    conf_score += 1; confluence_signals.append("PREUP_RECENT")
-                # T1/T2 demand bar in last 3 bars
-                if any(l.get("t_signal") in ("T1", "T2") for l in (last, prev, prev2)):
-                    conf_score += 1; confluence_signals.append("T1T2_BAR")
-                # Still in Bollinger squeeze (L bucket)
-                if last.get("bucket") == "L":
-                    conf_score += 1; confluence_signals.append("WLNBB_L")
+            _labels = compute_combined_bar_labels(candles, last_n=5)
         except Exception:
-            pass
+            _labels = []
+    if _labels:
+        last  = _labels[-1]
+        prev  = _labels[-2] if len(_labels) >= 2 else {}
+        prev2 = _labels[-3] if len(_labels) >= 3 else {}
+        # PREUP: EMA stack aligning bullish
+        if last.get("preup"):
+            conf_score += 2; confluence_signals.append("PREUP_NOW")
+        elif prev.get("preup") or prev2.get("preup"):
+            conf_score += 1; confluence_signals.append("PREUP_RECENT")
+        # T1/T2 demand bar in last 3 bars
+        if any(lb.get("t_signal") in ("T1", "T2") for lb in (last, prev, prev2)):
+            conf_score += 1; confluence_signals.append("T1T2_BAR")
+        # Still in Bollinger squeeze (L bucket)
+        if last.get("bucket") == "L":
+            conf_score += 1; confluence_signals.append("WLNBB_L")
 
     # ── Combine ───────────────────────────────────────────────────────────────
     total = cat_score + brk_score + flt_score + frsh_score + rs_score + conf_score
@@ -436,6 +439,97 @@ def _compute_ats(m: dict, r: dict) -> tuple[str, list[str], list[str]]:
     return signal, met, missing
 
 
+# ── CFR_A flow divergence signals (Run #157) ─────────────────────────────────
+
+def _compute_flow_signals(
+    candles: list[dict],
+    avg_vol_20d: float = 0,
+) -> dict:
+    """
+    Flow divergence signals from CFR_A research (Run #157).
+
+    Boosts:
+      OBV_ACCUM          OBV net accumulation > 15% of 5d avg vol (+1.5)
+      LOWER_WICK_ABSORB  avg lower-wick ≥ 30% of bar range, last 3 bars (+1.0)
+      LOWER_WICK_PARTIAL avg lower-wick ≥ 20%                              (+0.5)
+
+    Penalties (contra-signals — more common in false positives per R157):
+      OBV_DISTRIB        OBV net distribution > 15% of 5d avg vol         (-0.5)
+      EMA_SPREAD_WIDE    EMA9 > 12% above EMA50 — price already extended  (-1.0)
+      EMA_SPREAD_ELEVATED EMA9 > 8% above EMA50                           (-0.5)
+
+    Returns flow_score (-1.5 to +2.5), flow_signals, flow_risks.
+    """
+    if not candles or len(candles) < 10:
+        return {"flow_score": 0.0, "flow_signals": [], "flow_risks": []}
+
+    flow_score   = 0.0
+    flow_signals: list[str] = []
+    flow_risks:   list[str] = []
+
+    # ── OBV 5-bar accumulation trend ─────────────────────────────────────────
+    # Rising OBV during price compression = smart-money footprint (R157 #1 signal)
+    src    = candles[-11:]
+    closes = [b.get("close") or b.get("c") or 0.0 for b in src]
+    vols   = [b.get("volume") or b.get("v") or 0    for b in src]
+
+    obv  = 0.0
+    obvs = [0.0]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv += vols[i]
+        elif closes[i] < closes[i - 1]:
+            obv -= vols[i]
+        obvs.append(obv)
+
+    if len(obvs) >= 6 and avg_vol_20d > 0:
+        obv_5d_net = obvs[-1] - obvs[-6]
+        obv_pct    = obv_5d_net / (avg_vol_20d * 5)
+        if obv_pct > 0.15:
+            flow_score += 1.5; flow_signals.append("OBV_ACCUM")
+        elif obv_pct < -0.15:
+            flow_score -= 0.5; flow_risks.append("OBV_DISTRIB")
+
+    # ── Lower-wick absorption (buy pressure at lows) ──────────────────────────
+    # Buyers stepping in at the lows = absorption = accumulation footprint
+    recent  = candles[-3:]
+    lw_pcts = []
+    for b in recent:
+        h   = b.get("high")  or b.get("h") or 0
+        l   = b.get("low")   or b.get("l") or 0
+        o   = b.get("open")  or b.get("o") or 0
+        c   = b.get("close") or b.get("c") or 0
+        rng = max(h - l, 1e-9)
+        lw_pcts.append((min(o, c) - l) / rng)
+
+    avg_lw = sum(lw_pcts) / len(lw_pcts) if lw_pcts else 0.0
+    if avg_lw >= 0.30:
+        flow_score += 1.0; flow_signals.append("LOWER_WICK_ABSORB")
+    elif avg_lw >= 0.20:
+        flow_score += 0.5; flow_signals.append("LOWER_WICK_PARTIAL")
+
+    # ── EMA spread penalty (contra-signal: wide spread = extended = FP risk) ─
+    # avg_ema_spread_pre 0.68× lift in R157 FP — price already trending = late
+    if len(candles) >= 20:
+        all_c   = [b.get("close") or b.get("c") or 0.0 for b in candles]
+        ema9_s  = _ema(all_c, 9)
+        ema50_s = _ema(all_c, 50)
+        if ema9_s and ema50_s:
+            e9, e50 = ema9_s[-1], ema50_s[-1]
+            if e50 > 0:
+                spread = (e9 - e50) / e50 * 100
+                if spread > 12.0:
+                    flow_score -= 1.0; flow_risks.append("EMA_SPREAD_WIDE")
+                elif spread > 8.0:
+                    flow_score -= 0.5; flow_risks.append("EMA_SPREAD_ELEVATED")
+
+    return {
+        "flow_score":   round(max(-1.5, min(2.5, flow_score)), 2),
+        "flow_signals": flow_signals,
+        "flow_risks":   flow_risks,
+    }
+
+
 # ── Main composite scorer ────────────────────────────────────────────────────
 
 def score_demand_composite(
@@ -457,6 +551,15 @@ def score_demand_composite(
 
     price   = result.get("price") or 0.0
     avg_vol = result.get("avg_volume_20d") or 0
+
+    # ── Bar labels — computed once, shared by readiness Gap 6 + flow section ──
+    bar_labels: list[dict] = []
+    if candles and len(candles) >= 5:
+        try:
+            from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+            bar_labels = compute_combined_bar_labels(candles, last_n=5) or []
+        except Exception:
+            pass
 
     # ── Candle metrics ────────────────────────────────────────────────────────
     m: dict = {}
@@ -603,6 +706,16 @@ def score_demand_composite(
     breakdown["context"] = ctx
     score += ctx
 
+    # ── 6. CFR_A flow divergence signals (max +2.5 / min −1.5) ──────────────
+    flow = _compute_flow_signals(candles or [], avg_vol)
+    flow_pts = max(-1.5, min(2.5, flow["flow_score"]))
+    breakdown["flow"] = flow_pts
+    score += flow_pts
+    if flow["flow_signals"]:
+        reasons.extend(f"flow:{s.lower()}" for s in flow["flow_signals"])
+    if flow["flow_risks"]:
+        risks.extend(f"flow:{r.lower()}" for r in flow["flow_risks"])
+
     # ── Structure penalties ───────────────────────────────────────────────────
     exp_risk = result.get("expansion_timing_risk") or ""
     if exp_risk == "HIGH":
@@ -634,8 +747,8 @@ def score_demand_composite(
         tier = "BUY_WATCH"
         risks.append("tier_capped_expansion_risk")
 
-    # ── Readiness layer (5 gap-fills) ─────────────────────────────────────────
-    readiness = _compute_readiness(m, result, candles)
+    # ── Readiness layer (6 gap-fills; bar_labels pre-computed above) ──────────
+    readiness = _compute_readiness(m, result, candles, bar_labels=bar_labels)
 
     return {
         "demand_composite_score":   final,
@@ -663,6 +776,9 @@ def score_demand_composite(
         # Readiness layer (includes confluence_signals, confluence sub-score)
         **readiness,
         "combined_score":           round(final + readiness["readiness_score"], 2),
+        # CFR_A flow divergence signals
+        "flow_signals":             flow["flow_signals"],
+        "flow_risks":               flow["flow_risks"],
     }
 
 

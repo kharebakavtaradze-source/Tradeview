@@ -77,6 +77,13 @@ async def send_message(text: str) -> bool:
 
 # ── Demand composite formatter ────────────────────────────────────────────────
 
+_FLOW_ABBREV = {
+    "OBV_ACCUM":          "OBV↑",
+    "LOWER_WICK_ABSORB":  "LW↑↑",
+    "LOWER_WICK_PARTIAL": "LW↑",
+}
+
+
 def _fmt_row(r: dict) -> str:
     sym     = r.get("symbol", "?")
     price   = r.get("price") or 0.0
@@ -85,6 +92,7 @@ def _fmt_row(r: dict) -> str:
     ready_s = r.get("readiness_score") or 0
     ats     = r.get("ats_signal", "")
     conf    = r.get("confluence_signals") or []
+    flow    = r.get("flow_signals") or []
     dryup   = r.get("dc_dryup_streak") or 0
     brk     = r.get("breakout_signal", "")
 
@@ -98,6 +106,8 @@ def _fmt_row(r: dict) -> str:
         parts.append("+".join(
             c.replace("_NOW", "").replace("_RECENT", "~") for c in conf[:3]
         ))
+    if flow:
+        parts.append("+".join(_FLOW_ABBREV.get(s, s) for s in flow[:2]))
     if dryup:
         parts.append(f"dryup:{dryup}d")
     if brk and brk not in ("COILING", ""):
