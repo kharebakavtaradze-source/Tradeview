@@ -168,12 +168,13 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
 
 # ── Non-stock exclusion cache ─────────────────────────────────────────────────
 # Covers: ETF, ETN, ETV (exchange-traded vehicles), FUND (open-end funds),
-# CEF (closed-end funds — Polygon's dedicated type), plus a hardcoded safety
-# net for leveraged/inverse products and crypto spot ETFs that Polygon may
-# list under unusual types or CS (common stock).
+# CEF (closed-end funds — Polygon's dedicated type), WARRANT (exchange-listed
+# warrants, e.g. ABVEW / ARQQW / CCCXW), RIGHT (rights offerings), plus a
+# hardcoded safety net for leveraged/inverse products and crypto spot ETFs that
+# Polygon may list under unusual types or CS (common stock).
 
 # Polygon security types to exclude (all are non-equity instruments)
-_EXCLUDED_POLYGON_TYPES = ("ETF", "ETN", "ETV", "FUND", "CEF")
+_EXCLUDED_POLYGON_TYPES = ("ETF", "ETN", "ETV", "FUND", "CEF", "WARRANT", "RIGHT")
 
 # Known leveraged/inverse products, crypto spot ETFs, and other non-stock
 # instruments — safety net for anything misclassified or newly listed.
@@ -229,8 +230,8 @@ _excluded_cache_date: Optional[str] = None
 async def get_us_etf_symbols() -> set[str]:
     """
     Fetch all non-stock securities from Polygon reference API.
-    Covers ETF, ETN, ETV, FUND, CEF types + hardcoded leveraged/inverse/crypto
-    safety net. Cached in memory for 7 days.
+    Covers ETF, ETN, ETV, FUND, CEF, WARRANT, RIGHT types + hardcoded
+    leveraged/inverse/crypto safety net. Cached in memory for 7 days.
     Returns set of uppercase ticker strings.
 
     Kept as get_us_etf_symbols() for backwards-compat with all call sites.
@@ -286,7 +287,7 @@ async def get_us_etf_symbols() -> set[str]:
         _excluded_cache      = excluded
         _excluded_cache_date = today
         logger.info(f"Exclusion cache refreshed: {len(excluded)} total symbols "
-                    f"(ETF/ETN/ETV/FUND/CEF + {len(_HARDCODED_EXCLUSIONS)} hardcoded)")
+                    f"(ETF/ETN/ETV/FUND/CEF/WARRANT/RIGHT + {len(_HARDCODED_EXCLUSIONS)} hardcoded)")
     else:
         logger.warning("Polygon returned 0 results — using hardcoded exclusions only")
         _excluded_cache      = excluded   # still use the hardcoded set
