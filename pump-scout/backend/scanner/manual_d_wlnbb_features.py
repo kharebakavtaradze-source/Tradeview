@@ -670,10 +670,13 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     _FAMILY_MAP = {
         "D4_THEN_BEUP_5B": "D_THEN_BEUP",   "D6_THEN_BEUP_5B": "D_THEN_BEUP",   "D3_THEN_BEUP_5B": "D_THEN_BEUP",
         "D4_BEUP":         "SAME_BAR_BEUP",  "D6_BEUP":         "SAME_BAR_BEUP",  "D3_BEUP":         "SAME_BAR_BEUP",
+        "D1_BEUP":         "SAME_BAR_BEUP",  "D11_BEUP":        "SAME_BAR_BEUP",  "D9_BEUP":         "SAME_BAR_BEUP",
         "L34_THEN_D4_3B":  "L34_THEN_D",     "L34_THEN_D6_3B":  "L34_THEN_D",     "L34_THEN_D3_3B":  "L34_THEN_D",
         "D4_L34":          "SAME_BAR_L34",   "D6_L34":          "SAME_BAR_L34",   "D3_L34":          "SAME_BAR_L34",
+        "D1_L34":          "SAME_BAR_L34",   "D11_L34":         "SAME_BAR_L34",   "D9_L34":          "SAME_BAR_L34",
         "L43_THEN_D4_3B":  "L43_THEN_D",     "L43_THEN_D6_3B":  "L43_THEN_D",     "L43_THEN_D3_3B":  "L43_THEN_D",
         "D4_L43":          "SAME_BAR_L43",   "D6_L43":          "SAME_BAR_L43",   "D3_L43":          "SAME_BAR_L43",
+        "D1_L43":          "SAME_BAR_L43",   "D11_L43":         "SAME_BAR_L43",   "D9_L43":          "SAME_BAR_L43",
         "SECONDARY_D_WINDOW":     "SECONDARY",
         "SECONDARY_D_CONFLUENCE": "SECONDARY",
         "D_ONLY": "D_ONLY", "NONE": "NONE",
@@ -684,10 +687,13 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     _TIMING_MAP = {
         "D4_THEN_BEUP_5B": "D_THEN_BEUP_5B", "D6_THEN_BEUP_5B": "D_THEN_BEUP_5B", "D3_THEN_BEUP_5B": "D_THEN_BEUP_5B",
         "D4_BEUP":         "SAME_BAR",        "D6_BEUP":         "SAME_BAR",        "D3_BEUP":         "SAME_BAR",
+        "D1_BEUP":         "SAME_BAR",        "D11_BEUP":        "SAME_BAR",        "D9_BEUP":         "SAME_BAR",
         "L34_THEN_D4_3B":  "BASE_THEN_D_3B",  "L34_THEN_D6_3B":  "BASE_THEN_D_3B",  "L34_THEN_D3_3B":  "BASE_THEN_D_3B",
         "D4_L34":          "SAME_BAR",        "D6_L34":          "SAME_BAR",        "D3_L34":          "SAME_BAR",
+        "D1_L34":          "SAME_BAR",        "D11_L34":         "SAME_BAR",        "D9_L34":          "SAME_BAR",
         "L43_THEN_D4_3B":  "BASE_THEN_D_3B",  "L43_THEN_D6_3B":  "BASE_THEN_D_3B",  "L43_THEN_D3_3B":  "BASE_THEN_D_3B",
         "D4_L43":          "SAME_BAR",        "D6_L43":          "SAME_BAR",        "D3_L43":          "SAME_BAR",
+        "D1_L43":          "SAME_BAR",        "D11_L43":         "SAME_BAR",        "D9_L43":          "SAME_BAR",
         "SECONDARY_D_WINDOW":     "BASE_THEN_D_3B",
         "SECONDARY_D_CONFLUENCE": "SAME_BAR",
         "D_ONLY": "NONE", "NONE": "NONE",
@@ -711,10 +717,13 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
     _WLNBB_SIG_MAP = {
         "D4_THEN_BEUP_5B": "BE_UP", "D6_THEN_BEUP_5B": "BE_UP", "D3_THEN_BEUP_5B": "BE_UP",
         "D4_BEUP": "BE_UP", "D6_BEUP": "BE_UP", "D3_BEUP": "BE_UP",
+        "D1_BEUP": "BE_UP", "D11_BEUP": "BE_UP", "D9_BEUP": "BE_UP",
         "L34_THEN_D4_3B": "L34", "L34_THEN_D6_3B": "L34", "L34_THEN_D3_3B": "L34",
         "D4_L34": "L34", "D6_L34": "L34", "D3_L34": "L34",
+        "D1_L34": "L34", "D11_L34": "L34", "D9_L34": "L34",
         "L43_THEN_D4_3B": "L43", "L43_THEN_D6_3B": "L43", "L43_THEN_D3_3B": "L43",
         "D4_L43": "L43", "D6_L43": "L43", "D3_L43": "L43",
+        "D1_L43": "L43", "D11_L43": "L43", "D9_L43": "L43",
     }
     wlnbb_sig = _WLNBB_SIG_MAP.get(type_v2)
     if wlnbb_sig is None:
