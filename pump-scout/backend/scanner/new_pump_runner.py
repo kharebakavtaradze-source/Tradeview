@@ -578,6 +578,14 @@ async def run_new_pump_scan(
             "elapsed_secs": elapsed,
             "finished_at":  datetime.now(timezone.utc).isoformat(),
         })
+
+        # ── Step 9: Record signal outcomes for AI pattern learning ──────────────
+        try:
+            from ai_journal import record_scan_signals
+            asyncio.create_task(record_scan_signals(results))
+        except Exception as _so_exc:
+            logger.debug(f"[NpRunner] signal outcome recording skipped: {_so_exc}")
+
         return _latest
 
     except Exception as exc:
