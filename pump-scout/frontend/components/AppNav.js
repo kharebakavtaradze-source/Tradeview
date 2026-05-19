@@ -18,6 +18,7 @@ const NAV_LINKS = [
   { href: '/pump-study',        label: 'Pump Study' },
   { href: '/raw-pattern-study', label: 'Raw Patterns' },
   { href: '/demand-scanner',    label: 'Demand Scanner' },
+  { href: '/ai-journal',        label: 'AI Journal' },
   { href: '/admin',             label: 'Admin' },
   { href: '/design-system',  label: 'Design System' },
 ];
