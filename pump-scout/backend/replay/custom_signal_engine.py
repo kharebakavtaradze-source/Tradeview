@@ -61,9 +61,10 @@ CTAG_FULL_FRI34_G4_B2 = "FULL_FRI34_G4_B2"
 CTAG_CONFIRM_AFTER_G4 = "CONFIRM_AFTER_G4"
 
 # Volume context
-CTAG_VBO  = "VBO"
-CTAG_LVBO = "LVBO"
-CTAG_LD   = "LD"
+CTAG_VBO       = "VBO"
+CTAG_LVBO      = "LVBO"
+CTAG_LD        = "LD"
+CTAG_WC_GAP_LD = "WC_GAP_LD"   # two-bar: prev weak-close → gap-up + lower-wick reclaim
 
 # ABR/TZ quality tags (research-only)
 CTAG_ABR_A      = "ABR_A"       # ABR classification A (strongest)
@@ -119,7 +120,7 @@ ALL_CUSTOM_TAGS: list[str] = [
     CTAG_TRIGGER_AFTER_L34, CTAG_TRIGGER_AFTER_FRI34,
     CTAG_TRIGGER_AFTER_L43, CTAG_TRIGGER_AFTER_FRI64,
     CTAG_FULL_L34_G4_B2, CTAG_FULL_FRI34_G4_B2, CTAG_CONFIRM_AFTER_G4,
-    CTAG_VBO, CTAG_LVBO, CTAG_LD,
+    CTAG_VBO, CTAG_LVBO, CTAG_LD, CTAG_WC_GAP_LD,
     # ABR/TZ
     CTAG_ABR_A, CTAG_ABR_B_PLUS, CTAG_ABR_B, CTAG_ABR_R,
     CTAG_ABR_SP500, CTAG_ABR_NASDAQ,
@@ -152,7 +153,7 @@ def bars_to_custom_tags(snap: dict) -> list[str]:
     Reads pre-populated boolean fields extracted from feature_json:
       has_l43, has_l34, has_l22, has_l64, has_fri34, has_fri64,
       has_d3_beup, has_d4_beup, has_d6_beup, has_d4_l34, has_d3_l34,
-      has_vbo, has_lvbo, has_ld, np_is_setup, np_is_trigger.
+      has_vbo, has_lvbo, has_ld, has_wc_gap_ld, np_is_setup, np_is_trigger.
 
     Returns sorted list of CTAG_* strings; [CTAG_CUSTOM_FLAT] when no
     signal is active.
@@ -195,10 +196,11 @@ def bars_to_custom_tags(snap: dict) -> list[str]:
     if np_trigger and has_fri34: tags.append(CTAG_TRIGGER_AFTER_FRI34)
     if np_trigger and has_fri64: tags.append(CTAG_TRIGGER_AFTER_FRI64)
 
-    # Volume context
-    if snap.get("has_vbo"):  tags.append(CTAG_VBO)
-    if snap.get("has_lvbo"): tags.append(CTAG_LVBO)
-    if snap.get("has_ld"):   tags.append(CTAG_LD)
+    # Volume / demand context
+    if snap.get("has_vbo"):       tags.append(CTAG_VBO)
+    if snap.get("has_lvbo"):      tags.append(CTAG_LVBO)
+    if snap.get("has_ld"):        tags.append(CTAG_LD)
+    if snap.get("has_wc_gap_ld"): tags.append(CTAG_WC_GAP_LD)
 
     # ABR classification (research-only) — prefer SP500 rules, fall back to NASDAQ
     abr_sp500  = snap.get("abr_sp500")

@@ -1479,11 +1479,25 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
         d9   = d.get("d9",  False)
         d11  = d.get("d11", False)
 
-        # has_ld pre-computation: close position and lower-wick fraction
+        # has_ld / has_wc_gap_ld pre-computation
         _cb  = candles[i]
         _rng = max(_cb["high"] - _cb["low"], 1e-6)
         _pos = (_cb["close"] - _cb["low"]) / _rng          # 0=low, 1=high
         _lwk = (min(_cb["open"], _cb["close"]) - _cb["low"]) / _rng
+
+        # Two-bar: prev weak-close → cur gap-up + lower-wick reclaim
+        if i > 0:
+            _pb   = candles[i - 1]
+            _pb_r = max(_pb["high"] - _pb["low"], 1e-6)
+            _pb_pos = (_pb["close"] - _pb["low"]) / _pb_r      # prev close position
+            _gap_up = _cb["open"] > _pb["close"] * 1.002       # ≥0.2% gap up
+            _wc_gap_ld = bool(
+                _pb_pos <= 0.35                                 # prev bar weak close
+                and _gap_up
+                and _pos >= 0.50 and _lwk >= 0.20              # cur bar lower-wick reclaim
+            )
+        else:
+            _wc_gap_ld = False
 
         flags: dict = {
             "has_l34":        bool(l34),
@@ -1516,6 +1530,9 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
             # Classic supply-exhaustion / dryup-test that precedes setups.
             "has_ld":         bool(bkt == "N" and not beup and not bup
                                    and _pos >= 0.50 and _lwk >= 0.20),
+            # has_wc_gap_ld: Two-bar pattern. Prev bar weak-close → cur bar gaps
+            # up and reclaims lower wick (demand). R154: rel=0.814, Tier-1 clean.
+            "has_wc_gap_ld":  _wc_gap_ld,
             "np_is_setup":    bool(i in np_l34_set or i in np_fri34_set),
             "np_is_trigger":  bool(i in np_g4_set),
         }
