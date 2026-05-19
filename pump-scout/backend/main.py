@@ -115,6 +115,11 @@ async def lifespan(app: FastAPI):
         await _load_universe()
     except Exception as _exc:
         logger.warning(f"Universe snapshot bootstrap failed (non-fatal): {_exc}")
+    try:
+        from scanner.new_pump_runner import load_latest_from_db as _load_scan
+        await _load_scan()
+    except Exception as _exc:
+        logger.warning(f"Demand scan restore failed (non-fatal): {_exc}")
     start_scheduler()
     yield
     stop_scheduler()
@@ -1232,10 +1237,14 @@ async def demand_scanner_latest(
 
     ATS (Accumulation Trap Signal): 5-condition candle-level composite.
     """
-    from scanner.new_pump_runner import get_latest
+    from scanner.new_pump_runner import get_latest, load_latest_from_db
     from scanner.demand_composite_scanner import apply_demand_composite, TIER_ORDER
 
-    data    = get_latest()
+    data = get_latest()
+    # If in-memory is empty (fresh deploy), try DB restore once
+    if not data.get("results"):
+        await load_latest_from_db()
+        data = get_latest()
     results = data.get("results", [])
 
     exclusions = await _get_exclusion_set()
@@ -1278,6 +1287,30 @@ async def demand_scanner_latest(
             "tier": tier, "ats_signal": ats_signal,
             "min_score": min_score, "limit": limit,
         },
+    }
+
+
+@app.post("/api/demand-scanner/run")
+@app.get("/api/demand-scanner/run")
+async def demand_scanner_run(background_tasks: BackgroundTasks):
+    """Trigger a fresh demand scan in the background. Poll /api/demand-scanner/status."""
+    from scanner.new_pump_runner import is_running, run_new_pump_scan
+    if is_running():
+        return {"status": "already_running", "message": "Scan already in progress"}
+    background_tasks.add_task(run_new_pump_scan)
+    return {"status": "started", "message": "Demand scan started"}
+
+
+@app.get("/api/demand-scanner/status")
+async def demand_scanner_status():
+    """Live progress for the running demand scan."""
+    from scanner.new_pump_runner import is_running, get_progress, get_latest
+    data = get_latest()
+    return {
+        **get_progress(),
+        "has_results": bool(data.get("results")),
+        "scanned_at":  data.get("scanned_at"),
+        "result_count": len(data.get("results", [])),
     }
 
 
