@@ -300,24 +300,31 @@ const EP_COLS = [
   { key: 'group_type',                              label: 'Group',           mono: false },
   { key: 'pump_multiple',                           label: 'Mult',            mono: true,  fmt: v => v != null ? `${Number(v).toFixed(2)}×` : '—' },
   { key: 'pump_type',                               label: 'Type',            mono: true,  fmt: v => v || '—', small: true },
+  // ── Pump Watch labeling ──────────────────────────────────────────────────────
+  { key: 'pump_watch_label',                        label: 'PW Label',        mono: true,  fmt: v => (v || '—').replace('PUMP_WATCH_','').replace('PUMP_',''), small: true,
+    colorFn: v => v === 'PUMP_WATCH_HIGH' ? '#86efac' : v === 'PUMP_WATCH_MEDIUM' ? '#6ee7b7' : v === 'PUMP_SPECULATIVE' ? '#fde68a' : v === 'PUMP_IGNORE' ? '#fb7185' : undefined },
+  { key: 'pump_watch_score',                        label: 'PW Score',        mono: true  },
+  // ── Signal pre-counts (inputs to CFR scoring) ────────────────────────────────
+  { key: 'bull_stack_days_pre',                     label: 'BullStkD',        mono: true  },
+  { key: 'ema50_reclaim_count_pre',                 label: 'EMA50Rec',        mono: true  },
+  { key: 'dryup_day_count_pre',                     label: 'DryupDays',       mono: true  },
+  // ── Timing ──────────────────────────────────────────────────────────────────
   { key: 'days_in_base',                            label: 'Base d',          mono: true  },
-  { key: 'days_from_first_abnormal_volume_to_breakout', label: 'AbVol→Brk', mono: true  },
   { key: 'days_from_breakout_to_peak',              label: 'Brk→Peak',        mono: true  },
+  // ── Volume ──────────────────────────────────────────────────────────────────
   { key: 'max_volume_anomaly_pre',                  label: 'MaxVol×',         mono: true,  fmt: v => v != null ? Number(v).toFixed(1) : '—' },
   { key: 'abnormal_volume_day_count_pre',           label: 'AbVolDays',       mono: true  },
+  // ── Compression / structure ──────────────────────────────────────────────────
   { key: 'had_compression',                         label: 'Comp?',           mono: true,  fmt: v => v ? '✓' : '—' },
   { key: 'compression_days_pre',                    label: 'CmpDays',         mono: true  },
   { key: 'had_accumulation_like',                   label: 'Acc?',            mono: true,  fmt: v => v ? '✓' : '—' },
   { key: 'had_spring_test_lps',                     label: 'Spr?',            mono: true,  fmt: v => v ? '✓' : '—' },
-  { key: 'avg_body_pct_pre',                        label: 'AvgBody',         mono: true,  fmt: v => v != null ? `${(v * 100).toFixed(0)}%` : '—' },
-  { key: 'bullish_engulfing_count_pre',             label: 'BullEng',         mono: true  },
   { key: 'reclaim_bar_count_pre',                   label: 'Reclaim',         mono: true  },
+  // ── Split context ────────────────────────────────────────────────────────────
   { key: 'split_context',                           label: 'SplitCtx',        mono: false },
   { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠ YES' : '—', colorFn: v => v ? '#fb7185' : undefined },
-  { key: 'nearest_split_ratio',                     label: 'SplitRatio',      mono: true,  fmt: v => v != null ? `${Number(v).toFixed(2)}×` : '—' },
-  { key: 'nearest_split_days_from_breakout',        label: 'SplitΔBrk',      mono: true  },
+  // ── Scanner / structure signals ──────────────────────────────────────────────
   { key: 'dominant_structure_phase_pre',            label: 'StrPhase',        mono: false },
-  { key: 'had_confirmed_structure_pre',             label: 'Confirmed?',      mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
   { key: 'had_np_buy_candidate_pre',                label: 'NPBuy?',          mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
   { key: 'd_confluence_best_type_pre',              label: 'DType',           mono: true,  fmt: v => v || '—', small: true },
 ];

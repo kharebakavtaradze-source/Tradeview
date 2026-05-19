@@ -1390,7 +1390,9 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
       has_d1_l43, has_d9_l43, has_d11_l43 — Manual-D × L43 same-bar (secondary)
       has_vbo                             — be_up_wlnbb AND bucket in (B, VB)
       has_lvbo                            — break_up_wlnbb AND bucket == N
-      has_ld                              — not yet implemented (always False)
+      has_ld                              — quiet day, close upper-half, lower wick ≥20%
+      has_wc_gap_ld                       — two-bar: prev weak-close → gap-up + lower-wick reclaim
+      has_l34_np_ld                       — L34 + NP setup state + lower-wick reclaim same bar
       np_is_setup                         — NP-engine L34 or FRI34 on this bar
       np_is_trigger                       — NP-engine G4 on this bar
     """
