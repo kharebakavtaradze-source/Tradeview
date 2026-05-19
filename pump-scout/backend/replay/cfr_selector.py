@@ -286,8 +286,10 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
 
     has_l34  = custom.get("l34",   0) > 0
     has_l43  = custom.get("l43",   0) > 0
+    has_l22  = custom.get("l22",   0) > 0
     has_l64_many = custom.get("l64", 0) >= 5   # repeated = stress
     has_l64_any  = custom.get("l64", 0) > 0
+    has_fri64    = custom.get("fri64", 0) > 0
     has_vbo  = custom.get("vbo",   0) > 0
     has_lvbo = custom.get("lvbo",  0) > 0
     has_d4_beup = custom.get("d4_beup", 0) > 0
@@ -299,6 +301,12 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
         custom_pts += 1
         has_custom_confirm = True
         reasons.append("l34_l43_with_flow_setup")
+
+    # L22 (tightest compression) with any flow setup = strong squeeze signal
+    if has_l22 and has_flow_setup:
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("l22_compression_with_flow_setup")
 
     if (has_d4_beup or has_d6_beup) and clean:
         custom_pts += 1
@@ -314,6 +322,12 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
         custom_pts += 1
         has_custom_confirm = True
         reasons.append("d_l34_combo")
+
+    # FRI64 (volume-z + RSI-stable + L64) confirms setup or trigger
+    if has_fri64 and (has_flow_setup or has_strong_trigger):
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("fri64_volume_confirmation")
 
     # Penalty: repeated L64 without trigger
     if has_l64_many and not has_strong_trigger:
@@ -376,6 +390,20 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
     if price_bucket == "PRICE_MICRO_LT_050" and dv_bucket in ("DV_ILLIQUID_LT_50K", "DV_THIN_50K_250K"):
         risk_pts -= 1
         risk_flags.append("micro_price_illiquid")
+
+    # ≥5 extreme-volume anomaly days in pre-period → data is likely corrupt or
+    # the stock was already pumped/dumped before the episode window (0.67x lift).
+    extreme_anom_pre = int(ep.get("extreme_anomaly_day_count_pre") or 0)
+    if extreme_anom_pre >= 5:
+        risk_pts -= 1
+        risk_flags.append("extreme_anomaly_pre")
+
+    # ≥8 valid-trigger days in pre-period → over-triggered setup; empirically
+    # more common in false positives than real 4x pumps (0.67x lift).
+    valid_trigger_pre = int(ep.get("valid_trigger_days_pre") or 0)
+    if valid_trigger_pre >= 8:
+        risk_pts -= 1
+        risk_flags.append("over_triggered_setup")
 
     # Pure bearish stress without trigger
     pure_bearish = (

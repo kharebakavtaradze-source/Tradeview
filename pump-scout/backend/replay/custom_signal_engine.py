@@ -48,8 +48,12 @@ CTAG_D6_THEN_BEUP_5B = "D6_THEN_BEUP_5B"
 # Setup-only and trigger-state context
 CTAG_SETUP_ONLY_L34      = "SETUP_ONLY_L34"
 CTAG_SETUP_ONLY_FRI34    = "SETUP_ONLY_FRI34"
+CTAG_SETUP_ONLY_L43      = "SETUP_ONLY_L43"
+CTAG_SETUP_ONLY_FRI64    = "SETUP_ONLY_FRI64"
 CTAG_TRIGGER_AFTER_L34   = "TRIGGER_AFTER_L34"
 CTAG_TRIGGER_AFTER_FRI34 = "TRIGGER_AFTER_FRI34"
+CTAG_TRIGGER_AFTER_L43   = "TRIGGER_AFTER_L43"
+CTAG_TRIGGER_AFTER_FRI64 = "TRIGGER_AFTER_FRI64"
 
 # Full-sequence confirmation tags (setup → trigger within 3 bars)
 CTAG_FULL_L34_G4_B2   = "FULL_L34_G4_B2"
@@ -111,7 +115,9 @@ ALL_CUSTOM_TAGS: list[str] = [
     CTAG_D4_L34, CTAG_D3_L34,
     CTAG_D3_THEN_BEUP_5B, CTAG_D4_THEN_BEUP_5B, CTAG_D6_THEN_BEUP_5B,
     CTAG_SETUP_ONLY_L34, CTAG_SETUP_ONLY_FRI34,
+    CTAG_SETUP_ONLY_L43, CTAG_SETUP_ONLY_FRI64,
     CTAG_TRIGGER_AFTER_L34, CTAG_TRIGGER_AFTER_FRI34,
+    CTAG_TRIGGER_AFTER_L43, CTAG_TRIGGER_AFTER_FRI64,
     CTAG_FULL_L34_G4_B2, CTAG_FULL_FRI34_G4_B2, CTAG_CONFIRM_AFTER_G4,
     CTAG_VBO, CTAG_LVBO, CTAG_LD,
     # ABR/TZ
@@ -176,12 +182,18 @@ def bars_to_custom_tags(snap: dict) -> list[str]:
     np_setup   = snap.get("np_is_setup")
     np_trigger = snap.get("np_is_trigger")
     has_l34    = snap.get("has_l34")
+    has_l43    = snap.get("has_l43")
     has_fri34  = snap.get("has_fri34")
+    has_fri64  = snap.get("has_fri64")
 
-    if np_setup   and has_l34:  tags.append(CTAG_SETUP_ONLY_L34)
+    if np_setup   and has_l34:   tags.append(CTAG_SETUP_ONLY_L34)
+    if np_setup   and has_l43:   tags.append(CTAG_SETUP_ONLY_L43)
     if np_setup   and has_fri34: tags.append(CTAG_SETUP_ONLY_FRI34)
-    if np_trigger and has_l34:  tags.append(CTAG_TRIGGER_AFTER_L34)
+    if np_setup   and has_fri64: tags.append(CTAG_SETUP_ONLY_FRI64)
+    if np_trigger and has_l34:   tags.append(CTAG_TRIGGER_AFTER_L34)
+    if np_trigger and has_l43:   tags.append(CTAG_TRIGGER_AFTER_L43)
     if np_trigger and has_fri34: tags.append(CTAG_TRIGGER_AFTER_FRI34)
+    if np_trigger and has_fri64: tags.append(CTAG_TRIGGER_AFTER_FRI64)
 
     # Volume context
     if snap.get("has_vbo"):  tags.append(CTAG_VBO)
