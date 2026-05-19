@@ -179,6 +179,7 @@ function ScoreBreakdown({ bd = {} }) {
     { key: 'demand_bars',     label: 'Demand',    color: '#34d399' },
     { key: 'ats',             label: 'ATS',       color: '#fbbf24' },
     { key: 'context',         label: 'Context',   color: '#f472b6' },
+    { key: 'flow',            label: 'Flow',      color: '#22d3ee' },
     { key: 'expansion_penalty', label: 'Exp Pen', color: '#f87171' },
   ];
   return (
@@ -217,6 +218,18 @@ const CONFLUENCE_META = {
   PREUP_RECENT: { label: 'PREUP~',    color: '#86efac', title: 'PREUP signal in last 2–3 bars' },
   T1T2_BAR:     { label: 'T1/T2',     color: '#34d399', title: 'Strong demand bar (T1 or T2) in last 3 days' },
   WLNBB_L:      { label: 'BB-L',      color: '#22d3ee', title: 'Inside low Bollinger Band compression (L bucket)' },
+};
+
+const FLOW_SIGNAL_META = {
+  OBV_ACCUM:            { label: 'OBV ▲',       color: '#34d399', title: 'OBV net accumulation >15% of 5d avg vol — smart money buying quietly' },
+  LOWER_WICK_ABSORB:    { label: 'LWick ▲▲',    color: '#4ade80', title: 'Avg lower wick ≥30% of bar range last 3 bars — buyers absorbing supply at lows' },
+  LOWER_WICK_PARTIAL:   { label: 'LWick ▲',     color: '#86efac', title: 'Avg lower wick ≥20% of bar range — partial lower-wick absorption' },
+};
+
+const FLOW_RISK_META = {
+  OBV_DISTRIB:          { label: 'OBV ▼',        color: '#f87171', title: 'OBV net distribution — selling pressure accumulating' },
+  EMA_SPREAD_WIDE:      { label: 'EMA wide',     color: '#ef4444', title: 'EMA9 >12% above EMA50 — price already extended, late entry risk' },
+  EMA_SPREAD_ELEVATED:  { label: 'EMA elev',     color: '#fbbf24', title: 'EMA9 >8% above EMA50 — EMAs spread, some extension risk' },
 };
 
 function ReadinessBreakdown({ bd = {}, breakoutSignal, freshness, rsPct, floatTier, catalyst, confluenceSignals = [] }) {
@@ -455,6 +468,45 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
             catalyst={row.catalyst_proxy}
             confluenceSignals={row.confluence_signals || []}
           />
+        </div>
+      )}
+
+      {/* Flow Divergence */}
+      {((row.flow_signals?.length > 0) || (row.flow_risks?.length > 0)) && (
+        <div style={{ background: '#1f2937', borderRadius: 8, padding: '12px 14px', marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              Flow Divergence <span style={{ color: '#374151', fontWeight: 400 }}>(CFR_A · R157)</span>
+            </div>
+            {row.demand_score_breakdown?.flow != null && row.demand_score_breakdown.flow !== 0 && (
+              <span style={{
+                fontSize: 11, fontWeight: 700,
+                color: row.demand_score_breakdown.flow > 0 ? '#22d3ee' : '#f87171',
+              }}>
+                {row.demand_score_breakdown.flow > 0 ? '+' : ''}{row.demand_score_breakdown.flow.toFixed(1)} pts
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {(row.flow_signals || []).map(sig => {
+              const m = FLOW_SIGNAL_META[sig] || { label: sig, color: '#22d3ee', title: '' };
+              return (
+                <span key={sig} title={m.title} style={{
+                  background: 'rgba(34,211,238,0.1)', border: `1px solid ${m.color}`,
+                  color: m.color, borderRadius: 4, padding: '1px 6px', fontSize: 9, fontWeight: 700,
+                }}>{m.label}</span>
+              );
+            })}
+            {(row.flow_risks || []).map(r => {
+              const m = FLOW_RISK_META[r] || { label: r, color: '#f87171', title: '' };
+              return (
+                <span key={r} title={m.title} style={{
+                  background: 'rgba(239,68,68,0.08)', border: `1px solid ${m.color}40`,
+                  color: m.color, borderRadius: 4, padding: '1px 6px', fontSize: 9, fontWeight: 700,
+                }}>{m.label}</span>
+              );
+            })}
+          </div>
         </div>
       )}
 
