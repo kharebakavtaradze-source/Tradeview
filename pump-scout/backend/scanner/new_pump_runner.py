@@ -67,6 +67,28 @@ def get_progress() -> dict:
     return dict(_np_progress)
 
 
+async def load_latest_from_db() -> bool:
+    """
+    Restore the most recent demand scan from the database into _latest.
+    Called at startup so results survive deploys.
+    Returns True if a scan was loaded.
+    """
+    global _latest
+    try:
+        from database import get_latest_scan
+        data = await get_latest_scan()
+        if data and data.get("results"):
+            _latest = data
+            logger.info(
+                f"[NpRunner] Restored scan from DB: "
+                f"{len(data['results'])} results from {data.get('scanned_at', '?')}"
+            )
+            return True
+    except Exception as exc:
+        logger.warning(f"[NpRunner] DB restore failed (non-fatal): {exc}")
+    return False
+
+
 # ── Main runner ────────────────────────────────────────────────────────────────
 
 async def run_new_pump_scan(

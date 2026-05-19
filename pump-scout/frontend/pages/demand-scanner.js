@@ -1060,6 +1060,10 @@ export default function DemandScannerPage() {
   const [sortCol,   setSortCol]   = useState('demand_composite_score');
   const [sortDir,   setSortDir]   = useState('desc');
 
+  const [scanning,     setScanning]     = useState(false);
+  const [scanProgress, setScanProgress] = useState(null);
+  const [scanError,    setScanError]    = useState(null);
+
   const fetchNarrative = useCallback(async (row) => {
     const sym = row.symbol;
     if (narratives[sym] || narrativeLoading === sym) return;
@@ -1095,6 +1099,38 @@ export default function DemandScannerPage() {
   }, [tierF, atsF, minScore, limit]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  const triggerScan = useCallback(async () => {
+    setScanError(null);
+    try {
+      const res  = await fetch(`${API_URL}/api/demand-scanner/run`, { method: 'POST' });
+      const json = await res.json();
+      if (json.status === 'already_running' || json.status === 'started') {
+        setScanning(true);
+      }
+    } catch (e) {
+      setScanError(`Failed to start scan: ${e}`);
+    }
+  }, []);
+
+  // Poll scan status while a scan is running
+  useEffect(() => {
+    if (!scanning) return;
+    const poll = setInterval(async () => {
+      try {
+        const res  = await fetch(`${API_URL}/api/demand-scanner/status`);
+        const json = await res.json();
+        setScanProgress(json);
+        if (!json.running && (json.phase === 'done' || json.phase === 'error')) {
+          setScanning(false);
+          clearInterval(poll);
+          if (json.phase === 'done') fetchData();
+          if (json.phase === 'error') setScanError(json.last_error || 'Scan failed');
+        }
+      } catch (_) {}
+    }, 2000);
+    return () => clearInterval(poll);
+  }, [scanning, fetchData]);
 
   const rawResults = data?.results || [];
   const results = readyF
@@ -1250,7 +1286,41 @@ export default function DemandScannerPage() {
           >
             Refresh
           </button>
+          <button
+            onClick={triggerScan}
+            disabled={scanning}
+            style={{
+              background: scanning ? '#374151' : '#065f46',
+              color: scanning ? '#9ca3af' : '#34d399',
+              border: `1px solid ${scanning ? '#4b5563' : '#34d399'}`,
+              borderRadius: 6, padding: '6px 14px', fontSize: 11, fontWeight: 600,
+              cursor: scanning ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {scanning ? 'Scanning…' : 'Scan Today'}
+          </button>
         </div>
+
+        {/* Scan progress banner */}
+        {scanning && scanProgress && (
+          <div style={{
+            background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 8,
+            padding: '10px 16px', margin: '8px 0', display: 'flex', alignItems: 'center',
+            gap: 12, fontSize: 11, color: '#93c5fd', flexWrap: 'wrap',
+          }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#3b82f6', animation: 'pulse 1.5s infinite' }} />
+            <span style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#60a5fa' }}>
+              {scanProgress.phase?.replace(/_/g, ' ')}
+            </span>
+            {scanProgress.universe_size > 0 && <span>Universe: {scanProgress.universe_size.toLocaleString()}</span>}
+            {scanProgress.analyzed_count > 0 && <span>Analyzed: {scanProgress.analyzed_count}</span>}
+            {scanProgress.fire_count > 0 && <span style={{ color: '#34d399' }}>PRIME: {scanProgress.fire_count}</span>}
+            {scanProgress.elapsed_secs > 0 && <span style={{ color: '#6b7280' }}>{scanProgress.elapsed_secs}s</span>}
+          </div>
+        )}
+        {scanError && (
+          <div style={{ padding: '8px 16px', color: '#f87171', fontSize: 11 }}>{scanError}</div>
+        )}
 
         {/* State */}
         {loading && <div className={styles.summaryBar} style={{ padding: '16px 20px', color: '#9ca3af', fontSize: 13 }}>Loading…</div>}
