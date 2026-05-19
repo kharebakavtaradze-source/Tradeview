@@ -78,6 +78,8 @@ from database import (
     # Pump Study AI Layer
     get_pump_ai_summary,
     save_pump_ai_summary,
+    save_demand_ticker_history,
+    get_demand_ticker_history,
 )
 from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
@@ -171,6 +173,13 @@ async def _run_scan_background():
     try:
         result = await run_scan()
         await save_scan(result)
+        # Also persist per-ticker demand scores for trajectory tracking
+        try:
+            from database import save_demand_ticker_history as _sdth
+            from datetime import datetime as _dt
+            await _sdth(result.get("results", []), _dt.utcnow())
+        except Exception as _e:
+            logger.warning(f"save_demand_ticker_history failed (non-fatal): {_e}")
         logger.info("Manual scan complete and saved")
         await send_scan_alert(result)
     except Exception as e:
