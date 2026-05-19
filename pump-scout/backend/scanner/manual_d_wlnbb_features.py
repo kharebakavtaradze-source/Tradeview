@@ -812,20 +812,24 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
 
     # ── Two-bar demand pattern: prev weak-close → gap-up + lower-wick reclaim ──
     # Mirrors has_wc_gap_ld computed in pump_study_engine._compute_per_bar_custom_flags.
+    _cb_r   = max(candles[i]["high"] - candles[i]["low"], 1e-6)
+    _cb_pos = (candles[i]["close"] - candles[i]["low"]) / _cb_r
+    _cb_lwk = (min(candles[i]["open"], candles[i]["close"]) - candles[i]["low"]) / _cb_r
+
     _has_wc_gap_ld = False
     if i > 0:
-        _cb   = candles[i]
-        _pb   = candles[i - 1]
-        _pb_r = max(_pb["high"] - _pb["low"], 1e-6)
+        _pb     = candles[i - 1]
+        _pb_r   = max(_pb["high"] - _pb["low"], 1e-6)
         _pb_pos = (_pb["close"] - _pb["low"]) / _pb_r
-        _cb_r = max(_cb["high"] - _cb["low"], 1e-6)
-        _cb_pos = (_cb["close"] - _cb["low"]) / _cb_r
-        _cb_lwk = (min(_cb["open"], _cb["close"]) - _cb["low"]) / _cb_r
-        _gap_up = _cb["open"] > _pb["close"] * 1.002
+        _gap_up = candles[i]["open"] > _pb["close"] * 1.002
         _has_wc_gap_ld = bool(
             _pb_pos <= 0.35 and _gap_up
             and _cb_pos >= 0.50 and _cb_lwk >= 0.20
         )
+
+    # L34 + lower-wick reclaim on same bar (scanner approximation of has_l34_np_ld;
+    # NP engine state is not available here — l34 being active is the proxy).
+    _has_l34_np_ld = bool(l34 and _cb_pos >= 0.50 and _cb_lwk >= 0.20)
 
     return {
         # ── D signals ─────────────────────────────────────────────────────────
@@ -871,8 +875,9 @@ def compute_d_wlnbb_confluence(candles: list[dict]) -> dict:
         "d_confluence_core_signal":  core_sig,
         "d_confluence_wlnbb_signal": wlnbb_sig,
         "window_explanation":        expl,
-        # ── Two-bar demand ────────────────────────────────────────────────────
-        "has_wc_gap_ld": _has_wc_gap_ld,
+        # ── Two-bar / same-bar demand ─────────────────────────────────────────
+        "has_wc_gap_ld":  _has_wc_gap_ld,
+        "has_l34_np_ld":  _has_l34_np_ld,
         # ── Triple: D + L34 + BE_UP same-bar (research/reporting only) ────────
         "d3_l34_beup_same":  d3_l34_beup_same,
         "d4_l34_beup_same":  d4_l34_beup_same,
@@ -931,8 +936,9 @@ def _empty_confluence() -> dict:
         "d_confluence_core_signal":  "NONE",
         "d_confluence_wlnbb_signal": "NONE",
         "window_explanation":        "",
-        # Two-bar demand
-        "has_wc_gap_ld": False,
+        # Two-bar / same-bar demand
+        "has_wc_gap_ld":  False,
+        "has_l34_np_ld":  False,
         # Triple: D + L34 + BE_UP same-bar
         "d3_l34_beup_same": False, "d4_l34_beup_same": False, "d6_l34_beup_same": False,
         "core_d_l34_beup_same": False,

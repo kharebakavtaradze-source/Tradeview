@@ -58,7 +58,7 @@ _pattern_episode_ids_cache: dict[int, dict[str, dict]] = {}
 _REAL_CUSTOM_TAGS: frozenset[str] = frozenset({
     "L43", "L34", "L64", "L22", "FRI34", "FRI64",
     "D3_BEUP", "D4_BEUP", "D6_BEUP", "D3_L34", "D4_L34",
-    "VBO", "LVBO", "LD", "G4", "B2",
+    "VBO", "LVBO", "LD", "WC_GAP_LD", "L34_NP_LD", "G4", "B2",
 })
 
 # Save-mode rejected-pattern limits
@@ -1447,7 +1447,8 @@ async def build_discovery_export(
         "has_fri34", "has_fri64",
         "has_d3_beup", "has_d4_beup", "has_d6_beup",
         "has_d4_l34", "has_d3_l34",
-        "has_vbo", "has_lvbo", "has_ld",
+        "has_vbo", "has_lvbo",
+        "has_ld", "has_wc_gap_ld", "has_l34_np_ld",
         "np_is_setup", "np_is_trigger",
     ]
     _ctag_counts: dict[str, int] = {k: 0 for k in _custom_flag_keys}
@@ -1776,6 +1777,11 @@ async def build_discovery_export(
          and not _sig_has_tag(p, "L43")],
         lambda x: -(x["reliability_score"] or 0), min(50, n))
 
+    top_custom_demand_patterns = _top(
+        [p for p in custom_working + flow_custom_working
+         if any(_sig_has_tag(p, t) for t in ("LD", "WC_GAP_LD", "L34_NP_LD"))],
+        lambda x: -(x["reliability_score"] or 0), min(50, n))
+
     # Subtype-specific FLOW rankings (sorted by reliability_score)
     top_flow_divergence = _top(
         [p for p in flow_working if p.get("flow_subtype") == "FLOW_DIVERGENCE"],
@@ -2079,6 +2085,7 @@ async def build_discovery_export(
             "top_custom_l43_patterns":           top_custom_l43_patterns,
             "top_custom_d_confluence_patterns":  top_custom_d_confluence_patterns,
             "top_custom_l_series_patterns":      top_custom_l_series_patterns,
+            "top_custom_demand_patterns":        top_custom_demand_patterns,
             "regime_analysis":                   regime_analysis,
             "registry_snapshot":                 registry,
             "ranking_formula_version":           _RANKING_FORMULA_VERSION,
@@ -2144,6 +2151,7 @@ async def build_discovery_export(
         "top_custom_l43_patterns":               top_custom_l43_patterns,
         "top_custom_d_confluence_patterns":      top_custom_d_confluence_patterns,
         "top_custom_l_series_patterns":          top_custom_l_series_patterns,
+        "top_custom_demand_patterns":            top_custom_demand_patterns,
         "regime_analysis":                       regime_analysis,
         "registry_snapshot":                     registry,
         "ranking_formula_version":               _RANKING_FORMULA_VERSION,

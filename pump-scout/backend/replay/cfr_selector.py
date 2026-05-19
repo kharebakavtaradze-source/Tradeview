@@ -119,7 +119,7 @@ def _aggregate_custom_signals(daily_rows: list[dict]) -> dict:
         "d3_beup": 0, "d4_beup": 0, "d6_beup": 0,
         "d4_l34": 0, "d3_l34": 0,
         "vbo": 0, "lvbo": 0,
-        "ld": 0, "wc_gap_ld": 0,
+        "ld": 0, "wc_gap_ld": 0, "l34_np_ld": 0,
     }
     for row in daily_rows:
         fj = row.get("feature_json") or {}
@@ -194,15 +194,16 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
     split_art    = bool(ep.get("split_artifact_risk"))
 
     # ── 1. Pump Watch base ──────────────────────────────────────────────────
-    # R152 calibration: SPECULATIVE 4x rate (0.287) > HIGH (0.250) = MEDIUM (0.250)
-    # Compress HIGH/MEDIUM spread; give SPECULATIVE unconditional base point
+    # R155 calibration: MEDIUM 4x_rate (28.9%) >= HIGH (27.9%) — equalize pts.
+    # R155 also confirmed: SPECULATIVE dropped to 22.0% (was 28.3% in R154,
+    # which was inflated by split artifacts). IGNORE = 14.8% — good separation.
     pw_pts = 0
     speculative_base = False
     if pw_label == "PUMP_WATCH_HIGH":
-        pw_pts = 3              # was 4 — HIGH/MEDIUM parity on 4x rate doesn't justify +4
+        pw_pts = 3
         reasons.append("pump_watch_high")
     elif pw_label == "PUMP_WATCH_MEDIUM":
-        pw_pts = 2              # was 3
+        pw_pts = 3              # R155: MEDIUM ≥ HIGH on 4x rate — equalized
         reasons.append("pump_watch_medium")
     elif pw_label == "PUMP_SPECULATIVE":
         speculative_base = True  # +1 unconditional (trigger still earns extra via speculative block)
@@ -337,6 +338,14 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
         custom_pts += 1
         has_custom_confirm = True
         reasons.append("wc_gap_ld_two_bar")
+
+    # L34+NP_SETUP+LD: WLNBB L34 fires on same bar as NP-engine setup state
+    # and lower-wick reclaim. R155 #1 PRICE_ACTION: rel=0.766, 10×4x, 3×FP.
+    has_l34_np_ld = custom.get("l34_np_ld", 0) > 0
+    if has_l34_np_ld and not toxic:
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("l34_np_ld_setup_demand")
 
     # Dryup+L34+LD triple: quiet compression day with setup bar and demand wick.
     # R154 Tier-1: rel=0.738, add_to_pump_watch.
