@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import AppNav from '../components/AppNav';
+import BarLabels from '../components/BarLabels';
 import styles from '../styles/PumpStudy.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -257,6 +258,7 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
     { key: 'events',    label: `Events (${events.length})` },
     { key: 'snapshots', label: `Snapshots (${snaps.length})` },
     { key: 'cluster',   label: 'Cluster' },
+    { key: 'labels',    label: 'Bar Labels' },
   ];
 
   return (
@@ -465,6 +467,13 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
               </tbody>
             </table>
           )}
+        </div>
+      )}
+
+      {/* ── Section E: Bar Labels ─────────────────────────────────────────────── */}
+      {innerTab === 'labels' && (
+        <div style={{ padding: '12px 0' }}>
+          <BarLabels symbol={ep.symbol} />
         </div>
       )}
 

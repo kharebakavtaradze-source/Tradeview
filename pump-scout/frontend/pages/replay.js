@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import AppNav from '../components/AppNav';
+import BarLabels from '../components/BarLabels';
 import styles from '../styles/Replay.module.css';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -864,6 +865,9 @@ export default function ReplayPage() {
   const [deleting,       setDeleting]       = useState(false);
   const [deleteError,    setDeleteError]    = useState('');
 
+  // ── Bar labels panel ─────────────────────────────────────────────────────────
+  const [selectedCand,   setSelectedCand]   = useState(null);   // candidate with .symbol
+
   // ── Polling ─────────────────────────────────────────────────────────────────
 
   const stopPolling = useCallback(() => {
@@ -1375,54 +1379,77 @@ export default function ReplayPage() {
                   candidates.length === 0 ? (
                     <div className={styles.emptyMsg}>No candidates for this run.</div>
                   ) : (
-                    <table className={styles.candidateTable}>
-                      <thead>
-                        <tr>
-                          <th>Symbol</th>
-                          <th>Date</th>
-                          <th>Price</th>
-                          <th>Tier</th>
-                          <th>Score</th>
-                          <th>NP Score</th>
-                          <th>NP Label</th>
-                          <th>NP Sequence</th>
-                          <th>Wyckoff</th>
-                          <th>Sector</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {candidates.map(c => (
-                          <tr key={c.id}>
-                            <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
-                              {c.symbol}
-                            </td>
-                            <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                              {c.scan_date}
-                            </td>
-                            <td style={{ fontFamily: 'var(--font-mono)' }}>
-                              {c.price != null ? `$${fmt(c.price, 2)}` : '—'}
-                            </td>
-                            <td><TierBadge tier={c.tier} /></td>
-                            <td style={{ fontFamily: 'var(--font-mono)' }}>{c.total_score ?? '—'}</td>
-                            <td style={{ fontFamily: 'var(--font-mono)', color: npScoreColor(c.new_pump_score) }}>
-                              {c.new_pump_score != null ? Number(c.new_pump_score).toFixed(1) : '—'}
-                            </td>
-                            <td style={{ fontSize: 9 }}>
-                              <NpLabelBadge label={c.new_pump_label} />
-                            </td>
-                            <td style={{ fontSize: 9, color: 'var(--text-muted)', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {c.new_pump_sequence_label || '—'}
-                            </td>
-                            <td style={{ fontSize: 9, color: 'var(--text-muted)' }}>
-                              {c.wyckoff_state || '—'}
-                            </td>
-                            <td style={{ fontSize: 9, color: 'var(--text-dim)' }}>
-                              {c.sector || '—'}
-                            </td>
+                    <>
+                      <table className={styles.candidateTable}>
+                        <thead>
+                          <tr>
+                            <th>Symbol</th>
+                            <th>Date</th>
+                            <th>Price</th>
+                            <th>Tier</th>
+                            <th>Score</th>
+                            <th>NP Score</th>
+                            <th>NP Label</th>
+                            <th>NP Sequence</th>
+                            <th>Wyckoff</th>
+                            <th>Sector</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {candidates.map(c => (
+                            <tr
+                              key={c.id}
+                              style={{
+                                cursor: 'pointer',
+                                background: selectedCand?.id === c.id ? 'rgba(34,211,238,0.08)' : undefined,
+                              }}
+                              onClick={() => setSelectedCand(selectedCand?.id === c.id ? null : c)}
+                            >
+                              <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                                {c.symbol}
+                              </td>
+                              <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                                {c.scan_date}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)' }}>
+                                {c.price != null ? `$${fmt(c.price, 2)}` : '—'}
+                              </td>
+                              <td><TierBadge tier={c.tier} /></td>
+                              <td style={{ fontFamily: 'var(--font-mono)' }}>{c.total_score ?? '—'}</td>
+                              <td style={{ fontFamily: 'var(--font-mono)', color: npScoreColor(c.new_pump_score) }}>
+                                {c.new_pump_score != null ? Number(c.new_pump_score).toFixed(1) : '—'}
+                              </td>
+                              <td style={{ fontSize: 9 }}>
+                                <NpLabelBadge label={c.new_pump_label} />
+                              </td>
+                              <td style={{ fontSize: 9, color: 'var(--text-muted)', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {c.new_pump_sequence_label || '—'}
+                              </td>
+                              <td style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                                {c.wyckoff_state || '—'}
+                              </td>
+                              <td style={{ fontSize: 9, color: 'var(--text-dim)' }}>
+                                {c.sector || '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {selectedCand && (
+                        <div style={{ marginTop: 12 }}>
+                          <div style={{
+                            fontSize: 10,
+                            color: 'var(--text-muted)',
+                            marginBottom: 6,
+                            letterSpacing: '0.06em',
+                            textTransform: 'uppercase',
+                          }}>
+                            Bar Labels — {selectedCand.symbol}
+                          </div>
+                          <BarLabels symbol={selectedCand.symbol} />
+                        </div>
+                      )}
+                    </>
                   )
                 )}
 
