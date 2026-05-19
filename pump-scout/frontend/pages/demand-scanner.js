@@ -5,7 +5,8 @@ import AppNav from '../components/AppNav';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const API = '/api/demand-scanner/latest';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API = `${API_URL}/api/demand-scanner/latest`;
 
 const TIER_META = {
   PRIME_BUY:     { label: 'PRIME',      color: '#34d399', bg: 'rgba(52,211,153,0.15)' },
@@ -58,6 +59,30 @@ const ATS_COND_PRETTY = {
   near_ema50:      'Near EMA50',
   not_pumped:      'Not pumped',
   tight_range_bonus: 'Tight range (bonus)',
+};
+
+const READINESS_META = {
+  HOT:  { label: 'HOT',  color: '#34d399', bg: 'rgba(52,211,153,0.15)' },
+  WARM: { label: 'WARM', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' },
+  COOL: { label: 'COOL', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' },
+  COLD: { label: 'COLD', color: '#6b7280', bg: 'rgba(107,114,128,0.08)' },
+};
+
+const BREAKOUT_META = {
+  BREAKING:  { label: 'BREAKING',  color: '#34d399' },
+  SURGING:   { label: 'SURGING',   color: '#86efac' },
+  AWAKENING: { label: 'AWAKENING', color: '#fbbf24' },
+  TICKING:   { label: 'TICKING',   color: '#9ca3af' },
+  COILING:   { label: 'COILING',   color: '#4b5563' },
+};
+
+const FRESHNESS_COLORS = {
+  FRESH:    '#34d399',
+  NORMAL:   '#9ca3af',
+  AGING:    '#fbbf24',
+  STALE:    '#f87171',
+  DEAD:     '#ef4444',
+  NO_DRYUP: '#4b5563',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -172,9 +197,66 @@ function ScoreBreakdown({ bd = {} }) {
   );
 }
 
+function ReadinessBadge({ tier, score }) {
+  const m = READINESS_META[tier] || READINESS_META.COLD;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      padding: '2px 7px', borderRadius: 4,
+      fontSize: 10, fontWeight: 700, letterSpacing: '0.06em',
+      color: m.color, background: m.bg, border: `1px solid ${m.color}40`,
+    }}>
+      {m.label}
+      {score != null && <span style={{ opacity: 0.7, fontSize: 9 }}>{score}/10</span>}
+    </span>
+  );
+}
+
+function ReadinessBreakdown({ bd = {}, breakoutSignal, freshness, rsPct, floatTier, catalyst }) {
+  const bm = BREAKOUT_META[breakoutSignal] || BREAKOUT_META.COILING;
+  const items = [
+    { key: 'catalyst',  label: 'Catalyst',  color: '#a78bfa' },
+    { key: 'breakout',  label: 'Breakout',  color: '#34d399' },
+    { key: 'float',     label: 'Float',     color: '#60a5fa' },
+    { key: 'freshness', label: 'Freshness', color: '#fbbf24' },
+    { key: 'rs',        label: 'RS',        color: '#f472b6' },
+  ];
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        {items.map(i => (
+          <div key={i.key} style={{ textAlign: 'center', minWidth: 40 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: (bd[i.key] ?? 0) < 0 ? '#f87171' : i.color }}>
+              {(bd[i.key] ?? 0) > 0 ? '+' : ''}{bd[i.key] ?? 0}
+            </div>
+            <div style={{ fontSize: 8, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {i.label}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 10 }}>
+        <span style={{ color: bm.color, fontWeight: 600 }}>{bm.label}</span>
+        {freshness && (
+          <span style={{ color: FRESHNESS_COLORS[freshness] || '#9ca3af' }}>{freshness}</span>
+        )}
+        {rsPct != null && (
+          <span style={{ color: rsPct > 0 ? '#34d399' : '#f87171' }}>
+            RS {rsPct > 0 ? '+' : ''}{rsPct}%
+          </span>
+        )}
+        {floatTier && floatTier !== 'UNKNOWN' && (
+          <span style={{ color: '#9ca3af' }}>Float: {floatTier.replace('_PROXY', '~')}</span>
+        )}
+        {catalyst && <span style={{ color: '#a78bfa' }}>Pre-dryup catalyst ✓</span>}
+      </div>
+    </div>
+  );
+}
+
 // ── Drawer ────────────────────────────────────────────────────────────────────
 
-function DetailDrawer({ row, onClose }) {
+function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrative }) {
   if (!row) return null;
   const tier = TIER_META[row.demand_composite_tier] || TIER_META.SKIP;
   return (
@@ -212,6 +294,32 @@ function DetailDrawer({ row, onClose }) {
           <ScoreBreakdown bd={row.demand_score_breakdown || {}} />
         </div>
       </div>
+
+      {/* Readiness */}
+      {row.readiness_tier && (
+        <div style={{
+          background: READINESS_META[row.readiness_tier]?.bg || 'rgba(107,114,128,0.08)',
+          border: `1px solid ${READINESS_META[row.readiness_tier]?.color || '#6b7280'}40`,
+          borderRadius: 8, padding: '12px 16px', marginBottom: 16,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              Trigger Readiness
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ReadinessBadge tier={row.readiness_tier} score={row.readiness_score} />
+            </div>
+          </div>
+          <ReadinessBreakdown
+            bd={row.readiness_breakdown || {}}
+            breakoutSignal={row.breakout_signal}
+            freshness={row.freshness_label}
+            rsPct={row.rs_during_dryup_pct}
+            floatTier={row.float_proxy_tier}
+            catalyst={row.catalyst_proxy}
+          />
+        </div>
+      )}
 
       {/* ATS Signal */}
       <div style={{
@@ -293,7 +401,7 @@ function DetailDrawer({ row, onClose }) {
       </div>
 
       {/* NP engine */}
-      <div style={{ background: '#1f2937', borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ background: '#1f2937', borderRadius: 8, padding: '12px 14px', marginBottom: 12 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
           NP Engine
         </div>
@@ -310,6 +418,35 @@ function DetailDrawer({ row, onClose }) {
             <span style={{ fontSize: 11, color: '#f9fafb' }}>{val ?? '—'}</span>
           </div>
         ))}
+      </div>
+
+      {/* AI Analysis */}
+      <div style={{ background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 8, padding: '12px 14px' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#60a5fa', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          AI Setup Analysis
+        </div>
+        {!narrative && !narrativeLoading && (
+          <button
+            onClick={() => onFetchNarrative(row)}
+            style={{
+              background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 6,
+              padding: '7px 14px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+              width: '100%',
+            }}
+          >
+            Generate AI Analysis
+          </button>
+        )}
+        {narrativeLoading && (
+          <div style={{ color: '#9ca3af', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
+            Generating…
+          </div>
+        )}
+        {narrative && (
+          <p style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.7, margin: 0 }}>
+            {narrative}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -337,6 +474,11 @@ function ResultRow({ r, onClick }) {
       </td>
       <td style={{ padding: '8px 8px' }}>
         <AtsBadge signal={r.ats_signal} />
+      </td>
+      <td style={{ padding: '8px 8px' }}>
+        {r.readiness_tier
+          ? <ReadinessBadge tier={r.readiness_tier} score={r.readiness_score} />
+          : <span style={{ color: '#374151', fontSize: 10 }}>—</span>}
       </td>
       <td style={{ padding: '8px 8px', fontSize: 11, color: '#e5e7eb', fontVariantNumeric: 'tabular-nums' }}>
         ${fmt(r.price, 2)}
@@ -450,14 +592,36 @@ export default function DemandScannerPage() {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
 
-  const [tierF,    setTierF]    = useState('');
-  const [atsF,     setAtsF]     = useState('');
-  const [minScore, setMinScore] = useState(0);
-  const [limit,    setLimit]    = useState(200);
+  const [tierF,      setTierF]      = useState('');
+  const [atsF,       setAtsF]       = useState('');
+  const [readyF,     setReadyF]     = useState('');
+  const [minScore,   setMinScore]   = useState(0);
+  const [limit,      setLimit]      = useState(200);
 
-  const [drawerRow, setDrawerRow] = useState(null);
+  const [drawerRow,        setDrawerRow]        = useState(null);
+  const [narratives,       setNarratives]       = useState({});
+  const [narrativeLoading, setNarrativeLoading] = useState(null);
   const [sortCol,   setSortCol]   = useState('demand_composite_score');
   const [sortDir,   setSortDir]   = useState('desc');
+
+  const fetchNarrative = useCallback(async (row) => {
+    const sym = row.symbol;
+    if (narratives[sym] || narrativeLoading === sym) return;
+    setNarrativeLoading(sym);
+    try {
+      const res  = await fetch(`${API_URL}/api/demand-scanner/narrative`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      const json = await res.json();
+      setNarratives(prev => ({ ...prev, [sym]: json.narrative || json.detail || 'No narrative returned.' }));
+    } catch (e) {
+      setNarratives(prev => ({ ...prev, [sym]: `Error: ${e}` }));
+    } finally {
+      setNarrativeLoading(null);
+    }
+  }, [narratives, narrativeLoading]);
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null);
@@ -476,7 +640,10 @@ export default function DemandScannerPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const results = data?.results || [];
+  const rawResults = data?.results || [];
+  const results = readyF
+    ? rawResults.filter(r => r.readiness_tier === readyF)
+    : rawResults;
 
   // Client-side sort
   const sorted = [...results].sort((a, b) => {
@@ -590,6 +757,18 @@ export default function DemandScannerPage() {
             </select>
           </div>
           <div className={styles.filterGroup}>
+            <label style={{ fontSize: 11, color: '#9ca3af' }}>Ready</label>
+            <select
+              value={readyF} onChange={e => setReadyF(e.target.value)}
+              style={{ background: '#1f2937', color: '#f9fafb', border: '1px solid #374151', borderRadius: 5, padding: '4px 8px', fontSize: 11 }}
+            >
+              <option value="">All</option>
+              {Object.keys(READINESS_META).map(t => (
+                <option key={t} value={t}>{READINESS_META[t].label}</option>
+              ))}
+            </select>
+          </div>
+          <div className={styles.filterGroup}>
             <label style={{ fontSize: 11, color: '#9ca3af' }}>Min score</label>
             <input
               type="number" min={0} max={20} step={0.5} value={minScore}
@@ -631,6 +810,7 @@ export default function DemandScannerPage() {
                   <Th col="demand_composite_tier"   label="Tier"     />
                   <Th col="demand_composite_score"  label="Score"    />
                   <Th col="ats_signal"              label="ATS"      />
+                  <Th col="readiness_score"         label="Ready"    />
                   <Th col="price"                   label="Price"    />
                   <Th col="volume_today"            label="Volume"   />
                   <th style={{ padding: '8px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280', borderBottom: '1px solid #1f2937' }}>
@@ -647,7 +827,7 @@ export default function DemandScannerPage() {
               <tbody>
                 {sorted.length === 0 && (
                   <tr>
-                    <td colSpan={9} style={{ padding: '24px', color: '#6b7280', fontSize: 13, textAlign: 'center' }}>
+                    <td colSpan={10} style={{ padding: '24px', color: '#6b7280', fontSize: 13, textAlign: 'center' }}>
                       No results — run a scan first or adjust filters.
                     </td>
                   </tr>
@@ -668,7 +848,13 @@ export default function DemandScannerPage() {
             onClick={() => setDrawerRow(null)}
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 999 }}
           />
-          <DetailDrawer row={drawerRow} onClose={() => setDrawerRow(null)} />
+          <DetailDrawer
+            row={drawerRow}
+            onClose={() => setDrawerRow(null)}
+            narrative={narratives[drawerRow?.symbol]}
+            narrativeLoading={narrativeLoading === drawerRow?.symbol}
+            onFetchNarrative={fetchNarrative}
+          />
         </>
       )}
     </>
