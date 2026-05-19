@@ -203,6 +203,166 @@ def _compute_candle_metrics(candles: list[dict], avg_vol_20d: float) -> dict:
     }
 
 
+# ── Readiness — 5-gap trigger layer ──────────────────────────────────────────
+
+def _compute_readiness(
+    m: dict,
+    result: dict,
+    candles: Optional[list[dict]] = None,
+) -> dict:
+    """
+    5-gap readiness layer — answers "is this ready to MOVE, not just to set up?"
+
+    Gap 1 — Catalyst proxy   : was there a volume spike before the dryup? (0-2)
+    Gap 2 — Breakout signal  : is volume returning / price at highs?      (0-3)
+    Gap 3 — Float quality    : low float = explosive potential             (0-2)
+    Gap 4 — Signal freshness : dryup too long = setup gone stale          (-2 to +2)
+    Gap 5 — RS in compression: did price hold up during the dryup?        (-1 to +2)
+
+    readiness_score: 0-10    readiness_tier: HOT|WARM|COOL|COLD
+    """
+    avg_vol = result.get("avg_volume_20d") or 0
+
+    # Prefer live candle metrics; fall back to cached dc_* fields from result
+    dryup     = m.get("dryup_streak")
+    if dryup is None:
+        dryup = result.get("dc_dryup_streak", 0)
+
+    vol_ratio = m.get("vol_ratio")
+    if vol_ratio is None:
+        vol_ratio = result.get("dc_vol_ratio", 1.0)
+
+    price = m.get("price") or result.get("price") or 1.0
+
+    # ── Gap 1: Catalyst proxy ─────────────────────────────────────────────────
+    # Did volume spike 1.5-2.5× before the dryup started?  If yes, smart money
+    # bought on an event, then went quiet — classic accumulation after catalyst.
+    cat_score = 0
+    catalyst_proxy = False
+    if dryup >= 2 and candles and len(candles) >= dryup + 5 and avg_vol > 0:
+        pre_start  = max(0, len(candles) - dryup - 8)
+        pre_end    = max(0, len(candles) - dryup)
+        pre_bars   = candles[pre_start:pre_end]
+        if pre_bars:
+            max_pre = max((b.get("volume") or b.get("v") or 0) for b in pre_bars)
+            if max_pre >= avg_vol * 2.5:
+                cat_score = 2; catalyst_proxy = True
+            elif max_pre >= avg_vol * 1.5:
+                cat_score = 1; catalyst_proxy = True
+
+    # ── Gap 2: Breakout signal ────────────────────────────────────────────────
+    # Is volume returning AND price at the 5-day high?  The dryup ending with
+    # price expansion = accumulation converting to markup phase.
+    brk_score = 0
+    breakout_signal = "COILING"
+    if vol_ratio >= 2.0:
+        h5 = price
+        if candles and len(candles) >= 5:
+            h5 = max((b.get("high") or b.get("h") or 0) for b in candles[-5:])
+        if price >= h5 * 0.97:
+            breakout_signal = "BREAKING";  brk_score = 3
+        else:
+            breakout_signal = "SURGING";   brk_score = 2
+    elif vol_ratio >= 1.5:
+        breakout_signal = "AWAKENING";     brk_score = 1
+    elif vol_ratio >= 1.2:
+        breakout_signal = "TICKING"
+        # volume stirring but not yet scoring — watch list flag only
+
+    # ── Gap 3: Float quality ──────────────────────────────────────────────────
+    # Low float = small supply = explosive moves on demand.
+    # Use shares_float if available; fall back to avg-dollar-volume proxy.
+    flt_score = 0
+    float_proxy_tier = "UNKNOWN"
+    shares_float = result.get("shares_float")
+    if shares_float and shares_float > 0:
+        if shares_float < 5_000_000:
+            flt_score = 2; float_proxy_tier = "MICRO"
+        elif shares_float < 15_000_000:
+            flt_score = 2; float_proxy_tier = "LOW"
+        elif shares_float < 50_000_000:
+            flt_score = 1; float_proxy_tier = "NORMAL"
+        elif shares_float < 200_000_000:
+            flt_score = 0; float_proxy_tier = "LARGE"
+        else:
+            flt_score = -1; float_proxy_tier = "HEAVY"
+    else:
+        # Proxy: low-price + low avg dollar-volume = likely low float
+        avg_dv   = price * avg_vol if avg_vol > 0 else 0
+        p_bucket = m.get("price_bucket") or result.get("dc_price_bucket", "")
+        if p_bucket in ("PRICE_1_TO_3", "PRICE_SUB_1") and avg_dv < 2_000_000:
+            flt_score = 2; float_proxy_tier = "LOW_PROXY"
+        elif avg_dv < 5_000_000:
+            flt_score = 1; float_proxy_tier = "SMALL_PROXY"
+        elif avg_dv > 50_000_000:
+            flt_score = -1; float_proxy_tier = "LARGE_PROXY"
+        else:
+            float_proxy_tier = "MEDIUM_PROXY"
+
+    # ── Gap 4: Signal freshness ───────────────────────────────────────────────
+    # Dryups that drag on for 10+ bars usually mean no one cares — penalise.
+    frsh_score = 0
+    freshness_label = "NO_DRYUP"
+    if dryup >= 1:
+        if dryup <= 3:
+            frsh_score = 2;  freshness_label = "FRESH"
+        elif dryup <= 5:
+            frsh_score = 1;  freshness_label = "NORMAL"
+        elif dryup <= 8:
+            frsh_score = 0;  freshness_label = "AGING"
+        elif dryup <= 12:
+            frsh_score = -1; freshness_label = "STALE"
+        else:
+            frsh_score = -2; freshness_label = "DEAD"
+
+    # ── Gap 5: Relative strength during compression ───────────────────────────
+    # Did the stock HOLD UP during the dryup?  Rising / flat price while volume
+    # dries up = hidden demand.  Drifting lower = weak hands, no sponsorship.
+    rs_score = 0
+    rs_during_dryup_pct = None
+    if dryup >= 2 and candles and len(candles) >= dryup + 2:
+        ref = candles[-(dryup + 1)]
+        ref_close = ref.get("close") or ref.get("c") or 0
+        if ref_close > 0 and price > 0:
+            rs_during_dryup_pct = round((price / ref_close - 1) * 100, 1)
+            if rs_during_dryup_pct > 3.0:
+                rs_score = 2
+            elif rs_during_dryup_pct > 0.5:
+                rs_score = 1
+            elif rs_during_dryup_pct < -3.0:
+                rs_score = -1
+
+    # ── Combine ───────────────────────────────────────────────────────────────
+    total = cat_score + brk_score + flt_score + frsh_score + rs_score
+    readiness_score = max(0, min(10, total))
+
+    if readiness_score >= 7:
+        readiness_tier = "HOT"
+    elif readiness_score >= 4:
+        readiness_tier = "WARM"
+    elif readiness_score >= 2:
+        readiness_tier = "COOL"
+    else:
+        readiness_tier = "COLD"
+
+    return {
+        "readiness_score":     readiness_score,
+        "readiness_tier":      readiness_tier,
+        "readiness_breakdown": {
+            "catalyst":  cat_score,
+            "breakout":  brk_score,
+            "float":     flt_score,
+            "freshness": frsh_score,
+            "rs":        rs_score,
+        },
+        "breakout_signal":     breakout_signal,
+        "catalyst_proxy":      catalyst_proxy,
+        "float_proxy_tier":    float_proxy_tier,
+        "freshness_label":     freshness_label,
+        "rs_during_dryup_pct": rs_during_dryup_pct,
+    }
+
+
 # ── ATS — Accumulation Trap Signal ───────────────────────────────────────────
 
 def _compute_ats(m: dict, r: dict) -> tuple[str, list[str], list[str]]:
@@ -444,6 +604,9 @@ def score_demand_composite(
         tier = "BUY_WATCH"
         risks.append("tier_capped_expansion_risk")
 
+    # ── Readiness layer (5 gap-fills) ─────────────────────────────────────────
+    readiness = _compute_readiness(m, result, candles)
+
     return {
         "demand_composite_score":   final,
         "demand_composite_tier":    tier,
@@ -467,6 +630,9 @@ def score_demand_composite(
         "dc_atr_bucket":            a_bucket,
         "dc_dv_bucket":             d_bucket,
         "dc_tight_range":           m.get("tight_range", False),
+        # Readiness layer
+        **readiness,
+        "combined_score":           round(final + readiness["readiness_score"], 2),
     }
 
 
