@@ -15,6 +15,7 @@ import anthropic
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -131,6 +132,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Gzip all JSON responses ≥ 1 KB (browser sends Accept-Encoding: gzip automatically)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # ─── Non-stock exclusion helper ──────────────────────────────────────────────
 
