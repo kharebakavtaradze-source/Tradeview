@@ -1479,6 +1479,12 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
         d9   = d.get("d9",  False)
         d11  = d.get("d11", False)
 
+        # has_ld pre-computation: close position and lower-wick fraction
+        _cb  = candles[i]
+        _rng = max(_cb["high"] - _cb["low"], 1e-6)
+        _pos = (_cb["close"] - _cb["low"]) / _rng          # 0=low, 1=high
+        _lwk = (min(_cb["open"], _cb["close"]) - _cb["low"]) / _rng
+
         flags: dict = {
             "has_l34":        bool(l34),
             "has_l43":        bool(l43),
@@ -1504,7 +1510,12 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
             "has_d11_l43":    bool(d11 and l43),
             "has_vbo":        bool(beup and bkt in ("B", "VB")),
             "has_lvbo":       bool(bup  and bkt == "N"),
-            "has_ld":         False,
+            # has_ld: Low-volume lower-wick Demand absorption bar.
+            # Quiet day (bucket N) where price probed lower but recovered,
+            # closing in the upper half with a meaningful lower wick.
+            # Classic supply-exhaustion / dryup-test that precedes setups.
+            "has_ld":         bool(bkt == "N" and not beup and not bup
+                                   and _pos >= 0.50 and _lwk >= 0.20),
             "np_is_setup":    bool(i in np_l34_set or i in np_fri34_set),
             "np_is_trigger":  bool(i in np_g4_set),
         }
