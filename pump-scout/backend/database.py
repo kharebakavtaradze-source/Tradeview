@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -274,8 +275,10 @@ class AIJournalPosition(Base):
     scan_tier      = Column(String(20), nullable=True)
     scan_score     = Column(Float, nullable=True)
     ats_signal     = Column(String(20), nullable=True)
-    current_price  = Column(Float, nullable=True)
-    current_value  = Column(Float, nullable=True)
+    current_price      = Column(Float, nullable=True)
+    current_value      = Column(Float, nullable=True)
+    readiness_tier     = Column(String(10), nullable=True)
+    confluence_signals = Column(Text, nullable=True)
 
 
 class AIJournalEntry(Base):
@@ -302,6 +305,51 @@ class AIJournalState(Base):
     starting_capital = Column(Float, default=500.0)
     updated_at       = Column(DateTime, default=datetime.utcnow)
     learned_strategy = Column(Text, nullable=True)   # JSON — evolves over sessions
+
+
+class AISignalOutcome(Base):
+    """Every PRIME_BUY / HIGH_CONF_BUY signal — tracked for 3/7/14-day forward returns."""
+    __tablename__ = "ai_signal_outcome"
+    __table_args__ = (UniqueConstraint("symbol", "signal_date", name="uq_signal_outcome"),)
+
+    id              = Column(Integer, primary_key=True)
+    symbol          = Column(String(10), nullable=False, index=True)
+    signal_date     = Column(Date, nullable=False, index=True)
+    tier            = Column(String(20), nullable=False)
+    score           = Column(Float, nullable=True)
+    ats_signal      = Column(String(20), nullable=True)
+    readiness_tier  = Column(String(10), nullable=True)
+    flow_signals    = Column(Text, nullable=True)    # JSON list
+    flow_risks      = Column(Text, nullable=True)    # JSON list
+    risk_flags      = Column(Text, nullable=True)    # JSON list
+    price_at_signal = Column(Float, nullable=True)
+    price_3d        = Column(Float, nullable=True)
+    price_7d        = Column(Float, nullable=True)
+    price_14d       = Column(Float, nullable=True)
+    gain_3d         = Column(Float, nullable=True)   # % gain at day 3
+    gain_7d         = Column(Float, nullable=True)
+    gain_14d        = Column(Float, nullable=True)
+    max_gain_14d    = Column(Float, nullable=True)   # best % gain within 14d window
+    outcome_label   = Column(String(20), nullable=True)  # WIN_STRONG|WIN|FLAT|LOSS
+    backfilled_at   = Column(DateTime, nullable=True)
+    recorded_at     = Column(DateTime, default=datetime.utcnow)
+
+
+class AIPatternMemory(Base):
+    """Persisted pattern stats — what signal combos work or fail."""
+    __tablename__ = "ai_pattern_memory"
+
+    id            = Column(Integer, primary_key=True)
+    pattern_key   = Column(String(120), nullable=False, unique=True, index=True)
+    updated_at    = Column(DateTime, default=datetime.utcnow)
+    n_trades      = Column(Integer, default=0)
+    n_wins        = Column(Integer, default=0)
+    win_rate      = Column(Float, default=0.0)
+    avg_win_pct   = Column(Float, nullable=True)
+    avg_loss_pct  = Column(Float, nullable=True)
+    avg_hold_days = Column(Float, nullable=True)
+    best_trade    = Column(Text, nullable=True)    # JSON
+    notes         = Column(Text, nullable=True)    # AI's written insight
 
 
 class SectorCache(Base):
@@ -6054,4 +6102,259 @@ async def get_ai_journal_entries(limit: int = 10) -> list[dict]:
                 "decisions":        json.loads(e.decisions_json or "[]"),
             }
             for e in result.scalars().all()
+        ]
+
+
+# ── AI Signal Outcome & Pattern Memory functions ──────────────────────────────
+
+async def save_signal_outcomes(signals: list[dict]) -> int:
+    """Bulk-insert signal outcomes, skip duplicates (uq_signal_outcome constraint).
+
+    Each signal dict should have keys: symbol, signal_date (str YYYY-MM-DD), tier, score,
+    ats_signal, readiness_tier, flow_signals (list), flow_risks (list), risk_flags (list),
+    price_at_signal.
+    Returns count of rows actually inserted.
+    """
+    from datetime import date as _date
+    inserted = 0
+    for sig in signals:
+        try:
+            async with get_session_factory()() as session:
+                sig_date = sig.get("signal_date")
+                if isinstance(sig_date, str):
+                    sig_date = _date.fromisoformat(sig_date)
+                row = AISignalOutcome(
+                    symbol          = str(sig["symbol"]).upper(),
+                    signal_date     = sig_date,
+                    tier            = sig.get("tier", ""),
+                    score           = sig.get("score"),
+                    ats_signal      = sig.get("ats_signal"),
+                    readiness_tier  = sig.get("readiness_tier"),
+                    flow_signals    = json.dumps(sig.get("flow_signals") or []),
+                    flow_risks      = json.dumps(sig.get("flow_risks") or []),
+                    risk_flags      = json.dumps(sig.get("risk_flags") or []),
+                    price_at_signal = sig.get("price_at_signal"),
+                )
+                session.add(row)
+                await session.commit()
+                inserted += 1
+        except IntegrityError:
+            # Duplicate — skip silently
+            pass
+        except Exception as e:
+            logger.debug(f"save_signal_outcomes row error ({sig.get('symbol')}): {e}")
+    return inserted
+
+
+async def get_pending_backfill(min_age_days: int = 3, limit: int = 60) -> list[dict]:
+    """Return outcomes older than min_age_days with no backfill yet."""
+    cutoff = datetime.utcnow() - timedelta(days=min_age_days)
+    async with get_session_factory()() as session:
+        q = (
+            select(AISignalOutcome)
+            .where(
+                AISignalOutcome.backfilled_at.is_(None),
+                AISignalOutcome.recorded_at < cutoff,
+            )
+            .order_by(AISignalOutcome.recorded_at.asc())
+            .limit(limit)
+        )
+        result = await session.execute(q)
+        return [
+            {
+                "id":              r.id,
+                "symbol":          r.symbol,
+                "signal_date":     r.signal_date.isoformat() if r.signal_date else None,
+                "price_at_signal": r.price_at_signal,
+                "tier":            r.tier,
+                "ats_signal":      r.ats_signal,
+                "readiness_tier":  r.readiness_tier,
+            }
+            for r in result.scalars().all()
+        ]
+
+
+async def fill_signal_returns(outcome_id: int, data: dict):
+    """Fill price_3d/7d/14d, gain_3d/7d/14d, max_gain_14d, outcome_label, backfilled_at."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AISignalOutcome).where(AISignalOutcome.id == outcome_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return
+        row.price_3d      = data.get("price_3d")
+        row.price_7d      = data.get("price_7d")
+        row.price_14d     = data.get("price_14d")
+        row.gain_3d       = data.get("gain_3d")
+        row.gain_7d       = data.get("gain_7d")
+        row.gain_14d      = data.get("gain_14d")
+        row.max_gain_14d  = data.get("max_gain_14d")
+        row.outcome_label = data.get("outcome_label")
+        row.backfilled_at = datetime.utcnow()
+        await session.commit()
+
+
+async def get_pattern_stats_from_outcomes() -> list[dict]:
+    """Compute win rates per pattern_key from backfilled outcomes.
+
+    pattern_key = f"{tier}|{ats_signal}|{readiness_tier}"
+    A 'win' is outcome_label in ('WIN', 'WIN_STRONG').
+    Returns list of dicts: pattern_key, n_total, n_wins, win_rate, avg_gain_7d, avg_max_gain.
+    """
+    async with get_session_factory()() as session:
+        q = select(AISignalOutcome).where(AISignalOutcome.backfilled_at.isnot(None))
+        result = await session.execute(q)
+        rows = result.scalars().all()
+
+    stats: dict[str, dict] = {}
+    for r in rows:
+        key = f"{r.tier}|{r.ats_signal or ''}|{r.readiness_tier or ''}"
+        if key not in stats:
+            stats[key] = {"n_total": 0, "n_wins": 0, "gain_7d_sum": 0.0, "max_gain_sum": 0.0}
+        stats[key]["n_total"] += 1
+        if r.outcome_label in ("WIN", "WIN_STRONG"):
+            stats[key]["n_wins"] += 1
+        if r.gain_7d is not None:
+            stats[key]["gain_7d_sum"] += r.gain_7d
+        if r.max_gain_14d is not None:
+            stats[key]["max_gain_sum"] += r.max_gain_14d
+
+    out = []
+    for key, s in stats.items():
+        n = s["n_total"]
+        out.append({
+            "pattern_key":  key,
+            "n_total":      n,
+            "n_wins":       s["n_wins"],
+            "win_rate":     round(s["n_wins"] / n, 3) if n > 0 else 0.0,
+            "avg_gain_7d":  round(s["gain_7d_sum"] / n, 2) if n > 0 else None,
+            "avg_max_gain": round(s["max_gain_sum"] / n, 2) if n > 0 else None,
+        })
+    out.sort(key=lambda x: x["n_total"], reverse=True)
+    return out
+
+
+async def upsert_pattern_memory(
+    pattern_key: str,
+    n_trades: int,
+    n_wins: int,
+    win_rate: float,
+    avg_win_pct: float | None,
+    avg_loss_pct: float | None,
+    notes: str | None = None,
+):
+    """Create or update a pattern memory row."""
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(AIPatternMemory).where(AIPatternMemory.pattern_key == pattern_key)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = AIPatternMemory(pattern_key=pattern_key)
+            session.add(row)
+        row.n_trades     = n_trades
+        row.n_wins       = n_wins
+        row.win_rate     = win_rate
+        row.avg_win_pct  = avg_win_pct
+        row.avg_loss_pct = avg_loss_pct
+        row.updated_at   = datetime.utcnow()
+        if notes is not None:
+            row.notes = notes
+        await session.commit()
+
+
+async def get_pattern_memory(limit: int = 15) -> list[dict]:
+    """Return patterns ordered by n_trades DESC."""
+    async with get_session_factory()() as session:
+        q = (
+            select(AIPatternMemory)
+            .order_by(AIPatternMemory.n_trades.desc())
+            .limit(limit)
+        )
+        result = await session.execute(q)
+        return [
+            {
+                "id":            r.id,
+                "pattern_key":   r.pattern_key,
+                "updated_at":    r.updated_at.isoformat() if r.updated_at else None,
+                "n_trades":      r.n_trades,
+                "n_wins":        r.n_wins,
+                "win_rate":      r.win_rate,
+                "avg_win_pct":   r.avg_win_pct,
+                "avg_loss_pct":  r.avg_loss_pct,
+                "avg_hold_days": r.avg_hold_days,
+                "best_trade":    r.best_trade,
+                "notes":         r.notes,
+            }
+            for r in result.scalars().all()
+        ]
+
+
+async def get_ai_performance_stats() -> dict:
+    """Aggregate stats from all CLOSED AIJournalPosition rows.
+
+    Returns: total_trades, n_wins, win_rate, avg_win_pct, avg_loss_pct,
+             total_pnl_usd, best_trade (symbol+pnl_pct), worst_trade (symbol+pnl_pct)
+    """
+    async with get_session_factory()() as session:
+        q = select(AIJournalPosition).where(AIJournalPosition.status == "CLOSED")
+        result = await session.execute(q)
+        closed = result.scalars().all()
+
+    if not closed:
+        return {
+            "total_trades": 0,
+            "n_wins":       0,
+            "win_rate":     0.0,
+            "avg_win_pct":  None,
+            "avg_loss_pct": None,
+            "total_pnl_usd": 0.0,
+            "best_trade":   None,
+            "worst_trade":  None,
+        }
+
+    wins  = [p for p in closed if (p.pnl_usd or 0) > 0]
+    loses = [p for p in closed if (p.pnl_usd or 0) <= 0]
+
+    avg_win  = round(sum(p.pnl_pct for p in wins) / len(wins), 2) if wins else None
+    avg_loss = round(sum(p.pnl_pct for p in loses) / len(loses), 2) if loses else None
+
+    best  = max(closed, key=lambda p: p.pnl_pct or 0.0)
+    worst = min(closed, key=lambda p: p.pnl_pct or 0.0)
+
+    return {
+        "total_trades": len(closed),
+        "n_wins":       len(wins),
+        "win_rate":     round(len(wins) / len(closed), 3),
+        "avg_win_pct":  avg_win,
+        "avg_loss_pct": avg_loss,
+        "total_pnl_usd": round(sum(p.pnl_usd or 0 for p in closed), 2),
+        "best_trade":   {"symbol": best.symbol,  "pnl_pct": round(best.pnl_pct or 0, 2)},
+        "worst_trade":  {"symbol": worst.symbol, "pnl_pct": round(worst.pnl_pct or 0, 2)},
+    }
+
+
+async def get_recent_signal_outcomes(limit: int = 20) -> list[dict]:
+    """Return the most recent backfilled signal outcomes."""
+    async with get_session_factory()() as session:
+        q = (
+            select(AISignalOutcome)
+            .where(AISignalOutcome.outcome_label.isnot(None))
+            .order_by(AISignalOutcome.signal_date.desc())
+            .limit(limit)
+        )
+        result = await session.execute(q)
+        return [
+            {
+                "symbol":        r.symbol,
+                "tier":          r.tier,
+                "ats_signal":    r.ats_signal,
+                "readiness_tier": r.readiness_tier,
+                "gain_7d":       r.gain_7d,
+                "max_gain_14d":  r.max_gain_14d,
+                "outcome_label": r.outcome_label,
+                "signal_date":   r.signal_date.isoformat() if r.signal_date else None,
+            }
+            for r in result.scalars().all()
         ]

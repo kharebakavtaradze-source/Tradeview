@@ -785,26 +785,33 @@ function AtsExplainer() {
 // ── AI Trading Journal ────────────────────────────────────────────────────────
 
 function AIJournal() {
-  const [state,     setState]     = useState(null);
-  const [positions, setPositions] = useState([]);
-  const [entries,   setEntries]   = useState([]);
-  const [running,   setRunning]   = useState(false);
-  const [expanded,  setExpanded]  = useState(true);
-  const [tab,       setTab]       = useState('journal');  // journal | positions | history
+  const [state,       setState]       = useState(null);
+  const [positions,   setPositions]   = useState([]);
+  const [entries,     setEntries]     = useState([]);
+  const [running,     setRunning]     = useState(false);
+  const [expanded,    setExpanded]    = useState(true);
+  const [tab,         setTab]         = useState('journal');  // journal | positions | history | patterns
+  const [perfStats,   setPerfStats]   = useState(null);
+  const [patterns,    setPatterns]    = useState([]);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState(null);
 
   const reload = async () => {
     try {
-      const [s, p, e, h] = await Promise.all([
+      const [s, p, e, h, stats, pats] = await Promise.all([
         fetch(`${API_URL}/api/ai-journal/state`).then(r => r.json()),
         fetch(`${API_URL}/api/ai-journal/positions?status=OPEN`).then(r => r.json()),
         fetch(`${API_URL}/api/ai-journal/entries?limit=8`).then(r => r.json()),
         fetch(`${API_URL}/api/ai-journal/positions?status=CLOSED`).then(r => r.json()),
+        fetch(`${API_URL}/api/ai-journal/stats`).then(r => r.json()).catch(() => null),
+        fetch(`${API_URL}/api/ai-journal/patterns`).then(r => r.json()).catch(() => ({ patterns: [] })),
       ]);
       setState(s);
       setPositions(p.positions || []);
       setEntries(e.entries || []);
-      // merge closed into state for display
       setState(prev => ({ ...prev, _closed: h.positions || [] }));
+      if (stats) setPerfStats(stats);
+      setPatterns(pats.patterns || []);
     } catch {}
   };
 
@@ -824,8 +831,30 @@ function AIJournal() {
     }
   };
 
+  const runBackfill = async () => {
+    setBackfilling(true);
+    setBackfillMsg(null);
+    try {
+      const res  = await fetch(`${API_URL}/api/ai-journal/backfill`, { method: 'POST' });
+      const json = await res.json();
+      setBackfillMsg(`Backfilled ${json.backfilled ?? 0} signals (${json.errors ?? 0} errors)`);
+      setTimeout(() => setBackfillMsg(null), 5000);
+      await reload();
+    } catch (e) {
+      setBackfillMsg(`Backfill error: ${e.message}`);
+      setTimeout(() => setBackfillMsg(null), 5000);
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
   const pnlColor = v => v > 0 ? '#34d399' : v < 0 ? '#f87171' : '#9ca3af';
   const pnlSign  = v => v > 0 ? '+' : '';
+
+  const fmtPatternKey = key => {
+    if (!key) return key;
+    return key.split('|').map(p => p.replace(/_/g, ' ')).join(' + ');
+  };
 
   if (!state) return null;
 
@@ -874,6 +903,40 @@ function AIJournal() {
       {!expanded ? null : (
         <div style={{ padding: '14px 18px' }}>
 
+          {/* Performance stats bar */}
+          {perfStats && perfStats.total_trades > 0 && (
+            <div style={{
+              display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10,
+              padding: '8px 12px', background: 'rgba(17,24,39,0.8)',
+              borderRadius: 6, border: '1px solid #1f2937', fontSize: 10,
+            }}>
+              <span style={{ color: '#9ca3af' }}>
+                Win Rate: <strong style={{ color: '#34d399' }}>
+                  {(perfStats.win_rate * 100).toFixed(0)}%
+                </strong>
+              </span>
+              {perfStats.avg_win_pct != null && (
+                <span style={{ color: '#9ca3af' }}>
+                  Avg Win: <strong style={{ color: '#34d399' }}>
+                    +{fmt(perfStats.avg_win_pct, 1)}%
+                  </strong>
+                </span>
+              )}
+              {perfStats.avg_loss_pct != null && (
+                <span style={{ color: '#9ca3af' }}>
+                  Avg Loss: <strong style={{ color: '#f87171' }}>
+                    {fmt(perfStats.avg_loss_pct, 1)}%
+                  </strong>
+                </span>
+              )}
+              <span style={{ color: '#9ca3af' }}>
+                Total P&amp;L: <strong style={{ color: pnlColor(perfStats.total_pnl_usd) }}>
+                  {pnlSign(perfStats.total_pnl_usd)}${fmt(perfStats.total_pnl_usd, 2)}
+                </strong>
+              </span>
+            </div>
+          )}
+
           {/* Stats row */}
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
             {[
@@ -889,7 +952,24 @@ function AIJournal() {
                 <div style={{ fontSize: 9, color: '#4b5563', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
               </div>
             ))}
-            <div style={{ marginLeft: 'auto' }}>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {backfillMsg && (
+                <span style={{ fontSize: 10, color: '#60a5fa', background: 'rgba(30,58,95,0.4)', padding: '3px 8px', borderRadius: 4 }}>
+                  {backfillMsg}
+                </span>
+              )}
+              <button
+                onClick={runBackfill}
+                disabled={backfilling}
+                style={{
+                  background: 'transparent',
+                  color: backfilling ? '#4b5563' : '#6b7280',
+                  border: '1px solid #1f2937', borderRadius: 6, padding: '5px 10px',
+                  cursor: backfilling ? 'not-allowed' : 'pointer', fontSize: 10, fontWeight: 600,
+                }}
+              >
+                {backfilling ? 'Backfilling…' : 'Backfill Returns'}
+              </button>
               <button
                 onClick={runSession}
                 disabled={running}
@@ -907,7 +987,12 @@ function AIJournal() {
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
-            {[['journal', 'Journal'], ['positions', `Positions (${positions.length})`], ['history', 'History']].map(([id, label]) => (
+            {[
+              ['journal',   'Journal'],
+              ['positions', `Positions (${positions.length})`],
+              ['history',   'History'],
+              ['patterns',  `Patterns (${patterns.length})`],
+            ].map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)} style={{
                 background: tab === id ? '#1e3a5f' : 'transparent',
                 color: tab === id ? '#60a5fa' : '#6b7280',
@@ -971,7 +1056,7 @@ function AIJournal() {
                 </div>
               ) : positions.map(p => (
                 <div key={p.id} style={{
-                  display: 'grid', gridTemplateColumns: '80px 1fr 1fr 1fr 1fr',
+                  display: 'grid', gridTemplateColumns: '80px 1fr 1fr 1fr 1fr 1fr',
                   gap: 8, padding: '8px 0', borderBottom: '1px solid #1f2937', alignItems: 'center',
                 }}>
                   <span style={{ color: '#f9fafb', fontWeight: 700, fontSize: 12, fontFamily: 'monospace' }}>
@@ -982,8 +1067,18 @@ function AIJournal() {
                     <div style={{ color: '#f9fafb' }}>${fmt(p.entry_price, 2)}</div>
                   </div>
                   <div style={{ fontSize: 10 }}>
-                    <div style={{ color: '#9ca3af' }}>Cost</div>
-                    <div style={{ color: '#f9fafb' }}>${fmt(p.cost_basis, 2)}</div>
+                    <div style={{ color: '#9ca3af' }}>Current</div>
+                    <div style={{ color: p.current_price ? '#f9fafb' : '#4b5563' }}>
+                      {p.current_price ? `$${fmt(p.current_price, 2)}` : '—'}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 10 }}>
+                    <div style={{ color: '#9ca3af' }}>P&amp;L%</div>
+                    <div style={{ color: p.current_pnl_pct != null ? pnlColor(p.current_pnl_pct) : '#4b5563', fontWeight: 700 }}>
+                      {p.current_pnl_pct != null
+                        ? `${pnlSign(p.current_pnl_pct)}${fmt(p.current_pnl_pct, 1)}%`
+                        : '—'}
+                    </div>
                   </div>
                   <div style={{ fontSize: 10 }}>
                     <div style={{ color: '#9ca3af' }}>Target / Stop</div>
@@ -993,6 +1088,11 @@ function AIJournal() {
                   <div style={{ fontSize: 10 }}>
                     <div style={{ color: '#9ca3af' }}>{p.scan_tier?.replace('_BUY', '').replace('_', ' ')}</div>
                     <div style={{ color: '#6b7280', fontSize: 9 }}>{p.ats_signal?.replace('ATS_', '')}</div>
+                    {p.days_held != null && (
+                      <div style={{ color: p.days_held >= 12 ? '#fbbf24' : '#6b7280', fontSize: 9 }}>
+                        {p.days_held}d held
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1032,6 +1132,46 @@ function AIJournal() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Patterns tab */}
+          {tab === 'patterns' && (
+            <div>
+              {patterns.length === 0 ? (
+                <div style={{ color: '#4b5563', fontSize: 12, padding: '20px 0', textAlign: 'center' }}>
+                  No pattern data yet. Run AI reviews after scans to build pattern memory.
+                </div>
+              ) : patterns.map((pt, i) => {
+                const wr = pt.win_rate || 0;
+                const wrColor = wr > 0.6 ? '#34d399' : wr > 0.4 ? '#fbbf24' : '#f87171';
+                return (
+                  <div key={pt.pattern_key || i} style={{
+                    background: '#111827', borderRadius: 6, padding: '10px 12px',
+                    marginBottom: 8, border: '1px solid #1f2937',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#e5e7eb', fontFamily: 'monospace' }}>
+                        {fmtPatternKey(pt.pattern_key)}
+                      </span>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, marginLeft: 8 }}>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, color: wrColor,
+                          background: `${wrColor}20`, padding: '1px 6px', borderRadius: 3,
+                        }}>
+                          {(wr * 100).toFixed(0)}% win
+                        </span>
+                        <span style={{ fontSize: 9, color: '#6b7280' }}>{pt.n_trades} trades</span>
+                      </div>
+                    </div>
+                    {pt.notes && (
+                      <p style={{ fontSize: 10, color: '#9ca3af', margin: 0, lineHeight: 1.6 }}>
+                        {pt.notes.slice(0, 120)}{pt.notes.length > 120 ? '…' : ''}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 

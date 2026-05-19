@@ -84,6 +84,8 @@ from database import (
     get_ai_journal_positions,
     get_ai_journal_entries,
     reset_ai_journal,
+    get_pattern_memory,
+    get_ai_performance_stats,
 )
 from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
@@ -1469,6 +1471,27 @@ async def ai_journal_run(background_tasks: BackgroundTasks):
 @app.post("/api/ai-journal/reset")
 async def ai_journal_reset_route(capital: float = 500.0):
     return await reset_ai_journal(new_capital=capital)
+
+
+@app.post("/api/ai-journal/backfill")
+async def ai_journal_backfill():
+    """Backfill forward returns for recorded signal outcomes."""
+    from ai_journal import backfill_forward_returns
+    result = await backfill_forward_returns()
+    return result
+
+
+@app.get("/api/ai-journal/patterns")
+async def ai_journal_patterns():
+    """Return persisted pattern memory."""
+    patterns = await get_pattern_memory(20)
+    return {"patterns": patterns}
+
+
+@app.get("/api/ai-journal/stats")
+async def ai_journal_stats():
+    """Return overall performance stats."""
+    return await get_ai_performance_stats()
 
 
 @app.get("/api/demand-scanner/similar/{symbol}")
