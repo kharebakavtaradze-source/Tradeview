@@ -782,6 +782,265 @@ function AtsExplainer() {
   );
 }
 
+// ── AI Trading Journal ────────────────────────────────────────────────────────
+
+function AIJournal() {
+  const [state,     setState]     = useState(null);
+  const [positions, setPositions] = useState([]);
+  const [entries,   setEntries]   = useState([]);
+  const [running,   setRunning]   = useState(false);
+  const [expanded,  setExpanded]  = useState(true);
+  const [tab,       setTab]       = useState('journal');  // journal | positions | history
+
+  const reload = async () => {
+    try {
+      const [s, p, e, h] = await Promise.all([
+        fetch(`${API_URL}/api/ai-journal/state`).then(r => r.json()),
+        fetch(`${API_URL}/api/ai-journal/positions?status=OPEN`).then(r => r.json()),
+        fetch(`${API_URL}/api/ai-journal/entries?limit=8`).then(r => r.json()),
+        fetch(`${API_URL}/api/ai-journal/positions?status=CLOSED`).then(r => r.json()),
+      ]);
+      setState(s);
+      setPositions(p.positions || []);
+      setEntries(e.entries || []);
+      // merge closed into state for display
+      setState(prev => ({ ...prev, _closed: h.positions || [] }));
+    } catch {}
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const runSession = async () => {
+    setRunning(true);
+    try {
+      const res  = await fetch(`${API_URL}/api/ai-journal/run`, { method: 'POST' });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      await reload();
+    } catch (e) {
+      alert(`AI Journal error: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const pnlColor = v => v > 0 ? '#34d399' : v < 0 ? '#f87171' : '#9ca3af';
+  const pnlSign  = v => v > 0 ? '+' : '';
+
+  if (!state) return null;
+
+  const pnlPct  = state.starting_capital > 0
+    ? ((state.capital - state.starting_capital) / state.starting_capital * 100).toFixed(1)
+    : '0.0';
+  const pnlUsd  = (state.capital - state.starting_capital).toFixed(2);
+  const isProfit = state.capital >= state.starting_capital;
+
+  return (
+    <div style={{
+      background: '#0a0f1a', border: '1px solid #1e3a5f', borderRadius: 10,
+      marginTop: 20, overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div
+        onClick={() => setExpanded(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '12px 18px', cursor: 'pointer',
+          background: 'rgba(30,58,95,0.3)',
+          borderBottom: expanded ? '1px solid #1e3a5f' : 'none',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: '#60a5fa', letterSpacing: '0.04em' }}>
+            AI TRADING JOURNAL
+          </span>
+          <span style={{ fontSize: 10, color: '#374151', background: '#1e3a5f', borderRadius: 3, padding: '1px 6px' }}>
+            $500 virtual account · R154–R157 strategy
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 16, fontWeight: 800, color: isProfit ? '#34d399' : '#f87171' }}>
+              ${fmt(state.capital, 2)}
+            </span>
+            <span style={{ fontSize: 11, color: pnlColor(parseFloat(pnlPct)), marginLeft: 6 }}>
+              {pnlSign(parseFloat(pnlPct))}{pnlPct}%
+            </span>
+          </div>
+          <span style={{ color: '#4b5563', fontSize: 12 }}>{expanded ? '▲' : '▼'}</span>
+        </div>
+      </div>
+
+      {!expanded ? null : (
+        <div style={{ padding: '14px 18px' }}>
+
+          {/* Stats row */}
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
+            {[
+              ['Cash',       `$${fmt(state.cash, 2)}`,      '#9ca3af'],
+              ['Invested',   `$${fmt(state.invested, 2)}`,  '#60a5fa'],
+              ['Positions',  state.open_positions,           '#fbbf24'],
+              ['Closed',     state.closed_trades,            '#9ca3af'],
+              ['Win Rate',   `${state.win_rate_pct}%`,       '#34d399'],
+              ['P&L',        `${pnlSign(parseFloat(pnlUsd))}$${pnlUsd}`, pnlColor(parseFloat(pnlUsd))],
+            ].map(([label, val, color]) => (
+              <div key={label} style={{ textAlign: 'center', minWidth: 52 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color }}>{val}</div>
+                <div style={{ fontSize: 9, color: '#4b5563', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+              </div>
+            ))}
+            <div style={{ marginLeft: 'auto' }}>
+              <button
+                onClick={runSession}
+                disabled={running}
+                style={{
+                  background: running ? '#1f2937' : '#1d4ed8',
+                  color: running ? '#6b7280' : '#fff',
+                  border: 'none', borderRadius: 6, padding: '6px 14px',
+                  cursor: running ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600,
+                }}
+              >
+                {running ? 'Thinking…' : 'Run AI Review'}
+              </button>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+            {[['journal', 'Journal'], ['positions', `Positions (${positions.length})`], ['history', 'History']].map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id)} style={{
+                background: tab === id ? '#1e3a5f' : 'transparent',
+                color: tab === id ? '#60a5fa' : '#6b7280',
+                border: `1px solid ${tab === id ? '#1e3a5f' : '#1f2937'}`,
+                borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 10, fontWeight: 600,
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {/* Journal tab */}
+          {tab === 'journal' && (
+            <div>
+              {entries.length === 0 ? (
+                <div style={{ color: '#4b5563', fontSize: 12, padding: '20px 0', textAlign: 'center' }}>
+                  No journal entries yet. Run an AI review after a demand scan.
+                </div>
+              ) : entries.map(e => (
+                <div key={e.id} style={{
+                  background: '#111827', borderRadius: 7, padding: '12px 14px',
+                  marginBottom: 10, border: '1px solid #1f2937',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontSize: 10, color: '#4b5563' }}>
+                      {e.created_at?.slice(0, 16).replace('T', ' ')}
+                    </span>
+                    <div style={{ display: 'flex', gap: 8, fontSize: 9 }}>
+                      {e.positions_opened > 0 && (
+                        <span style={{ color: '#34d399' }}>+{e.positions_opened} opened</span>
+                      )}
+                      {e.positions_closed > 0 && (
+                        <span style={{ color: '#fbbf24' }}>{e.positions_closed} closed</span>
+                      )}
+                      <span style={{ color: pnlColor(e.capital_after - e.capital_before) }}>
+                        {pnlSign(e.capital_after - e.capital_before)}${(e.capital_after - e.capital_before).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 11, color: '#d1d5db', lineHeight: 1.7, margin: 0, whiteSpace: 'pre-wrap' }}>
+                    {e.journal_text}
+                  </p>
+                  {e.strategy_notes && (
+                    <div style={{
+                      marginTop: 8, padding: '6px 10px', background: 'rgba(96,165,250,0.06)',
+                      border: '1px solid rgba(96,165,250,0.15)', borderRadius: 5,
+                      fontSize: 10, color: '#93c5fd',
+                    }}>
+                      Strategy update: {e.strategy_notes}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Positions tab */}
+          {tab === 'positions' && (
+            <div>
+              {positions.length === 0 ? (
+                <div style={{ color: '#4b5563', fontSize: 12, padding: '20px 0', textAlign: 'center' }}>
+                  No open positions.
+                </div>
+              ) : positions.map(p => (
+                <div key={p.id} style={{
+                  display: 'grid', gridTemplateColumns: '80px 1fr 1fr 1fr 1fr',
+                  gap: 8, padding: '8px 0', borderBottom: '1px solid #1f2937', alignItems: 'center',
+                }}>
+                  <span style={{ color: '#f9fafb', fontWeight: 700, fontSize: 12, fontFamily: 'monospace' }}>
+                    {p.symbol}
+                  </span>
+                  <div style={{ fontSize: 10 }}>
+                    <div style={{ color: '#9ca3af' }}>Entry</div>
+                    <div style={{ color: '#f9fafb' }}>${fmt(p.entry_price, 2)}</div>
+                  </div>
+                  <div style={{ fontSize: 10 }}>
+                    <div style={{ color: '#9ca3af' }}>Cost</div>
+                    <div style={{ color: '#f9fafb' }}>${fmt(p.cost_basis, 2)}</div>
+                  </div>
+                  <div style={{ fontSize: 10 }}>
+                    <div style={{ color: '#9ca3af' }}>Target / Stop</div>
+                    <div style={{ color: '#34d399' }}>${fmt(p.target_price, 2)}</div>
+                    <div style={{ color: '#f87171' }}>${fmt(p.stop_price, 2)}</div>
+                  </div>
+                  <div style={{ fontSize: 10 }}>
+                    <div style={{ color: '#9ca3af' }}>{p.scan_tier?.replace('_BUY', '').replace('_', ' ')}</div>
+                    <div style={{ color: '#6b7280', fontSize: 9 }}>{p.ats_signal?.replace('ATS_', '')}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* History tab */}
+          {tab === 'history' && (
+            <div>
+              {!(state._closed?.length) ? (
+                <div style={{ color: '#4b5563', fontSize: 12, padding: '20px 0', textAlign: 'center' }}>
+                  No closed trades yet.
+                </div>
+              ) : (state._closed || []).slice(0, 15).map(p => (
+                <div key={p.id} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '7px 0', borderBottom: '1px solid #1f2937',
+                }}>
+                  <div>
+                    <span style={{ color: '#f9fafb', fontWeight: 700, fontSize: 12, fontFamily: 'monospace' }}>
+                      {p.symbol}
+                    </span>
+                    <span style={{ color: '#4b5563', fontSize: 9, marginLeft: 6 }}>
+                      {p.exit_date?.slice(0, 10)}
+                    </span>
+                    <span style={{ color: '#374151', fontSize: 9, marginLeft: 6 }}>
+                      {p.exit_reason}
+                    </span>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: pnlColor(p.pnl_usd) }}>
+                      {pnlSign(p.pnl_usd)}${fmt(p.pnl_usd, 2)}
+                    </div>
+                    <div style={{ fontSize: 10, color: pnlColor(p.pnl_pct) }}>
+                      {pnlSign(p.pnl_pct)}{fmt(p.pnl_pct, 1)}%
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DemandScannerPage() {
@@ -1037,6 +1296,9 @@ export default function DemandScannerPage() {
           </div>
         )}
       </div>
+
+      {/* AI Trading Journal */}
+      <AIJournal />
 
       {/* Detail drawer */}
       {drawerRow && (
