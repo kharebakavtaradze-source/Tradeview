@@ -194,9 +194,9 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
     split_art    = bool(ep.get("split_artifact_risk"))
 
     # ── 1. Pump Watch base ──────────────────────────────────────────────────
-    # R155 calibration: MEDIUM 4x_rate (28.9%) >= HIGH (27.9%) — equalize pts.
-    # R155 also confirmed: SPECULATIVE dropped to 22.0% (was 28.3% in R154,
-    # which was inflated by split artifacts). IGNORE = 14.8% — good separation.
+    # R155: MEDIUM 4x_rate (28.9%) >= HIGH (27.9%) — equalized to 3pts.
+    # R156: SPECULATIVE 30.3% > HIGH 27.0%; HIGH FP inverted (FP 30.4% > 4x 27.0%).
+    #       SPECULATIVE raised to 2pts. HIGH stays 3pts pending deeper recalibration.
     pw_pts = 0
     speculative_base = False
     if pw_label == "PUMP_WATCH_HIGH":
@@ -270,9 +270,11 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
     if _B_GAP_RESET in badges and not has_strong_trigger:
         reasons.append("gap_reset_context_only")
 
-    # PUMP_SPECULATIVE: +1 unconditional (R152: highest 4x rate 0.287 > HIGH/MEDIUM 0.250)
+    # PUMP_SPECULATIVE: +2 pts base.
+    # R156: SPECULATIVE 4x rate 30.3% > HIGH 27.0% — raised to match MEDIUM (also 3pts).
+    # Note: HIGH FP rate 30.4% > HIGH 4x rate 27.0% in R156 (inverted, calibration lag).
     if speculative_base:
-        pw_pts_spec = 1
+        pw_pts_spec = 2
         components["pump_watch_base"] = float(pw_pts_spec)
         score += pw_pts_spec
         reasons.append("pump_speculative_base")
@@ -341,11 +343,28 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
 
     # L34+NP_SETUP+LD: WLNBB L34 fires on same bar as NP-engine setup state
     # and lower-wick reclaim. R155 #1 PRICE_ACTION: rel=0.766, 10×4x, 3×FP.
-    has_l34_np_ld = custom.get("l34_np_ld", 0) > 0
+    l34_np_ld_count = custom.get("l34_np_ld", 0)
+    has_l34_np_ld   = l34_np_ld_count > 0
     if has_l34_np_ld and not toxic:
         custom_pts += 1
         has_custom_confirm = True
         reasons.append("l34_np_ld_setup_demand")
+
+    # Multi-bar L34_NP_LD: ≥2 bars with L34+NP_SETUP+lower-wick = FIVE_BAR context.
+    # R156 rank #13: rel=0.7685, 4x=12, FP=3, lift=4.67× (EXPERIMENTAL).
+    if l34_np_ld_count >= 2 and not toxic:
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("l34_np_ld_multi_bar")
+
+    # L34+NP_SETUP without lower-wick requirement (INSIDE_BAR variant).
+    # R156 rank #32: INSIDE_BAR+L34+NP_SETUP, rel=0.749, 4x=19, FP=7 (EXPERIMENTAL).
+    # Only fires when l34_np_ld hasn't already fired (avoid double-count).
+    valid_setup_pre = int(ep.get("valid_setup_days_pre") or 0)
+    if has_l34 and valid_setup_pre >= 1 and not has_l34_np_ld and not toxic:
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("l34_np_setup_confirmed")
 
     # Dryup+L34+LD triple: quiet compression day with setup bar and demand wick.
     # R154 Tier-1: rel=0.738, add_to_pump_watch.
@@ -356,6 +375,18 @@ def _compute_cfr_score(ep: dict, custom: dict) -> dict:
         custom_pts += 1
         has_custom_confirm = True
         reasons.append("dryup_l34_ld_triple")
+
+    # Dryup+compression+LD: #1 overall R156 pattern (FIVE_BAR DRYUP+FLAT+INSIDE_BAR+
+    # LOWER_WICK_RECLAIM), rel=0.8218, 4x=10, FP=1, lift=11.67× (EXPERIMENTAL).
+    # Captures quiet accumulation with demand wick without requiring L34.
+    atr_contract_pre  = int(ep.get("atr_contraction_days_pre") or 0)
+    compress_days_pre = int(ep.get("compression_days_pre") or 0)
+    if (dryup_pre >= 2
+            and (atr_contract_pre >= 3 or compress_days_pre >= 3)
+            and has_ld_any and not toxic):
+        custom_pts += 1
+        has_custom_confirm = True
+        reasons.append("dryup_compression_ld_reclaim")
 
     # DISC_EMA_CLUSTER_RECLAIM_001: EMA50 reclaim + bull stack = structural
     # momentum alignment. R154: rel=0.709, 18×4x, 0% split, add_to_pump_watch.
