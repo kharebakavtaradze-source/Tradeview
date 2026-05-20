@@ -58,11 +58,12 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
   const needsRepair = run.status === 'complete' && !run.comparison_count;
   const [repairing,   setRepairing]   = useState(false);
   const [repairErr,   setRepairErr]   = useState('');
-  const [copying,        setCopying]        = useState(false);
-  const [copyDone,       setCopyDone]       = useState(false);
-  const [downloading,    setDownloading]    = useState(false);
-  const [downloadingCsv, setDownloadingCsv] = useState(false);
-  const [downloadingMd,  setDownloadingMd]  = useState(false);
+  const [copying,           setCopying]           = useState(false);
+  const [copyDone,          setCopyDone]          = useState(false);
+  const [downloading,       setDownloading]       = useState(false);
+  const [downloadingCsv,    setDownloadingCsv]    = useState(false);
+  const [downloadingMd,     setDownloadingMd]     = useState(false);
+  const [downloadingBarCsv, setDownloadingBarCsv] = useState(false);
 
   const handleCopyContext = async () => {
     setCopying(true); setCopyDone(false);
@@ -133,6 +134,20 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
     } catch { /* ignore */ } finally { setDownloadingMd(false); }
   };
 
+  const handleDownloadBarCsv = async () => {
+    setDownloadingBarCsv(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/daily-features/export`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail); }
+      const blob = new Blob([await r.text()], { type: 'text/csv' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `raw-pattern-run-${run.id}-bars.csv`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ } finally { setDownloadingBarCsv(false); }
+  };
+
   const handleRepair = async () => {
     setRepairing(true);
     setRepairErr('');
@@ -189,6 +204,15 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
               style={{ color: '#93c5fd' }}
             >
               {downloadingMd ? '…' : '↓ MD'}
+            </button>
+            <button
+              className={styles.contextBtn}
+              disabled={downloadingBarCsv || copying}
+              onClick={handleDownloadBarCsv}
+              title="Download per-bar daily features CSV with L3/4/5 columns (body_class, wick_class, gap_class, range_class, vix_token, psar_token, rsi2_token)"
+              style={{ color: '#fb923c' }}
+            >
+              {downloadingBarCsv ? '…' : '↓ Bars CSV'}
             </button>
           </>
         )}
@@ -4054,8 +4078,8 @@ function _rejectReason(p) {
 
 const L345_TAGS = [
   // Line 3
-  { tag: 'BODY_X',   label: 'Body X',    desc: 'Extra-large body (>1.5×)',      color: '#a5b4fc' },
-  { tag: 'BODY_S',   label: 'Body S',    desc: 'Small body (<0.5×)',             color: '#7dd3fc' },
+  { tag: 'BODY_X',   label: 'Body X',    desc: 'Extra-large body (≥1.5× prev)',  color: '#a5b4fc' },
+  { tag: 'BODY_M',   label: 'Body M',    desc: 'Micro/Minimal body (≤0.5× prev)',color: '#7dd3fc' },
   { tag: 'WICK_TB',  label: 'Wick TB',   desc: 'Top wick dominant (≥50%)',       color: '#86efac' },
   { tag: 'WICK_BB',  label: 'Wick BB',   desc: 'Bottom wick dominant (≥50%)',    color: '#f87171' },
   { tag: 'WICK_J',   label: 'Wick J',    desc: 'Doji/spinning top (body ≤20%)', color: '#fbbf24' },

@@ -1452,6 +1452,17 @@ export default function ReplayPage() {
                                   Clear
                                 </button>
                               )}
+                              <span style={{ flex: 1 }} />
+                              <button
+                                onClick={() => window.open(`${apiUrl}/api/replay/${runId}/export?format=csv`)}
+                                style={{ fontSize: 10, color: '#22c55e', background: 'transparent', border: '1px solid #22c55e44', borderRadius: 3, padding: '2px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
+                                title="Download all candidates as CSV"
+                              >↓ CSV</button>
+                              <button
+                                onClick={() => window.open(`${apiUrl}/api/replay/${runId}/export?format=json`)}
+                                style={{ fontSize: 10, color: '#aaa', background: 'transparent', border: '1px solid #333', borderRadius: 3, padding: '2px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
+                                title="Download all candidates as JSON"
+                              >↓ JSON</button>
                             </>
                           );
                         })()}
