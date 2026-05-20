@@ -471,8 +471,8 @@ function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick,
   const tempLvl  = r.readiness_tier === 'HOT' ? 5 : r.readiness_tier === 'WARM' ? 3 : r.readiness_tier === 'COOL' ? 2 : 1;
   const tempColor = readTemp === 'WARM' ? 'var(--warn)' : 'var(--pump-blue)';
   const criteria  = (r.demand_buy_reasons || []).slice(0, 4).map(rr => REASONS_PRETTY[rr] || rr);
-  const sparkData = scoreHistory?.length >= 2 ? scoreHistory : sp(symSeed(r.symbol), 30, chgUp ? 0.3 : -0.2);
-  const sparkColor = scoreHistory?.length >= 2 ? 'var(--pump-lime)' : (chgUp ? 'var(--pump-lime)' : 'var(--neg)');
+  const sparkData = scoreHistory?.length >= 2 ? scoreHistory : null;
+  const sparkColor = 'var(--pump-lime)';
   return (
     <div onClick={() => onClick(r)} style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12, cursor: 'pointer', transition: 'border-color 0.15s' }}
       onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--pump-lime-soft)'}
@@ -723,43 +723,135 @@ function PumpMoversCard({ kind, livePrices, allResults, marketOpen }) {
   );
 }
 
-function PumpHypeMonitor({ hypeStatus, hypeResults }) {
+const HYPE_TIER_COLOR = { VIRAL: '#ff4400', HOT: '#ff8800', WARM: '#ffd600', COLD: 'var(--ink-dim)' };
+const HYPE_TIER_BG    = { VIRAL: 'rgba(255,68,0,0.15)', HOT: 'rgba(255,136,0,0.13)', WARM: 'rgba(255,214,0,0.10)', COLD: 'rgba(80,80,80,0.08)' };
+
+function PumpHypeMonitor({ hypeStatus, hypeResults, allResults, onRunHype, hypeRunning }) {
   const hot       = hypeStatus?.hot_tickers || [];
   const divCount  = hypeStatus?.total_divergences ?? 0;
-  const hypeLabel = divCount > 20 ? 'HOT' : divCount > 10 ? 'WARM' : 'COOL';
   const monitored = hypeStatus?.tickers_monitored ?? 0;
-  const volSurge  = hypeStatus?.avg_vol_surge ?? 0;
-  const mentions  = hypeStatus?.social_count ?? 0;
+  const social    = hypeStatus?.social_count ?? 0;
+  const topHype   = hypeStatus?.top_hype || [];
+  const lastRun   = hypeStatus?.last_run_at;
+  const hasData   = monitored > 0;
+
+  const overallTier = hot.length > 3 ? 'HOT' : hot.length > 0 ? 'WARM' : hasData ? 'COOL' : null;
+  const tierColor   = HYPE_TIER_COLOR[overallTier] || 'var(--ink-mute)';
+
+  // Fallback: top vol surge tickers from scan data
+  const topVol = (allResults || [])
+    .filter(r => (r.indicators?.anomaly_ratio ?? 0) > 1.5)
+    .sort((a, b) => (b.indicators?.anomaly_ratio ?? 0) - (a.indicators?.anomaly_ratio ?? 0))
+    .slice(0, 6);
+
   return (
     <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 22px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
           <h3 style={{ fontSize: 14, margin: 0, color: 'var(--ink-mute)', fontWeight: 500 }}>Hype monitor</h3>
-          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>volume/social momentum · last 24h</span>
+          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>social · news · volume · last 24h</span>
+          {lastRun && <span style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>{fmtAge(lastRun)} ago</span>}
         </div>
-        <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 'var(--r-pill)', background: 'var(--bg-2)', border: '1px solid var(--stroke-soft)', color: 'var(--ink-mute)', fontFamily: 'var(--f-mono)' }}>{hypeLabel} · {divCount}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {hypeRunning && (
+            <span style={{ fontSize: 11, color: 'var(--pump-blue)', fontFamily: 'var(--f-mono)', animation: 'none' }}>scanning…</span>
+          )}
+          <button onClick={onRunHype} disabled={hypeRunning} style={{
+            fontSize: 11, padding: '3px 12px', borderRadius: 'var(--r-pill)',
+            background: 'var(--bg-2)', border: '1px solid var(--stroke)',
+            color: 'var(--ink-mute)', fontFamily: 'var(--f-mono)', cursor: hypeRunning ? 'wait' : 'pointer',
+          }}>
+            {hypeRunning ? '…' : hasData ? '↺ Refresh' : '▶ Run scan'}
+          </button>
+          {overallTier && (
+            <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 'var(--r-pill)', background: HYPE_TIER_BG[overallTier], color: tierColor, border: `1px solid ${tierColor}44`, fontFamily: 'var(--f-mono)', fontWeight: 600 }}>
+              {overallTier} · {hot.length} hot
+            </span>
+          )}
+        </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Vol surge</span>
-          <span style={{ fontSize: 24, color: 'var(--pump-lime)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{volSurge > 0 ? `+${volSurge}%` : '—'}</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Social mentions</span>
-          <span style={{ fontSize: 24, color: 'var(--pump-blue)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{mentions > 0 ? mentions.toLocaleString() : '—'}</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Monitored</span>
-          <span style={{ fontSize: 24, color: 'var(--ink)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{monitored || '—'}</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Hot tickers</span>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
-            {hot.slice(0, 6).map(t => <span key={t} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 'var(--r-pill)', background: 'var(--pump-lime-soft)', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{t}</span>)}
-            {hot.length === 0 && <span style={{ fontSize: 12, color: 'var(--ink-faint)' }}>—</span>}
+
+      {/* Stats row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: hasData || topVol.length > 0 ? 16 : 0 }}>
+        {[
+          { label: 'Monitored',   value: monitored || '—',              color: 'var(--ink)' },
+          { label: 'Social 24h',  value: social > 0 ? social.toLocaleString() : '—', color: 'var(--pump-blue)' },
+          { label: 'Hot tickers', value: hot.length > 0 ? hot.length : '—', color: '#ff8800' },
+          { label: 'Divergences', value: divCount > 0 ? divCount : '—', color: divCount > 0 ? 'var(--pos)' : 'var(--ink)' },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>{label}</span>
+            <span style={{ fontSize: 22, color, fontWeight: 500, fontFamily: 'var(--f-mono)', lineHeight: 1.1 }}>{value}</span>
           </div>
-        </div>
+        ))}
       </div>
+
+      {/* Hot ticker pills */}
+      {hot.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+          {hot.map(t => (
+            <span key={t} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 'var(--r-pill)', background: 'rgba(255,136,0,0.13)', color: '#ff8800', fontFamily: 'var(--f-mono)', fontWeight: 700, border: '1px solid rgba(255,136,0,0.25)' }}>{t}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Top hype table (when social scan has run) */}
+      {topHype.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <div style={{ fontSize: 10, color: 'var(--ink-faint)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)', marginBottom: 4 }}>Top Signals</div>
+          {topHype.map(t => (
+            <div key={t.ticker} style={{ display: 'grid', gridTemplateColumns: '50px 58px 1fr 62px', gap: 10, alignItems: 'center', padding: '7px 10px', background: 'var(--bg-2)', borderRadius: 'var(--r-md)' }}>
+              <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>{t.ticker}</span>
+              <span style={{ fontSize: 9, padding: '2px 5px', borderRadius: 4, background: HYPE_TIER_BG[t.tier], color: HYPE_TIER_COLOR[t.tier], fontFamily: 'var(--f-mono)', fontWeight: 700, letterSpacing: '0.05em', textAlign: 'center', border: `1px solid ${HYPE_TIER_COLOR[t.tier]}33` }}>{t.tier}</span>
+              <span style={{ fontSize: 11, color: 'var(--ink-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {t.headlines?.[0]?.title || (t.divergences > 0 ? `${t.divergences} divergence${t.divergences > 1 ? 's' : ''}` : '—')}
+              </span>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                <span style={{ fontFamily: 'var(--f-mono)', fontSize: 10, color: 'var(--ink-mute)' }}>{t.social_24h} soc</span>
+                {t.news_count > 0 && <span style={{ fontFamily: 'var(--f-mono)', fontSize: 10, color: 'var(--ink-faint)' }}>{t.news_count} news</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Fallback: vol surge leaders from scan data */}
+      {topHype.length === 0 && topVol.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <div style={{ fontSize: 10, color: 'var(--ink-faint)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)', marginBottom: 4 }}>Volume Surge · Scan Data</div>
+          {topVol.map(r => {
+            const anomaly = r.indicators?.anomaly_ratio ?? 0;
+            const barW = Math.min(100, Math.round((anomaly / 10) * 100));
+            const tier = r.demand_composite_tier;
+            return (
+              <div key={r.symbol} style={{ display: 'grid', gridTemplateColumns: '50px 1fr 64px', gap: 10, alignItems: 'center', padding: '7px 10px', background: 'var(--bg-2)', borderRadius: 'var(--r-md)' }}>
+                <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>{r.symbol}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, height: 4, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ width: `${barW}%`, height: '100%', background: 'var(--pump-lime)', borderRadius: 2 }} />
+                  </div>
+                  {tier && tier !== 'SKIP' && <TierBadge tier={tier} small />}
+                </div>
+                <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--ink-mute)', textAlign: 'right' }}>{anomaly.toFixed(1)}× vol</span>
+              </div>
+            );
+          })}
+          {!hypeRunning && (
+            <div style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)', marginTop: 6, textAlign: 'center' }}>
+              Run social scan for StockTwits · Reddit · news hype scores
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {topHype.length === 0 && topVol.length === 0 && !hypeRunning && (
+        <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--ink-faint)', fontSize: 12, fontFamily: 'var(--f-mono)' }}>
+          No scan data yet · click Run scan
+        </div>
+      )}
     </div>
   );
 }
@@ -1752,6 +1844,7 @@ export default function DashboardPage() {
   const [regime,      setRegime]      = useState(null);
   const [hypeStatus,  setHypeStatus]  = useState(null);
   const [hypeResults, setHypeResults] = useState([]);
+  const [hypeRunning, setHypeRunning] = useState(false);
   const [livePrices,  setLivePrices]  = useState({});
   const [sectors,        setSectors]        = useState({});
   const [sectorsLoading, setSectorsLoading] = useState(true);
@@ -1811,6 +1904,49 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => { fetchContext(); const id = setInterval(fetchContext, 5 * 60 * 1000); return () => clearInterval(id); }, [fetchContext]);
+
+  // Auto-trigger hype scan on load if no results or stale > 1h
+  useEffect(() => {
+    if (!hypeStatus) return;
+    const lastRun = hypeStatus.last_run_at ? new Date(hypeStatus.last_run_at) : null;
+    const stale = !lastRun || (Date.now() - lastRun.getTime() > 60 * 60 * 1000);
+    if (stale && !hypeRunning) {
+      setHypeRunning(true);
+      fetch(`${API_URL}/api/hype/run`, { method: 'POST' })
+        .then(() => {
+          setTimeout(() => {
+            fetch(`${API_URL}/api/hype/status`).then(r => r.json()).then(d => { setHypeStatus(d); setHypeRunning(false); }).catch(() => setHypeRunning(false));
+            fetch(`${API_URL}/api/hype/results`).then(r => r.json()).then(d => setHypeResults(d.results || [])).catch(() => {});
+          }, 8000);
+        })
+        .catch(() => setHypeRunning(false));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hypeStatus?.last_run_at]);
+
+  const runHypeScan = useCallback(() => {
+    if (hypeRunning) return;
+    setHypeRunning(true);
+    fetch(`${API_URL}/api/hype/run`, { method: 'POST' })
+      .then(() => {
+        const poll = (attempt) => {
+          if (attempt > 15) { setHypeRunning(false); return; }
+          setTimeout(() => {
+            Promise.all([
+              fetch(`${API_URL}/api/hype/status`).then(r => r.json()),
+              fetch(`${API_URL}/api/hype/results`).then(r => r.json()),
+            ]).then(([s, res]) => {
+              setHypeStatus(s);
+              setHypeResults(res.results || []);
+              if (s.tickers_monitored > 0) setHypeRunning(false);
+              else poll(attempt + 1);
+            }).catch(() => poll(attempt + 1));
+          }, 5000);
+        };
+        poll(0);
+      })
+      .catch(() => setHypeRunning(false));
+  }, [hypeRunning]);
 
   // Market countdown
   useEffect(() => {
@@ -1997,7 +2133,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Hype Monitor */}
-            <PumpHypeMonitor hypeStatus={hypeStatus} hypeResults={hypeResults} />
+            <PumpHypeMonitor hypeStatus={hypeStatus} hypeResults={hypeResults} allResults={allResults} onRunHype={runHypeScan} hypeRunning={hypeRunning} />
 
             {/* News */}
             <PumpNewsGrid news={news} newsLoading={newsLoading} />
