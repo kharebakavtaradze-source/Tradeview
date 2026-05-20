@@ -558,26 +558,36 @@ function PumpSetupGrid({ allResults, livePrices, journaledSet, addingJournal, ad
   );
 }
 
-function PumpSectorTile({ name, count, perf, topSymbols, lead = false }) {
-  const isPos = perf >= 0;
-  const intensity = Math.min(Math.abs(perf) / 4, 1);
+const TREND_SCORE = { BULL_STRONG: 3, BULL: 2, NEUTRAL: 0, BEAR: -2, BEAR_STRONG: -3 };
+const TREND_COLOR = {
+  BULL_STRONG: 'var(--pos)', BULL: 'var(--pos)', NEUTRAL: 'var(--ink-mute)',
+  BEAR: 'var(--neg)', BEAR_STRONG: 'var(--neg)',
+};
+
+function PumpSectorTile({ etf, displayName, trend, rs, count, topSymbols, lead = false }) {
+  const score = TREND_SCORE[trend] ?? 0;
+  const isPos = score >= 0;
+  const intensity = Math.min(Math.abs(rs - 1) * 4, 1);
   const bg = lead
     ? `radial-gradient(ellipse at 100% 0%, oklch(0.96 0.18 125 / 0.5) 0%, transparent 55%), linear-gradient(135deg, color-mix(in oklch, var(--pump-lime) ${55 + intensity * 25}%, var(--bg-1)) 0%, color-mix(in oklch, var(--pump-lime) ${30 + intensity * 15}%, var(--bg-1)) 100%)`
-    : isPos ? `color-mix(in oklch, var(--pump-lime) ${10 + intensity * 22}%, var(--bg-1))`
-    : `color-mix(in oklch, var(--neg) ${8 + intensity * 20}%, var(--bg-1))`;
+    : isPos ? `color-mix(in oklch, var(--pump-lime) ${8 + intensity * 18}%, var(--bg-1))`
+    : `color-mix(in oklch, var(--neg) ${6 + intensity * 16}%, var(--bg-1))`;
   const fg = lead && isPos ? 'var(--on-lime)' : 'var(--ink)';
-  const dimFg = lead && isPos ? 'color-mix(in oklch, var(--on-lime) 70%, transparent)' : 'var(--ink-dim)';
+  const dimFg = lead ? 'color-mix(in oklch, var(--on-lime) 70%, transparent)' : 'var(--ink-dim)';
+  const trendColor = lead ? fg : (TREND_COLOR[trend] || 'var(--ink-mute)');
   return (
     <div style={{ background: bg, borderRadius: 'var(--r-lg)', padding: lead ? '18px 20px' : '12px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gridColumn: lead ? 'span 2' : 'span 1', gridRow: lead ? 'span 2' : 'span 1', minHeight: lead ? 0 : 100, color: fg, position: 'relative', overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span style={{ fontSize: lead ? 15 : 12, fontWeight: 500, letterSpacing: '-0.01em', color: fg }}>{name}</span>
-          <span style={{ fontSize: 10, color: dimFg, letterSpacing: '0.06em', fontFamily: 'var(--f-mono)' }}>{count} SETUPS</span>
+          <span style={{ fontSize: lead ? 15 : 12, fontWeight: 500, letterSpacing: '-0.01em', color: fg }}>{displayName}</span>
+          <span style={{ fontSize: 10, color: dimFg, letterSpacing: '0.06em', fontFamily: 'var(--f-mono)' }}>{etf} · {count} SETUPS</span>
         </div>
-        <span style={{ fontSize: lead ? 24 : 15, color: isPos ? (lead ? fg : 'var(--pos)') : 'var(--neg)', fontWeight: 500, letterSpacing: '-0.01em', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: 'var(--f-mono)' }}>{isPos ? '+' : ''}{perf.toFixed(2)}%</span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+          <span style={{ fontSize: lead ? 13 : 11, color: trendColor, fontWeight: 600, fontFamily: 'var(--f-mono)', letterSpacing: '0.06em' }}>{trend?.replace('_', ' ') || '—'}</span>
+          {rs != null && <span style={{ fontSize: 10, color: dimFg, fontFamily: 'var(--f-mono)' }}>RS {rs.toFixed(2)}</span>}
+        </div>
       </div>
-      {lead && <Sparkline width={210} height={28} data={sp(name.length * 7, 24, 0.3)} color="var(--on-lime)" />}
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8 }}>
         {topSymbols.slice(0, lead ? 5 : 3).map((t, i) => (
           <span key={i} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 'var(--r-pill)', background: lead ? 'color-mix(in oklch, var(--on-lime) 18%, transparent)' : 'var(--bg-2)', color: lead ? fg : 'var(--ink-mute)', fontFamily: 'var(--f-mono)', fontWeight: 500 }}>{t}</span>
         ))}
@@ -587,14 +597,23 @@ function PumpSectorTile({ name, count, perf, topSymbols, lead = false }) {
 }
 
 function PumpSectorHeat({ sectors, allResults, sectorsLoading }) {
+  // sectors is keyed by ETF ticker (e.g. XLC, XLY) from /api/sectors/heatmap
   const entries = Object.entries(sectors || {})
-    .map(([name, d]) => ({
-      name,
-      chg: d.change_pct ?? d.change_1d ?? d.pct_change_1d ?? 0,
-      count: allResults.filter(r => r.sector === name || r.sector === d.gics_name).length,
-      topSyms: allResults.filter(r => r.sector === name || r.sector === d.gics_name).slice(0, 4).map(r => r.symbol),
+    .map(([etf, d]) => ({
+      etf,
+      displayName: d.name || etf,
+      trend: d.trend_label || 'NEUTRAL',
+      rs: d.rs_ratio ?? 1.0,
+      count: allResults.filter(r => {
+        const sec = r.sector || '';
+        return sec === etf || sec === d.name || sec.toLowerCase() === (d.name || '').toLowerCase();
+      }).length,
+      topSyms: allResults.filter(r => {
+        const sec = r.sector || '';
+        return sec === etf || sec === d.name || sec.toLowerCase() === (d.name || '').toLowerCase();
+      }).slice(0, 4).map(r => r.symbol),
     }))
-    .sort((a, b) => b.chg - a.chg);
+    .sort((a, b) => (TREND_SCORE[b.trend] ?? 0) - (TREND_SCORE[a.trend] ?? 0));
   return (
     <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -612,8 +631,8 @@ function PumpSectorHeat({ sectors, allResults, sectorsLoading }) {
         <div style={{ color: 'var(--ink-faint)', fontSize: 12, padding: '20px 0' }}>No sector data — market may be closed</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, gridAutoRows: 'minmax(100px, auto)' }}>
-          {entries.slice(0, 1).map(e => <PumpSectorTile key={e.name} name={e.name} count={e.count} perf={e.chg} topSymbols={e.topSyms} lead />)}
-          {entries.slice(1, 7).map(e => <PumpSectorTile key={e.name} name={e.name.split(' ')[0]} count={e.count} perf={e.chg} topSymbols={e.topSyms} />)}
+          {entries.slice(0, 1).map(e => <PumpSectorTile key={e.etf} etf={e.etf} displayName={e.displayName} trend={e.trend} rs={e.rs} count={e.count} topSymbols={e.topSyms} lead />)}
+          {entries.slice(1, 7).map(e => <PumpSectorTile key={e.etf} etf={e.etf} displayName={e.displayName.split(' ').slice(0,2).join(' ')} trend={e.trend} rs={e.rs} count={e.count} topSymbols={e.topSyms} />)}
         </div>
       )}
     </div>
@@ -1259,6 +1278,48 @@ function MarketContextBar({ marketTimer, regime, livePrices, marketOpen }) {
 
 // ── DRAWER (full detail) ──────────────────────────────────────────────────────
 
+function TradingViewChart({ symbol, height = 380 }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || !symbol) return;
+    ref.current.innerHTML = '';
+    const container = document.createElement('div');
+    container.className = 'tradingview-widget-container';
+    container.style.height = height + 'px';
+    const inner = document.createElement('div');
+    inner.className = 'tradingview-widget-container__widget';
+    inner.style.height = '100%';
+    container.appendChild(inner);
+    const script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      autosize: true,
+      symbol: symbol,
+      interval: 'D',
+      timezone: 'America/New_York',
+      theme: 'dark',
+      style: '1',
+      locale: 'en',
+      backgroundColor: 'rgba(22, 22, 18, 1)',
+      gridColor: 'rgba(80, 80, 70, 0.2)',
+      hide_top_toolbar: false,
+      hide_legend: false,
+      hide_side_toolbar: true,
+      allow_symbol_change: true,
+      save_image: false,
+      calendar: false,
+      support_host: 'https://www.tradingview.com',
+    });
+    container.appendChild(script);
+    ref.current.appendChild(container);
+  }, [symbol]);
+  return (
+    <div ref={ref} style={{ height, borderRadius: 'var(--r-lg)', overflow: 'hidden', background: 'var(--bg-0)' }} />
+  );
+}
+
 function ScoreHistory({ symbol }) {
   const [hist, setHist] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1391,28 +1452,28 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
   const tier = TIER_META[row.demand_composite_tier] || TIER_META.SKIP;
   return (
     <div style={{
-      position: 'fixed', right: 0, top: 0, bottom: 0, width: 420,
+      position: 'fixed', right: 0, top: 0, bottom: 0, width: 520,
       background: 'var(--bg-1)', borderLeft: '1px solid var(--stroke-soft)',
-      zIndex: 1000, overflowY: 'auto', padding: 20,
+      zIndex: 1000, overflowY: 'auto', padding: 0,
       boxShadow: '-8px 0 32px rgba(0,0,0,0.5)',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--ink)' }}>{row.symbol}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-mute)', marginTop: 2 }}>${fmt(row.price, 2)} · {row.sector || '—'}</div>
+      {/* TradingView chart — full width, no padding */}
+      <div style={{ position: 'relative' }}>
+        <TradingViewChart symbol={row.symbol} height={340} />
+        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.15)', color: 'white', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12, zIndex: 10, backdropFilter: 'blur(4px)' }}>✕ Close</button>
+        <div style={{ position: 'absolute', bottom: 12, left: 14, display: 'flex', gap: 8, alignItems: 'center', zIndex: 10, pointerEvents: 'none' }}>
+          <span style={{ fontSize: 20, fontWeight: 700, color: 'white', textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>{row.symbol}</span>
+          <TierBadge tier={row.demand_composite_tier} />
+          <span style={{ fontSize: 22, fontWeight: 700, color: tier.color, fontFamily: 'var(--f-mono)', textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>{fmt(row.demand_composite_score, 1)}<span style={{ fontSize: 12, opacity: 0.6 }}>/20</span></span>
         </div>
-        <button onClick={onClose} style={{ background: 'none', border: '1px solid var(--stroke)', color: 'var(--ink-mute)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Close</button>
       </div>
 
-      <div style={{ background: tier.bg, border: `1px solid ${tier.color}40`, borderRadius: 8, padding: '12px 16px', marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <TierBadge tier={row.demand_composite_tier} />
-          <div style={{ fontSize: 28, fontWeight: 800, color: tier.color }}>{fmt(row.demand_composite_score, 1)}<span style={{ fontSize: 14, opacity: 0.5 }}>/20</span></div>
-        </div>
+      <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ background: tier.bg, border: `1px solid ${tier.color}40`, borderRadius: 8, padding: '10px 14px' }}>
         <ScoreBreakdown bd={row.demand_score_breakdown || {}} />
       </div>
 
-      <div style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+      <div style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '10px 12px' }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-mute)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Score History</div>
         <ScoreHistory symbol={row.symbol} />
       </div>
@@ -1489,6 +1550,7 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
         {narrativeLoading && <div style={{ color: 'var(--ink-mute)', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>Generating…</div>}
         {narrative && <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.7, margin: 0 }}>{narrative}</p>}
       </div>
+      </div>{/* end padding wrapper */}
     </div>
   );
 }
@@ -1733,14 +1795,16 @@ export default function DashboardPage() {
         fetch(`${API_URL}/api/market-regime`).catch(() => null),
         fetch(`${API_URL}/api/hype/status`).catch(() => null),
         fetch(`${API_URL}/api/hype/results`).catch(() => null),
-        fetch(`${API_URL}/api/sector-momentum`).catch(() => null),
+        fetch(`${API_URL}/api/sectors/heatmap`).catch(() => null),
       ]);
       if (regRes?.ok)     setRegime(await regRes.json());
       if (statusRes?.ok)  setHypeStatus(await statusRes.json());
       if (resultsRes?.ok) { const d = await resultsRes.json(); setHypeResults(d.results || []); }
       if (secRes?.ok) {
         const secData = await secRes.json();
-        setSectors(typeof secData === 'object' && !Array.isArray(secData) ? secData : {});
+        // /api/sectors/heatmap returns { as_of, risk_mode, sectors: { ETF: { name, trend_label, rs_ratio, ... } } }
+        const raw = secData?.sectors ?? secData;
+        setSectors(typeof raw === 'object' && !Array.isArray(raw) ? raw : {});
       }
     } catch { /* optional */ }
     finally { setSectorsLoading(false); }
