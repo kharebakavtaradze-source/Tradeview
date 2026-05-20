@@ -30,11 +30,8 @@ logger = logging.getLogger(__name__)
 from database import (
     add_journal_entry,
     add_to_watchlist,
-    close_ai_position,
     delete_journal_entry,
     get_active_streaks,
-    get_ai_portfolio_history,
-    get_all_ai_positions,
     get_candidates_missed,
     get_candidates_summary,
     get_deep_analytics,
@@ -45,9 +42,6 @@ from database import (
     get_latest_scan,
     get_market_regime_history,
     get_market_regime_latest,
-    get_open_ai_positions,
-    update_ai_portfolio_baseline,
-    get_portfolio_state,
     get_position_snapshots,
     get_sector_strength_for_sector,
     get_sector_strength_latest,
@@ -656,109 +650,6 @@ async def candidates_summary():
     return {"summary": await get_candidates_summary()}
 
 
-# ─── AI Portfolio routes ───────────────────────────────────────────────────────
-
-@app.get("/api/ai-portfolio/state")
-async def ai_portfolio_state():
-    return await get_portfolio_state()
-
-
-@app.get("/api/ai-portfolio/positions")
-async def ai_portfolio_positions():
-    return {"positions": await get_open_ai_positions()}
-
-
-@app.get("/api/ai-portfolio/history")
-async def ai_portfolio_history_route():
-    positions = await get_all_ai_positions(50)
-    history = await get_ai_portfolio_history(30)
-    return {"positions": positions, "history": history}
-
-
-@app.get("/api/ai-portfolio/report/latest")
-async def ai_portfolio_latest_report():
-    state = await get_portfolio_state()
-    return {
-        "total_value": state["total_value"],
-        "cash": state["cash"],
-        "total_pnl_pct": state["total_pnl_pct"],
-        "report": state.get("daily_report"),
-        "decisions": state.get("decisions_json"),
-    }
-
-
-@app.get("/api/ai-portfolio/report/{report_date}")
-async def ai_portfolio_report_by_date(report_date: str):
-    """Return AI portfolio state for a specific date (YYYY-MM-DD)."""
-    from sqlalchemy import select
-    from database import AIPortfolioState, get_session_factory
-    import json as _json
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(AIPortfolioState).where(AIPortfolioState.date == report_date)
-        )
-        state = result.scalar_one_or_none()
-    if not state:
-        raise HTTPException(status_code=404, detail=f"No portfolio data for {report_date}")
-    return {
-        "date": state.date,
-        "total_value": state.total_value,
-        "cash": state.cash,
-        "total_pnl_pct": state.total_pnl_pct or 0,
-        "report": _json.loads(state.daily_report) if state.daily_report else None,
-        "decisions": _json.loads(state.decisions_json) if state.decisions_json else None,
-    }
-
-
-@app.post("/api/ai-portfolio/run-now")
-async def ai_portfolio_run_now(background_tasks: BackgroundTasks):
-    """Manually trigger AI portfolio decisions."""
-    from ai_portfolio import ai_portfolio_decisions as run_decisions
-    background_tasks.add_task(run_decisions)
-    return {"status": "started", "message": "AI portfolio decisions running in background"}
-
-
-@app.post("/api/ai-portfolio/refresh-prices")
-async def ai_portfolio_refresh_prices():
-    """
-    Fetch live prices for all open AI positions and update P&L.
-    Safe to call any time — no AI decisions made, prices only.
-    """
-    from ai_portfolio import update_ai_positions_intraday
-    from database import get_open_ai_positions
-    positions = await get_open_ai_positions()
-    if not positions:
-        return {"status": "ok", "message": "No open positions to update", "updated": 0}
-    await update_ai_positions_intraday()
-    positions_after = await get_open_ai_positions()
-    return {
-        "status": "ok",
-        "updated": len(positions_after),
-        "message": f"Prices refreshed for {len(positions_after)} positions",
-        "positions": positions_after,
-    }
-
-
-@app.post("/api/ai-portfolio/reset")
-async def ai_portfolio_reset(capital: float = 2000.0):
-    """
-    Reset AI portfolio to a clean state with the given capital base.
-    Closes all open positions (exit_reason=RESET) and sets cash/baseline to capital.
-    """
-    from database import reset_ai_portfolio
-    result = await reset_ai_portfolio(new_capital=capital)
-    return result
-
-
-@app.put("/api/ai-portfolio/settings")
-async def ai_portfolio_settings(data: Dict[str, Any]):
-    """Update baseline capital display without resetting positions."""
-    baseline = data.get("baseline_value")
-    if baseline is None or not isinstance(baseline, (int, float)) or baseline <= 0:
-        raise HTTPException(status_code=400, detail="baseline_value must be a positive number")
-    return await update_ai_portfolio_baseline(float(baseline))
-
-
 # ─── Hype Monitor routes (specific routes BEFORE parameterized {symbol}) ───────
 
 @app.get("/api/hype/status")
@@ -879,160 +770,6 @@ async def sector_strength_latest():
             data = scan["sector_strength"]
     sectors = sorted(data.values(), key=lambda x: x.get("avg_score", 0), reverse=True)
     return {"sectors": sectors}
-
-
-# ─── New Pump standalone pipeline ────────────────────────────────────────────
-# Completely separate from old scanner. Own universe → own candles → own engine.
-
-@app.get("/api/new-pump/run")
-@app.post("/api/new-pump/run")
-async def new_pump_run(background_tasks: BackgroundTasks):
-    """Trigger a New Pump standalone scan in background."""
-    from scanner.new_pump_runner import is_running, run_new_pump_scan
-    if is_running():
-        return {"status": "already_running", "message": "New Pump scan already in progress"}
-    background_tasks.add_task(run_new_pump_scan)
-    return {"status": "started", "message": "New Pump scan started in background"}
-
-
-@app.get("/api/new-pump/status")
-async def new_pump_status():
-    """Return running status and metadata of latest New Pump scan."""
-    from scanner.new_pump_runner import is_running, get_latest
-    data = get_latest()
-    return {
-        "running":     is_running(),
-        "scanned_at":  data.get("scanned_at"),
-        "total":       data.get("total", 0),
-        "universe":    data.get("universe", 0),
-        "elapsed_secs": data.get("elapsed_secs"),
-        "has_data":    bool(data.get("results")),
-    }
-
-
-@app.get("/api/new-pump/latest")
-async def new_pump_latest(
-    min_score:    float = 0.0,
-    label:        str   = "",
-    sequence:     str   = "",
-    decision:     str   = "",   # BUY_CANDIDATE | WATCH | AVOID | IMPULSE_RISK
-    phase:        str   = "",   # CONFIRMED_STRUCTURE | TRIGGERED_STRUCTURE | ...
-    ss_bucket:    str   = "",   # 66_100 | 46_65 | 26_45 | 0_25
-    max_results:  int   = 500,
-):
-    """
-    Return latest New Pump scan results from standalone pipeline.
-    Filters: min_score, label, sequence, decision, phase, ss_bucket.
-    Fields include v3.6 decision authority: decision, structure_phase,
-    structure_score, decision_reason, decision_flags, decision_authority.
-    """
-    from scanner.new_pump_runner import get_latest
-    data = get_latest()
-    results = data.get("results", [])
-
-    # Strip ETFs/funds
-    exclusions = await _get_exclusion_set()
-    results = _strip_non_stocks(results, exclusions)
-
-    if min_score > 0:
-        results = [r for r in results if (r.get("new_pump_score") or 0) >= min_score]
-    if label:
-        results = [r for r in results if r.get("new_pump_label") == label]
-    if sequence:
-        results = [r for r in results if r.get("new_pump_sequence_label") == sequence]
-    if decision:
-        results = [r for r in results if r.get("decision") == decision]
-    if phase:
-        results = [r for r in results if r.get("structure_phase") == phase]
-    if ss_bucket:
-        def _in_bucket(r):
-            ss = r.get("structure_score")
-            if ss is None: return False
-            if ss_bucket == "66_100": return ss >= 66
-            if ss_bucket == "46_65":  return 46 <= ss < 66
-            if ss_bucket == "26_45":  return 26 <= ss < 46
-            if ss_bucket == "0_25":   return ss < 26
-            return True
-        results = [r for r in results if _in_bucket(r)]
-
-    return {
-        "results":      results[:min(max_results, 1000)],
-        "total":        len(results),
-        "universe":     data.get("universe", 0),
-        "scanned_at":   data.get("scanned_at"),
-        "elapsed_secs": data.get("elapsed_secs"),
-        "excluded_non_common_stock_count": data.get("excluded_non_common_stock_count", 0),
-        "filters":      {
-            "min_score": min_score, "label": label, "sequence": sequence,
-            "decision": decision, "phase": phase, "ss_bucket": ss_bucket,
-        },
-    }
-
-
-@app.get("/api/new-pump/ticker/{symbol}")
-async def new_pump_ticker_detail(symbol: str):
-    """
-    Structured drawer payload for one New Pump ticker.
-    Aggregates: NP fields, signal timeline, company identity, news,
-    technical context, market regime, red flags, final verdict.
-    Cache: 30 min per symbol. Each section fails independently.
-    """
-    from scanner.np_drawer import build_drawer_payload
-    return await build_drawer_payload(symbol.upper())
-
-
-@app.get("/api/new-pump/journal-check")
-async def new_pump_journal_check(symbols: str = ""):
-    """
-    Return which symbols (from comma-separated list) are already in the journal
-    with source='new_pump'.  Used by frontend to disable the Add-to-Journal button.
-    """
-    from database import get_session_factory
-    from database import Journal as JournalModel
-    from sqlalchemy import select as _sa_select
-    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    if not sym_list:
-        return {"journaled": []}
-    async with get_session_factory()() as sess:
-        rows = await sess.execute(
-            _sa_select(JournalModel.symbol).where(
-                JournalModel.symbol.in_(sym_list),
-                JournalModel.source == "new_pump",
-            )
-        )
-        journaled = list({r[0] for r in rows.fetchall()})
-    return {"journaled": journaled}
-
-
-@app.get("/api/new-pump/anatomy/{symbol}")
-async def new_pump_anatomy(symbol: str):
-    """
-    Signal anatomy diagnostic for one symbol.
-    Fetches 200 daily candles, runs compute_anatomy(), returns full diagnostic
-    report: per-bar signal detail (last 30 bars), per-signal fire/near-miss
-    counts, G4 arm/consume history, and human-readable diagnosis list.
-    """
-    sym = symbol.upper()
-    try:
-        from scanner.massive_data import fetch_candles_massive
-        from scanner.signal_anatomy import compute_anatomy
-
-        candles = await fetch_candles_massive(sym, days=200)
-        if not candles:
-            return {"error": "no_candles", "symbol": sym}
-
-        bars = [
-            {"open": c["o"], "high": c["h"], "low": c["l"],
-             "close": c["c"], "volume": c["v"]}
-            for c in candles
-        ]
-        report = compute_anatomy(bars)
-        report["symbol"] = sym
-        report["n_candles"] = len(candles)
-        return report
-    except Exception as exc:
-        logger.error(f"[anatomy] {sym}: {exc}", exc_info=True)
-        return {"error": str(exc), "symbol": sym}
 
 
 # ─── Bar Labels endpoint ───────────────────────────────────────────────────────
@@ -1386,6 +1123,26 @@ async def demand_similar_pumps(symbol: str, top_n: int = 5):
     return {"symbol": symbol.upper(), "similar": similar, "candidate_score": candidate.get("demand_composite_score")}
 
 
+@app.get("/api/demand-scanner/journal-check")
+async def demand_scanner_journal_check(symbols: str = ""):
+    """Return which symbols are already in the journal with source='demand_scanner'."""
+    from database import get_session_factory
+    from database import Journal as JournalModel
+    from sqlalchemy import select as _sa_select
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        return {"journaled": []}
+    async with get_session_factory()() as sess:
+        rows = await sess.execute(
+            _sa_select(JournalModel.symbol).where(
+                JournalModel.symbol.in_(sym_list),
+                JournalModel.source == "demand_scanner",
+            )
+        )
+        journaled = list({r[0] for r in rows.fetchall()})
+    return {"journaled": journaled}
+
+
 # ─── Scanner v2 — New Pump as structural core ─────────────────────────────────
 
 @app.get("/api/scanner/v2/latest")
@@ -1627,32 +1384,6 @@ async def sector_subsector_detail(etf: str, subsector: str):
 
 
 # ─── Admin / Maintenance routes ───────────────────────────────────────────────
-
-@app.get("/api/admin/run-new-pump-scan")
-async def admin_run_new_pump_scan(background_tasks: BackgroundTasks):
-    """
-    Trigger the standalone New Pump universe scan in background.
-    Uses Massive/Polygon exclusively — no Finviz, no Yahoo, no old-scanner input.
-    Poll /api/admin/new-pump-scan/status for live progress.
-    """
-    from scanner.new_pump_runner import is_running, run_new_pump_scan
-    if is_running():
-        return {"status": "already_running", "message": "New Pump scan already in progress"}
-    background_tasks.add_task(run_new_pump_scan)
-    return {"status": "started", "message": "New Pump universe scan started in background"}
-
-
-@app.get("/api/admin/new-pump-scan/status")
-async def admin_new_pump_scan_status():
-    """Return live progress of the standalone New Pump universe scan."""
-    from scanner.new_pump_runner import get_progress, get_latest
-    p = get_progress()
-    d = get_latest()
-    p["scanned_at"]  = d.get("scanned_at")
-    p["total"]       = d.get("total", 0)
-    p["has_data"]    = bool(d.get("results"))
-    return p
-
 
 @app.get("/api/admin/test-massive")
 async def admin_test_massive(symbol: str = "AAPL"):
