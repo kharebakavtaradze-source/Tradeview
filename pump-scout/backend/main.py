@@ -1123,6 +1123,49 @@ async def demand_similar_pumps(symbol: str, top_n: int = 5):
     return {"symbol": symbol.upper(), "similar": similar, "candidate_score": candidate.get("demand_composite_score")}
 
 
+@app.get("/api/demand-scanner/news")
+async def demand_scanner_news(symbols: str = "", limit: int = 20):
+    """Fetch recent Polygon news for a comma-separated list of demand scanner tickers."""
+    import asyncio, httpx
+    from scanner.massive_data import MASSIVE_API_KEY
+
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:15]
+    if not sym_list or not MASSIVE_API_KEY:
+        return {"articles": []}
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def _fetch(sym: str, client) -> list:
+        async with semaphore:
+            try:
+                resp = await client.get(
+                    "https://api.polygon.io/v2/reference/news",
+                    params={"ticker": sym, "limit": 5, "order": "desc",
+                            "sort": "published_utc", "apiKey": MASSIVE_API_KEY},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("results", [])
+            except Exception:
+                pass
+        return []
+
+    async with httpx.AsyncClient() as client:
+        batches = await asyncio.gather(*[_fetch(s, client) for s in sym_list], return_exceptions=True)
+
+    seen, articles = set(), []
+    for batch in batches:
+        if isinstance(batch, list):
+            for a in batch:
+                key = a.get("id") or a.get("title", "")
+                if key and key not in seen:
+                    seen.add(key)
+                    articles.append(a)
+
+    articles.sort(key=lambda a: a.get("published_utc", ""), reverse=True)
+    return {"articles": articles[:limit]}
+
+
 @app.get("/api/demand-scanner/journal-check")
 async def demand_scanner_journal_check(symbols: str = ""):
     """Return which symbols are already in the journal with source='demand_scanner'."""
