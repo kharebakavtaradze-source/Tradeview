@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
-import AppNav from '../components/AppNav';
+import Link from 'next/link';
+import { useRouter } from 'next/router';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -156,6 +157,636 @@ const fmtAge = iso => {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 };
+
+// ── PUMP DESIGN SYSTEM COMPONENTS ────────────────────────────────────────────
+
+const sp = (seed, n = 24, drift = 0) => Array.from({ length: n }, (_, i) => {
+  const x = Math.sin(seed + i * 0.6) * 0.5 + Math.cos(seed * 0.31 + i * 0.21) * 0.3;
+  return 50 + x * 18 + drift * i;
+});
+const symSeed = s => s ? s.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 100 : 42;
+
+function PumpMark({ size = 24 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M12 1.5 C 12.7 7.6, 16.4 11.3, 22.5 12 C 16.4 12.7, 12.7 16.4, 12 22.5 C 11.3 16.4, 7.6 12.7, 1.5 12 C 7.6 11.3, 11.3 7.6, 12 1.5 Z" fill="var(--pump-lime)" />
+    </svg>
+  );
+}
+
+function Sparkline({ data = [], width = 80, height = 24, color = 'var(--pump-lime)' }) {
+  if (!data.length) return <svg width={width} height={height} />;
+  const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
+  const pts = data.map((v, i) => [
+    (i / (data.length - 1)) * (width - 2) + 1,
+    height - ((v - min) / range) * (height - 2) - 1,
+  ]);
+  const d = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  return (
+    <svg width={width} height={height} style={{ display: 'block', overflow: 'visible' }}>
+      <path d={d} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+const NAV_ICONS = {
+  home:     <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" />,
+  search:   <><circle cx="11" cy="11" r="8" stroke="currentColor" fill="none" /><line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" strokeLinecap="round" /></>,
+  layers:   <><polygon points="12 2 2 7 12 12 22 7 12 2" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><polyline points="2 17 12 22 22 17" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><polyline points="2 12 12 17 22 12" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>,
+  folder:   <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" />,
+  globe:    <><circle cx="12" cy="12" r="10" stroke="currentColor" fill="none" /><line x1="2" y1="12" x2="22" y2="12" stroke="currentColor" strokeLinecap="round" /><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" stroke="currentColor" fill="none" /></>,
+  swap:     <><polyline points="17 1 21 5 17 9" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><path d="M3 11V9a4 4 0 014-4h14" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><polyline points="7 23 3 19 7 15" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><path d="M21 13v2a4 4 0 01-4 4H3" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>,
+  bolt:     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" />,
+  candle:   <><rect x="9" y="6" width="6" height="12" rx="1" stroke="currentColor" fill="none" /><line x1="12" y1="2" x2="12" y2="6" stroke="currentColor" strokeLinecap="round" /><line x1="12" y1="18" x2="12" y2="22" stroke="currentColor" strokeLinecap="round" /></>,
+  spark:    <><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><polyline points="17 6 23 6 23 12" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>,
+  settings: <><circle cx="12" cy="12" r="3" stroke="currentColor" fill="none" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" fill="none" /></>,
+  grid:     <><rect x="3" y="3" width="7" height="7" stroke="currentColor" fill="none" strokeLinecap="round" /><rect x="14" y="3" width="7" height="7" stroke="currentColor" fill="none" strokeLinecap="round" /><rect x="14" y="14" width="7" height="7" stroke="currentColor" fill="none" strokeLinecap="round" /><rect x="3" y="14" width="7" height="7" stroke="currentColor" fill="none" strokeLinecap="round" /></>,
+  bell:     <><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><path d="M13.73 21a2 2 0 01-3.46 0" stroke="currentColor" fill="none" strokeLinecap="round" /></>,
+  filter:   <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" />,
+  'arrow-ur': <><line x1="7" y1="17" x2="17" y2="7" stroke="currentColor" strokeLinecap="round" /><polyline points="7 7 17 7 17 17" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>,
+  right:    <polyline points="9 18 15 12 9 6" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" />,
+  down:     <polyline points="6 9 12 15 18 9" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" />,
+};
+
+function NavIcon({ name, size = 18, color = 'currentColor' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'block', color }}>
+      {NAV_ICONS[name] || <circle cx="12" cy="12" r="4" stroke="currentColor" fill="none" />}
+    </svg>
+  );
+}
+
+function LeftSidebar() {
+  const router = useRouter();
+  const items = [
+    { href: '/',         icon: 'home',     label: 'Dashboard' },
+    { href: '/scanner',  icon: 'search',   label: 'Scanner' },
+    { href: '/sectors',  icon: 'layers',   label: 'Sectors' },
+    { href: '/journal',  icon: 'folder',   label: 'Journal' },
+    { href: '/macro',    icon: 'globe',    label: 'Macro' },
+    { href: '/replay',   icon: 'swap',     label: 'Replay' },
+    null,
+    { href: '/study',    icon: 'bolt',     label: 'Pump Study' },
+    { href: '/patterns', icon: 'candle',   label: 'Raw Patterns' },
+    { href: '/ai',       icon: 'spark',    label: 'AI Journal' },
+    null,
+    { href: '/settings', icon: 'settings', label: 'Settings' },
+    { href: '/design',   icon: 'grid',     label: 'Design System' },
+  ];
+  return (
+    <aside style={{
+      width: 78, flexShrink: 0, background: 'var(--bg-1)',
+      borderRight: '1px solid var(--stroke-soft)',
+      padding: '18px 12px 14px', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', gap: 6, position: 'sticky', top: 0, alignSelf: 'flex-start',
+      minHeight: '100vh', zIndex: 10,
+    }}>
+      <div style={{ padding: '4px 0 8px' }} title="Pump"><PumpMark size={24} /></div>
+      {items.map((item, i) => {
+        if (!item) return <div key={`d${i}`} style={{ height: 1, background: 'var(--stroke-soft)', width: 28, margin: '4px 0' }} />;
+        const active = router.pathname === item.href;
+        return (
+          <Link key={item.href} href={item.href} title={item.label} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 42, height: 38, borderRadius: 'var(--r-md)',
+            background: active ? 'var(--pump-lime-soft)' : 'transparent',
+            color: active ? 'var(--pump-lime)' : 'var(--ink-dim)',
+            textDecoration: 'none', position: 'relative', transition: 'background 0.15s, color 0.15s',
+          }}
+          onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'var(--bg-2)'; e.currentTarget.style.color = 'var(--ink)'; }}}
+          onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-dim)'; }}}
+          >
+            <NavIcon name={item.icon} size={18} />
+            {active && <span style={{ position: 'absolute', left: -14, top: '50%', transform: 'translateY(-50%)', width: 4, height: 18, borderRadius: 2, background: 'var(--pump-lime)' }} />}
+          </Link>
+        );
+      })}
+      <div style={{ flex: 1 }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 42, height: 38, borderRadius: 'var(--r-md)', color: 'var(--ink-dim)', cursor: 'pointer' }} title="Alerts">
+        <NavIcon name="bell" size={18} />
+      </div>
+      <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--pump-blue)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginTop: 6 }} title="Account">MK</div>
+    </aside>
+  );
+}
+
+function TopBar({ marketTimer, regime }) {
+  const regimeState = regime?.regime_state || regime?.state;
+  const today = new Date();
+  const dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][today.getDay()];
+  const dateStr = today.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+  return (
+    <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 28px', borderBottom: '1px solid var(--stroke-soft)', background: 'var(--bg-0)', gap: 16, flexWrap: 'nowrap' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)', marginBottom: 2 }}>Hi Mike · {dayName}</div>
+        <h1 style={{ margin: 0, fontSize: 21, fontWeight: 500, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
+          Dashboard{' '}<em style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', color: 'var(--pump-lime)', fontWeight: 400 }}>overview</em>
+        </h1>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        {regimeState && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: 'var(--bg-1)', borderRadius: 'var(--r-pill)', border: '1px solid var(--stroke-soft)' }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.07em', fontFamily: 'var(--f-mono)' }}>Regime</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: REGIME_COLORS[regimeState] || 'var(--ink-mute)', fontFamily: 'var(--f-mono)', letterSpacing: '0.05em' }}>{regimeState.replace(/_/g, ' ')}</span>
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'var(--bg-1)', borderRadius: 'var(--r-pill)', whiteSpace: 'nowrap', border: '1px solid var(--stroke-soft)' }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: marketTimer.open ? 'var(--pos)' : 'var(--ink-dim)', display: 'inline-block' }} />
+          <span style={{ fontSize: 10, color: 'var(--ink-mute)', letterSpacing: '0.08em', fontFamily: 'var(--f-mono)', textTransform: 'uppercase' }}>{marketTimer.open ? 'OPEN' : 'CLOSED'}</span>
+          <span style={{ fontSize: 12, color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>{marketTimer.label}</span>
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', padding: '6px 12px', background: 'var(--bg-1)', borderRadius: 'var(--r-pill)', border: '1px solid var(--stroke-soft)' }}>{dateStr}</span>
+      </div>
+    </header>
+  );
+}
+
+function HeroRead({ allResults, tc, hypeStatus, sectors, loading }) {
+  const highConf = (tc.HIGH_CONF_BUY ?? 0) + (tc.PRIME_BUY ?? 0);
+  const leadTicker = allResults[0]?.symbol || '—';
+  const leadScore  = allResults[0] ? fmt(allResults[0].demand_composite_score, 1) : '—';
+  const topSectors = Object.entries(sectors || {})
+    .map(([name, d]) => ({ name, chg: d.change_1d ?? d.pct_change_1d ?? 0 }))
+    .sort((a, b) => b.chg - a.chg).slice(0, 3)
+    .map(s => s.name.split(' ')[0].toUpperCase().slice(0, 6));
+  const sectorStr = topSectors.length ? topSectors.join(' · ') : '—';
+  const hypeScore = hypeStatus?.total_divergences ?? 0;
+  const hypeLabel = hypeScore > 20 ? 'HOT' : hypeScore > 10 ? 'WARM' : 'COOL';
+  const volSurge  = hypeStatus?.avg_vol_surge ?? 0;
+  const today = new Date().toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+  return (
+    <div style={{
+      padding: '18px 22px',
+      background: 'radial-gradient(ellipse at 100% 0%, oklch(0.96 0.18 125 / 0.65) 0%, transparent 55%), linear-gradient(135deg, oklch(0.94 0.20 125) 0%, oklch(0.84 0.20 120) 100%)',
+      color: 'var(--on-lime)', borderRadius: 'var(--r-xl)', overflow: 'hidden', position: 'relative',
+      display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', minHeight: 130,
+    }}>
+      <svg style={{ position: 'absolute', right: -40, top: -50, opacity: 0.22, pointerEvents: 'none' }} width="240" height="240" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="48" fill="none" stroke="var(--on-lime)" strokeWidth="0.4" />
+        <circle cx="50" cy="50" r="36" fill="none" stroke="var(--on-lime)" strokeWidth="0.4" />
+        <circle cx="50" cy="50" r="24" fill="none" stroke="var(--on-lime)" strokeWidth="0.4" />
+      </svg>
+      <div style={{ flex: '1 1 300px', minWidth: 260, position: 'relative' }}>
+        <div style={{ fontSize: 10, color: 'var(--on-lime)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)', marginBottom: 4 }}>Today's read · {today}</div>
+        <div style={{ fontSize: 20, lineHeight: 1.25, letterSpacing: '-0.02em', color: 'var(--on-lime)' }}>
+          <em style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic' }}>here's</em> what's hot —{' '}
+          <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{loading ? '…' : highConf}</span> high-conf setups firing, led by{' '}
+          <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{leadTicker}</span> at{' '}
+          <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{leadScore}</span>.
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 18, flexShrink: 0, position: 'relative' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--on-lime)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Conviction</div>
+          <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 26 }}>
+            {[12, 18, 24, 16, 10].map((h, i) => <span key={i} style={{ width: 5, height: h, background: 'var(--on-lime)', borderRadius: 1.5, opacity: i >= 3 ? 0.5 : 1 }} />)}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--on-lime)', fontFamily: 'var(--f-mono)', letterSpacing: '0.08em' }}>BUILDING</div>
+        </div>
+        <span style={{ width: 1, height: 40, background: 'var(--on-lime)', opacity: 0.2, alignSelf: 'center' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--on-lime)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Lead sectors</div>
+          <div style={{ fontSize: 13, color: 'var(--on-lime)', fontFamily: 'var(--f-mono)', fontWeight: 500 }}>{sectorStr}</div>
+          <div style={{ fontSize: 10, color: 'var(--on-lime)', opacity: 0.7, fontFamily: 'var(--f-mono)' }}>top {topSectors.length || '…'} of {Object.keys(sectors || {}).length || '…'}</div>
+        </div>
+        <span style={{ width: 1, height: 40, background: 'var(--on-lime)', opacity: 0.2, alignSelf: 'center' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--on-lime)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Hype</div>
+          <div style={{ fontSize: 13, color: 'var(--on-lime)', fontFamily: 'var(--f-mono)', fontWeight: 500 }}>{hypeScore} · {hypeLabel}</div>
+          <div style={{ fontSize: 10, color: 'var(--on-lime)', opacity: 0.7, fontFamily: 'var(--f-mono)' }}>{volSurge > 0 ? `vol +${volSurge}%` : 'vol surge'}</div>
+        </div>
+      </div>
+      <button style={{ background: 'var(--on-lime)', color: 'var(--pump-lime)', padding: '10px 16px', borderRadius: 'var(--r-pill)', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap', position: 'relative', flexShrink: 0 }}>
+        Open prep notebook <NavIcon name="arrow-ur" size={14} color="var(--pump-lime)" />
+      </button>
+    </div>
+  );
+}
+
+function FunnelCard({ tc, ac, data, loading }) {
+  const universe = data?.universe || 0;
+  const atsTotal = (ac.ATS_PRIME || 0) + (ac.ATS_SETUP || 0) + (ac.ATS_WATCH || 0);
+  const highConf = (tc.HIGH_CONF_BUY || 0) + (tc.PRIME_BUY || 0);
+  const prime    = tc.PRIME_BUY || 0;
+  const logW = v => v <= 0 ? 3 : Math.log(v + 1);
+  const maxW = logW(universe || 1);
+  const stages = [
+    { label: 'UNIVERSE', count: universe >= 1000 ? `${(universe/1000).toFixed(1)}K` : String(universe), width: 100 },
+    { label: 'ATS SETUP', count: String(atsTotal), width: universe > 0 ? Math.max(8, (logW(atsTotal) / maxW) * 90) : 62 },
+    { label: 'HIGH CONF', count: String(highConf), width: universe > 0 ? Math.max(5, (logW(highConf) / maxW) * 90) : 26 },
+    { label: 'PRIME BUY', count: String(prime),    width: prime > 0 ? Math.max(4, (logW(prime) / maxW) * 90) : 8 },
+  ];
+  const scannedAt = data?.scanned_at ? new Date(data.scanned_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  return (
+    <div style={{
+      padding: '20px 22px',
+      background: 'radial-gradient(ellipse at 0% 0%, oklch(0.82 0.13 268 / 0.7) 0%, transparent 55%), linear-gradient(135deg, var(--pump-blue) 0%, oklch(0.60 0.14 268) 100%)',
+      color: 'white', borderRadius: 'var(--r-xl)', overflow: 'hidden', position: 'relative',
+      display: 'flex', flexDirection: 'column', gap: 12,
+    }}>
+      <svg style={{ position: 'absolute', right: -30, bottom: -30, opacity: 0.22, pointerEvents: 'none' }} width="200" height="200" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="48" fill="none" stroke="white" strokeWidth="0.5" />
+        <circle cx="50" cy="50" r="36" fill="none" stroke="white" strokeWidth="0.5" />
+        <circle cx="50" cy="50" r="24" fill="none" stroke="white" strokeWidth="0.5" />
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative' }}>
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Scanner pipeline</span>
+        {scannedAt && <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', fontFamily: 'var(--f-mono)', letterSpacing: '0.06em' }}>{scannedAt}{data?.elapsed_secs ? ` · ${data.elapsed_secs}s` : ''}</span>}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, position: 'relative' }}>
+        {stages.map((s, i) => (
+          <div key={s.label} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', width: 78, fontFamily: 'var(--f-mono)', letterSpacing: '0.06em', flexShrink: 0 }}>{s.label}</span>
+            <div style={{ flex: 1, height: 24, position: 'relative', background: 'rgba(255,255,255,0.10)', borderRadius: 'var(--r-sm)', overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', inset: 0, width: `${s.width}%`, background: i === stages.length - 1 ? 'var(--pump-lime)' : 'linear-gradient(90deg, rgba(255,255,255,0.65), rgba(255,255,255,0.88))', borderRadius: 'var(--r-sm)' }} />
+              <div style={{ position: 'absolute', left: 10, top: 0, height: 24, display: 'flex', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: i === stages.length - 1 ? 'var(--on-lime)' : 'var(--pump-blue)', fontWeight: 600, fontFamily: 'var(--f-mono)' }}>{loading ? '…' : s.count}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 14, position: 'relative', marginTop: 'auto', paddingTop: 8, borderTop: '1px dashed rgba(255,255,255,0.2)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--f-mono)' }}>BUY WATCH</span>
+          <span style={{ fontSize: 18, color: 'white', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{loading ? '…' : (tc.BUY_WATCH ?? 0)}</span>
+        </div>
+        <span style={{ width: 1, height: 32, background: 'rgba(255,255,255,0.18)', alignSelf: 'center' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--f-mono)' }}>ATS PRIME</span>
+          <span style={{ fontSize: 18, color: 'white', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{loading ? '…' : (ac.ATS_PRIME ?? 0)}</span>
+        </div>
+        {data?.elapsed_secs && <>
+          <span style={{ width: 1, height: 32, background: 'rgba(255,255,255,0.18)', alignSelf: 'center' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--f-mono)' }}>SCAN TIME</span>
+            <span style={{ fontSize: 18, color: 'white', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{data.elapsed_secs}s</span>
+          </div>
+        </>}
+      </div>
+    </div>
+  );
+}
+
+function KpiCell({ label, value, trend, color = 'var(--ink)', sparkData, sparkColor, tint }) {
+  const tintBg =
+    tint === 'blue' ? 'linear-gradient(135deg, color-mix(in oklch, var(--pump-blue) 14%, var(--bg-1)) 0%, var(--bg-1) 90%)' :
+    tint === 'lime' ? 'linear-gradient(135deg, color-mix(in oklch, var(--pump-lime) 10%, var(--bg-1)) 0%, var(--bg-1) 90%)' :
+    tint === 'warn' ? 'linear-gradient(135deg, color-mix(in oklch, var(--warn) 10%, var(--bg-1)) 0%, var(--bg-1) 90%)' :
+    'var(--bg-1)';
+  const borderColor = tint === 'blue' ? 'var(--pump-blue)' : tint === 'lime' ? 'var(--pump-lime)' : tint === 'warn' ? 'var(--warn)' : null;
+  return (
+    <div style={{ background: tintBg, borderRadius: 'var(--r-lg)', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 108, minWidth: 0, border: borderColor ? `1px solid color-mix(in oklch, ${borderColor} 18%, transparent)` : '1px solid var(--stroke-soft)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>{label}</span>
+        {trend && <span style={{ fontSize: 10, color: trend.startsWith('+') ? 'var(--pos)' : trend.startsWith('-') ? 'var(--neg)' : 'var(--ink-dim)', fontFamily: 'var(--f-mono)', whiteSpace: 'nowrap' }}>{trend}</span>}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 'auto', minWidth: 0 }}>
+        <span style={{ fontSize: 28, color, fontWeight: 500, letterSpacing: '-0.02em', lineHeight: 1, fontFamily: 'var(--f-mono)' }}>{value}</span>
+        {sparkData && <Sparkline width={62} height={22} data={sparkData} color={sparkColor || color} />}
+      </div>
+    </div>
+  );
+}
+
+function KpiStrip({ tc, ac, data, loading }) {
+  const val = (v, big) => loading ? '…' : (big ? (v >= 1000 ? `${(v/1000).toFixed(1)}K` : String(v)) : String(v));
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
+      <KpiCell label="PRIME BUY" value={val(tc.PRIME_BUY ?? 0)}    trend="—" color="var(--pos)"       tint="lime" sparkData={sp(1,16,-0.2)} sparkColor="var(--pos)" />
+      <KpiCell label="HIGH CONF" value={val(tc.HIGH_CONF_BUY ?? 0)} trend="—" color="var(--pump-blue)" tint="blue" sparkData={sp(2,16, 0.4)} sparkColor="var(--pump-blue)" />
+      <KpiCell label="BUY WATCH" value={val(tc.BUY_WATCH ?? 0)}    trend="—" color="var(--warn)"      tint="warn" sparkData={sp(3,16, 0.6)} sparkColor="var(--warn)" />
+      <KpiCell label="ATS PRIME" value={val(ac.ATS_PRIME ?? 0)}    trend="—" color="var(--pos)"       tint="lime" sparkData={sp(4,16, 0.3)} sparkColor="var(--pos)" />
+      <KpiCell label="ATS SETUP" value={val(ac.ATS_SETUP ?? 0)}    trend="—" color="var(--pump-blue)" tint="blue" sparkData={sp(5,16, 0.5)} sparkColor="var(--pump-blue)" />
+      <KpiCell label="UNIVERSE"  value={val(data?.universe || 0, true)} trend="—" color="var(--ink)"  sparkData={sp(6,16, 0.0)} sparkColor="var(--ink-mute)" />
+    </div>
+  );
+}
+
+function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick }) {
+  const price    = livePrice?.price ?? r.price;
+  const chgPct   = livePrice?.change_pct;
+  const chgUp    = chgPct != null ? chgPct >= 0 : true;
+  const score    = fmt(r.demand_composite_score, 1);
+  const atsRating = r.ats_signal === 'ATS_PRIME' ? 3 : r.ats_signal === 'ATS_SETUP' ? 2 : r.ats_signal === 'ATS_WATCH' ? 1 : 0;
+  const readTemp = (r.readiness_tier === 'HOT' || r.readiness_tier === 'WARM') ? 'WARM' : 'COOL';
+  const tempLvl  = r.readiness_tier === 'HOT' ? 5 : r.readiness_tier === 'WARM' ? 3 : r.readiness_tier === 'COOL' ? 2 : 1;
+  const tempColor = readTemp === 'WARM' ? 'var(--warn)' : 'var(--pump-blue)';
+  const criteria  = (r.demand_buy_reasons || []).slice(0, 4).map(rr => REASONS_PRETTY[rr] || rr);
+  const sparkData = sp(symSeed(r.symbol), 30, chgUp ? 0.3 : -0.2);
+  return (
+    <div onClick={() => onClick(r)} style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12, cursor: 'pointer', transition: 'border-color 0.15s' }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--pump-lime-soft)'}
+      onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--stroke-soft)'}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--ink)' }}>{r.symbol}</span>
+            <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: 'var(--pump-blue-soft)', color: 'var(--pump-blue)', fontFamily: 'var(--f-mono)', fontWeight: 700, letterSpacing: '0.06em' }}>{TIER_META[r.demand_composite_tier]?.label || 'SETUP'}</span>
+          </div>
+          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>{r.sector || '—'}</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+          <span style={{ fontSize: 26, color: 'var(--pump-lime)', fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1, fontFamily: 'var(--f-mono)' }}>{score}</span>
+          <span style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>/ 20</span>
+        </div>
+      </div>
+      <div style={{ position: 'relative', background: 'var(--bg-2)', borderRadius: 'var(--r-md)', padding: '8px 10px', overflow: 'hidden' }}>
+        <Sparkline width={260} height={38} data={sparkData} color={chgUp ? 'var(--pump-lime)' : 'var(--neg)'} />
+        <div style={{ position: 'absolute', top: 8, right: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>${fmt(price, 2)}</span>
+          {chgPct != null && <span style={{ fontSize: 11, color: chgUp ? 'var(--pos)' : 'var(--neg)', fontFamily: 'var(--f-mono)' }}>{chgUp ? '▲' : '▼'} {Math.abs(chgPct).toFixed(2)}%</span>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--f-mono)' }}>ATS</span>
+          <span style={{ color: 'var(--pump-lime)', fontSize: 12, letterSpacing: '0.06em' }}>{'★'.repeat(atsRating)}{'☆'.repeat(3-atsRating)}</span>
+        </div>
+        {r.readiness_tier && <>
+          <span style={{ width: 1, height: 14, background: 'var(--stroke-soft)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 10, color: tempColor, letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>{readTemp}</span>
+            <div style={{ display: 'flex', gap: 2 }}>
+              {[1,2,3,4,5].map(n => <span key={n} style={{ width: 8, height: 4, borderRadius: 1, background: n <= tempLvl ? tempColor : 'var(--bg-3)' }} />)}
+            </div>
+          </div>
+        </>}
+      </div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {criteria.map((c, i) => <span key={i} style={{ fontSize: 10, padding: '3px 7px', borderRadius: 'var(--r-pill)', background: 'color-mix(in oklch, var(--pump-blue) 22%, transparent)', color: 'var(--pump-blue)', fontFamily: 'var(--f-mono)' }}>{c}</span>)}
+      </div>
+      <div style={{ borderTop: '1px dashed var(--stroke-soft)', paddingTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+        <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>Vol <span style={{ color: 'var(--ink-mute)' }}>{fmtK(r.volume_today)}</span></span>
+        {(journaled || added) ? (
+          <span style={{ fontSize: 11, color: 'var(--pos)', fontFamily: 'var(--f-mono)' }}>✓ Journaled</span>
+        ) : (
+          <button onClick={e => { e.stopPropagation(); onAdd(r); }} disabled={adding} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 'var(--r-pill)', background: 'var(--pump-lime)', color: 'var(--on-lime)', border: 'none', cursor: adding ? 'not-allowed' : 'pointer', fontFamily: 'var(--f-mono)', fontWeight: 600, whiteSpace: 'nowrap' }}>{adding ? '…' : '+ Journal'}</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PumpSetupGrid({ allResults, livePrices, journaledSet, addingJournal, addedJournal, addToJournal, setDrawerRow, loading }) {
+  const topSetups = allResults.filter(r => r.demand_composite_tier !== 'SKIP').slice(0, 8);
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.01em', margin: 0, color: 'var(--ink)' }}>Top demand setups</h2>
+          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>{topSetups.length} shown · ranked by Pump score</span>
+        </div>
+      </div>
+      {loading ? (
+
+        <div style={{ color: 'var(--ink-dim)', fontSize: 13, padding: '20px 0' }}>Loading setups…</div>
+      ) : topSetups.length === 0 ? (
+        <div style={{ color: 'var(--ink-dim)', fontSize: 13, padding: '20px 0' }}>No setups — run a scan or check the scanner.</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 14 }}>
+          {topSetups.map(r => (
+            <PumpSetupCard key={r.symbol} r={r} livePrice={livePrices[r.symbol]} journaled={journaledSet.has(r.symbol)} adding={addingJournal === r.symbol} added={addedJournal.has(r.symbol)} onAdd={addToJournal} onClick={setDrawerRow} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PumpSectorTile({ name, count, perf, topSymbols, lead = false }) {
+  const isPos = perf >= 0;
+  const intensity = Math.min(Math.abs(perf) / 4, 1);
+  const bg = lead
+    ? `radial-gradient(ellipse at 100% 0%, oklch(0.96 0.18 125 / 0.5) 0%, transparent 55%), linear-gradient(135deg, color-mix(in oklch, var(--pump-lime) ${55 + intensity * 25}%, var(--bg-1)) 0%, color-mix(in oklch, var(--pump-lime) ${30 + intensity * 15}%, var(--bg-1)) 100%)`
+    : isPos ? `color-mix(in oklch, var(--pump-lime) ${10 + intensity * 22}%, var(--bg-1))`
+    : `color-mix(in oklch, var(--neg) ${8 + intensity * 20}%, var(--bg-1))`;
+  const fg = lead && isPos ? 'var(--on-lime)' : 'var(--ink)';
+  const dimFg = lead && isPos ? 'color-mix(in oklch, var(--on-lime) 70%, transparent)' : 'var(--ink-dim)';
+  return (
+    <div style={{ background: bg, borderRadius: 'var(--r-lg)', padding: lead ? '18px 20px' : '12px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gridColumn: lead ? 'span 2' : 'span 1', gridRow: lead ? 'span 2' : 'span 1', minHeight: lead ? 0 : 100, color: fg, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: lead ? 15 : 12, fontWeight: 500, letterSpacing: '-0.01em', color: fg }}>{name}</span>
+          <span style={{ fontSize: 10, color: dimFg, letterSpacing: '0.06em', fontFamily: 'var(--f-mono)' }}>{count} SETUPS</span>
+        </div>
+        <span style={{ fontSize: lead ? 24 : 15, color: isPos ? (lead ? fg : 'var(--pos)') : 'var(--neg)', fontWeight: 500, letterSpacing: '-0.01em', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: 'var(--f-mono)' }}>{isPos ? '+' : ''}{perf.toFixed(2)}%</span>
+      </div>
+      {lead && <Sparkline width={210} height={28} data={sp(name.length * 7, 24, 0.3)} color="var(--on-lime)" />}
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {topSymbols.slice(0, lead ? 5 : 3).map((t, i) => (
+          <span key={i} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 'var(--r-pill)', background: lead ? 'color-mix(in oklch, var(--on-lime) 18%, transparent)' : 'var(--bg-2)', color: lead ? fg : 'var(--ink-mute)', fontFamily: 'var(--f-mono)', fontWeight: 500 }}>{t}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PumpSectorHeat({ sectors, allResults }) {
+  const entries = Object.entries(sectors || {})
+    .map(([name, d]) => ({
+      name, chg: d.change_1d ?? d.pct_change_1d ?? 0,
+      count: allResults.filter(r => r.sector === name).length,
+      topSyms: allResults.filter(r => r.sector === name).slice(0, 4).map(r => r.symbol),
+    }))
+    .sort((a, b) => b.chg - a.chg);
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h3 style={{ fontSize: 14, margin: 0, color: 'var(--ink-mute)', fontWeight: 500 }}>Sectors</h3>
+          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>by setup count · close perf</span>
+        </div>
+      </div>
+      {entries.length === 0 ? (
+        <div style={{ color: 'var(--ink-faint)', fontSize: 12, padding: '20px 0' }}>Loading sectors…</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, gridAutoRows: 'minmax(100px, auto)' }}>
+          {entries.slice(0, 1).map(e => <PumpSectorTile key={e.name} name={e.name} count={e.count} perf={e.chg} topSymbols={e.topSyms} lead />)}
+          {entries.slice(1, 7).map(e => <PumpSectorTile key={e.name} name={e.name.split(' ')[0]} count={e.count} perf={e.chg} topSymbols={e.topSyms} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PumpAtsSignals({ allResults }) {
+  const prime = allResults.filter(r => r.ats_signal === 'ATS_PRIME').slice(0, 3);
+  const setup = allResults.filter(r => r.ats_signal === 'ATS_SETUP').slice(0, 6);
+  const AtsRow = ({ r, tier }) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 70px', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid var(--stroke-soft)' }}>
+      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>{r.symbol}</span>
+      <Sparkline width={100} height={18} data={sp(symSeed(r.symbol), 22, 0.3)} color={tier === 'PRIME' ? 'var(--pos)' : 'var(--pump-blue)'} />
+      <span style={{ fontSize: 13, color: 'var(--ink)', textAlign: 'right', fontFamily: 'var(--f-mono)' }}>{fmt(r.demand_composite_score, 1)}</span>
+    </div>
+  );
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <h3 style={{ fontSize: 14, margin: 0, color: 'var(--ink)', fontWeight: 500 }}>ATS signals</h3>
+          <span style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.06em' }}>{prime.length} PRIME · {setup.length} SETUP</span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {prime.length > 0 && <>
+          <span style={{ fontSize: 10, color: 'var(--pos)', letterSpacing: '0.1em', marginBottom: 2, fontFamily: 'var(--f-mono)' }}>★★★ PRIME · {prime.length}</span>
+          {prime.map(r => <AtsRow key={r.symbol} r={r} tier="PRIME" />)}
+        </>}
+        {setup.length > 0 && <>
+          <span style={{ fontSize: 10, color: 'var(--pump-blue)', letterSpacing: '0.1em', marginTop: prime.length ? 12 : 0, marginBottom: 2, fontFamily: 'var(--f-mono)' }}>★★ SETUP · {setup.length}</span>
+          {setup.map(r => <AtsRow key={r.symbol} r={r} tier="SETUP" />)}
+        </>}
+        {prime.length === 0 && setup.length === 0 && <div style={{ color: 'var(--ink-faint)', fontSize: 12, padding: '12px 0', textAlign: 'center' }}>No ATS signals in current scan</div>}
+      </div>
+    </div>
+  );
+}
+
+function PumpMoversCard({ kind, livePrices, allResults, marketOpen }) {
+  const isUp = kind === 'gainers';
+  const tone = isUp ? 'var(--pos)' : 'var(--neg)';
+  const enriched = Object.entries(livePrices)
+    .filter(([, d]) => d.change_pct != null)
+    .map(([sym, d]) => ({ symbol: sym, price: d.price, chg: d.change_pct }));
+  const rows = enriched.length > 0
+    ? [...enriched].sort((a, b) => isUp ? b.chg - a.chg : a.chg - b.chg).slice(0, 5)
+    : allResults.slice(isUp ? 0 : Math.max(0, allResults.length - 5)).map(r => ({ symbol: r.symbol, price: r.price, chg: null }));
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: `color-mix(in oklch, ${tone} 22%, transparent)`, color: tone, fontSize: 11, fontWeight: 700 }}>{isUp ? '▲' : '▼'}</span>
+          <h3 style={{ fontSize: 14, margin: 0, color: 'var(--ink)', fontWeight: 500 }}>{isUp ? 'Top gainers' : 'Top losers'}</h3>
+        </div>
+        <span style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.06em' }}>{marketOpen ? 'LIVE' : 'LAST CLOSE'}</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {rows.length === 0 ? (
+          <div style={{ color: 'var(--ink-faint)', fontSize: 12, padding: '12px 0', textAlign: 'center' }}>{marketOpen ? 'Loading prices…' : 'Live data during market hours (9:30–16:00 ET)'}</div>
+        ) : rows.map(({ symbol, price, chg }, i) => (
+          <div key={symbol} style={{ display: 'grid', gridTemplateColumns: '52px 1fr 64px 68px', alignItems: 'center', padding: '8px 0', gap: 6, borderBottom: i < rows.length - 1 ? '1px solid var(--stroke-soft)' : 'none' }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>{symbol}</span>
+            <Sparkline width={80} height={18} data={sp(symSeed(symbol), 18, isUp ? 0.5 : -0.4)} color={tone} />
+            <span style={{ fontSize: 12, color: 'var(--ink-mute)', textAlign: 'right', fontFamily: 'var(--f-mono)' }}>${fmt(price, 2)}</span>
+            <span style={{ fontSize: 12, color: chg != null ? tone : 'var(--ink-dim)', textAlign: 'right', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PumpHypeMonitor({ hypeStatus, hypeResults }) {
+  const hot       = hypeStatus?.hot_tickers || [];
+  const divCount  = hypeStatus?.total_divergences ?? 0;
+  const hypeLabel = divCount > 20 ? 'HOT' : divCount > 10 ? 'WARM' : 'COOL';
+  const monitored = hypeStatus?.tickers_monitored ?? 0;
+  const volSurge  = hypeStatus?.avg_vol_surge ?? 0;
+  const mentions  = hypeStatus?.social_count ?? 0;
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 22px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <h3 style={{ fontSize: 14, margin: 0, color: 'var(--ink-mute)', fontWeight: 500 }}>Hype monitor</h3>
+          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>volume/social momentum · last 24h</span>
+        </div>
+        <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 'var(--r-pill)', background: 'var(--bg-2)', border: '1px solid var(--stroke-soft)', color: 'var(--ink-mute)', fontFamily: 'var(--f-mono)' }}>{hypeLabel} · {divCount}</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Vol surge</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 24, color: 'var(--pump-lime)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{volSurge > 0 ? `+${volSurge}%` : '—'}</span>
+            <Sparkline width={100} height={26} data={sp(51, 22, 0.6)} color="var(--pump-lime)" />
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Social mentions</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 24, color: 'var(--pump-blue)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{mentions > 0 ? mentions.toLocaleString() : '—'}</span>
+            <Sparkline width={100} height={26} data={sp(52, 22, 0.3)} color="var(--pump-blue)" />
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Monitored</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 24, color: 'var(--ink)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{monitored || '—'}</span>
+            <Sparkline width={100} height={26} data={sp(53, 22, 0.2)} color="var(--ink-mute)" />
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Hot tickers</span>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+            {hot.slice(0, 6).map(t => <span key={t} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 'var(--r-pill)', background: 'var(--pump-lime-soft)', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{t}</span>)}
+            {hot.length === 0 && <span style={{ fontSize: 12, color: 'var(--ink-faint)' }}>—</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PumpNewsGrid({ news, newsLoading }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.01em', margin: 0, color: 'var(--ink)' }}>Market news</h2>
+          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>top picks · ranked by ticker relevance</span>
+        </div>
+      </div>
+      {newsLoading ? (
+        <div style={{ color: 'var(--ink-dim)', fontSize: 12, padding: '12px 0' }}>Loading news…</div>
+      ) : !news?.length ? (
+        <div style={{ color: 'var(--ink-dim)', fontSize: 12, padding: '12px 0' }}>No news available for current top picks</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
+          {news.slice(0, 10).map((a, i) => {
+            const tickers = (a.tickers || []).slice(0, 4);
+            const src = a.publisher?.name || a.source || '';
+            const age = fmtAge(a.published_utc);
+            return (
+              <a key={a.id || i} href={a.article_url || '#'} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', textDecoration: 'none', background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-lg)', padding: '14px 16px', minHeight: 120, transition: 'border-color 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--pump-blue)'}
+                onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--stroke-soft)'}
+              >
+                <p style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.4, color: 'var(--ink)', fontWeight: 500 }}>{a.title}</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {tickers.map((t, ti) => <span key={ti} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 'var(--r-pill)', background: ti === 0 ? 'var(--pump-lime-soft)' : 'color-mix(in oklch, var(--pump-blue) 22%, transparent)', color: ti === 0 ? 'var(--pump-lime)' : 'var(--pump-blue)', fontFamily: 'var(--f-mono)', fontWeight: 500 }}>{t}</span>)}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>{src}</span>
+                    <span style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>{age}</span>
+                  </div>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PumpFooterCta({ allResults, setShowFullTable }) {
+  return (
+    <div style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-1)', border: '1px dashed var(--stroke)', borderRadius: 'var(--r-xl)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <NavIcon name="filter" size={16} color="var(--ink-mute)" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 13, color: 'var(--ink)' }}>Show full scanner</span>
+          <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>{allResults.length} results · universe</span>
+        </div>
+      </div>
+      <button onClick={() => setShowFullTable(s => !s)} style={{ fontSize: 12, padding: '7px 16px', borderRadius: 'var(--r-pill)', background: 'var(--pump-lime)', color: 'var(--on-lime)', border: 'none', cursor: 'pointer', fontWeight: 600, fontFamily: 'var(--f-mono)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        Open scanner <NavIcon name="right" size={14} color="var(--on-lime)" />
+      </button>
+    </div>
+  );
+}
 
 // ── Shared micro-components ───────────────────────────────────────────────────
 
@@ -1190,135 +1821,80 @@ export default function DashboardPage() {
   return (
     <>
       <Head><title>Dashboard — Pump Scout</title></Head>
-      <AppNav />
-      <MarketContextBar marketTimer={marketTimer} regime={regime} livePrices={livePrices} marketOpen={marketTimer.open} />
+      <div style={{ minHeight: '100vh', background: 'var(--bg-0)', display: 'flex' }}>
+        <LeftSidebar />
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <TopBar marketTimer={marketTimer} regime={regime} />
+          <main style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 1020 }}>
 
-      <div style={{ background: 'var(--bg-0)', minHeight: '100vh', padding: '16px 20px 80px' }}>
+            {error && (
+              <div style={{ padding: '10px 14px', background: 'oklch(0.72 0.21 25 / 0.10)', border: '1px solid oklch(0.72 0.21 25 / 0.30)', borderRadius: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>
+            )}
 
-        {/* ── Overview stats ─────────────────────────────────────────────────── */}
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
-          {[
-            { label: 'PRIME BUY',  val: data?.demand_prime_count ?? tc.PRIME_BUY ?? 0,     color: 'var(--pos)' },
-            { label: 'HIGH CONF',  val: data?.demand_high_count  ?? tc.HIGH_CONF_BUY ?? 0, color: 'var(--pump-blue)' },
-            { label: 'BUY WATCH',  val: data?.demand_watch_count ?? tc.BUY_WATCH ?? 0,     color: 'var(--warn)' },
-            { label: 'ATS PRIME',  val: data?.ats_prime_count    ?? ac.ATS_PRIME ?? 0,      color: 'var(--pos)' },
-            { label: 'ATS SETUP',  val: ac.ATS_SETUP ?? 0,                                  color: 'var(--pump-blue)' },
-            { label: 'UNIVERSE',   val: (data?.universe || 0).toLocaleString(),              color: 'var(--ink-mute)' },
-          ].map(({ label, val, color }) => (
-            <div key={label} style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '12px 18px', textAlign: 'center', minWidth: 90 }}>
-              <div style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1 }}>{loading ? '…' : val}</div>
-              <div style={{ fontSize: 9, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.07em', marginTop: 4 }}>{label}</div>
+            {/* Row 1: Hero (lime) + Funnel (blue) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1fr', gap: 14 }}>
+              <HeroRead allResults={allResults} tc={tc} hypeStatus={hypeStatus} sectors={sectors} loading={loading} />
+              <FunnelCard tc={tc} ac={ac} data={data} loading={loading} />
             </div>
-          ))}
-          {data?.scanned_at && (
-            <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '12px 18px', textAlign: 'center', minWidth: 120, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-mute)' }}>{new Date(data.scanned_at).toLocaleDateString()}</div>
-              <div style={{ fontSize: 10, color: 'var(--ink-dim)', marginTop: 2 }}>{new Date(data.scanned_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {data.elapsed_secs}s</div>
-              <div style={{ fontSize: 9, color: 'var(--ink-faint)', marginTop: 2 }}>Last scan</div>
-            </div>
-          )}
-        </div>
 
-        {error && <div style={{ padding: '12px 16px', background: 'oklch(0.72 0.21 25 / 0.10)', border: '1px solid oklch(0.72 0.21 25 / 0.30)', borderRadius: 8, color: 'var(--neg)', fontSize: 12, marginBottom: 16 }}>{error}</div>}
+            {/* KPI strip */}
+            <KpiStrip tc={tc} ac={ac} data={data} loading={loading} />
 
-        {/* ── Top Picks Carousel ─────────────────────────────────────────────── */}
-        {!loading && topPicks.length > 0 && (
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
-              Top Demand Setups
-            </div>
-            <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8 }}>
-              {topPicks.map(r => (
-                <TopPickCard
-                  key={r.symbol}
-                  r={r}
-                  livePrice={livePrices[r.symbol]}
-                  journaled={journaledSet.has(r.symbol)}
-                  adding={addingJournal === r.symbol}
-                  added={addedJournal.has(r.symbol)}
-                  onAdd={addToJournal}
-                  onClick={setDrawerRow}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── 3-column grid: Sectors | ATS Panel | Gainers/Losers ───────────── */}
-        {!loading && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px 280px', gap: 12, marginBottom: 20 }}>
-            <SectorHeatmap sectors={sectors} />
-            <AtsPanel results={allResults} />
-            <GainersLosers livePrices={livePrices} results={allResults} marketOpen={marketTimer.open} />
-          </div>
-        )}
-
-        {/* ── Hype Strip ─────────────────────────────────────────────────────── */}
-        {(hypeStatus || hypeResults.length > 0) && (
-          <div style={{ marginBottom: 16 }}>
-            <HypeStrip hypeStatus={hypeStatus} hypeResults={hypeResults} />
-          </div>
-        )}
-
-        {/* ── News Feed ──────────────────────────────────────────────────────── */}
-        {!loading && (
-          <div style={{ marginBottom: 20 }}>
-            <NewsFeed articles={news} loading={newsLoading} />
-          </div>
-        )}
-
-        {/* ── Full Scanner Toggle ────────────────────────────────────────────── */}
-        <div style={{ marginBottom: 8 }}>
-          <button
-            onClick={() => setShowFullTable(s => !s)}
-            style={{
-              background: showFullTable ? 'var(--pump-blue-soft)' : 'var(--bg-1)',
-              border: `1px solid ${showFullTable ? 'var(--pump-blue)' : 'var(--stroke)'}`,
-              color: showFullTable ? 'var(--pump-blue)' : 'var(--ink-mute)',
-              borderRadius: 8, padding: '8px 18px', fontSize: 12, fontWeight: 600,
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-            }}
-          >
-            <span style={{ fontSize: 10 }}>{showFullTable ? '▲' : '▼'}</span>
-            {showFullTable ? 'Hide' : 'Show'} Full Scanner
-            <span style={{ fontSize: 11, opacity: 0.7 }}>({allResults.length} results)</span>
-          </button>
-        </div>
-
-        {/* ── Full Scanner Table ─────────────────────────────────────────────── */}
-        {showFullTable && (
-          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px' }}>
-            <ScannerTable
-              results={allResults}
-              livePrices={livePrices}
-              journaledSet={journaledSet}
-              addingJournal={addingJournal}
-              addedJournal={addedJournal}
-              onAddToJournal={addToJournal}
-              onRowClick={setDrawerRow}
-              tierF={tierF} setTierF={setTierF}
-              atsF={atsF} setAtsF={setAtsF}
-              readyF={readyF} setReadyF={setReadyF}
-              minScore={minScore} setMinScore={setMinScore}
-              limit={limit} setLimit={setLimit}
-              onRefresh={fetchData}
-              triggerScan={triggerScan}
-              scanning={scanning}
-              scanProgress={scanProgress}
-              scanError={scanError}
+            {/* Top demand setups grid */}
+            <PumpSetupGrid
+              allResults={allResults} livePrices={livePrices} journaledSet={journaledSet}
+              addingJournal={addingJournal} addedJournal={addedJournal}
+              addToJournal={addToJournal} setDrawerRow={setDrawerRow} loading={loading}
             />
-          </div>
-        )}
 
+            {/* Sectors + ATS Signals */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14, alignItems: 'start' }}>
+              <PumpSectorHeat sectors={sectors} allResults={allResults} />
+              <PumpAtsSignals allResults={allResults} />
+            </div>
+
+            {/* Gainers + Losers */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <PumpMoversCard kind="gainers" livePrices={livePrices} allResults={allResults} marketOpen={marketTimer.open} />
+              <PumpMoversCard kind="losers"  livePrices={livePrices} allResults={allResults} marketOpen={marketTimer.open} />
+            </div>
+
+            {/* Hype Monitor */}
+            <PumpHypeMonitor hypeStatus={hypeStatus} hypeResults={hypeResults} />
+
+            {/* News */}
+            <PumpNewsGrid news={news} newsLoading={newsLoading} />
+
+            {/* Footer / scanner CTA */}
+            <PumpFooterCta allResults={allResults} setShowFullTable={setShowFullTable} />
+
+            {/* Full scanner table (toggled by footer CTA) */}
+            {showFullTable && (
+              <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px' }}>
+                <ScannerTable
+                  results={allResults} livePrices={livePrices}
+                  journaledSet={journaledSet} addingJournal={addingJournal} addedJournal={addedJournal}
+                  onAddToJournal={addToJournal} onRowClick={setDrawerRow}
+                  tierF={tierF} setTierF={setTierF}
+                  atsF={atsF} setAtsF={setAtsF}
+                  readyF={readyF} setReadyF={setReadyF}
+                  minScore={minScore} setMinScore={setMinScore}
+                  limit={limit} setLimit={setLimit}
+                  onRefresh={fetchData} triggerScan={triggerScan}
+                  scanning={scanning} scanProgress={scanProgress} scanError={scanError}
+                />
+              </div>
+            )}
+          </main>
+        </div>
       </div>
 
-      {/* Drawer */}
+      {/* Detail drawer */}
       {drawerRow && (
         <>
           <div onClick={() => setDrawerRow(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999 }} />
           <DetailDrawer
-            row={drawerRow}
-            onClose={() => setDrawerRow(null)}
+            row={drawerRow} onClose={() => setDrawerRow(null)}
             narrative={narratives[drawerRow?.symbol]}
             narrativeLoading={narrativeLoading === drawerRow?.symbol}
             onFetchNarrative={fetchNarrative}
