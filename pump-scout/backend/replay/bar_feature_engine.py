@@ -1055,6 +1055,26 @@ TAG_NP_SETUP           = "NP_SETUP"
 TAG_NP_TRIGGER         = "NP_TRIGGER"
 TAG_FLAT               = "FLAT"
 
+# 260521 Line3/4/5 tags
+TAG_BODY_X             = "BODY_X"      # extra-large body (>1.5× avg)
+TAG_BODY_S             = "BODY_S"      # small body (<0.5× avg)
+TAG_WICK_TB            = "WICK_TB"     # top wick dominant (≥50% of range)
+TAG_WICK_BB            = "WICK_BB"     # bottom wick dominant (≥50% of range)
+TAG_WICK_J             = "WICK_J"      # doji / spinning top (body ≤20% of range)
+TAG_WICK_F             = "WICK_F"      # full body, small wicks
+TAG_GAP_G2             = "GAP_G2"      # gap 0.5–1.0 ATR
+TAG_GAP_G3             = "GAP_G3"      # gap >1.0 ATR
+TAG_RANGE_V            = "RANGE_V"     # volatile range (>1.5 ATR)
+TAG_RANGE_C            = "RANGE_C"     # compressed range (<0.5 ATR)
+TAG_VIX_X              = "VIX_X"       # Williams VIX-Fix spike
+TAG_VIX_R              = "VIX_R"       # Williams VIX-Fix range
+TAG_PSAR_BULL          = "PSAR_BULL"   # Parabolic SAR bullish (close > SAR)
+TAG_PSAR_BEAR          = "PSAR_BEAR"   # Parabolic SAR bearish (close ≤ SAR)
+TAG_RSI2_X             = "RSI2_X"      # RSI2 reclaim above 20
+TAG_RSI2_D             = "RSI2_D"      # RSI2 drop below 80
+TAG_RSI2_L             = "RSI2_L"      # RSI2 oversold (< 20)
+TAG_RSI2_H             = "RSI2_H"      # RSI2 overbought (> 80)
+
 ALL_TAGS = [
     TAG_STRONG_CLOSE, TAG_WEAK_CLOSE, TAG_LOWER_WICK_RECLAIM,
     TAG_GAP_UP, TAG_GAP_UP_HOLD, TAG_GAP_DOWN, TAG_GAP_DOWN_RECLAIM,
@@ -1064,6 +1084,14 @@ ALL_TAGS = [
     TAG_BB_COMPRESSION, TAG_EXPANSION,
     TAG_BULL_ENGULF, TAG_INSIDE_BAR, TAG_RECLAIM_BAR, TAG_WIDE_RANGE,
     TAG_L34, TAG_NP_SETUP, TAG_NP_TRIGGER,
+    # 260521
+    TAG_BODY_X, TAG_BODY_S,
+    TAG_WICK_TB, TAG_WICK_BB, TAG_WICK_J, TAG_WICK_F,
+    TAG_GAP_G2, TAG_GAP_G3,
+    TAG_RANGE_V, TAG_RANGE_C,
+    TAG_VIX_X, TAG_VIX_R,
+    TAG_PSAR_BULL, TAG_PSAR_BEAR,
+    TAG_RSI2_X, TAG_RSI2_D, TAG_RSI2_L, TAG_RSI2_H,
 ]
 
 
@@ -1173,6 +1201,34 @@ def bars_to_tags(bar_features: dict) -> list[str]:
         tags.append(TAG_NP_SETUP)
     if bar_features.get("np_is_trigger"):
         tags.append(TAG_NP_TRIGGER)
+
+    # ── 260521 Line3/4/5 ──────────────────────────────────────────────────────
+    body = bar_features.get("body_class",  "") or ""
+    wick = bar_features.get("wick_class",  "") or ""
+    gap  = bar_features.get("gap_class",   "") or ""
+    rng  = bar_features.get("range_class", "") or ""
+    vix  = bar_features.get("vix_token",   "") or ""
+    psar = bar_features.get("psar_token",  "") or ""
+    rsi2 = bar_features.get("rsi2_token",  "") or ""
+
+    if body == "X":   tags.append(TAG_BODY_X)
+    if body == "S":   tags.append(TAG_BODY_S)
+    if wick == "TB":  tags.append(TAG_WICK_TB)
+    if wick == "BB":  tags.append(TAG_WICK_BB)
+    if wick == "J":   tags.append(TAG_WICK_J)
+    if wick == "F":   tags.append(TAG_WICK_F)
+    if gap  == "G2":  tags.append(TAG_GAP_G2)
+    if gap  == "G3":  tags.append(TAG_GAP_G3)
+    if rng  == "V":   tags.append(TAG_RANGE_V)
+    if rng  == "C":   tags.append(TAG_RANGE_C)
+    if vix  == "VX":  tags.append(TAG_VIX_X)
+    if vix  == "VR":  tags.append(TAG_VIX_R)
+    if psar == "PB":  tags.append(TAG_PSAR_BULL)
+    if psar == "PS":  tags.append(TAG_PSAR_BEAR)
+    if rsi2 == "R2X": tags.append(TAG_RSI2_X)
+    if rsi2 == "R2D": tags.append(TAG_RSI2_D)
+    if rsi2 == "R2L": tags.append(TAG_RSI2_L)
+    if rsi2 == "R2H": tags.append(TAG_RSI2_H)
 
     result = sorted(set(tags))
     return result if result else [TAG_FLAT]
@@ -1310,6 +1366,14 @@ def build_bar_feature_snapshots_for_episode(
             "abr_l4":                  fj.get("has_l4"),
             "abr_l5":                  fj.get("has_l5"),
             "abr_l6":                  fj.get("has_l6"),
+            # 260521 Line3/4/5 token fields
+            "body_class":  fj.get("body_class",  "") or "",
+            "wick_class":  fj.get("wick_class",  "") or "",
+            "gap_class":   fj.get("gap_class",   "") or "",
+            "range_class": fj.get("range_class", "") or "",
+            "vix_token":   fj.get("vix_token",   "") or "",
+            "psar_token":  fj.get("psar_token",  "") or "",
+            "rsi2_token":  fj.get("rsi2_token",  "") or "",
         }
 
         snap["tags"]          = bars_to_tags(snap)
