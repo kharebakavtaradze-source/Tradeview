@@ -43,14 +43,12 @@ from database import (
     get_journal_settings,
     get_journal_stats,
     get_latest_scan,
-    get_latest_scan_by_type,
     get_market_regime_history,
     get_market_regime_latest,
     get_open_ai_positions,
     update_ai_portfolio_baseline,
     get_portfolio_state,
     get_position_snapshots,
-    get_scan_history,
     get_sector_strength_for_sector,
     get_sector_strength_latest,
     get_watchlist,
@@ -58,7 +56,6 @@ from database import (
     mark_candidate_journaled,
     remove_from_watchlist,
     reset_journal,
-    save_scan,
     update_journal_entry,
     update_journal_settings,
     get_eod_log,
@@ -92,7 +89,6 @@ from database import (
     backfill_pump_episode_demand_scores,
     backfill_raw_pattern_demand_scores,
 )
-from scanner.runner import run_scan
 from scanner.massive_data import get_us_etf_symbols
 from scanner.sector_map import NON_STOCK_SECURITIES
 from scheduler import start_scheduler, stop_scheduler
@@ -154,63 +150,31 @@ app.add_middleware(
 # Gzip all JSON responses ≥ 1 KB (browser sends Accept-Encoding: gzip automatically)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-# ─── Non-stock exclusion helper ──────────────────────────────────────────────
+# ─── Routes ──────────────────────────────────────────────────────────────────
+
+_etf_exclusions_cache: set[str] | None = None
 
 async def _get_exclusion_set() -> set[str]:
-    """
-    Return the union of the Polygon-sourced ETF/ETN/ETV/FUND list and the
-    static NON_STOCK_SECURITIES set (CEFs + ETNs).  Result is cached for 7
-    days inside get_us_etf_symbols() — subsequent calls within the same day
-    are essentially free.
-    """
-    try:
-        etf_syms = await get_us_etf_symbols()
-    except Exception:
-        etf_syms = set()
-    return etf_syms | {s.upper() for s in NON_STOCK_SECURITIES}
-
-
-def _strip_non_stocks(results: list[dict], exclusions: set[str]) -> list[dict]:
-    """Remove ETF / ETN / CEF / fund / leveraged / crypto entries from a result list."""
-    return [r for r in results if r.get("symbol", "").upper() not in exclusions]
-
-
-# ─── Background scan state ────────────────────────────────────────────────────
-
-_scan_running = False
-
-
-async def _run_scan_background():
-    global _scan_running
-    if _scan_running:
-        logger.info("Scan already running — skipping")
-        return
-    _scan_running = True
-    try:
-        result = await run_scan()
-        await save_scan(result)
-        # Also persist per-ticker demand scores for trajectory tracking
+    """Cache ETF/fund symbols to exclude from stock results."""
+    global _etf_exclusions_cache
+    if _etf_exclusions_cache is None:
         try:
-            from database import save_demand_ticker_history as _sdth
-            from datetime import datetime as _dt
-            await _sdth(result.get("results", []), _dt.utcnow())
-        except Exception as _e:
-            logger.warning(f"save_demand_ticker_history failed (non-fatal): {_e}")
-        logger.info("Manual scan complete and saved")
-        await send_scan_alert(result)
-    except Exception as e:
-        logger.error(f"Background scan error: {e}", exc_info=True)
-    finally:
-        _scan_running = False
+            etfs = await get_us_etf_symbols()
+            _etf_exclusions_cache = set(etfs) | NON_STOCK_SECURITIES
+        except Exception:
+            _etf_exclusions_cache = NON_STOCK_SECURITIES
+    return _etf_exclusions_cache
 
 
-# ─── Routes ──────────────────────────────────────────────────────────────────
+def _strip_non_stocks(results: list, exclusions: set[str]) -> list:
+    """Remove ETFs and non-stock securities from a result list."""
+    return [r for r in results if r.get("symbol", "") not in exclusions]
+
 
 @app.get("/api/health")
 async def health():
     return {
         "status": "ok",
-        "scan_running": _scan_running,
         "version": "14.0",
     }
 
@@ -279,66 +243,6 @@ async def get_live_prices(symbols: str = ""):
     return result
 
 
-@app.get("/api/scan/latest")
-async def get_latest():
-    """Return the most recent scan results."""
-    data = await get_latest_scan()
-    if not data:
-        return {
-            "results": [],
-            "scanned_at": None,
-            "total": 0,
-            "tier_counts": {},
-            "message": "No scan data yet. Trigger a manual scan or wait for the scheduled run.",
-        }
-    exclusions = await _get_exclusion_set()
-    results = _strip_non_stocks(data.get("results", []), exclusions)
-    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
-    return {
-        **{k: v for k, v in data.items() if k != "results"},
-        "results": slim,
-    }
-
-
-@app.get("/api/scan/history")
-async def get_history(days: int = 30):
-    """Return scan history summary for the last N days."""
-    history = await get_scan_history(days=min(days, 90))
-    return {"history": history, "days": days}
-
-
-@app.get("/api/scan/universe/latest")
-async def get_universe_scan_latest():
-    """Return the latest Massive EOD universe scan results."""
-    data = await get_latest_scan_by_type("massive_eod")
-    if not data:
-        return {
-            "results": [], "scanned_at": None, "total": 0,
-            "scan_type": "massive_eod",
-            "message": "No EOD universe scan yet. Runs at 17:00 ET Mon–Fri.",
-        }
-    exclusions = await _get_exclusion_set()
-    results = _strip_non_stocks(data.get("results", []), exclusions)
-    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
-    return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
-
-
-@app.get("/api/scan/intraday/latest")
-async def get_intraday_scan_latest():
-    """Return the latest Yahoo intraday validation scan results."""
-    data = await get_latest_scan_by_type("yahoo_intraday")
-    if not data:
-        return {
-            "results": [], "scanned_at": None, "total": 0,
-            "scan_type": "yahoo_intraday",
-            "message": "No intraday scan yet. Runs at 8:00, 9:30, 12:00 ET Mon–Fri.",
-        }
-    exclusions = await _get_exclusion_set()
-    results = _strip_non_stocks(data.get("results", []), exclusions)
-    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
-    return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
-
-
 @app.get("/api/ticker/{symbol}")
 async def get_ticker(symbol: str):
     """Return full detail for one ticker from the latest scan, including candles."""
@@ -385,43 +289,6 @@ async def get_ticker(symbol: str):
         "candles": candles[-100:] if candles and len(candles) >= 20 else [],
         "source": "scan",
     }
-
-
-@app.get("/api/scan/run")
-async def trigger_scan_get(background_tasks: BackgroundTasks):
-    """Manually trigger a scan via GET. Runs in background."""
-    if _scan_running:
-        return {"status": "already_running", "message": "A scan is already in progress"}
-    background_tasks.add_task(_run_scan_background)
-    return {"status": "started", "message": "Scan started in background"}
-
-
-@app.post("/api/scan/run")
-async def trigger_scan(background_tasks: BackgroundTasks):
-    """Manually trigger a scan via POST. Runs in background."""
-    if _scan_running:
-        return {"status": "already_running", "message": "A scan is already in progress"}
-
-    background_tasks.add_task(_run_scan_background)
-    return {"status": "started", "message": "Scan started in background"}
-
-
-# ─── Legacy scanner context (read-only, feature-source only) ─────────────────
-
-@app.get("/api/legacy-scanner/context/{symbol}")
-async def get_legacy_scanner_context(symbol: str):
-    """
-    Return raw feature context from the old (legacy) main scanner for one ticker.
-
-    The old scanner is FROZEN as a feature source.  Its tier labels
-    (FIRE/ARM/BASE/WATCH) are legacy only and do NOT map to Scanner v2 decisions.
-    This endpoint exposes hype, sympathy, flow, stealth, and silent signals for
-    research and Scanner v2 context enrichment.
-    """
-    from scanner.legacy_context import extract_legacy_context
-    data = await get_latest_scan()
-    ctx = extract_legacy_context(symbol.upper(), scan_data=data)
-    return ctx
 
 
 # ─── Watchlist routes ────────────────────────────────────────────────────────
@@ -1014,25 +881,6 @@ async def sector_strength_latest():
     return {"sectors": sectors}
 
 
-# ── Retired scan surfaces ────────────────────────────────────────────────────
-
-def _retired_scan_endpoint(name: str):
-    raise HTTPException(
-        status_code=410,
-        detail=f"{name} has been retired. Use the New Pump workflow instead.",
-    )
-
-
-@app.get("/api/scan/ribbon")
-async def get_ribbon_scanner():
-    _retired_scan_endpoint("Ribbon Scanner")
-
-
-@app.get("/api/scan/ignition")
-async def get_ignition_scan():
-    _retired_scan_endpoint("Ignition Scanner")
-
-
 # ─── New Pump standalone pipeline ────────────────────────────────────────────
 # Completely separate from old scanner. Own universe → own candles → own engine.
 
@@ -1185,11 +1033,6 @@ async def new_pump_anatomy(symbol: str):
     except Exception as exc:
         logger.error(f"[anatomy] {sym}: {exc}", exc_info=True)
         return {"error": str(exc), "symbol": sym}
-
-
-@app.get("/api/scan/pump")
-async def get_pump_scan():
-    _retired_scan_endpoint("Pump Engine")
 
 
 # ─── Bar Labels endpoint ───────────────────────────────────────────────────────

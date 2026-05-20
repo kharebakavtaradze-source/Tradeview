@@ -2,15 +2,12 @@
 APScheduler setup — all schedule times shown in GMT+4 (= ET + 8h).
 
 PREMARKET (GMT+4):
-  16:00  Pre-Market Intraday Scan
   17:00  Morning Brief
   17:10  Hype Monitor #1
   17:15  AI Portfolio Decisions (before market open)
 
 MARKET SESSION (GMT+4):
-  17:30  Market Open Intraday Scan
   17:30–00:00 every 30 min  Price Alerts, AI Positions, Journal Prices
-  20:00  Midday Scan
   20:10  Hype Monitor #2
   23:20  Hype Monitor #3 (pre-close, next-day prep)
 
@@ -34,9 +31,8 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from scanner.runner import run_scan
 from scanner.universe_scan import run_universe_scan
-from database import save_scan, rotate_old_data, upsert_macro_events
+from database import rotate_old_data, upsert_macro_events
 from hype_monitor.monitor import run_hype_monitor
 from journal_autoclose import auto_close_journal, update_journal_prices_intraday
 from ai_portfolio import ai_portfolio_decisions, generate_daily_report, update_ai_positions_intraday
@@ -52,17 +48,6 @@ logger = logging.getLogger(__name__)
 EASTERN_TZ = "America/New_York"
 
 scheduler = AsyncIOScheduler(timezone=EASTERN_TZ)
-
-
-async def _run_and_save():
-    """Run a scan and persist results to the database."""
-    try:
-        logger.info("Scheduled scan starting...")
-        result = await run_scan()
-        scan_id = await save_scan(result)
-        logger.info(f"Scheduled scan complete — saved as scan #{scan_id}")
-    except Exception as e:
-        logger.error(f"Scheduled scan failed: {e}", exc_info=True)
 
 
 async def _run_hype_monitor():
@@ -214,16 +199,6 @@ def start_scheduler():
 
     # ── PREMARKET ──────────────────────────────────────────────────────────────
 
-    # 08:00 ET (16:00 GMT+4) — Pre-market intraday scan
-    scheduler.add_job(
-        _run_and_save,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=EASTERN_TZ),
-        id="scan_0800_et",
-        name="Pre-Market Scan (08:00 ET / 16:00 GMT+4)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
-
     # 09:00 ET (17:00 GMT+4) — Morning Brief Telegram
     scheduler.add_job(
         send_morning_brief,
@@ -255,16 +230,6 @@ def start_scheduler():
     )
 
     # ── MARKET SESSION ─────────────────────────────────────────────────────────
-
-    # 09:30 ET (17:30 GMT+4) — Market Open Scan
-    scheduler.add_job(
-        _run_and_save,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone=EASTERN_TZ),
-        id="scan_0930_et",
-        name="Market Open Scan (09:30 ET / 17:30 GMT+4)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
 
     # Every 5 min, 09:30–16:00 ET — AI position price update + auto-stop/target
     scheduler.add_job(
@@ -304,16 +269,6 @@ def start_scheduler():
         name="Price Alerts (every 30min, 17:30–00:00 GMT+4)",
         replace_existing=True,
         misfire_grace_time=120,
-    )
-
-    # 12:00 ET (20:00 GMT+4) — Midday Scan
-    scheduler.add_job(
-        _run_and_save,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=12, minute=0, timezone=EASTERN_TZ),
-        id="scan_1200_et",
-        name="Midday Scan (12:00 ET / 20:00 GMT+4)",
-        replace_existing=True,
-        misfire_grace_time=300,
     )
 
     # 12:10 ET (20:10 GMT+4) — Hype Monitor #2
