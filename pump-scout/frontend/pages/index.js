@@ -7,25 +7,25 @@ import AppNav from '../components/AppNav';
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 const TIER_META = {
-  PRIME_BUY:     { label: 'PRIME',     color: '#34d399', bg: 'rgba(52,211,153,0.15)' },
-  HIGH_CONF_BUY: { label: 'HIGH CONF', color: '#60a5fa', bg: 'rgba(96,165,250,0.15)' },
-  BUY_WATCH:     { label: 'BUY WATCH', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' },
-  SETUP_MONITOR: { label: 'MONITOR',   color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' },
-  SKIP:          { label: 'SKIP',      color: '#6b7280', bg: 'rgba(107,114,128,0.08)' },
+  PRIME_BUY:     { label: 'PRIME',     color: 'var(--pos)',        bg: 'oklch(0.86 0.18 142 / 0.15)' },
+  HIGH_CONF_BUY: { label: 'HIGH CONF', color: 'var(--pump-blue)',  bg: 'oklch(0.74 0.12 268 / 0.15)' },
+  BUY_WATCH:     { label: 'BUY WATCH', color: 'var(--warn)',       bg: 'oklch(0.84 0.16 80 / 0.12)' },
+  SETUP_MONITOR: { label: 'MONITOR',   color: 'var(--pump-blue)',  bg: 'oklch(0.74 0.12 268 / 0.12)' },
+  SKIP:          { label: 'SKIP',      color: 'var(--ink-dim)',    bg: 'oklch(0.62 0.010 90 / 0.08)' },
 };
 
 const ATS_META = {
-  ATS_PRIME: { label: 'ATS ★★★', color: '#34d399' },
-  ATS_SETUP: { label: 'ATS ★★',  color: '#60a5fa' },
-  ATS_WATCH: { label: 'ATS ★',   color: '#fbbf24' },
-  ATS_NONE:  { label: '—',        color: '#4b5563' },
+  ATS_PRIME: { label: 'ATS ★★★', color: 'var(--pos)' },
+  ATS_SETUP: { label: 'ATS ★★',  color: 'var(--pump-blue)' },
+  ATS_WATCH: { label: 'ATS ★',   color: 'var(--warn)' },
+  ATS_NONE:  { label: '—',        color: 'var(--ink-faint)' },
 };
 
 const READINESS_META = {
-  HOT:  { label: 'HOT',  color: '#34d399', bg: 'rgba(52,211,153,0.15)' },
-  WARM: { label: 'WARM', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' },
-  COOL: { label: 'COOL', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' },
-  COLD: { label: 'COLD', color: '#6b7280', bg: 'rgba(107,114,128,0.08)' },
+  HOT:  { label: 'HOT',  color: 'var(--pos)',       bg: 'oklch(0.86 0.18 142 / 0.15)' },
+  WARM: { label: 'WARM', color: 'var(--warn)',      bg: 'oklch(0.84 0.16 80 / 0.12)' },
+  COOL: { label: 'COOL', color: 'var(--pump-blue)', bg: 'oklch(0.74 0.12 268 / 0.12)' },
+  COLD: { label: 'COLD', color: 'var(--ink-dim)',   bg: 'oklch(0.62 0.010 90 / 0.08)' },
 };
 
 const ATS_COND_PRETTY = {
@@ -50,46 +50,46 @@ const REASONS_PRETTY = {
 };
 
 const CONFLUENCE_META = {
-  PREUP_NOW:    { label: 'PREUP▲', color: '#4ade80' },
-  PREUP_RECENT: { label: 'PREUP~', color: '#86efac' },
-  T1T2_BAR:     { label: 'T1/T2',  color: '#34d399' },
-  WLNBB_L:      { label: 'BB-L',   color: '#22d3ee' },
+  PREUP_NOW:    { label: 'PREUP▲', color: 'var(--pos)' },
+  PREUP_RECENT: { label: 'PREUP~', color: 'var(--pos)' },
+  T1T2_BAR:     { label: 'T1/T2',  color: 'var(--pos)' },
+  WLNBB_L:      { label: 'BB-L',   color: 'var(--pump-blue)' },
 };
 
 const FLOW_SIGNAL_META = {
-  OBV_ACCUM:          { label: 'OBV▲',     color: '#34d399', title: 'OBV net accumulation' },
-  LOWER_WICK_ABSORB:  { label: 'LWick▲▲',  color: '#4ade80', title: 'Lower wick absorption' },
-  LOWER_WICK_PARTIAL: { label: 'LWick▲',   color: '#86efac', title: 'Partial lower-wick' },
+  OBV_ACCUM:          { label: 'OBV▲',     color: 'var(--pos)', title: 'OBV net accumulation' },
+  LOWER_WICK_ABSORB:  { label: 'LWick▲▲',  color: 'var(--pos)', title: 'Lower wick absorption' },
+  LOWER_WICK_PARTIAL: { label: 'LWick▲',   color: 'var(--pos)', title: 'Partial lower-wick' },
 };
 
 const FLOW_RISK_META = {
-  OBV_DISTRIB:         { label: 'OBV▼',     color: '#f87171', title: 'OBV distribution' },
-  EMA_SPREAD_WIDE:     { label: 'EMA wide', color: '#ef4444', title: 'EMA9 >12% above EMA50' },
-  EMA_SPREAD_ELEVATED: { label: 'EMA elev', color: '#fbbf24', title: 'EMA9 >8% above EMA50' },
+  OBV_DISTRIB:         { label: 'OBV▼',     color: 'var(--neg)', title: 'OBV distribution' },
+  EMA_SPREAD_WIDE:     { label: 'EMA wide', color: 'var(--neg)', title: 'EMA9 >12% above EMA50' },
+  EMA_SPREAD_ELEVATED: { label: 'EMA elev', color: 'var(--warn)', title: 'EMA9 >8% above EMA50' },
 };
 
 const BREAKOUT_META = {
-  BREAKING:  { label: 'BREAKING',  color: '#34d399' },
-  SURGING:   { label: 'SURGING',   color: '#86efac' },
-  AWAKENING: { label: 'AWAKENING', color: '#fbbf24' },
-  TICKING:   { label: 'TICKING',   color: '#9ca3af' },
-  COILING:   { label: 'COILING',   color: '#4b5563' },
+  BREAKING:  { label: 'BREAKING',  color: 'var(--pos)' },
+  SURGING:   { label: 'SURGING',   color: 'var(--pos)' },
+  AWAKENING: { label: 'AWAKENING', color: 'var(--warn)' },
+  TICKING:   { label: 'TICKING',   color: 'var(--ink-mute)' },
+  COILING:   { label: 'COILING',   color: 'var(--ink-faint)' },
 };
 
 const FRESHNESS_COLORS = {
-  FRESH: '#34d399', NORMAL: '#9ca3af', AGING: '#fbbf24',
-  STALE: '#f87171', DEAD: '#ef4444', NO_DRYUP: '#4b5563',
+  FRESH: 'var(--pos)', NORMAL: 'var(--ink-mute)', AGING: 'var(--warn)',
+  STALE: 'var(--neg)', DEAD: 'var(--neg)', NO_DRYUP: 'var(--ink-faint)',
 };
 
 const TIER_COLORS_MINI = {
-  PRIME_BUY: '#4ade80', HIGH_CONF_BUY: '#fbbf24',
-  BUY_WATCH: '#60a5fa', SETUP_MONITOR: '#9ca3af', SKIP: '#374151',
+  PRIME_BUY: 'var(--pos)', HIGH_CONF_BUY: 'var(--warn)',
+  BUY_WATCH: 'var(--pump-blue)', SETUP_MONITOR: 'var(--ink-mute)', SKIP: 'var(--bg-3)',
 };
 
 const REGIME_COLORS = {
-  BULL_IMPULSE: '#34d399', BULL_RECOVERY: '#86efac', NEUTRAL: '#fbbf24',
-  BEAR_CAUTION: '#f97316', BEAR_DECLINE: '#f87171',
-  ACCUMULATION: '#60a5fa', DISTRIBUTION: '#a78bfa',
+  BULL_IMPULSE: 'var(--pos)', BULL_RECOVERY: 'var(--pos)', NEUTRAL: 'var(--warn)',
+  BEAR_CAUTION: 'var(--neg)', BEAR_DECLINE: 'var(--neg)',
+  ACCUMULATION: 'var(--pump-blue)', DISTRIBUTION: 'var(--pump-blue)',
 };
 
 // ── Market helpers ────────────────────────────────────────────────────────────
@@ -172,7 +172,7 @@ function TierBadge({ tier, small }) {
 
 function AtsBadge({ signal }) {
   const m = ATS_META[signal] || ATS_META.ATS_NONE;
-  if (signal === 'ATS_NONE') return <span style={{ color: '#4b5563', fontSize: 10 }}>—</span>;
+  if (signal === 'ATS_NONE') return <span style={{ color: 'var(--ink-faint)', fontSize: 10 }}>—</span>;
   return (
     <span style={{
       display: 'inline-block', padding: '2px 6px', borderRadius: 4,
@@ -184,10 +184,10 @@ function AtsBadge({ signal }) {
 
 function ScoreBar({ score, max = 20, width = 60 }) {
   const pct = Math.min(100, (score / max) * 100);
-  const color = score >= 13 ? '#34d399' : score >= 9 ? '#60a5fa' : score >= 6 ? '#fbbf24' : '#6b7280';
+  const color = score >= 13 ? 'var(--pos)' : score >= 9 ? 'var(--pump-blue)' : score >= 6 ? 'var(--warn)' : 'var(--ink-dim)';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <div style={{ width, height: 4, background: '#1f2937', borderRadius: 3, overflow: 'hidden' }}>
+      <div style={{ width, height: 4, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3 }} />
       </div>
       <span style={{ fontSize: 12, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>
@@ -222,8 +222,8 @@ function TopPickCard({ r, livePrice, journaled, adding, added, onAdd, onClick })
     <div
       onClick={() => onClick(r)}
       style={{
-        minWidth: 200, maxWidth: 220, background: '#111827',
-        border: `1px solid ${tier.color}40`, borderRadius: 12,
+        minWidth: 200, maxWidth: 220, background: 'var(--bg-1)',
+        border: `1px solid ${tier.color}40`, borderRadius: 'var(--r-xl)',
         padding: '14px 16px', cursor: 'pointer', flexShrink: 0,
         transition: 'border-color 0.15s, transform 0.1s',
         position: 'relative',
@@ -234,7 +234,7 @@ function TopPickCard({ r, livePrice, journaled, adding, added, onAdd, onClick })
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: '#f9fafb', fontFamily: 'monospace', letterSpacing: '-0.5px' }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--ink)', fontFamily: 'var(--f-mono)', letterSpacing: '-0.5px' }}>
             {r.symbol}
           </div>
           <TierBadge tier={r.demand_composite_tier} />
@@ -243,7 +243,7 @@ function TopPickCard({ r, livePrice, journaled, adding, added, onAdd, onClick })
           <div style={{ fontSize: 20, fontWeight: 800, color: tier.color, lineHeight: 1 }}>
             {fmt(r.demand_composite_score, 1)}
           </div>
-          <div style={{ fontSize: 8, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>/ 20</div>
+          <div style={{ fontSize: 8, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>/ 20</div>
         </div>
       </div>
 
@@ -254,16 +254,16 @@ function TopPickCard({ r, livePrice, journaled, adding, added, onAdd, onClick })
 
       {/* Price */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 8 }}>
-        <span style={{ fontSize: 16, fontWeight: 700, color: '#e5e7eb', fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>
           ${fmt(price, 2)}
         </span>
         {chg != null && (
-          <span style={{ fontSize: 12, fontWeight: 600, color: chg >= 0 ? '#34d399' : '#f87171' }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: chg >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
             {chg >= 0 ? '+' : ''}{chg.toFixed(2)}%
           </span>
         )}
         {livePrice && (
-          <span style={{ fontSize: 9, color: '#34d399', marginLeft: 2 }}>●</span>
+          <span style={{ fontSize: 9, color: 'var(--pos)', marginLeft: 2 }}>●</span>
         )}
       </div>
 
@@ -278,27 +278,27 @@ function TopPickCard({ r, livePrice, journaled, adding, added, onAdd, onClick })
         {topReasons.map(rr => (
           <span key={rr} style={{
             fontSize: 8, padding: '1px 4px', borderRadius: 3,
-            background: 'rgba(96,165,250,0.1)', color: '#93c5fd',
-            border: '1px solid rgba(96,165,250,0.2)',
+            background: 'var(--pump-blue-soft)', color: 'var(--pump-blue)',
+            border: '1px solid oklch(0.74 0.12 268 / 0.25)',
           }}>{REASONS_PRETTY[rr] || rr}</span>
         ))}
       </div>
 
       {/* Footer: vol + sector + journal */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #1f2937', paddingTop: 8 }}>
-        <div style={{ fontSize: 9, color: '#6b7280' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--stroke-soft)', paddingTop: 8 }}>
+        <div style={{ fontSize: 9, color: 'var(--ink-dim)' }}>
           <span style={{ marginRight: 6 }}>Vol {fmtK(r.volume_today)}</span>
-          {r.sector && <span style={{ color: '#4b5563' }}>{r.sector?.split(' ').slice(-1)[0]}</span>}
+          {r.sector && <span style={{ color: 'var(--ink-faint)' }}>{r.sector?.split(' ').slice(-1)[0]}</span>}
         </div>
         {(journaled || added) ? (
-          <span style={{ fontSize: 9, color: '#34d399', fontWeight: 700 }}>✓ Journaled</span>
+          <span style={{ fontSize: 9, color: 'var(--pos)', fontWeight: 700 }}>✓ Journaled</span>
         ) : (
           <button
             onClick={e => { e.stopPropagation(); onAdd(r); }}
             disabled={adding}
             style={{
-              background: 'rgba(29,78,216,0.25)', border: '1px solid #3b82f680',
-              color: '#93c5fd', borderRadius: 4, padding: '2px 7px',
+              background: 'var(--pump-lime)', border: 'none',
+              color: 'var(--on-lime)', borderRadius: 4, padding: '2px 7px',
               fontSize: 9, fontWeight: 600, cursor: adding ? 'not-allowed' : 'pointer',
             }}
           >{adding ? '…' : '+ Journal'}</button>
@@ -314,20 +314,20 @@ function AtsPanel({ results }) {
   const prime = results.filter(r => r.ats_signal === 'ATS_PRIME').slice(0, 8);
   const setup = results.filter(r => r.ats_signal === 'ATS_SETUP').slice(0, 6);
   return (
-    <div style={{ background: '#0d1526', border: '1px solid #1e3a5f', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--pump-blue)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
         ATS Signals
       </div>
       {prime.length > 0 && (
         <>
-          <div style={{ fontSize: 9, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, fontWeight: 700 }}>
+          <div style={{ fontSize: 9, color: 'var(--pos)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, fontWeight: 700 }}>
             ★★★ PRIME ({prime.length})
           </div>
           {prime.map(r => (
-            <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5, padding: '3px 0', borderBottom: '1px solid #1a2030' }}>
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#f9fafb', fontSize: 12 }}>{r.symbol}</span>
+            <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5, padding: '3px 0', borderBottom: '1px solid var(--stroke-soft)' }}>
+              <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 700, color: 'var(--ink)', fontSize: 12 }}>{r.symbol}</span>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span style={{ fontSize: 10, color: '#34d399', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.demand_composite_score, 1)}</span>
+                <span style={{ fontSize: 10, color: 'var(--pos)', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.demand_composite_score, 1)}</span>
                 <TierBadge tier={r.demand_composite_tier} small />
               </div>
             </div>
@@ -336,19 +336,19 @@ function AtsPanel({ results }) {
       )}
       {setup.length > 0 && (
         <>
-          <div style={{ fontSize: 9, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, marginTop: 10, fontWeight: 700 }}>
+          <div style={{ fontSize: 9, color: 'var(--pump-blue)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, marginTop: 10, fontWeight: 700 }}>
             ★★ SETUP ({setup.length})
           </div>
           {setup.map(r => (
-            <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5, padding: '3px 0', borderBottom: '1px solid #1a2030' }}>
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#d1d5db', fontSize: 12 }}>{r.symbol}</span>
-              <span style={{ fontSize: 10, color: '#60a5fa', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.demand_composite_score, 1)}</span>
+            <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5, padding: '3px 0', borderBottom: '1px solid var(--stroke-soft)' }}>
+              <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 700, color: 'var(--ink-mute)', fontSize: 12 }}>{r.symbol}</span>
+              <span style={{ fontSize: 10, color: 'var(--pump-blue)', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.demand_composite_score, 1)}</span>
             </div>
           ))}
         </>
       )}
       {prime.length === 0 && setup.length === 0 && (
-        <div style={{ color: '#4b5563', fontSize: 11, textAlign: 'center', paddingTop: 20 }}>No ATS signals in current scan</div>
+        <div style={{ color: 'var(--ink-faint)', fontSize: 11, textAlign: 'center', paddingTop: 20 }}>No ATS signals in current scan</div>
       )}
     </div>
   );
@@ -377,9 +377,9 @@ function SectorHeatmap({ sectors }) {
 
   if (entries.length === 0) {
     return (
-      <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Sectors</div>
-        <div style={{ color: '#4b5563', fontSize: 11, textAlign: 'center', paddingTop: 20 }}>Loading sectors…</div>
+      <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Sectors</div>
+        <div style={{ color: 'var(--ink-faint)', fontSize: 11, textAlign: 'center', paddingTop: 20 }}>Loading sectors…</div>
       </div>
     );
   }
@@ -387,17 +387,17 @@ function SectorHeatmap({ sectors }) {
   const maxAbs = Math.max(...entries.map(e => Math.abs(e.chg)), 1);
 
   return (
-    <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Sector Performance</div>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Sector Performance</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
         {entries.map(({ name, chg }) => {
-          const color = chg > 0.5 ? '#34d399' : chg > 0 ? '#86efac' : chg > -0.5 ? '#fbbf24' : '#f87171';
+          const color = chg > 0.5 ? 'var(--pos)' : chg > 0 ? 'var(--pos)' : chg > -0.5 ? 'var(--warn)' : 'var(--neg)';
           const barW = Math.abs(chg) / maxAbs * 100;
           const abbr = SECTOR_ABBR[name] || name.split(' ')[0];
           return (
             <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 80, fontSize: 10, color: '#9ca3af', textAlign: 'right', flexShrink: 0 }}>{abbr}</div>
-              <div style={{ flex: 1, height: 14, background: '#1f2937', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
+              <div style={{ width: 80, fontSize: 10, color: 'var(--ink-mute)', textAlign: 'right', flexShrink: 0 }}>{abbr}</div>
+              <div style={{ flex: 1, height: 14, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
                 <div style={{
                   position: 'absolute',
                   [chg >= 0 ? 'left' : 'right']: 0,
@@ -433,38 +433,38 @@ function GainersLosers({ livePrices, results, marketOpen }) {
   const list = tab === 'gainers' ? gainers : losers;
 
   return (
-    <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         {['gainers', 'losers'].map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
-            background: tab === t ? (t === 'gainers' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)') : 'none',
-            border: `1px solid ${tab === t ? (t === 'gainers' ? '#34d399' : '#f87171') : '#374151'}40`,
-            color: tab === t ? (t === 'gainers' ? '#34d399' : '#f87171') : '#6b7280',
+            background: tab === t ? (t === 'gainers' ? 'oklch(0.86 0.18 142 / 0.15)' : 'oklch(0.72 0.21 25 / 0.15)') : 'none',
+            border: `1px solid ${tab === t ? (t === 'gainers' ? 'var(--pos)' : 'var(--neg)') : 'var(--stroke)'}`,
+            color: tab === t ? (t === 'gainers' ? 'var(--pos)' : 'var(--neg)') : 'var(--ink-dim)',
             borderRadius: 6, padding: '3px 10px', fontSize: 10, fontWeight: 700,
             cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
           }}>{t === 'gainers' ? '▲ Gainers' : '▼ Losers'}</button>
         ))}
-        {!marketOpen && <span style={{ fontSize: 9, color: '#4b5563', marginLeft: 'auto' }}>Market closed</span>}
-        {marketOpen && list.length === 0 && <span style={{ fontSize: 9, color: '#4b5563', marginLeft: 'auto' }}>Loading prices…</span>}
+        {!marketOpen && <span style={{ fontSize: 9, color: 'var(--ink-faint)', marginLeft: 'auto' }}>Market closed</span>}
+        {marketOpen && list.length === 0 && <span style={{ fontSize: 9, color: 'var(--ink-faint)', marginLeft: 'auto' }}>Loading prices…</span>}
       </div>
       {list.length === 0 && marketOpen && (
-        <div style={{ color: '#4b5563', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>
+        <div style={{ color: 'var(--ink-faint)', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>
           Fetching live prices…
         </div>
       )}
       {!marketOpen && (
-        <div style={{ color: '#4b5563', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>
+        <div style={{ color: 'var(--ink-faint)', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>
           Live data available during market hours (9:30–16:00 ET)
         </div>
       )}
       {list.map(({ symbol, price, chg, tier }) => (
-        <div key={symbol} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, padding: '4px 0', borderBottom: '1px solid #1a2030' }}>
-          <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#f9fafb', fontSize: 12, minWidth: 44 }}>{symbol}</span>
+        <div key={symbol} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, padding: '4px 0', borderBottom: '1px solid var(--stroke-soft)' }}>
+          <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 700, color: 'var(--ink)', fontSize: 12, minWidth: 44 }}>{symbol}</span>
           {tier && <TierBadge tier={tier} small />}
-          <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: chg >= 0 ? '#34d399' : '#f87171', fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: chg >= 0 ? 'var(--pos)' : 'var(--neg)', fontVariantNumeric: 'tabular-nums' }}>
             {chg >= 0 ? '+' : ''}{chg.toFixed(2)}%
           </span>
-          <span style={{ fontSize: 11, color: '#9ca3af', fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ fontSize: 11, color: 'var(--ink-mute)', fontVariantNumeric: 'tabular-nums' }}>
             ${fmt(price, 2)}
           </span>
         </div>
@@ -478,24 +478,24 @@ function GainersLosers({ livePrices, results, marketOpen }) {
 function NewsFeed({ articles, loading }) {
   if (loading) {
     return (
-      <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '14px 16px' }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Market News</div>
-        <div style={{ color: '#4b5563', fontSize: 11 }}>Loading news…</div>
+      <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Market News</div>
+        <div style={{ color: 'var(--ink-faint)', fontSize: 11 }}>Loading news…</div>
       </div>
     );
   }
   if (!articles?.length) {
     return (
-      <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '14px 16px' }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Market News</div>
-        <div style={{ color: '#4b5563', fontSize: 11 }}>No news available for current top picks</div>
+      <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Market News</div>
+        <div style={{ color: 'var(--ink-faint)', fontSize: 11 }}>No news available for current top picks</div>
       </div>
     );
   }
 
   return (
-    <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
         Market News — Top Picks
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
@@ -511,21 +511,21 @@ function NewsFeed({ articles, loading }) {
               rel="noopener noreferrer"
               style={{
                 display: 'block', textDecoration: 'none',
-                background: '#0d1526', border: '1px solid #1e3a5f', borderRadius: 8,
-                padding: '10px 12px', transition: 'border-color 0.15s',
+                background: 'var(--bg-2)', border: '1px solid var(--stroke-soft)', borderRadius: 8,
+                padding: '10px 12px', transition: 'border-color 0.15s, background 0.15s',
               }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = '#3b82f6'}
-              onMouseLeave={e => e.currentTarget.style.borderColor = '#1e3a5f'}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-3)'; e.currentTarget.style.borderColor = 'var(--pump-blue)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg-2)'; e.currentTarget.style.borderColor = 'var(--stroke-soft)'; }}
             >
-              <div style={{ fontSize: 11, fontWeight: 600, color: '#e2e8f0', lineHeight: 1.4, marginBottom: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink)', lineHeight: 1.4, marginBottom: 6 }}>
                 {a.title}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 {tickers.map(t => (
-                  <span key={t} style={{ fontSize: 9, fontFamily: 'monospace', color: '#60a5fa', fontWeight: 700 }}>{t}</span>
+                  <span key={t} style={{ fontSize: 9, fontFamily: 'var(--f-mono)', color: 'var(--pump-blue)', fontWeight: 700 }}>{t}</span>
                 ))}
-                {src && <span style={{ fontSize: 9, color: '#4b5563', marginLeft: 'auto' }}>{src}</span>}
-                {age && <span style={{ fontSize: 9, color: '#374151' }}>{age}</span>}
+                {src && <span style={{ fontSize: 9, color: 'var(--ink-faint)', marginLeft: 'auto' }}>{src}</span>}
+                {age && <span style={{ fontSize: 9, color: 'var(--ink-faint)' }}>{age}</span>}
               </div>
             </a>
           );
@@ -542,27 +542,27 @@ function HypeStrip({ hypeStatus, hypeResults }) {
   if (!hot.length && !hypeStatus) return null;
   return (
     <div style={{
-      background: '#0f0820', border: '1px solid rgba(167,139,250,0.25)',
+      background: 'var(--bg-1)', border: '1px solid var(--pump-blue-soft)',
       borderRadius: 10, padding: '10px 16px',
       display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
     }}>
-      <span style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0 }}>
+      <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--pump-blue)', textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0 }}>
         Hype Monitor
       </span>
       {hot.map(t => (
         <span key={t} style={{
-          fontFamily: 'monospace', fontWeight: 700, fontSize: 11, color: '#c4b5fd',
-          background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)',
+          fontFamily: 'var(--f-mono)', fontWeight: 700, fontSize: 11, color: 'var(--pump-blue)',
+          background: 'var(--pump-blue-soft)', border: '1px solid oklch(0.74 0.12 268 / 0.35)',
           borderRadius: 4, padding: '1px 6px',
         }}>{t}</span>
       ))}
       {hypeStatus?.total_divergences > 0 && (
-        <span style={{ fontSize: 10, color: '#6b7280', marginLeft: 4 }}>
+        <span style={{ fontSize: 10, color: 'var(--ink-dim)', marginLeft: 4 }}>
           {hypeStatus.total_divergences} signals · {hypeStatus.tickers_monitored} monitored
         </span>
       )}
       {hypeStatus?.last_run_at && (
-        <span style={{ fontSize: 9, color: '#374151', marginLeft: 'auto' }}>
+        <span style={{ fontSize: 9, color: 'var(--ink-faint)', marginLeft: 'auto' }}>
           {fmtAge(hypeStatus.last_run_at)}
         </span>
       )}
@@ -580,29 +580,29 @@ function MarketContextBar({ marketTimer, regime, livePrices, marketOpen }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', flexWrap: 'wrap',
-      background: '#060d1a', borderBottom: '1px solid #1f2937', fontSize: 11,
+      background: 'var(--bg-1)', borderBottom: '1px solid var(--stroke-soft)', fontSize: 11,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 16px', borderRight: '1px solid #1f2937' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 16px', borderRight: '1px solid var(--stroke-soft)' }}>
         <span style={{
           width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
-          background: marketOpen ? '#34d399' : '#6b7280',
-          boxShadow: marketOpen ? '0 0 6px #34d399' : 'none',
+          background: marketOpen ? 'var(--pos)' : 'var(--ink-dim)',
+          boxShadow: marketOpen ? '0 0 6px var(--pos)' : 'none',
         }} />
-        <span style={{ color: marketOpen ? '#34d399' : '#9ca3af', fontWeight: 700, letterSpacing: '0.05em' }}>
+        <span style={{ color: marketOpen ? 'var(--pos)' : 'var(--ink-mute)', fontWeight: 700, letterSpacing: '0.05em' }}>
           {marketOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}
         </span>
-        <span style={{ color: '#4b5563', fontVariantNumeric: 'tabular-nums' }}>{marketTimer.label}</span>
+        <span style={{ color: 'var(--ink-faint)', fontVariantNumeric: 'tabular-nums' }}>{marketTimer.label}</span>
       </div>
       {regimeState && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRight: '1px solid #1f2937' }}>
-          <span style={{ color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', fontSize: 10 }}>Regime</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRight: '1px solid var(--stroke-soft)' }}>
+          <span style={{ color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.07em', fontSize: 10 }}>Regime</span>
           <span style={{ color: regimeColor, fontWeight: 700 }}>{regimeState.replace(/_/g, ' ')}</span>
         </div>
       )}
       {marketOpen && liveCount > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 14px' }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34d399', display: 'inline-block', animation: 'pulse 1.5s infinite' }} />
-          <span style={{ color: '#34d399', fontSize: 10 }}>Live · {liveCount} tickers · 30s</span>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--pos)', display: 'inline-block', animation: 'pulse 1.5s infinite' }} />
+          <span style={{ color: 'var(--pos)', fontSize: 10 }}>Live · {liveCount} tickers · 30s</span>
         </div>
       )}
     </div>
@@ -630,7 +630,7 @@ function ScoreHistory({ symbol }) {
   return (
     <div style={{ marginTop: 6 }}>
       <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
-        <path d={pathD} fill="none" stroke="#374151" strokeWidth={1.5} />
+        <path d={pathD} fill="none" stroke="var(--stroke)" strokeWidth={1.5} />
         {pts.map(([x, y, h], i) => (
           <circle key={i} cx={x} cy={y} r={3}
             fill={TIER_COLORS_MINI[h.demand_composite_tier] || '#374151'}
@@ -644,22 +644,22 @@ function ScoreHistory({ symbol }) {
 
 function ScoreBreakdown({ bd = {} }) {
   const items = [
-    { key: 'regime', label: 'Regime', color: '#a78bfa' },
-    { key: 'base_pump', label: 'NP', color: '#60a5fa' },
-    { key: 'demand_bars', label: 'Demand', color: '#34d399' },
-    { key: 'ats', label: 'ATS', color: '#fbbf24' },
-    { key: 'context', label: 'Context', color: '#f472b6' },
-    { key: 'flow', label: 'Flow', color: '#22d3ee' },
-    { key: 'expansion_penalty', label: 'ExpPen', color: '#f87171' },
+    { key: 'regime', label: 'Regime', color: 'var(--pump-blue)' },
+    { key: 'base_pump', label: 'NP', color: 'var(--pump-blue)' },
+    { key: 'demand_bars', label: 'Demand', color: 'var(--pos)' },
+    { key: 'ats', label: 'ATS', color: 'var(--warn)' },
+    { key: 'context', label: 'Context', color: 'var(--pump-lime)' },
+    { key: 'flow', label: 'Flow', color: 'var(--pump-blue)' },
+    { key: 'expansion_penalty', label: 'ExpPen', color: 'var(--neg)' },
   ];
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
       {items.filter(i => bd[i.key] != null && bd[i.key] !== 0).map(i => (
         <div key={i.key} style={{ textAlign: 'center', minWidth: 32 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: bd[i.key] < 0 ? '#f87171' : i.color }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: bd[i.key] < 0 ? 'var(--neg)' : i.color }}>
             {bd[i.key] > 0 ? '+' : ''}{fmt(bd[i.key], 1)}
           </div>
-          <div style={{ fontSize: 8, color: '#6b7280', textTransform: 'uppercase' }}>{i.label}</div>
+          <div style={{ fontSize: 8, color: 'var(--ink-dim)', textTransform: 'uppercase' }}>{i.label}</div>
         </div>
       ))}
     </div>
@@ -669,41 +669,41 @@ function ScoreBreakdown({ bd = {} }) {
 function ReadinessBreakdown({ bd = {}, breakoutSignal, freshness, rsPct, floatTier, catalyst, confluenceSignals = [] }) {
   const bm = BREAKOUT_META[breakoutSignal] || BREAKOUT_META.COILING;
   const items = [
-    { key: 'catalyst', label: 'Cat', color: '#a78bfa' },
-    { key: 'breakout', label: 'BO', color: '#34d399' },
-    { key: 'float', label: 'Float', color: '#60a5fa' },
-    { key: 'freshness', label: 'Fresh', color: '#fbbf24' },
-    { key: 'rs', label: 'RS', color: '#f472b6' },
-    { key: 'confluence', label: 'Conf', color: '#4ade80' },
+    { key: 'catalyst', label: 'Cat', color: 'var(--pump-blue)' },
+    { key: 'breakout', label: 'BO', color: 'var(--pos)' },
+    { key: 'float', label: 'Float', color: 'var(--pump-blue)' },
+    { key: 'freshness', label: 'Fresh', color: 'var(--warn)' },
+    { key: 'rs', label: 'RS', color: 'var(--pump-lime)' },
+    { key: 'confluence', label: 'Conf', color: 'var(--pos)' },
   ];
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
         {items.map(i => (
           <div key={i.key} style={{ textAlign: 'center', minWidth: 36 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: (bd[i.key] ?? 0) < 0 ? '#f87171' : i.color }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: (bd[i.key] ?? 0) < 0 ? 'var(--neg)' : i.color }}>
               {(bd[i.key] ?? 0) > 0 ? '+' : ''}{bd[i.key] ?? 0}
             </div>
-            <div style={{ fontSize: 8, color: '#6b7280', textTransform: 'uppercase' }}>{i.label}</div>
+            <div style={{ fontSize: 8, color: 'var(--ink-dim)', textTransform: 'uppercase' }}>{i.label}</div>
           </div>
         ))}
       </div>
       {confluenceSignals.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
           {confluenceSignals.map(sig => {
-            const m = CONFLUENCE_META[sig] || { label: sig, color: '#9ca3af' };
+            const m = CONFLUENCE_META[sig] || { label: sig, color: 'var(--ink-mute)' };
             return (
-              <span key={sig} style={{ background: 'rgba(74,222,128,0.1)', border: `1px solid ${m.color}`, color: m.color, borderRadius: 4, padding: '1px 5px', fontSize: 9, fontWeight: 700 }}>{m.label}</span>
+              <span key={sig} style={{ background: 'oklch(0.86 0.18 142 / 0.10)', border: `1px solid ${m.color}`, color: m.color, borderRadius: 4, padding: '1px 5px', fontSize: 9, fontWeight: 700 }}>{m.label}</span>
             );
           })}
         </div>
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 10 }}>
         <span style={{ color: bm.color, fontWeight: 600 }}>{bm.label}</span>
-        {freshness && <span style={{ color: FRESHNESS_COLORS[freshness] || '#9ca3af' }}>{freshness}</span>}
-        {rsPct != null && <span style={{ color: rsPct > 0 ? '#34d399' : '#f87171' }}>RS {rsPct > 0 ? '+' : ''}{rsPct}%</span>}
-        {floatTier && floatTier !== 'UNKNOWN' && <span style={{ color: '#9ca3af' }}>Float: {floatTier.replace('_PROXY', '~')}</span>}
-        {catalyst && <span style={{ color: '#a78bfa' }}>Catalyst ✓</span>}
+        {freshness && <span style={{ color: FRESHNESS_COLORS[freshness] || 'var(--ink-mute)' }}>{freshness}</span>}
+        {rsPct != null && <span style={{ color: rsPct > 0 ? 'var(--pos)' : 'var(--neg)' }}>RS {rsPct > 0 ? '+' : ''}{rsPct}%</span>}
+        {floatTier && floatTier !== 'UNKNOWN' && <span style={{ color: 'var(--ink-mute)' }}>Float: {floatTier.replace('_PROXY', '~')}</span>}
+        {catalyst && <span style={{ color: 'var(--pump-blue)' }}>Catalyst ✓</span>}
       </div>
     </div>
   );
@@ -715,16 +715,16 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
   return (
     <div style={{
       position: 'fixed', right: 0, top: 0, bottom: 0, width: 420,
-      background: '#111827', borderLeft: '1px solid #1f2937',
+      background: 'var(--bg-1)', borderLeft: '1px solid var(--stroke-soft)',
       zIndex: 1000, overflowY: 'auto', padding: 20,
       boxShadow: '-8px 0 32px rgba(0,0,0,0.5)',
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: '#f9fafb' }}>{row.symbol}</div>
-          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>${fmt(row.price, 2)} · {row.sector || '—'}</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--ink)' }}>{row.symbol}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-mute)', marginTop: 2 }}>${fmt(row.price, 2)} · {row.sector || '—'}</div>
         </div>
-        <button onClick={onClose} style={{ background: 'none', border: '1px solid #374151', color: '#9ca3af', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Close</button>
+        <button onClick={onClose} style={{ background: 'none', border: '1px solid var(--stroke)', color: 'var(--ink-mute)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Close</button>
       </div>
 
       <div style={{ background: tier.bg, border: `1px solid ${tier.color}40`, borderRadius: 8, padding: '12px 16px', marginBottom: 14 }}>
@@ -735,8 +735,8 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
         <ScoreBreakdown bd={row.demand_score_breakdown || {}} />
       </div>
 
-      <div style={{ background: '#1f2937', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Score History</div>
+      <div style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-mute)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Score History</div>
         <ScoreHistory symbol={row.symbol} />
       </div>
 
@@ -751,32 +751,32 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
       )}
 
       {((row.flow_signals?.length > 0) || (row.flow_risks?.length > 0)) && (
-        <div style={{ background: '#1f2937', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Flow Divergence</div>
+        <div style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-mute)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Flow Divergence</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            {(row.flow_signals || []).map(sig => { const m = FLOW_SIGNAL_META[sig] || { label: sig, color: '#22d3ee' }; return <span key={sig} title={m.title} style={{ background: 'rgba(34,211,238,0.1)', border: `1px solid ${m.color}`, color: m.color, borderRadius: 4, padding: '1px 5px', fontSize: 9, fontWeight: 700 }}>{m.label}</span>; })}
-            {(row.flow_risks || []).map(r => { const m = FLOW_RISK_META[r] || { label: r, color: '#f87171' }; return <span key={r} title={m.title} style={{ background: 'rgba(239,68,68,0.08)', border: `1px solid ${m.color}40`, color: m.color, borderRadius: 4, padding: '1px 5px', fontSize: 9, fontWeight: 700 }}>{m.label}</span>; })}
+            {(row.flow_signals || []).map(sig => { const m = FLOW_SIGNAL_META[sig] || { label: sig, color: 'var(--pump-blue)' }; return <span key={sig} title={m.title} style={{ background: 'var(--pump-blue-soft)', border: `1px solid ${m.color}`, color: m.color, borderRadius: 4, padding: '1px 5px', fontSize: 9, fontWeight: 700 }}>{m.label}</span>; })}
+            {(row.flow_risks || []).map(r => { const m = FLOW_RISK_META[r] || { label: r, color: 'var(--neg)' }; return <span key={r} title={m.title} style={{ background: 'oklch(0.72 0.21 25 / 0.08)', border: `1px solid ${m.color}`, color: m.color, borderRadius: 4, padding: '1px 5px', fontSize: 9, fontWeight: 700 }}>{m.label}</span>; })}
           </div>
         </div>
       )}
 
-      <div style={{ background: '#1f2937', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>ATS Signal</div>
+      <div style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-mute)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>ATS Signal</div>
         <AtsBadge signal={row.ats_signal} />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 }}>
-          {(row.ats_conditions_met || []).map(c => <span key={c} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'rgba(52,211,153,0.12)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}>{ATS_COND_PRETTY[c] || c}</span>)}
-          {(row.ats_conditions_missing || []).map(c => <span key={c} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'rgba(239,68,68,0.08)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>{ATS_COND_PRETTY[c] || c}</span>)}
+          {(row.ats_conditions_met || []).map(c => <span key={c} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'oklch(0.86 0.18 142 / 0.12)', color: 'var(--pos)', border: '1px solid oklch(0.86 0.18 142 / 0.25)' }}>{ATS_COND_PRETTY[c] || c}</span>)}
+          {(row.ats_conditions_missing || []).map(c => <span key={c} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'oklch(0.72 0.21 25 / 0.08)', color: 'var(--neg)', border: '1px solid oklch(0.72 0.21 25 / 0.2)' }}>{ATS_COND_PRETTY[c] || c}</span>)}
         </div>
       </div>
 
-      <div style={{ background: '#1f2937', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Active Signals</div>
+      <div style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-mute)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Active Signals</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-          {(row.demand_buy_reasons || []).slice(0, 8).map(r => <span key={r} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'rgba(96,165,250,0.1)', color: '#93c5fd', border: '1px solid rgba(96,165,250,0.2)' }}>{REASONS_PRETTY[r] || r}</span>)}
+          {(row.demand_buy_reasons || []).slice(0, 8).map(r => <span key={r} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'var(--pump-blue-soft)', color: 'var(--pump-blue)', border: '1px solid oklch(0.74 0.12 268 / 0.25)' }}>{REASONS_PRETTY[r] || r}</span>)}
         </div>
         {(row.demand_risk_flags || []).length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 }}>
-            {row.demand_risk_flags.map(f => <span key={f} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'rgba(239,68,68,0.08)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)' }}>{f}</span>)}
+            {row.demand_risk_flags.map(f => <span key={f} style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: 'oklch(0.72 0.21 25 / 0.08)', color: 'var(--neg)', border: '1px solid oklch(0.72 0.21 25 / 0.2)' }}>{f}</span>)}
           </div>
         )}
       </div>
@@ -787,30 +787,30 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
         ['Vol ratio', row.dc_vol_ratio != null ? `${row.dc_vol_ratio}×` : '—'], ['5d range', row.dc_range_pct_5d != null ? `${row.dc_range_pct_5d}%` : '—'],
         ['10d max gain', row.dc_max_gain_10d != null ? `${row.dc_max_gain_10d}%` : '—'],
       ].length > 0 && (
-        <div style={{ background: '#1f2937', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Candle Metrics</div>
+        <div style={{ background: 'var(--bg-2)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-mute)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Candle Metrics</div>
           {[
             ['Dryup streak', `${row.dc_dryup_streak ?? '—'}d`], ['ATR contract', row.dc_atr_contracting ? '✓' : '—'],
             ['Near EMA50', row.dc_near_ema50 ? '✓' : '—'], ['EMA50 dist', row.dc_ema_dist_pct != null ? `${row.dc_ema_dist_pct}%` : '—'],
             ['Vol ratio', row.dc_vol_ratio != null ? `${row.dc_vol_ratio}×` : '—'], ['10d max gain', row.dc_max_gain_10d != null ? `${row.dc_max_gain_10d}%` : '—'],
           ].map(([label, val]) => (
             <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-              <span style={{ fontSize: 11, color: '#9ca3af' }}>{label}</span>
-              <span style={{ fontSize: 11, color: '#f9fafb', fontVariantNumeric: 'tabular-nums' }}>{val}</span>
+              <span style={{ fontSize: 11, color: 'var(--ink-mute)' }}>{label}</span>
+              <span style={{ fontSize: 11, color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>{val}</span>
             </div>
           ))}
         </div>
       )}
 
-      <div style={{ background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 8, padding: '10px 12px' }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: '#60a5fa', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>AI Setup Analysis</div>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--pump-blue-soft)', borderRadius: 8, padding: '10px 12px' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--pump-blue)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>AI Setup Analysis</div>
         {!narrative && !narrativeLoading && (
-          <button onClick={() => onFetchNarrative(row)} style={{ background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 6, padding: '7px 14px', fontSize: 11, fontWeight: 600, cursor: 'pointer', width: '100%' }}>
+          <button onClick={() => onFetchNarrative(row)} style={{ background: 'var(--pump-lime)', color: 'var(--on-lime)', border: 'none', borderRadius: 6, padding: '7px 14px', fontSize: 11, fontWeight: 600, cursor: 'pointer', width: '100%' }}>
             Generate AI Analysis
           </button>
         )}
-        {narrativeLoading && <div style={{ color: '#9ca3af', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>Generating…</div>}
-        {narrative && <p style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.7, margin: 0 }}>{narrative}</p>}
+        {narrativeLoading && <div style={{ color: 'var(--ink-mute)', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>Generating…</div>}
+        {narrative && <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.7, margin: 0 }}>{narrative}</p>}
       </div>
     </div>
   );
@@ -837,74 +837,74 @@ function ScannerTable({ results, livePrices, journaledSet, addingJournal, addedJ
   const Th = ({ col, label }) => (
     <th onClick={() => toggleSort(col)} style={{
       padding: '7px 8px', textAlign: 'left', fontSize: 9, fontWeight: 700,
-      textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280',
+      textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--ink-dim)',
       cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
-      borderBottom: '1px solid #1f2937',
+      borderBottom: '1px solid var(--stroke-soft)',
     }}>
       {label}{sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
     </th>
   );
 
-  const selStyle = { background: '#1f2937', color: '#f9fafb', border: '1px solid #374151', borderRadius: 5, padding: '4px 8px', fontSize: 11 };
+  const selStyle = { background: 'var(--bg-2)', color: 'var(--ink)', border: '1px solid var(--stroke)', borderRadius: 5, padding: '4px 8px', fontSize: 11 };
 
   return (
     <div>
       {/* Controls */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: '10px 0 14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <label style={{ fontSize: 11, color: '#9ca3af' }}>Tier</label>
+          <label style={{ fontSize: 11, color: 'var(--ink-mute)' }}>Tier</label>
           <select value={tierF} onChange={e => setTierF(e.target.value)} style={selStyle}>
             <option value="">All</option>
             {Object.entries(TIER_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <label style={{ fontSize: 11, color: '#9ca3af' }}>ATS</label>
+          <label style={{ fontSize: 11, color: 'var(--ink-mute)' }}>ATS</label>
           <select value={atsF} onChange={e => setAtsF(e.target.value)} style={selStyle}>
             <option value="">All</option>
             {Object.entries(ATS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <label style={{ fontSize: 11, color: '#9ca3af' }}>Ready</label>
+          <label style={{ fontSize: 11, color: 'var(--ink-mute)' }}>Ready</label>
           <select value={readyF} onChange={e => setReadyF(e.target.value)} style={selStyle}>
             <option value="">All</option>
             {Object.entries(READINESS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <label style={{ fontSize: 11, color: '#9ca3af' }}>Min</label>
+          <label style={{ fontSize: 11, color: 'var(--ink-mute)' }}>Min</label>
           <input type="number" min={0} max={20} step={0.5} value={minScore} onChange={e => setMinScore(Number(e.target.value))}
             style={{ width: 50, ...selStyle }} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <label style={{ fontSize: 11, color: '#9ca3af' }}>Limit</label>
+          <label style={{ fontSize: 11, color: 'var(--ink-mute)' }}>Limit</label>
           <select value={limit} onChange={e => setLimit(Number(e.target.value))} style={selStyle}>
             {[50, 100, 200, 500].map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
-        <button onClick={onRefresh} style={{ background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Refresh</button>
+        <button onClick={onRefresh} style={{ background: 'var(--pump-lime)', color: 'var(--on-lime)', border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Refresh</button>
         <button onClick={triggerScan} disabled={scanning} style={{
-          background: scanning ? '#374151' : '#065f46', color: scanning ? '#9ca3af' : '#34d399',
-          border: `1px solid ${scanning ? '#4b5563' : '#34d399'}`, borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer',
+          background: scanning ? 'var(--bg-3)' : 'oklch(0.86 0.18 142 / 0.15)', color: scanning ? 'var(--ink-dim)' : 'var(--pos)',
+          border: `1px solid ${scanning ? 'var(--stroke)' : 'var(--pos)'}`, borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: scanning ? 'not-allowed' : 'pointer',
         }}>{scanning ? 'Scanning…' : 'Scan Today'}</button>
-        <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 'auto' }}>{sorted.length} results</span>
+        <span style={{ fontSize: 11, color: 'var(--ink-dim)', marginLeft: 'auto' }}>{sorted.length} results</span>
       </div>
 
       {scanning && scanProgress && (
-        <div style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 8, padding: '8px 14px', marginBottom: 8, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: '#93c5fd' }}>
-          <span style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#60a5fa' }}>{scanProgress.phase?.replace(/_/g, ' ')}</span>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--pump-blue-soft)', borderRadius: 8, padding: '8px 14px', marginBottom: 8, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--pump-blue)' }}>
+          <span style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--pump-blue)' }}>{scanProgress.phase?.replace(/_/g, ' ')}</span>
           {scanProgress.universe_size > 0 && <span>Universe: {scanProgress.universe_size.toLocaleString()}</span>}
           {scanProgress.analyzed_count > 0 && <span>Analyzed: {scanProgress.analyzed_count}</span>}
-          {scanProgress.elapsed_secs > 0 && <span style={{ color: '#6b7280' }}>{scanProgress.elapsed_secs}s</span>}
+          {scanProgress.elapsed_secs > 0 && <span style={{ color: 'var(--ink-dim)' }}>{scanProgress.elapsed_secs}s</span>}
         </div>
       )}
-      {scanError && <div style={{ padding: '6px 0', color: '#f87171', fontSize: 11 }}>{scanError}</div>}
+      {scanError && <div style={{ padding: '6px 0', color: 'var(--neg)', fontSize: 11 }}>{scanError}</div>}
 
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
-            <tr style={{ background: '#0f1729' }}>
+            <tr style={{ background: 'var(--bg-2)' }}>
               <Th col="symbol" label="Symbol" />
               <Th col="demand_composite_tier" label="Tier" />
               <Th col="demand_composite_score" label="Score" />
@@ -912,63 +912,63 @@ function ScannerTable({ results, livePrices, journaledSet, addingJournal, addedJ
               <Th col="readiness_score" label="Ready" />
               <Th col="price" label="Price" />
               <Th col="volume_today" label="Volume" />
-              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280', borderBottom: '1px solid #1f2937' }}>Demand Flags</th>
-              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280', borderBottom: '1px solid #1f2937' }}>Context</th>
-              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280', borderBottom: '1px solid #1f2937' }}>Sector</th>
-              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280', borderBottom: '1px solid #1f2937' }}>Journal</th>
+              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--ink-dim)', borderBottom: '1px solid var(--stroke-soft)' }}>Demand Flags</th>
+              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--ink-dim)', borderBottom: '1px solid var(--stroke-soft)' }}>Context</th>
+              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--ink-dim)', borderBottom: '1px solid var(--stroke-soft)' }}>Sector</th>
+              <th style={{ padding: '7px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--ink-dim)', borderBottom: '1px solid var(--stroke-soft)' }}>Journal</th>
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 && (
-              <tr><td colSpan={11} style={{ padding: '20px', color: '#6b7280', fontSize: 13, textAlign: 'center' }}>No results — run a scan or adjust filters</td></tr>
+              <tr><td colSpan={11} style={{ padding: '20px', color: 'var(--ink-dim)', fontSize: 13, textAlign: 'center' }}>No results — run a scan or adjust filters</td></tr>
             )}
             {sorted.map(r => {
               const lp = livePrices[r.symbol];
               const price = lp?.price ?? r.price;
               const chg = lp?.change_pct;
               return (
-                <tr key={r.symbol} onClick={() => onRowClick(r)} style={{ cursor: 'pointer', borderBottom: '1px solid #1a2030' }}
-                  onMouseEnter={e => e.currentTarget.style.background = '#1a2433'}
+                <tr key={r.symbol} onClick={() => onRowClick(r)} style={{ cursor: 'pointer', borderBottom: '1px solid var(--stroke-soft)' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-2)'}
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 >
-                  <td style={{ padding: '7px 10px', fontWeight: 700, color: '#f9fafb', fontSize: 13, fontFamily: 'monospace' }}>{r.symbol}</td>
+                  <td style={{ padding: '7px 10px', fontWeight: 700, color: 'var(--ink)', fontSize: 13, fontFamily: 'var(--f-mono)' }}>{r.symbol}</td>
                   <td style={{ padding: '7px 8px' }}><TierBadge tier={r.demand_composite_tier} /></td>
                   <td style={{ padding: '7px 8px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <div style={{ width: 50, height: 4, background: '#1f2937', borderRadius: 2, overflow: 'hidden' }}>
-                        <div style={{ width: `${Math.min(100, (r.demand_composite_score / 20) * 100)}%`, height: '100%', background: r.demand_composite_score >= 13 ? '#34d399' : r.demand_composite_score >= 9 ? '#60a5fa' : '#fbbf24', borderRadius: 2 }} />
+                      <div style={{ width: 50, height: 4, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(100, (r.demand_composite_score / 20) * 100)}%`, height: '100%', background: r.demand_composite_score >= 13 ? 'var(--pos)' : r.demand_composite_score >= 9 ? 'var(--pump-blue)' : 'var(--warn)', borderRadius: 2 }} />
                       </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: r.demand_composite_score >= 13 ? '#34d399' : r.demand_composite_score >= 9 ? '#60a5fa' : '#fbbf24', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.demand_composite_score, 1)}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: r.demand_composite_score >= 13 ? 'var(--pos)' : r.demand_composite_score >= 9 ? 'var(--pump-blue)' : 'var(--warn)', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.demand_composite_score, 1)}</span>
                     </div>
                   </td>
                   <td style={{ padding: '7px 8px' }}><AtsBadge signal={r.ats_signal} /></td>
                   <td style={{ padding: '7px 8px' }}>
-                    {r.readiness_tier ? <ReadinessBadge tier={r.readiness_tier} score={r.readiness_score} /> : <span style={{ color: '#374151', fontSize: 10 }}>—</span>}
+                    {r.readiness_tier ? <ReadinessBadge tier={r.readiness_tier} score={r.readiness_score} /> : <span style={{ color: 'var(--stroke)', fontSize: 10 }}>—</span>}
                   </td>
                   <td style={{ padding: '7px 8px', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
-                    <span style={{ color: '#e5e7eb' }}>${fmt(price, 2)}</span>
-                    {chg != null && <span style={{ marginLeft: 4, fontSize: 10, color: chg >= 0 ? '#34d399' : '#f87171' }}>{chg >= 0 ? '+' : ''}{chg.toFixed(1)}%</span>}
+                    <span style={{ color: 'var(--ink)' }}>${fmt(price, 2)}</span>
+                    {chg != null && <span style={{ marginLeft: 4, fontSize: 10, color: chg >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{chg >= 0 ? '+' : ''}{chg.toFixed(1)}%</span>}
                   </td>
-                  <td style={{ padding: '7px 8px', fontSize: 11, color: '#9ca3af', fontVariantNumeric: 'tabular-nums' }}>{fmtK(r.volume_today)}</td>
+                  <td style={{ padding: '7px 8px', fontSize: 11, color: 'var(--ink-mute)', fontVariantNumeric: 'tabular-nums' }}>{fmtK(r.volume_today)}</td>
                   <td style={{ padding: '7px 8px', fontSize: 11 }}>
-                    <span style={{ color: r.has_l34_np_ld ? '#34d399' : '#374151', fontWeight: 700 }}>{r.has_l34_np_ld ? 'L34NP' : '—'}</span>
-                    {' '}<span style={{ color: r.has_wc_gap_ld ? '#34d399' : '#374151', fontWeight: 700 }}>{r.has_wc_gap_ld ? 'WcGap' : ''}</span>
-                    {' '}<span style={{ color: r.l34_wlnbb ? '#60a5fa' : '#374151' }}>{r.l34_wlnbb ? 'L34' : ''}</span>
-                    {' '}<span style={{ color: (r.d4_beup || r.d6_beup) ? '#a78bfa' : '#374151', fontWeight: 700 }}>{r.d6_beup ? 'D6' : r.d4_beup ? 'D4' : ''}</span>
+                    <span style={{ color: r.has_l34_np_ld ? 'var(--pos)' : 'var(--stroke)', fontWeight: 700 }}>{r.has_l34_np_ld ? 'L34NP' : '—'}</span>
+                    {' '}<span style={{ color: r.has_wc_gap_ld ? 'var(--pos)' : 'var(--stroke)', fontWeight: 700 }}>{r.has_wc_gap_ld ? 'WcGap' : ''}</span>
+                    {' '}<span style={{ color: r.l34_wlnbb ? 'var(--pump-blue)' : 'var(--stroke)' }}>{r.l34_wlnbb ? 'L34' : ''}</span>
+                    {' '}<span style={{ color: (r.d4_beup || r.d6_beup) ? 'var(--pump-blue)' : 'var(--stroke)', fontWeight: 700 }}>{r.d6_beup ? 'D6' : r.d4_beup ? 'D4' : ''}</span>
                   </td>
-                  <td style={{ padding: '7px 8px', fontSize: 10, color: '#6b7280' }}>
-                    {r.dc_dryup_streak > 0 && <span style={{ color: r.dc_dryup_streak >= 3 ? '#fbbf24' : '#6b7280', marginRight: 4 }}>Dry×{r.dc_dryup_streak}</span>}
-                    {r.dc_near_ema50 && <span style={{ color: '#60a5fa', marginRight: 4 }}>EMA</span>}
-                    {r.dc_atr_contracting && <span style={{ color: '#a78bfa' }}>ATR↘</span>}
+                  <td style={{ padding: '7px 8px', fontSize: 10, color: 'var(--ink-dim)' }}>
+                    {r.dc_dryup_streak > 0 && <span style={{ color: r.dc_dryup_streak >= 3 ? 'var(--warn)' : 'var(--ink-dim)', marginRight: 4 }}>Dry×{r.dc_dryup_streak}</span>}
+                    {r.dc_near_ema50 && <span style={{ color: 'var(--pump-blue)', marginRight: 4 }}>EMA</span>}
+                    {r.dc_atr_contracting && <span style={{ color: 'var(--pump-blue)' }}>ATR↘</span>}
                   </td>
-                  <td style={{ padding: '7px 8px', fontSize: 10, color: '#6b7280' }}>{r.sector || '—'}</td>
+                  <td style={{ padding: '7px 8px', fontSize: 10, color: 'var(--ink-dim)' }}>{r.sector || '—'}</td>
                   <td style={{ padding: '7px 8px' }} onClick={e => e.stopPropagation()}>
                     {(journaledSet.has(r.symbol) || addedJournal.has(r.symbol)) ? (
-                      <span style={{ fontSize: 9, color: '#34d399', fontWeight: 700 }}>✓</span>
+                      <span style={{ fontSize: 9, color: 'var(--pos)', fontWeight: 700 }}>✓</span>
                     ) : (
                       <button onClick={() => onAddToJournal(r)} disabled={addingJournal === r.symbol} style={{
-                        background: 'rgba(29,78,216,0.2)', border: '1px solid #3b82f680',
-                        color: '#93c5fd', borderRadius: 4, padding: '1px 6px', fontSize: 9, fontWeight: 600,
+                        background: 'var(--pump-lime)', border: 'none',
+                        color: 'var(--on-lime)', borderRadius: 4, padding: '1px 6px', fontSize: 9, fontWeight: 600,
                         cursor: addingJournal === r.symbol ? 'not-allowed' : 'pointer',
                       }}>{addingJournal === r.symbol ? '…' : '+J'}</button>
                     )}
@@ -1193,38 +1193,38 @@ export default function DashboardPage() {
       <AppNav />
       <MarketContextBar marketTimer={marketTimer} regime={regime} livePrices={livePrices} marketOpen={marketTimer.open} />
 
-      <div style={{ background: '#060d1a', minHeight: '100vh', padding: '16px 20px 80px' }}>
+      <div style={{ background: 'var(--bg-0)', minHeight: '100vh', padding: '16px 20px 80px' }}>
 
         {/* ── Overview stats ─────────────────────────────────────────────────── */}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
           {[
-            { label: 'PRIME BUY',  val: data?.demand_prime_count ?? tc.PRIME_BUY ?? 0,     color: '#34d399' },
-            { label: 'HIGH CONF',  val: data?.demand_high_count  ?? tc.HIGH_CONF_BUY ?? 0, color: '#60a5fa' },
-            { label: 'BUY WATCH',  val: data?.demand_watch_count ?? tc.BUY_WATCH ?? 0,     color: '#fbbf24' },
-            { label: 'ATS PRIME',  val: data?.ats_prime_count    ?? ac.ATS_PRIME ?? 0,      color: '#34d399' },
-            { label: 'ATS SETUP',  val: ac.ATS_SETUP ?? 0,                                  color: '#60a5fa' },
-            { label: 'UNIVERSE',   val: (data?.universe || 0).toLocaleString(),              color: '#9ca3af' },
+            { label: 'PRIME BUY',  val: data?.demand_prime_count ?? tc.PRIME_BUY ?? 0,     color: 'var(--pos)' },
+            { label: 'HIGH CONF',  val: data?.demand_high_count  ?? tc.HIGH_CONF_BUY ?? 0, color: 'var(--pump-blue)' },
+            { label: 'BUY WATCH',  val: data?.demand_watch_count ?? tc.BUY_WATCH ?? 0,     color: 'var(--warn)' },
+            { label: 'ATS PRIME',  val: data?.ats_prime_count    ?? ac.ATS_PRIME ?? 0,      color: 'var(--pos)' },
+            { label: 'ATS SETUP',  val: ac.ATS_SETUP ?? 0,                                  color: 'var(--pump-blue)' },
+            { label: 'UNIVERSE',   val: (data?.universe || 0).toLocaleString(),              color: 'var(--ink-mute)' },
           ].map(({ label, val, color }) => (
-            <div key={label} style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '12px 18px', textAlign: 'center', minWidth: 90 }}>
+            <div key={label} style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '12px 18px', textAlign: 'center', minWidth: 90 }}>
               <div style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1 }}>{loading ? '…' : val}</div>
-              <div style={{ fontSize: 9, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', marginTop: 4 }}>{label}</div>
+              <div style={{ fontSize: 9, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.07em', marginTop: 4 }}>{label}</div>
             </div>
           ))}
           {data?.scanned_at && (
-            <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '12px 18px', textAlign: 'center', minWidth: 120, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af' }}>{new Date(data.scanned_at).toLocaleDateString()}</div>
-              <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>{new Date(data.scanned_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {data.elapsed_secs}s</div>
-              <div style={{ fontSize: 9, color: '#4b5563', marginTop: 2 }}>Last scan</div>
+            <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '12px 18px', textAlign: 'center', minWidth: 120, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-mute)' }}>{new Date(data.scanned_at).toLocaleDateString()}</div>
+              <div style={{ fontSize: 10, color: 'var(--ink-dim)', marginTop: 2 }}>{new Date(data.scanned_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {data.elapsed_secs}s</div>
+              <div style={{ fontSize: 9, color: 'var(--ink-faint)', marginTop: 2 }}>Last scan</div>
             </div>
           )}
         </div>
 
-        {error && <div style={{ padding: '12px 16px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#f87171', fontSize: 12, marginBottom: 16 }}>{error}</div>}
+        {error && <div style={{ padding: '12px 16px', background: 'oklch(0.72 0.21 25 / 0.10)', border: '1px solid oklch(0.72 0.21 25 / 0.30)', borderRadius: 8, color: 'var(--neg)', fontSize: 12, marginBottom: 16 }}>{error}</div>}
 
         {/* ── Top Picks Carousel ─────────────────────────────────────────────── */}
         {!loading && topPicks.length > 0 && (
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
               Top Demand Setups
             </div>
             <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8 }}>
@@ -1272,9 +1272,9 @@ export default function DashboardPage() {
           <button
             onClick={() => setShowFullTable(s => !s)}
             style={{
-              background: showFullTable ? 'rgba(96,165,250,0.15)' : '#111827',
-              border: `1px solid ${showFullTable ? '#60a5fa' : '#374151'}`,
-              color: showFullTable ? '#60a5fa' : '#9ca3af',
+              background: showFullTable ? 'var(--pump-blue-soft)' : 'var(--bg-1)',
+              border: `1px solid ${showFullTable ? 'var(--pump-blue)' : 'var(--stroke)'}`,
+              color: showFullTable ? 'var(--pump-blue)' : 'var(--ink-mute)',
               borderRadius: 8, padding: '8px 18px', fontSize: 12, fontWeight: 600,
               cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
             }}
@@ -1287,7 +1287,7 @@ export default function DashboardPage() {
 
         {/* ── Full Scanner Table ─────────────────────────────────────────────── */}
         {showFullTable && (
-          <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 10, padding: '14px 16px' }}>
+          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, padding: '14px 16px' }}>
             <ScannerTable
               results={allResults}
               livePrices={livePrices}
