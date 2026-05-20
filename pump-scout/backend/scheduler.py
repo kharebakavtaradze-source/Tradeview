@@ -35,7 +35,7 @@ from scanner.universe_scan import run_universe_scan
 from database import rotate_old_data, upsert_macro_events
 from hype_monitor.monitor import run_hype_monitor
 from journal_autoclose import auto_close_journal, update_journal_prices_intraday
-from ai_portfolio import ai_portfolio_decisions, generate_daily_report, update_ai_positions_intraday
+
 from scan_candidates import fill_candidate_prices
 from eod_log import run_eod_log
 from scanner.market_regime import detect_market_regime
@@ -219,37 +219,7 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
-    # 09:15 ET (17:15 GMT+4) — AI Portfolio Decisions (before market open)
-    scheduler.add_job(
-        ai_portfolio_decisions,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=15, timezone=EASTERN_TZ),
-        id="ai_portfolio_decisions",
-        name="AI Portfolio Decisions (09:15 ET / 17:15 GMT+4)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
-
     # ── MARKET SESSION ─────────────────────────────────────────────────────────
-
-    # Every 5 min, 09:30–16:00 ET — AI position price update + auto-stop/target
-    scheduler.add_job(
-        update_ai_positions_intraday,
-        trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone=EASTERN_TZ),
-        id="ai_positions_intraday_5min",
-        name="AI Portfolio Price Update (every 5min, 17:30–00:00 GMT+4)",
-        replace_existing=True,
-        misfire_grace_time=120,
-    )
-
-    # 16:05 ET — post-close final price snapshot for AI positions
-    scheduler.add_job(
-        update_ai_positions_intraday,
-        trigger=CronTrigger(day_of_week="mon-fri", hour="16", minute="5", timezone=EASTERN_TZ),
-        id="ai_positions_post_close",
-        name="AI Portfolio Post-Close Price Snapshot (00:05 GMT+4)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
 
     # Every 5 min, 09:30–16:00 ET — persist live prices to journal DB
     scheduler.add_job(
@@ -329,16 +299,6 @@ def start_scheduler():
         trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=25, timezone=EASTERN_TZ),
         id="sector_performance_1625_et",
         name="Finviz Sector Performance (16:25 ET / 00:25 GMT+4)",
-        replace_existing=True,
-        misfire_grace_time=300,
-    )
-
-    # 16:30 ET (00:30 GMT+4) — AI Portfolio daily report
-    scheduler.add_job(
-        generate_daily_report,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=EASTERN_TZ),
-        id="ai_portfolio_report",
-        name="AI Portfolio Daily Report (16:30 ET / 00:30 GMT+4)",
         replace_existing=True,
         misfire_grace_time=300,
     )

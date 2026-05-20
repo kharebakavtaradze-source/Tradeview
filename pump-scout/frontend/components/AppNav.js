@@ -1,32 +1,40 @@
-/**
- * AppNav — Shared top navigation bar for all Pump Scout pages.
- * Unified premium dark-mode navigation — part of the design system.
- */
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 
+// 4-point star SVG from PUMP design system
+function PumpMark({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className="logo-mark">
+      <path
+        d="M12 1.5 C 12.7 7.6, 16.4 11.3, 22.5 12 C 16.4 12.7, 12.7 16.4, 12 22.5 C 11.3 16.4, 7.6 12.7, 1.5 12 C 7.6 11.3, 11.3 7.6, 12 1.5 Z"
+        fill="var(--pump-lime)"
+      />
+    </svg>
+  );
+}
+
 const NAV_LINKS = [
-  { href: '/',             label: 'Dashboard' },
-  { href: '/new-pump',       label: 'New Pump' },
-  { href: '/scanner-v2',     label: 'Scanner v2' },
-  { href: '/signal-anatomy', label: 'Signal Anatomy' },
-  { href: '/sectors',      label: 'Sectors' },
-  { href: '/journal',      label: 'Journal' },
-  { href: '/ai-portfolio', label: 'AI Portfolio' },
-  { href: '/macro-events', label: 'Macro' },
+  { href: '/',                  label: 'Dashboard' },
+  { href: '/scanner-v2',        label: 'Scanner v2' },
+  { href: '/sectors',           label: 'Sectors' },
+  { href: '/journal',           label: 'Journal' },
+  { href: '/macro-events',      label: 'Macro' },
   { href: '/replay',            label: 'Replay' },
   { href: '/pump-study',        label: 'Pump Study' },
   { href: '/raw-pattern-study', label: 'Raw Patterns' },
   { href: '/ai-journal',        label: 'AI Journal' },
   { href: '/admin',             label: 'Admin' },
-  { href: '/design-system',  label: 'Design System' },
+  { href: '/design-system',     label: 'Design System' },
 ];
 
 export default function AppNav() {
   const router = useRouter();
-
   return (
     <nav className="app-nav">
+      <Link href="/" className="nav-logo">
+        <PumpMark size={20} />
+        <span className="logo-word">pump</span>
+      </Link>
       {NAV_LINKS.map(({ href, label }) => {
         const isActive = router.pathname === href;
         return (
