@@ -4054,8 +4054,8 @@ function _rejectReason(p) {
 
 const L345_TAGS = [
   // Line 3
-  { tag: 'BODY_X',   label: 'Body X',    desc: 'Extra-large body (>1.5×)',      color: '#a5b4fc' },
-  { tag: 'BODY_S',   label: 'Body S',    desc: 'Small body (<0.5×)',             color: '#7dd3fc' },
+  { tag: 'BODY_X',   label: 'Body X',    desc: 'Extra-large body (≥1.5× prev)',  color: '#a5b4fc' },
+  { tag: 'BODY_M',   label: 'Body M',    desc: 'Micro/Minimal body (≤0.5× prev)',color: '#7dd3fc' },
   { tag: 'WICK_TB',  label: 'Wick TB',   desc: 'Top wick dominant (≥50%)',       color: '#86efac' },
   { tag: 'WICK_BB',  label: 'Wick BB',   desc: 'Bottom wick dominant (≥50%)',    color: '#f87171' },
   { tag: 'WICK_J',   label: 'Wick J',    desc: 'Doji/spinning top (body ≤20%)', color: '#fbbf24' },

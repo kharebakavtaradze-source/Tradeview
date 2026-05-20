@@ -1056,8 +1056,8 @@ TAG_NP_TRIGGER         = "NP_TRIGGER"
 TAG_FLAT               = "FLAT"
 
 # 260521 Line3/4/5 tags
-TAG_BODY_X             = "BODY_X"      # extra-large body (>1.5× avg)
-TAG_BODY_S             = "BODY_S"      # small body (<0.5× avg)
+TAG_BODY_X             = "BODY_X"      # extra-large body (>= 1.5× previous bar's body)
+TAG_BODY_M             = "BODY_M"      # micro/minimal body (<= 0.5× previous bar's body)
 TAG_WICK_TB            = "WICK_TB"     # top wick dominant (≥50% of range)
 TAG_WICK_BB            = "WICK_BB"     # bottom wick dominant (≥50% of range)
 TAG_WICK_J             = "WICK_J"      # doji / spinning top (body ≤20% of range)
@@ -1085,7 +1085,7 @@ ALL_TAGS = [
     TAG_BULL_ENGULF, TAG_INSIDE_BAR, TAG_RECLAIM_BAR, TAG_WIDE_RANGE,
     TAG_L34, TAG_NP_SETUP, TAG_NP_TRIGGER,
     # 260521
-    TAG_BODY_X, TAG_BODY_S,
+    TAG_BODY_X, TAG_BODY_M,
     TAG_WICK_TB, TAG_WICK_BB, TAG_WICK_J, TAG_WICK_F,
     TAG_GAP_G2, TAG_GAP_G3,
     TAG_RANGE_V, TAG_RANGE_C,
@@ -1212,7 +1212,7 @@ def bars_to_tags(bar_features: dict) -> list[str]:
     rsi2 = bar_features.get("rsi2_token",  "") or ""
 
     if body == "X":   tags.append(TAG_BODY_X)
-    if body == "S":   tags.append(TAG_BODY_S)
+    if body == "M":   tags.append(TAG_BODY_M)  # M = Micro/Minimal (<= 0.5× prev body)
     if wick == "TB":  tags.append(TAG_WICK_TB)
     if wick == "BB":  tags.append(TAG_WICK_BB)
     if wick == "J":   tags.append(TAG_WICK_J)

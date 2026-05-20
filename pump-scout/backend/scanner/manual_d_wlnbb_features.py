@@ -1239,8 +1239,8 @@ def _rsi2_tokens_series(
         curr = rsi_series[i]
         if prev is None or curr is None:
             continue
-        if prev < low  and curr >= low:   out[i] = "R2X"   # oversold reclaim
-        elif prev > high and curr <= high: out[i] = "R2D"   # overbought drop
+        if prev < low  and curr > low:     out[i] = "R2X"   # oversold reclaim (Pine: rsi2[1]<20 and rsi2>20)
+        elif prev > high and curr < high:  out[i] = "R2D"   # overbought drop  (Pine: rsi2[1]>80 and rsi2<80)
         elif curr < low:                   out[i] = "R2L"
         elif curr > high:                  out[i] = "R2H"
     return out
@@ -1305,7 +1305,7 @@ def compute_combined_bar_labels(
         1: "Z4", 2: "Z6", 3: "Z1G", 4: "Z2G",
         5: "Z1", 6: "Z2", 7: "Z9",  8: "Z10",
         9: "Z3", 10: "Z11", 11: "Z5", 12: "Z12",
-        13: "Z7",
+        13: "Z8", 14: "Z7",
     }
 
     # ── WLNBB bucket helpers (needed for vol_down_adapted) ────────────────────

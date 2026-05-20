@@ -504,9 +504,9 @@ export default function BarLabels({ symbol, barsOverride }) {
         borderTop: '1px solid #1f2937', background: '#0d1117',
       }}>
         {[
-          { text: 'X',   bg: BODY_COLOR.X.bg,  color: BODY_COLOR.X.color,  title: 'Body: Extra-large (>1.5× avg)' },
-          { text: 'M',   bg: BODY_COLOR.M.bg,  color: BODY_COLOR.M.color,  title: 'Body: Medium' },
-          { text: 'S',   bg: BODY_COLOR.S.bg,  color: BODY_COLOR.S.color,  title: 'Body: Small (<0.5× avg)' },
+          { text: 'X',   bg: BODY_COLOR.X.bg,  color: BODY_COLOR.X.color,  title: 'Body X: Extra-large (≥1.5× previous bar body)' },
+          { text: 'M',   bg: BODY_COLOR.M.bg,  color: BODY_COLOR.M.color,  title: 'Body M: Micro/Minimal (≤0.5× previous bar body — tiny body)' },
+          { text: 'S',   bg: BODY_COLOR.S.bg,  color: BODY_COLOR.S.color,  title: 'Body S: Standard/Normal (between 0.5× and 1.5× previous bar body)' },
           { text: 'TB',  bg: WICK_COLOR.TB.bg, color: WICK_COLOR.TB.color, title: 'Top wick dominant' },
           { text: 'BB',  bg: WICK_COLOR.BB.bg, color: WICK_COLOR.BB.color, title: 'Bottom wick dominant' },
           { text: 'J',   bg: WICK_COLOR.J.bg,  color: WICK_COLOR.J.color,  title: 'Doji — tiny body' },
