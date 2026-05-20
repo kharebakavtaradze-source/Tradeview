@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import Head from 'next/head';
 import styles from '../styles/Sectors.module.css';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -403,9 +402,7 @@ export default function Sectors() {
   const riskMode = overview?.risk_mode || 'NEUTRAL';
 
   return (
-    <>
-      <Head><title>Sector Rotation — Pump Scout</title></Head>
-      <AppNav />
+    <PumpLayout title="Sector Rotation">
       <div className={styles.page}>
         <h1 className={styles.pageTitle}>Sector Rotation</h1>
 
@@ -612,6 +609,6 @@ export default function Sectors() {
           </>
         )}
       </div>
-    </>
+    </PumpLayout>
   );
 }

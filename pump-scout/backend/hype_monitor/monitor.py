@@ -171,13 +171,30 @@ def get_alert_history() -> list[dict]:
 
 
 def get_status() -> dict:
+    hot = [r["ticker"] for r in _latest_results if r["hype_score"].get("hype_tier") in ("HOT", "VIRAL")]
+    social_total = sum(r.get("velocity", {}).get("count_24h", 0) for r in _latest_results)
+
+    top_hype = sorted(_latest_results, key=lambda x: x["hype_score"].get("hype_index", 0), reverse=True)[:8]
+    top_hype_out = []
+    for r in top_hype:
+        hs = r.get("hype_score", {})
+        news = r.get("news", {})
+        top_hype_out.append({
+            "ticker":      r["ticker"],
+            "tier":        hs.get("hype_tier", "COLD"),
+            "hype_index":  hs.get("hype_index", 0),
+            "social_24h":  r.get("velocity", {}).get("count_24h", 0),
+            "news_count":  news.get("total_count_24h") or news.get("count_24h", 0),
+            "divergences": len(r.get("divergences", [])),
+            "headlines":   (news.get("headlines") or [])[:2],
+        })
+
     return {
-        "last_run_at": _last_run_at.isoformat() if _last_run_at else None,
-        "tickers_monitored": len(_latest_results),
-        "hot_tickers": [
-            r["ticker"] for r in _latest_results
-            if r["hype_score"].get("hype_tier") in ("HOT", "VIRAL")
-        ],
-        "total_divergences": sum(len(r.get("divergences", [])) for r in _latest_results),
-        "alert_count_24h": len(_alert_history),
+        "last_run_at":        _last_run_at.isoformat() if _last_run_at else None,
+        "tickers_monitored":  len(_latest_results),
+        "hot_tickers":        hot,
+        "total_divergences":  sum(len(r.get("divergences", [])) for r in _latest_results),
+        "alert_count_24h":    len(_alert_history),
+        "social_count":       social_total,
+        "top_hype":           top_hype_out,
     }

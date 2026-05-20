@@ -5,8 +5,7 @@
  * Phase 5C (future): comparison charts.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Head from 'next/head';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 import BarLabels from '../components/BarLabels';
 import styles from '../styles/RawPatternStudy.module.css';
 
@@ -4248,10 +4247,8 @@ export default function RawPatternStudy() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <>
-      <Head><title>Raw Pattern Study — Pump Scout</title></Head>
+    <PumpLayout title="Raw Patterns">
       <div className={styles.page}>
-        <AppNav />
 
         <div className={styles.header}>
           <div className={styles.advisory}>Research</div>
@@ -4583,6 +4580,6 @@ export default function RawPatternStudy() {
           </div>
         </div>
       )}
-    </>
+    </PumpLayout>
   );
 }
