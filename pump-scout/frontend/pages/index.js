@@ -174,8 +174,8 @@ function PumpMark({ size = 24 }) {
   );
 }
 
-function Sparkline({ data = [], width = 80, height = 24, color = 'var(--pump-lime)' }) {
-  if (!data.length) return <svg width={width} height={height} />;
+function Sparkline({ data, width = 80, height = 24, color = 'var(--pump-lime)' }) {
+  if (!data?.length) return <svg width={width} height={height} />;
   const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
   const pts = data.map((v, i) => [
     (i / (data.length - 1)) * (width - 2) + 1,
@@ -492,7 +492,7 @@ function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick,
         </div>
       </div>
       <div style={{ position: 'relative', background: 'var(--bg-2)', borderRadius: 'var(--r-md)', padding: '8px 10px', overflow: 'hidden', minHeight: 58 }}>
-        <Sparkline width={268} height={42} data={sparkData} color={sparkColor} />
+        {sparkData && <Sparkline width={268} height={42} data={sparkData} color={sparkColor} />}
         {scoreHistory?.length >= 2 && (
           <div style={{ position: 'absolute', bottom: 6, left: 10, fontSize: 9, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.06em' }}>
             SCORE HIST · {scoreHistory.length}d
