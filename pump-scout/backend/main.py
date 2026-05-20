@@ -3845,6 +3845,67 @@ async def raw_pattern_study_export(run_id: int, format: str = "json"):
     )
 
 
+@app.get("/api/replay/raw-pattern-study/{run_id}/daily-features/export")
+async def raw_pattern_daily_features_export(run_id: int, phase: Optional[str] = None):
+    """
+    Download per-bar daily features for a raw-pattern-study run as CSV.
+    Expands feature_json so L3/4/5 fields (body_class, wick_class, gap_class,
+    range_class, vix_token, psar_token, rsi2_token, line3, line4, line5) appear
+    as dedicated columns — ready for verification in a spreadsheet.
+
+    ?phase=PRE|PUMP|POST   (optional) filter to a single phase window.
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_daily_features
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    rows = await get_raw_pattern_daily_features(run_id, phase=phase, limit=50000)
+    if not rows:
+        raise HTTPException(404, detail="No daily features found for this run")
+
+    L345_EXTRA = [
+        "body_class", "wick_class", "line3",
+        "gap_class", "range_class", "line4",
+        "vix_token", "psar_token", "rsi2_token", "line5",
+    ]
+    BASE_COLS = [
+        "id", "run_id", "episode_id", "symbol", "date", "phase",
+        "relative_day_from_start", "relative_day_from_peak",
+        "open", "high", "low", "close", "volume", "dollar_volume",
+        "gap_pct", "intraday_range_pct", "body_pct",
+        "upper_wick_pct", "lower_wick_pct", "close_position_in_bar",
+        "wide_range_bar", "narrow_range_bar",
+        "strong_close_near_high", "weak_close_near_low",
+        "volume_vs_avg20", "volume_zscore", "abnormal_volume_day", "dryup_day",
+        "atr", "atr_pct", "atr_expansion_state",
+        "compression_state", "bb_squeeze_bars",
+        "bullish_engulfing", "bearish_engulfing",
+        "inside_bar", "outside_bar", "doji_like", "reclaim_bar", "expansion_bar",
+    ] + L345_EXTRA
+
+    flat = []
+    for r in rows:
+        fj = r.get("feature_json") or {}
+        row = {col: r.get(col) for col in BASE_COLS if col not in L345_EXTRA}
+        for f in L345_EXTRA:
+            row[f] = fj.get(f, "")
+        flat.append(row)
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=BASE_COLS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(flat)
+    suffix = f"_{phase.lower()}" if phase else ""
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="raw_pattern_{run_id}_bars{suffix}.csv"'},
+    )
+
+
 # ── 8. AI summary ─────────────────────────────────────────────────────────────
 
 @app.get("/api/replay/raw-pattern-study/{run_id}/ai-summary")
