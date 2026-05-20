@@ -58,9 +58,11 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
   const needsRepair = run.status === 'complete' && !run.comparison_count;
   const [repairing,   setRepairing]   = useState(false);
   const [repairErr,   setRepairErr]   = useState('');
-  const [copying,     setCopying]     = useState(false);
-  const [copyDone,    setCopyDone]    = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [copying,        setCopying]        = useState(false);
+  const [copyDone,       setCopyDone]       = useState(false);
+  const [downloading,    setDownloading]    = useState(false);
+  const [downloadingCsv, setDownloadingCsv] = useState(false);
+  const [downloadingMd,  setDownloadingMd]  = useState(false);
 
   const handleCopyContext = async () => {
     setCopying(true); setCopyDone(false);
@@ -103,6 +105,34 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
     } catch { /* ignore */ } finally { setDownloading(false); }
   };
 
+  const handleDownloadCsv = async () => {
+    setDownloadingCsv(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/export?format=csv`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail); }
+      const blob = new Blob([await r.text()], { type: 'text/csv' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `raw-pattern-run-${run.id}-episodes.csv`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ } finally { setDownloadingCsv(false); }
+  };
+
+  const handleDownloadMd = async () => {
+    setDownloadingMd(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/${run.id}/export?format=markdown`);
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail); }
+      const blob = new Blob([await r.text()], { type: 'text/markdown' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `raw-pattern-run-${run.id}-summary.md`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ } finally { setDownloadingMd(false); }
+  };
+
   const handleRepair = async () => {
     setRepairing(true);
     setRepairErr('');
@@ -140,7 +170,25 @@ function RunHeader({ run, npCoverage, onRepairDone, onDelete }) {
               onClick={handleDownload}
               title="Download full research context as JSON"
             >
-              {downloading ? '…' : 'Download JSON'}
+              {downloading ? '…' : '↓ JSON'}
+            </button>
+            <button
+              className={styles.contextBtn}
+              disabled={downloadingCsv || copying}
+              onClick={handleDownloadCsv}
+              title="Download episode features as CSV (flat table, all fields)"
+              style={{ color: '#4ade80' }}
+            >
+              {downloadingCsv ? '…' : '↓ CSV'}
+            </button>
+            <button
+              className={styles.contextBtn}
+              disabled={downloadingMd || copying}
+              onClick={handleDownloadMd}
+              title="Download research summary as Markdown"
+              style={{ color: '#93c5fd' }}
+            >
+              {downloadingMd ? '…' : '↓ MD'}
             </button>
           </>
         )}
@@ -1658,6 +1706,33 @@ function PatternRow({ p }) {
   );
 }
 
+function downloadPatternCsv(rows, filename) {
+  if (!rows || rows.length === 0) return;
+  const COLS = [
+    'signal_id', 'source_type', 'feature_family', 'status',
+    'lift_vs_false_positive', 'count_all_4x', 'count_missed_4x',
+    'count_false_positive', 'count_normal_winner', 'count_all_episodes',
+    'false_positive_rate', 'recall_4x', 'precision',
+    'split_artifact_exposure', 'recommendation', 'description', 'sequence_signature',
+  ];
+  const header = COLS.join(',');
+  const csvRows = rows.map(p =>
+    COLS.map(k => {
+      const v = p[k] ?? '';
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(',')
+  );
+  const csv = [header, ...csvRows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function PatternDiscoveryPanel({ runId }) {
   // Controls
   const [mode,        setMode]        = useState('both');
@@ -1988,6 +2063,7 @@ function PatternDiscoveryPanel({ runId }) {
 
           {results && !isRunning && (
             <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              {/* JSON exports (backend-served) */}
               <a
                 href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=compact`}
                 download={`raw-pattern-run-${runId}-discovery-compact.json`}
@@ -1995,14 +2071,6 @@ function PatternDiscoveryPanel({ runId }) {
                 style={{ textDecoration: 'none' }}
               >
                 ⬇ Compact JSON
-              </a>
-              <a
-                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=summary`}
-                download={`raw-pattern-run-${runId}-discovery-summary.json`}
-                className={styles.discoveryExportBtnSm}
-                style={{ textDecoration: 'none' }}
-              >
-                Summary
               </a>
               <a
                 href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=accepted`}
@@ -2021,6 +2089,14 @@ function PatternDiscoveryPanel({ runId }) {
                 Rankings
               </a>
               <a
+                href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=summary`}
+                download={`raw-pattern-run-${runId}-discovery-summary.json`}
+                className={styles.discoveryExportBtnSm}
+                style={{ textDecoration: 'none' }}
+              >
+                Summary
+              </a>
+              <a
                 href={`${API_URL}/api/replay/raw-pattern-study/${runId}/discover/export-full?section=episodes`}
                 download={`raw-pattern-run-${runId}-discovery-episodes.json`}
                 className={styles.discoveryExportBtnSm}
@@ -2037,6 +2113,24 @@ function PatternDiscoveryPanel({ runId }) {
               >
                 Full (large)
               </a>
+              {/* CSV exports (client-side, from in-memory patterns) */}
+              <span style={{ width: 1, height: 14, background: 'var(--border)', display: 'inline-block', margin: '0 4px' }} />
+              <button
+                onClick={() => downloadPatternCsv(patterns.filter(p => p.status !== 'REJECT'), `raw-pattern-run-${runId}-accepted.csv`)}
+                className={styles.discoveryExportBtnSm}
+                title="Download accepted patterns as CSV"
+                style={{ color: '#4ade80', cursor: 'pointer' }}
+              >
+                ↓ CSV Accepted
+              </button>
+              <button
+                onClick={() => downloadPatternCsv(patterns, `raw-pattern-run-${runId}-all-patterns.csv`)}
+                className={styles.discoveryExportBtnSm}
+                title="Download ALL patterns (incl. rejected) as CSV"
+                style={{ color: '#93c5fd', cursor: 'pointer' }}
+              >
+                ↓ CSV All
+              </button>
             </span>
           )}
         </div>
@@ -2152,6 +2246,7 @@ function PatternDiscoveryPanel({ runId }) {
               { id: 'by-family',    label: 'By Family' },
               { id: 'by-type',      label: 'By Source Type' },
               { id: 'all',          label: `All (${patterns.length})` },
+              { id: 'l345',         label: 'L3/4/5 Signals' },
               { id: 'flow-impact',   label: 'FLOW Impact' },
               { id: 'curated-flow',  label: 'Curated FLOW' },
               { id: 'cfr-selector',   label: 'CFR Selector v1' },
@@ -2235,6 +2330,11 @@ function PatternDiscoveryPanel({ runId }) {
           {/* All patterns including REJECT */}
           {resTab === 'all' && (
             <AllPatternsTable patterns={patterns} />
+          )}
+
+          {/* L3/4/5 Signals breakdown */}
+          {resTab === 'l345' && (
+            <L345SignalsTab patterns={patterns} runId={runId} />
           )}
 
           {/* FLOW Impact (research-only) */}
@@ -3948,6 +4048,143 @@ function _rejectReason(p) {
   if ((p.count_all_4x || 0) < 2) return 'low_count';
   if ((p.lift_vs_false_positive || 0) < 1.0) return 'low_lift';
   return 'unknown';
+}
+
+// ── L3/4/5 Signals Tab ────────────────────────────────────────────────────────
+
+const L345_TAGS = [
+  // Line 3
+  { tag: 'BODY_X',   label: 'Body X',    desc: 'Extra-large body (>1.5×)',      color: '#a5b4fc' },
+  { tag: 'BODY_S',   label: 'Body S',    desc: 'Small body (<0.5×)',             color: '#7dd3fc' },
+  { tag: 'WICK_TB',  label: 'Wick TB',   desc: 'Top wick dominant (≥50%)',       color: '#86efac' },
+  { tag: 'WICK_BB',  label: 'Wick BB',   desc: 'Bottom wick dominant (≥50%)',    color: '#f87171' },
+  { tag: 'WICK_J',   label: 'Wick J',    desc: 'Doji/spinning top (body ≤20%)', color: '#fbbf24' },
+  { tag: 'WICK_F',   label: 'Wick F',    desc: 'Full body, small wicks',         color: '#9ca3af' },
+  // Line 4
+  { tag: 'GAP_G2',   label: 'Gap G2',    desc: 'Gap 0.5–1.0 ATR',               color: '#34d399' },
+  { tag: 'GAP_G3',   label: 'Gap G3',    desc: 'Gap >1.0 ATR',                  color: '#86efac' },
+  { tag: 'RANGE_V',  label: 'Range V',   desc: 'Volatile range (>1.5 ATR)',      color: '#a5b4fc' },
+  { tag: 'RANGE_C',  label: 'Range C',   desc: 'Compressed range (<0.5 ATR)',    color: '#fb923c' },
+  // Line 5
+  { tag: 'VIX_X',    label: 'VIX-X',     desc: 'Williams VIX-Fix spike',         color: '#f87171' },
+  { tag: 'VIX_R',    label: 'VIX-R',     desc: 'Williams VIX-Fix range',         color: '#fbbf24' },
+  { tag: 'PSAR_BULL',label: 'PSAR Bull', desc: 'PSAR bullish (close > SAR)',     color: '#4ade80' },
+  { tag: 'PSAR_BEAR',label: 'PSAR Bear', desc: 'PSAR bearish (close ≤ SAR)',     color: '#fb923c' },
+  { tag: 'RSI2_X',   label: 'RSI2 R2X',  desc: 'RSI2 reclaim above 20',          color: '#86efac' },
+  { tag: 'RSI2_D',   label: 'RSI2 R2D',  desc: 'RSI2 drop below 80',             color: '#f87171' },
+  { tag: 'RSI2_L',   label: 'RSI2 R2L',  desc: 'RSI2 oversold (<20)',            color: '#34d399' },
+  { tag: 'RSI2_H',   label: 'RSI2 R2H',  desc: 'RSI2 overbought (>80)',          color: '#fca5a5' },
+];
+
+function sigContainsTag(p, tag) {
+  const sig = (p.signal_id || '') + ' ' + (p.sequence_signature || '') + ' ' + (p.description || '');
+  return sig.includes(tag);
+}
+
+function L345SignalsTab({ patterns, runId }) {
+  const accepted = patterns.filter(p => p.status !== 'REJECT');
+
+  // Build tag → patterns that contain it
+  const tagToPatterns = {};
+  for (const { tag } of L345_TAGS) {
+    tagToPatterns[tag] = accepted.filter(p => sigContainsTag(p, tag));
+  }
+
+  const active = L345_TAGS.filter(({ tag }) => tagToPatterns[tag].length > 0);
+  const inactive = L345_TAGS.filter(({ tag }) => tagToPatterns[tag].length === 0);
+
+  // Export CSV helper
+  const handleCsvExport = () => {
+    const rows = [];
+    for (const { tag, label } of L345_TAGS) {
+      for (const p of tagToPatterns[tag] || []) {
+        rows.push({ tag, tag_label: label, ...p });
+      }
+    }
+    downloadPatternCsv(rows, `raw-pattern-run-${runId}-l345-patterns.csv`);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Header */}
+      <div className={styles.tableCard}>
+        <div className={styles.tableHeader}>
+          <span className={styles.tableTitle}>L3/4/5 Signal Patterns (Pine 260521)</span>
+          <span className={styles.tableHint} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span>{active.length} of {L345_TAGS.length} tags found in accepted patterns</span>
+            {accepted.length > 0 && (
+              <button
+                onClick={handleCsvExport}
+                style={{ padding: '1px 7px', borderRadius: 3, cursor: 'pointer',
+                         fontSize: 9, fontWeight: 700, background: '#1f2937',
+                         color: '#4ade80', border: '1px solid #374151',
+                         fontFamily: 'var(--font-mono)' }}
+              >↓ CSV</button>
+            )}
+          </span>
+        </div>
+        <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)' }}>
+          Shows accepted patterns whose signal_id or sequence signature contains L3/4/5 tags
+          (BODY_X, WICK_BB, VIX_X, PSAR_BULL, RSI2_X, etc.).
+          Run Pattern Discovery in <strong>All Research Layers (V1A–V1E)</strong> mode
+          on a new/rebuilt study run to mine these combinations.
+        </div>
+      </div>
+
+      {/* Active tags with patterns */}
+      {active.map(({ tag, label, desc, color }) => (
+        <div key={tag} className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color, marginRight: 8 }}>{tag}</span>
+              {label} — {desc}
+            </span>
+            <span className={styles.tableHint}>{tagToPatterns[tag].length} pattern{tagToPatterns[tag].length !== 1 ? 's' : ''}</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className={styles.historyTable} style={{ width: '100%' }}>
+              <thead>
+                <tr className={styles.historyHead}>
+                  <th>Signal ID</th><th>Source</th><th>Status</th>
+                  <th>Lift vs FP</th><th>4x Ep</th><th>Missed</th><th>FP Rate</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tagToPatterns[tag]
+                  .sort((a, b) => (b.lift_vs_false_positive || 0) - (a.lift_vs_false_positive || 0))
+                  .map((p, i) => <PatternRow key={p.signal_id || i} p={p} />)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+
+      {/* Not-yet-found tags */}
+      {inactive.length > 0 && (
+        <div className={styles.tableCard}>
+          <div className={styles.tableHeader}>
+            <span className={styles.tableTitle} style={{ color: 'var(--text-muted)' }}>
+              Tags not yet in accepted patterns ({inactive.length})
+            </span>
+          </div>
+          <div style={{ padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {inactive.map(({ tag, desc, color }) => (
+              <span key={tag} title={desc} style={{
+                padding: '2px 7px', borderRadius: 3, fontSize: 9, fontWeight: 700,
+                fontFamily: 'var(--font-mono)', color, border: `1px solid ${color}44`,
+                background: color + '11', opacity: 0.5,
+              }}>{tag}</span>
+            ))}
+          </div>
+          <div style={{ padding: '4px 12px 10px', fontSize: 10, color: 'var(--text-muted)' }}>
+            Rebuild the study run to store L3/4/5 fields, then re-run Pattern Discovery
+            in &quot;All Research Layers&quot; mode to mine these combinations.
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function AllPatternsTable({ patterns }) {
