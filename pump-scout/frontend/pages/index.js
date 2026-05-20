@@ -219,19 +219,18 @@ function NavIcon({ name, size = 18, color = 'currentColor' }) {
 function LeftSidebar() {
   const router = useRouter();
   const items = [
-    { href: '/',         icon: 'home',     label: 'Dashboard' },
-    { href: '/scanner',  icon: 'search',   label: 'Scanner' },
-    { href: '/sectors',  icon: 'layers',   label: 'Sectors' },
-    { href: '/journal',  icon: 'folder',   label: 'Journal' },
-    { href: '/macro',    icon: 'globe',    label: 'Macro' },
-    { href: '/replay',   icon: 'swap',     label: 'Replay' },
+    { href: '/',                  icon: 'home',     label: 'Dashboard' },
+    { href: '/scanner-v2',        icon: 'search',   label: 'Scanner' },
+    { href: '/sectors',           icon: 'layers',   label: 'Sectors' },
+    { href: '/journal',           icon: 'folder',   label: 'Journal' },
+    { href: '/macro-events',      icon: 'globe',    label: 'Macro' },
+    { href: '/replay',            icon: 'swap',     label: 'Replay' },
     null,
-    { href: '/study',    icon: 'bolt',     label: 'Pump Study' },
-    { href: '/patterns', icon: 'candle',   label: 'Raw Patterns' },
-    { href: '/ai',       icon: 'spark',    label: 'AI Journal' },
+    { href: '/pump-study',        icon: 'bolt',     label: 'Pump Study' },
+    { href: '/raw-pattern-study', icon: 'candle',   label: 'Raw Patterns' },
+    { href: '/ai-journal',        icon: 'spark',    label: 'AI Journal' },
     null,
-    { href: '/settings', icon: 'settings', label: 'Settings' },
-    { href: '/design',   icon: 'grid',     label: 'Design System' },
+    { href: '/design-system',     icon: 'grid',     label: 'Design System' },
   ];
   return (
     <aside style={{
@@ -265,7 +264,6 @@ function LeftSidebar() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 42, height: 38, borderRadius: 'var(--r-md)', color: 'var(--ink-dim)', cursor: 'pointer' }} title="Alerts">
         <NavIcon name="bell" size={18} />
       </div>
-      <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--pump-blue)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginTop: 6 }} title="Account">MK</div>
     </aside>
   );
 }
@@ -278,7 +276,7 @@ function TopBar({ marketTimer, regime }) {
   return (
     <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 28px', borderBottom: '1px solid var(--stroke-soft)', background: 'var(--bg-0)', gap: 16, flexWrap: 'nowrap' }}>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)', marginBottom: 2 }}>Hi Mike · {dayName}</div>
+        <div style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)', marginBottom: 2 }}>{dayName}</div>
         <h1 style={{ margin: 0, fontSize: 21, fontWeight: 500, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
           Dashboard{' '}<em style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', color: 'var(--pump-lime)', fontWeight: 400 }}>overview</em>
         </h1>
@@ -463,9 +461,9 @@ function KpiStrip({ tc, ac, data, loading }) {
   );
 }
 
-function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick }) {
+function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick, scoreHistory }) {
   const price    = livePrice?.price ?? r.price;
-  const chgPct   = livePrice?.change_pct;
+  const chgPct   = livePrice?.change_pct ?? r.price_change_pct;
   const chgUp    = chgPct != null ? chgPct >= 0 : true;
   const score    = fmt(r.demand_composite_score, 1);
   const atsRating = r.ats_signal === 'ATS_PRIME' ? 3 : r.ats_signal === 'ATS_SETUP' ? 2 : r.ats_signal === 'ATS_WATCH' ? 1 : 0;
@@ -473,7 +471,8 @@ function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick 
   const tempLvl  = r.readiness_tier === 'HOT' ? 5 : r.readiness_tier === 'WARM' ? 3 : r.readiness_tier === 'COOL' ? 2 : 1;
   const tempColor = readTemp === 'WARM' ? 'var(--warn)' : 'var(--pump-blue)';
   const criteria  = (r.demand_buy_reasons || []).slice(0, 4).map(rr => REASONS_PRETTY[rr] || rr);
-  const sparkData = sp(symSeed(r.symbol), 30, chgUp ? 0.3 : -0.2);
+  const sparkData = scoreHistory?.length >= 2 ? scoreHistory : sp(symSeed(r.symbol), 30, chgUp ? 0.3 : -0.2);
+  const sparkColor = scoreHistory?.length >= 2 ? 'var(--pump-lime)' : (chgUp ? 'var(--pump-lime)' : 'var(--neg)');
   return (
     <div onClick={() => onClick(r)} style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12, cursor: 'pointer', transition: 'border-color 0.15s' }}
       onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--pump-lime-soft)'}
@@ -492,8 +491,13 @@ function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick 
           <span style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>/ 20</span>
         </div>
       </div>
-      <div style={{ position: 'relative', background: 'var(--bg-2)', borderRadius: 'var(--r-md)', padding: '8px 10px', overflow: 'hidden' }}>
-        <Sparkline width={260} height={38} data={sparkData} color={chgUp ? 'var(--pump-lime)' : 'var(--neg)'} />
+      <div style={{ position: 'relative', background: 'var(--bg-2)', borderRadius: 'var(--r-md)', padding: '8px 10px', overflow: 'hidden', minHeight: 58 }}>
+        <Sparkline width={268} height={42} data={sparkData} color={sparkColor} />
+        {scoreHistory?.length >= 2 && (
+          <div style={{ position: 'absolute', bottom: 6, left: 10, fontSize: 9, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.06em' }}>
+            SCORE HIST · {scoreHistory.length}d
+          </div>
+        )}
         <div style={{ position: 'absolute', top: 8, right: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
           <span style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>${fmt(price, 2)}</span>
           {chgPct != null && <span style={{ fontSize: 11, color: chgUp ? 'var(--pos)' : 'var(--neg)', fontFamily: 'var(--f-mono)' }}>{chgUp ? '▲' : '▼'} {Math.abs(chgPct).toFixed(2)}%</span>}
@@ -529,7 +533,7 @@ function PumpSetupCard({ r, livePrice, journaled, adding, added, onAdd, onClick 
   );
 }
 
-function PumpSetupGrid({ allResults, livePrices, journaledSet, addingJournal, addedJournal, addToJournal, setDrawerRow, loading }) {
+function PumpSetupGrid({ allResults, livePrices, journaledSet, addingJournal, addedJournal, addToJournal, setDrawerRow, loading, scoreHistMap }) {
   const topSetups = allResults.filter(r => r.demand_composite_tier !== 'SKIP').slice(0, 8);
   return (
     <div>
@@ -540,14 +544,13 @@ function PumpSetupGrid({ allResults, livePrices, journaledSet, addingJournal, ad
         </div>
       </div>
       {loading ? (
-
         <div style={{ color: 'var(--ink-dim)', fontSize: 13, padding: '20px 0' }}>Loading setups…</div>
       ) : topSetups.length === 0 ? (
         <div style={{ color: 'var(--ink-dim)', fontSize: 13, padding: '20px 0' }}>No setups — run a scan or check the scanner.</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 14 }}>
           {topSetups.map(r => (
-            <PumpSetupCard key={r.symbol} r={r} livePrice={livePrices[r.symbol]} journaled={journaledSet.has(r.symbol)} adding={addingJournal === r.symbol} added={addedJournal.has(r.symbol)} onAdd={addToJournal} onClick={setDrawerRow} />
+            <PumpSetupCard key={r.symbol} r={r} livePrice={livePrices[r.symbol]} journaled={journaledSet.has(r.symbol)} adding={addingJournal === r.symbol} added={addedJournal.has(r.symbol)} onAdd={addToJournal} onClick={setDrawerRow} scoreHistory={scoreHistMap?.[r.symbol]} />
           ))}
         </div>
       )}
@@ -583,12 +586,13 @@ function PumpSectorTile({ name, count, perf, topSymbols, lead = false }) {
   );
 }
 
-function PumpSectorHeat({ sectors, allResults }) {
+function PumpSectorHeat({ sectors, allResults, sectorsLoading }) {
   const entries = Object.entries(sectors || {})
     .map(([name, d]) => ({
-      name, chg: d.change_1d ?? d.pct_change_1d ?? 0,
-      count: allResults.filter(r => r.sector === name).length,
-      topSyms: allResults.filter(r => r.sector === name).slice(0, 4).map(r => r.symbol),
+      name,
+      chg: d.change_pct ?? d.change_1d ?? d.pct_change_1d ?? 0,
+      count: allResults.filter(r => r.sector === name || r.sector === d.gics_name).length,
+      topSyms: allResults.filter(r => r.sector === name || r.sector === d.gics_name).slice(0, 4).map(r => r.symbol),
     }))
     .sort((a, b) => b.chg - a.chg);
   return (
@@ -599,8 +603,13 @@ function PumpSectorHeat({ sectors, allResults }) {
           <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>by setup count · close perf</span>
         </div>
       </div>
-      {entries.length === 0 ? (
-        <div style={{ color: 'var(--ink-faint)', fontSize: 12, padding: '20px 0' }}>Loading sectors…</div>
+      {sectorsLoading && entries.length === 0 ? (
+        <div style={{ color: 'var(--ink-dim)', fontSize: 12, padding: '20px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--pump-lime)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+          Loading sector data…
+        </div>
+      ) : entries.length === 0 ? (
+        <div style={{ color: 'var(--ink-faint)', fontSize: 12, padding: '20px 0' }}>No sector data — market may be closed</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, gridAutoRows: 'minmax(100px, auto)' }}>
           {entries.slice(0, 1).map(e => <PumpSectorTile key={e.name} name={e.name} count={e.count} perf={e.chg} topSymbols={e.topSyms} lead />)}
@@ -650,9 +659,13 @@ function PumpMoversCard({ kind, livePrices, allResults, marketOpen }) {
   const enriched = Object.entries(livePrices)
     .filter(([, d]) => d.change_pct != null)
     .map(([sym, d]) => ({ symbol: sym, price: d.price, chg: d.change_pct }));
-  const rows = enriched.length > 0
-    ? [...enriched].sort((a, b) => isUp ? b.chg - a.chg : a.chg - b.chg).slice(0, 5)
-    : allResults.slice(isUp ? 0 : Math.max(0, allResults.length - 5)).map(r => ({ symbol: r.symbol, price: r.price, chg: null }));
+  const fromResults = allResults
+    .filter(r => r.price_change_pct != null || r.dc_range_pct_5d != null)
+    .map(r => ({ symbol: r.symbol, price: r.price, chg: r.price_change_pct ?? null }));
+  const pool = enriched.length > 0 ? enriched : fromResults;
+  const rows = pool.length > 0
+    ? [...pool].sort((a, b) => isUp ? (b.chg ?? 0) - (a.chg ?? 0) : (a.chg ?? 0) - (b.chg ?? 0)).slice(0, 10)
+    : allResults.slice(isUp ? 0 : Math.max(0, allResults.length - 10)).map(r => ({ symbol: r.symbol, price: r.price, chg: null })).slice(0, 10);
   return (
     <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -1244,31 +1257,60 @@ function MarketContextBar({ marketTimer, regime, livePrices, marketOpen }) {
 
 function ScoreHistory({ symbol }) {
   const [hist, setHist] = useState([]);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     if (!symbol) return;
-    fetch(`${API_URL}/api/demand-scanner/history/${symbol}?limit=20`)
-      .then(r => r.json()).then(d => setHist((d.history || []).reverse())).catch(() => {});
+    setLoading(true);
+    fetch(`${API_URL}/api/demand-scanner/history/${symbol}?limit=30`)
+      .then(r => r.json())
+      .then(d => setHist((d.history || []).reverse()))
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [symbol]);
-  if (hist.length < 2) return null;
-  const maxScore = Math.max(...hist.map(h => h.combined_score || 0), 10);
-  const W = 280, H = 44, pad = 4;
+
+  if (loading) return <div style={{ fontSize: 11, color: 'var(--ink-faint)', padding: '8px 0' }}>Loading history…</div>;
+  if (hist.length < 2) return <div style={{ fontSize: 11, color: 'var(--ink-faint)', padding: '8px 0' }}>No score history yet</div>;
+
+  const scores = hist.map(h => h.combined_score ?? h.demand_composite_score ?? 0);
+  const maxScore = Math.max(...scores, 1);
+  const minScore = Math.min(...scores, 0);
+  const range = maxScore - minScore || 1;
+  const W = 360, H = 72, padX = 4, padY = 6;
   const pts = hist.map((h, i) => {
-    const x = pad + (i / (hist.length - 1)) * (W - pad * 2);
-    const y = H - pad - ((h.combined_score || 0) / maxScore) * (H - pad * 2);
-    return [x, y, h];
+    const s = h.combined_score ?? h.demand_composite_score ?? 0;
+    const x = padX + (i / (hist.length - 1)) * (W - padX * 2);
+    const y = H - padY - ((s - minScore) / range) * (H - padY * 2);
+    return [x, y, h, s];
   });
   const pathD = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const areaD = pathD + ` L${pts[pts.length-1][0].toFixed(1)},${H} L${pts[0][0].toFixed(1)},${H} Z`;
+  const last = pts[pts.length - 1];
   return (
     <div style={{ marginTop: 6 }}>
-      <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
-        <path d={pathD} fill="none" stroke="var(--stroke)" strokeWidth={1.5} />
-        {pts.map(([x, y, h], i) => (
-          <circle key={i} cx={x} cy={y} r={3}
-            fill={TIER_COLORS_MINI[h.demand_composite_tier] || '#374151'}
-            title={`${h.scanned_at?.slice(0,10)} ${h.combined_score}`}
-          />
+      <svg width={W} height={H} style={{ display: 'block', overflow: 'visible', width: '100%' }} viewBox={`0 0 ${W} ${H}`}>
+        <defs>
+          <linearGradient id={`hist-grad-${symbol}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--pump-lime)" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="var(--pump-lime)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={areaD} fill={`url(#hist-grad-${symbol})`} />
+        <path d={pathD} fill="none" stroke="var(--pump-lime)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+        {pts.map(([x, y, h, s], i) => (
+          <circle key={i} cx={x} cy={y} r={i === pts.length - 1 ? 4 : 2.5}
+            fill={i === pts.length - 1 ? 'var(--pump-lime)' : (TIER_COLORS_MINI[h.demand_composite_tier] || 'var(--stroke)')}
+            stroke="var(--bg-1)" strokeWidth={i === pts.length - 1 ? 1.5 : 0}
+          >
+            <title>{h.scanned_at?.slice(0,10)} · score {s?.toFixed(1)}</title>
+          </circle>
         ))}
+        <text x={last[0]} y={last[1] - 8} fontSize={9} fill="var(--pump-lime)" textAnchor="middle" fontFamily="var(--f-mono)">{last[3]?.toFixed(1)}</text>
       </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+        <span style={{ fontSize: 9, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>{hist[0]?.scanned_at?.slice(5,10)}</span>
+        <span style={{ fontSize: 9, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>{hist.length} scans</span>
+        <span style={{ fontSize: 9, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>{hist[hist.length-1]?.scanned_at?.slice(5,10)}</span>
+      </div>
     </div>
   );
 }
@@ -1645,9 +1687,13 @@ export default function DashboardPage() {
   const [hypeStatus,  setHypeStatus]  = useState(null);
   const [hypeResults, setHypeResults] = useState([]);
   const [livePrices,  setLivePrices]  = useState({});
-  const [sectors,     setSectors]     = useState({});
+  const [sectors,        setSectors]        = useState({});
+  const [sectorsLoading, setSectorsLoading] = useState(true);
   const [news,        setNews]        = useState([]);
   const [newsLoading, setNewsLoading] = useState(false);
+
+  // Score history for sparklines
+  const [scoreHistMap, setScoreHistMap] = useState({});
 
   // Journal
   const [journaledSet,  setJournaledSet]  = useState(new Set());
@@ -1677,6 +1723,7 @@ export default function DashboardPage() {
 
   // Market context — regime + hype + sectors
   const fetchContext = useCallback(async () => {
+    setSectorsLoading(true);
     try {
       const [regRes, statusRes, resultsRes, secRes] = await Promise.all([
         fetch(`${API_URL}/api/market-regime`).catch(() => null),
@@ -1687,8 +1734,12 @@ export default function DashboardPage() {
       if (regRes?.ok)     setRegime(await regRes.json());
       if (statusRes?.ok)  setHypeStatus(await statusRes.json());
       if (resultsRes?.ok) { const d = await resultsRes.json(); setHypeResults(d.results || []); }
-      if (secRes?.ok)     setSectors(await secRes.json());
+      if (secRes?.ok) {
+        const secData = await secRes.json();
+        setSectors(typeof secData === 'object' && !Array.isArray(secData) ? secData : {});
+      }
     } catch { /* optional */ }
+    finally { setSectorsLoading(false); }
   }, []);
 
   useEffect(() => { fetchContext(); const id = setInterval(fetchContext, 5 * 60 * 1000); return () => clearInterval(id); }, [fetchContext]);
@@ -1717,6 +1768,23 @@ export default function DashboardPage() {
     const id = setInterval(() => fetchLivePrices(data.results), 30 * 1000);
     return () => clearInterval(id);
   }, [data, fetchLivePrices]);
+
+  // Score history for top 8 setup sparklines
+  useEffect(() => {
+    if (!data?.results?.length) return;
+    const top8 = data.results.filter(r => r.demand_composite_tier !== 'SKIP').slice(0, 8);
+    const missing = top8.filter(r => !scoreHistMap[r.symbol]);
+    if (!missing.length) return;
+    missing.forEach(r => {
+      fetch(`${API_URL}/api/demand-scanner/history/${r.symbol}?limit=20`)
+        .then(res => res.ok ? res.json() : { history: [] })
+        .then(d => {
+          const pts = (d.history || []).reverse().map(h => h.combined_score ?? h.demand_composite_score ?? 0);
+          if (pts.length >= 2) setScoreHistMap(prev => ({ ...prev, [r.symbol]: pts }));
+        })
+        .catch(() => {});
+    });
+  }, [data?.results]); // eslint-disable-line
 
   // News for top 10 picks
   useEffect(() => {
@@ -1845,11 +1913,12 @@ export default function DashboardPage() {
               allResults={allResults} livePrices={livePrices} journaledSet={journaledSet}
               addingJournal={addingJournal} addedJournal={addedJournal}
               addToJournal={addToJournal} setDrawerRow={setDrawerRow} loading={loading}
+              scoreHistMap={scoreHistMap}
             />
 
             {/* Sectors + ATS Signals */}
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14, alignItems: 'start' }}>
-              <PumpSectorHeat sectors={sectors} allResults={allResults} />
+              <PumpSectorHeat sectors={sectors} allResults={allResults} sectorsLoading={sectorsLoading} />
               <PumpAtsSignals allResults={allResults} />
             </div>
 
