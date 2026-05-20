@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import Head from 'next/head';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -91,9 +90,7 @@ export default function AIJournalPage() {
 
   // ── Loading / error state ─────────────────────────────────────────────────
   if (!state) return (
-    <>
-      <Head><title>AI Journal — pump-scout</title></Head>
-      <AppNav />
+    <PumpLayout title="AI Journal">
       <div style={{ maxWidth: 960, margin: '60px auto', padding: '0 24px' }}>
         <div style={{
           background: '#0a0f1a', border: '1px solid #1e3a5f', borderRadius: 10,
@@ -119,7 +116,7 @@ export default function AIJournalPage() {
           )}
         </div>
       </div>
-    </>
+    </PumpLayout>
   );
 
   const pnlPct  = state.starting_capital > 0
@@ -130,9 +127,7 @@ export default function AIJournalPage() {
   const activeBlacklist = blacklist.filter(b => b.active).length;
 
   return (
-    <>
-      <Head><title>AI Journal — pump-scout</title></Head>
-      <AppNav />
+    <PumpLayout title="AI Journal">
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '28px 24px' }}>
 
         {/* Page header */}
@@ -558,6 +553,6 @@ export default function AIJournalPage() {
         )}
 
       </div>
-    </>
+    </PumpLayout>
   );
 }
