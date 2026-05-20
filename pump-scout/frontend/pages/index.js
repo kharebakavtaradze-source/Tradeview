@@ -451,12 +451,12 @@ function KpiStrip({ tc, ac, data, loading }) {
   const val = (v, big) => loading ? '…' : (big ? (v >= 1000 ? `${(v/1000).toFixed(1)}K` : String(v)) : String(v));
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
-      <KpiCell label="PRIME BUY" value={val(tc.PRIME_BUY ?? 0)}    trend="—" color="var(--pos)"       tint="lime" sparkData={sp(1,16,-0.2)} sparkColor="var(--pos)" />
-      <KpiCell label="HIGH CONF" value={val(tc.HIGH_CONF_BUY ?? 0)} trend="—" color="var(--pump-blue)" tint="blue" sparkData={sp(2,16, 0.4)} sparkColor="var(--pump-blue)" />
-      <KpiCell label="BUY WATCH" value={val(tc.BUY_WATCH ?? 0)}    trend="—" color="var(--warn)"      tint="warn" sparkData={sp(3,16, 0.6)} sparkColor="var(--warn)" />
-      <KpiCell label="ATS PRIME" value={val(ac.ATS_PRIME ?? 0)}    trend="—" color="var(--pos)"       tint="lime" sparkData={sp(4,16, 0.3)} sparkColor="var(--pos)" />
-      <KpiCell label="ATS SETUP" value={val(ac.ATS_SETUP ?? 0)}    trend="—" color="var(--pump-blue)" tint="blue" sparkData={sp(5,16, 0.5)} sparkColor="var(--pump-blue)" />
-      <KpiCell label="UNIVERSE"  value={val(data?.universe || 0, true)} trend="—" color="var(--ink)"  sparkData={sp(6,16, 0.0)} sparkColor="var(--ink-mute)" />
+      <KpiCell label="PRIME BUY" value={val(tc.PRIME_BUY ?? 0)}    color="var(--pos)"       tint="lime" />
+      <KpiCell label="HIGH CONF" value={val(tc.HIGH_CONF_BUY ?? 0)} color="var(--pump-blue)" tint="blue" />
+      <KpiCell label="BUY WATCH" value={val(tc.BUY_WATCH ?? 0)}    color="var(--warn)"      tint="warn" />
+      <KpiCell label="ATS PRIME" value={val(ac.ATS_PRIME ?? 0)}    color="var(--pos)"       tint="lime" />
+      <KpiCell label="ATS SETUP" value={val(ac.ATS_SETUP ?? 0)}    color="var(--pump-blue)" tint="blue" />
+      <KpiCell label="UNIVERSE"  value={val(data?.universe || 0, true)} color="var(--ink)" />
     </div>
   );
 }
@@ -623,13 +623,20 @@ function PumpSectorHeat({ sectors, allResults, sectorsLoading }) {
 function PumpAtsSignals({ allResults }) {
   const prime = allResults.filter(r => r.ats_signal === 'ATS_PRIME').slice(0, 3);
   const setup = allResults.filter(r => r.ats_signal === 'ATS_SETUP').slice(0, 6);
-  const AtsRow = ({ r, tier }) => (
-    <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 70px', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid var(--stroke-soft)' }}>
-      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>{r.symbol}</span>
-      <Sparkline width={100} height={18} data={sp(symSeed(r.symbol), 22, 0.3)} color={tier === 'PRIME' ? 'var(--pos)' : 'var(--pump-blue)'} />
-      <span style={{ fontSize: 13, color: 'var(--ink)', textAlign: 'right', fontFamily: 'var(--f-mono)' }}>{fmt(r.demand_composite_score, 1)}</span>
-    </div>
-  );
+  const AtsRow = ({ r, tier }) => {
+    const toneColor = tier === 'PRIME' ? 'var(--pos)' : 'var(--pump-blue)';
+    const score = r.demand_composite_score ?? 0;
+    const barPct = Math.min(100, (score / 20) * 100);
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 52px', alignItems: 'center', padding: '9px 0', gap: 10, borderBottom: '1px solid var(--stroke-soft)' }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>{r.symbol}</span>
+        <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
+          <div style={{ width: `${barPct}%`, height: '100%', background: toneColor, borderRadius: 2 }} />
+        </div>
+        <span style={{ fontSize: 13, color: toneColor, textAlign: 'right', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{fmt(score, 1)}</span>
+      </div>
+    );
+  };
   return (
     <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 'var(--r-xl)', padding: '18px 20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -678,14 +685,20 @@ function PumpMoversCard({ kind, livePrices, allResults, marketOpen }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {rows.length === 0 ? (
           <div style={{ color: 'var(--ink-faint)', fontSize: 12, padding: '12px 0', textAlign: 'center' }}>{marketOpen ? 'Loading prices…' : 'Live data during market hours (9:30–16:00 ET)'}</div>
-        ) : rows.map(({ symbol, price, chg }, i) => (
-          <div key={symbol} style={{ display: 'grid', gridTemplateColumns: '52px 1fr 64px 68px', alignItems: 'center', padding: '8px 0', gap: 6, borderBottom: i < rows.length - 1 ? '1px solid var(--stroke-soft)' : 'none' }}>
-            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>{symbol}</span>
-            <Sparkline width={80} height={18} data={sp(symSeed(symbol), 18, isUp ? 0.5 : -0.4)} color={tone} />
+        ) : rows.map(({ symbol, price, chg }, i) => {
+          const maxAbsChg = Math.max(...rows.filter(r => r.chg != null).map(r => Math.abs(r.chg ?? 0)), 1);
+          const barW = chg != null ? Math.round((Math.abs(chg) / maxAbsChg) * 100) : 0;
+          return (
+          <div key={symbol} style={{ display: 'grid', gridTemplateColumns: '56px 1fr 58px 68px', alignItems: 'center', padding: '8px 0', gap: 8, borderBottom: i < rows.length - 1 ? '1px solid var(--stroke-soft)' : 'none' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>{symbol}</span>
+            <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
+              <div style={{ width: `${barW}%`, height: '100%', background: tone, borderRadius: 2 }} />
+            </div>
             <span style={{ fontSize: 12, color: 'var(--ink-mute)', textAlign: 'right', fontFamily: 'var(--f-mono)' }}>${fmt(price, 2)}</span>
-            <span style={{ fontSize: 12, color: chg != null ? tone : 'var(--ink-dim)', textAlign: 'right', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}</span>
+            <span style={{ fontSize: 12, color: chg != null ? tone : 'var(--ink-dim)', textAlign: 'right', fontWeight: 600, fontFamily: 'var(--f-mono)' }}>{chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}</span>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -710,24 +723,15 @@ function PumpHypeMonitor({ hypeStatus, hypeResults }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Vol surge</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 24, color: 'var(--pump-lime)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{volSurge > 0 ? `+${volSurge}%` : '—'}</span>
-            <Sparkline width={100} height={26} data={sp(51, 22, 0.6)} color="var(--pump-lime)" />
-          </div>
+          <span style={{ fontSize: 24, color: 'var(--pump-lime)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{volSurge > 0 ? `+${volSurge}%` : '—'}</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Social mentions</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 24, color: 'var(--pump-blue)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{mentions > 0 ? mentions.toLocaleString() : '—'}</span>
-            <Sparkline width={100} height={26} data={sp(52, 22, 0.3)} color="var(--pump-blue)" />
-          </div>
+          <span style={{ fontSize: 24, color: 'var(--pump-blue)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{mentions > 0 ? mentions.toLocaleString() : '—'}</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Monitored</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 24, color: 'var(--ink)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{monitored || '—'}</span>
-            <Sparkline width={100} height={26} data={sp(53, 22, 0.2)} color="var(--ink-mute)" />
-          </div>
+          <span style={{ fontSize: 24, color: 'var(--ink)', fontWeight: 500, fontFamily: 'var(--f-mono)' }}>{monitored || '—'}</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--f-mono)' }}>Hot tickers</span>
