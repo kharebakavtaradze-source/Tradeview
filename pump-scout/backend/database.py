@@ -2591,6 +2591,22 @@ async def rotate_old_data() -> dict:
         )
         deleted["ribbon_candidates"] = r.rowcount
 
+    # Prune old study/replay runs — keep only the 3 most-recent complete runs each.
+    # These tables have no time-based cutoff so they grow unboundedly without this.
+    for cleanup_fn, label in [
+        (cleanup_raw_pattern_runs, "raw_pattern"),
+        (cleanup_pump_study_runs,  "pump_study"),
+        (cleanup_replay_runs,      "replay"),
+    ]:
+        try:
+            result = await cleanup_fn(keep_last_n=3, dry_run=False)
+            child_deleted = sum(result.get("deleted", {}).values())
+            if child_deleted:
+                deleted[f"{label}_rows"] = child_deleted
+                deleted[f"{label}_runs"] = result["deleted"].get("runs", 0)
+        except Exception as exc:
+            logger.warning(f"rotate_old_data: {label} cleanup failed: {exc}")
+
     total = sum(deleted.values())
     logger.info(
         f"Data rotation complete — {total} rows removed: "
@@ -2979,31 +2995,24 @@ async def delete_replay_run(run_id: int) -> dict:
     Returns deleted row counts per table.
     Raises ValueError if run does not exist.
     """
-    async with get_session_factory()() as session:
-        run = (await session.execute(
-            select(ReplayRun).where(ReplayRun.id == run_id)
-        )).scalar_one_or_none()
-        if not run:
+    async with get_engine().begin() as conn:
+        row = (await conn.execute(
+            text("SELECT id FROM replay_runs WHERE id = :id"), {"id": run_id}
+        )).fetchone()
+        if not row:
             raise ValueError(f"Replay run {run_id} not found")
 
         counts = {}
-
-        # Children — delete in dependency order (no FK constraints enforced by SQLite,
-        # but order matters for Postgres if constraints are ever added)
-        for Model, label, fk in [
-            (ReplaySignalCandidate, "candidates",   ReplaySignalCandidate.replay_run_id),
-            (ReplayOutcome,         "outcomes",     ReplayOutcome.replay_run_id),
-            (ReplayMissedMover,     "missed_movers", ReplayMissedMover.replay_run_id),
+        for tbl, label in [
+            ("replay_outcomes",          "outcomes"),
+            ("replay_missed_movers",     "missed_movers"),
+            ("replay_signal_candidates", "candidates"),
         ]:
-            result = await session.execute(select(Model).where(fk == run_id))
-            rows   = result.scalars().all()
-            for r in rows:
-                await session.delete(r)
-            counts[label] = len(rows)
+            r = await conn.execute(text(f"DELETE FROM {tbl} WHERE replay_run_id = :id"), {"id": run_id})
+            counts[label] = r.rowcount
 
-        await session.delete(run)
-        counts["run"] = 1
-        await session.commit()
+        r = await conn.execute(text("DELETE FROM replay_runs WHERE id = :id"), {"id": run_id})
+        counts["run"] = r.rowcount
         return counts
 
 
@@ -3013,35 +3022,29 @@ async def delete_pump_study_run(run_id: int) -> dict:
     Returns deleted row counts per table.
     Raises ValueError if run does not exist.
     """
-    async with get_session_factory()() as session:
-        run = (await session.execute(
-            select(PumpStudyRun).where(PumpStudyRun.id == run_id)
-        )).scalar_one_or_none()
-        if not run:
+    async with get_engine().begin() as conn:
+        row = (await conn.execute(
+            text("SELECT id FROM pump_study_runs WHERE id = :id"), {"id": run_id}
+        )).fetchone()
+        if not row:
             raise ValueError(f"Pump study run {run_id} not found")
 
         counts = {}
-
-        # Leaf tables first — snapshot and event rows hang off episodes
-        for Model, label, fk in [
-            (PumpEpisodeSnapshot,   "snapshots",     PumpEpisodeSnapshot.run_id),
-            (PumpEpisodeEvent,      "events",        PumpEpisodeEvent.run_id),
-            (PumpEpisodeDetection,  "detections",    PumpEpisodeDetection.run_id),
-            (PumpComparisonMember,  "cmp_members",   PumpComparisonMember.run_id),
-            (PumpComparisonGroup,   "cmp_groups",    PumpComparisonGroup.run_id),
-            (PumpCluster,           "clusters",      PumpCluster.run_id),
-            (PumpEpisode,           "episodes",      PumpEpisode.run_id),
-            (PumpStudyAISummary,    "ai_summaries",  PumpStudyAISummary.run_id),
+        for tbl, label in [
+            ("pump_episode_snapshots",    "snapshots"),
+            ("pump_episode_events",       "events"),
+            ("pump_episode_detections",   "detections"),
+            ("pump_comparison_members",   "cmp_members"),
+            ("pump_comparison_groups",    "cmp_groups"),
+            ("pump_clusters",             "clusters"),
+            ("pump_episodes",             "episodes"),
+            ("pump_study_ai_summaries",   "ai_summaries"),
         ]:
-            result = await session.execute(select(Model).where(fk == run_id))
-            rows   = result.scalars().all()
-            for r in rows:
-                await session.delete(r)
-            counts[label] = len(rows)
+            r = await conn.execute(text(f"DELETE FROM {tbl} WHERE run_id = :id"), {"id": run_id})
+            counts[label] = r.rowcount
 
-        await session.delete(run)
-        counts["run"] = 1
-        await session.commit()
+        r = await conn.execute(text("DELETE FROM pump_study_runs WHERE id = :id"), {"id": run_id})
+        counts["run"] = r.rowcount
         return counts
 
 
@@ -5298,31 +5301,27 @@ async def clear_raw_pattern_comparisons(run_id: int) -> int:
 
 async def delete_raw_pattern_run(run_id: int) -> dict:
     """Hard-delete a raw-pattern run and all its child records."""
-    async with get_session_factory()() as session:
-        run = (await session.execute(
-            select(RawPatternRun).where(RawPatternRun.id == run_id)
-        )).scalar_one_or_none()
-        if not run:
+    async with get_engine().begin() as conn:
+        row = (await conn.execute(
+            text("SELECT id FROM raw_pattern_runs WHERE id = :id"), {"id": run_id}
+        )).fetchone()
+        if not row:
             raise ValueError(f"Raw pattern run {run_id} not found")
 
         counts = {}
-        for Model, label, fk in [
-            (RawPatternComparisonMember, "cmp_members",     RawPatternComparisonMember.run_id),
-            (RawPatternComparison,       "cmp_features",    RawPatternComparison.run_id),
-            (RawPatternEpisodeFeatures,  "ep_features",     RawPatternEpisodeFeatures.run_id),
-            (RawPatternDailyFeatures,    "daily_features",  RawPatternDailyFeatures.run_id),
-            (RawPatternAISummary,        "ai_summaries",    RawPatternAISummary.run_id),
-            (DiscoveredPattern,          "discovered_patterns", DiscoveredPattern.run_id),
+        for tbl, label in [
+            ("raw_pattern_comparison_members", "cmp_members"),
+            ("raw_pattern_comparisons",         "cmp_features"),
+            ("raw_pattern_episode_features",    "ep_features"),
+            ("raw_pattern_daily_features",      "daily_features"),
+            ("raw_pattern_ai_summaries",        "ai_summaries"),
+            ("discovered_patterns",             "discovered_patterns"),
         ]:
-            result = await session.execute(select(Model).where(fk == run_id))
-            rows   = result.scalars().all()
-            for r in rows:
-                await session.delete(r)
-            counts[label] = len(rows)
+            r = await conn.execute(text(f"DELETE FROM {tbl} WHERE run_id = :id"), {"id": run_id})
+            counts[label] = r.rowcount
 
-        await session.delete(run)
-        counts["run"] = 1
-        await session.commit()
+        r = await conn.execute(text("DELETE FROM raw_pattern_runs WHERE id = :id"), {"id": run_id})
+        counts["run"] = r.rowcount
         return counts
 
 
@@ -5373,30 +5372,30 @@ async def cleanup_raw_pattern_runs(
                 "vacuum_done":    False,
             }
 
-        # Hard-delete each run (reuse per-row delete logic)
+        # Bulk-delete child tables then run rows — no ORM round-trip per row
         total_counts: dict[str, int] = {}
-        for run_id in to_delete_ids:
-            run_row = (await session.execute(
-                select(RawPatternRun).where(RawPatternRun.id == run_id)
-            )).scalar_one_or_none()
-            if not run_row:
-                continue
-            for Model, label, fk in [
-                (RawPatternComparisonMember, "cmp_members",        RawPatternComparisonMember.run_id),
-                (RawPatternComparison,       "cmp_features",       RawPatternComparison.run_id),
-                (RawPatternEpisodeFeatures,  "ep_features",        RawPatternEpisodeFeatures.run_id),
-                (RawPatternDailyFeatures,    "daily_features",     RawPatternDailyFeatures.run_id),
-                (RawPatternAISummary,        "ai_summaries",       RawPatternAISummary.run_id),
-                (DiscoveredPattern,          "discovered_patterns", DiscoveredPattern.run_id),
-            ]:
-                rows = (await session.execute(select(Model).where(fk == run_id))).scalars().all()
-                for r in rows:
-                    await session.delete(r)
-                total_counts[label] = total_counts.get(label, 0) + len(rows)
-            await session.delete(run_row)
-            total_counts["runs"] = total_counts.get("runs", 0) + 1
 
-        await session.commit()
+    async with get_engine().begin() as conn:
+        id_list = tuple(to_delete_ids)
+        for tbl, label in [
+            ("raw_pattern_comparison_members", "cmp_members"),
+            ("raw_pattern_comparisons",         "cmp_features"),
+            ("raw_pattern_episode_features",    "ep_features"),
+            ("raw_pattern_daily_features",      "daily_features"),
+            ("raw_pattern_ai_summaries",        "ai_summaries"),
+            ("discovered_patterns",             "discovered_patterns"),
+        ]:
+            r = await conn.execute(
+                text(f"DELETE FROM {tbl} WHERE run_id = ANY(:ids)"),
+                {"ids": list(id_list)},
+            )
+            total_counts[label] = r.rowcount
+
+        r = await conn.execute(
+            text("DELETE FROM raw_pattern_runs WHERE id = ANY(:ids)"),
+            {"ids": list(id_list)},
+        )
+        total_counts["runs"] = r.rowcount
 
     vacuum_done = False
     if vacuum and _IS_SQLITE:
@@ -5412,6 +5411,123 @@ async def cleanup_raw_pattern_runs(
         "runs_to_delete": preview,
         "deleted":        total_counts,
         "vacuum_done":    vacuum_done,
+    }
+
+
+async def cleanup_pump_study_runs(
+    keep_last_n: int = 3,
+    dry_run: bool = True,
+) -> dict:
+    """
+    Bulk-delete old pump-study runs to reclaim DB storage.
+    Keeps the `keep_last_n` most-recent complete runs; deletes all child rows
+    (snapshots, events, detections, episodes, clusters, comparisons).
+    """
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PumpStudyRun)
+            .where(PumpStudyRun.status == "complete")
+            .order_by(PumpStudyRun.created_at.desc())
+        )
+        complete_runs = result.scalars().all()
+        to_delete = complete_runs[keep_last_n:]
+        to_delete_ids = [r.id for r in to_delete]
+        preview = [
+            {"run_id": r.id, "created_at": r.created_at.isoformat() if r.created_at else None}
+            for r in to_delete
+        ]
+
+        if dry_run or not to_delete_ids:
+            return {
+                "dry_run": dry_run, "keep_last_n": keep_last_n,
+                "runs_kept": len(complete_runs) - len(to_delete),
+                "runs_to_delete": preview, "deleted": {},
+            }
+
+    total_counts: dict[str, int] = {}
+    async with get_engine().begin() as conn:
+        for tbl, label in [
+            ("pump_episode_snapshots",  "snapshots"),
+            ("pump_episode_events",     "events"),
+            ("pump_episode_detections", "detections"),
+            ("pump_comparison_members", "cmp_members"),
+            ("pump_comparison_groups",  "cmp_groups"),
+            ("pump_clusters",           "clusters"),
+            ("pump_episodes",           "episodes"),
+            ("pump_study_ai_summaries", "ai_summaries"),
+        ]:
+            r = await conn.execute(
+                text(f"DELETE FROM {tbl} WHERE run_id = ANY(:ids)"),
+                {"ids": to_delete_ids},
+            )
+            total_counts[label] = r.rowcount
+
+        r = await conn.execute(
+            text("DELETE FROM pump_study_runs WHERE id = ANY(:ids)"),
+            {"ids": to_delete_ids},
+        )
+        total_counts["runs"] = r.rowcount
+
+    return {
+        "dry_run": False, "keep_last_n": keep_last_n,
+        "runs_kept": len(complete_runs) - len(to_delete),
+        "runs_to_delete": preview, "deleted": total_counts,
+    }
+
+
+async def cleanup_replay_runs(
+    keep_last_n: int = 3,
+    dry_run: bool = True,
+) -> dict:
+    """
+    Bulk-delete old replay runs to reclaim DB storage.
+    Keeps the `keep_last_n` most-recent complete runs; deletes all child rows
+    (signal candidates, outcomes, missed movers).
+    """
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ReplayRun)
+            .where(ReplayRun.status == "completed")
+            .order_by(ReplayRun.created_at.desc())
+        )
+        complete_runs = result.scalars().all()
+        to_delete = complete_runs[keep_last_n:]
+        to_delete_ids = [r.id for r in to_delete]
+        preview = [
+            {"run_id": r.id, "created_at": r.created_at.isoformat() if r.created_at else None}
+            for r in to_delete
+        ]
+
+        if dry_run or not to_delete_ids:
+            return {
+                "dry_run": dry_run, "keep_last_n": keep_last_n,
+                "runs_kept": len(complete_runs) - len(to_delete),
+                "runs_to_delete": preview, "deleted": {},
+            }
+
+    total_counts: dict[str, int] = {}
+    async with get_engine().begin() as conn:
+        for tbl, label in [
+            ("replay_outcomes",          "outcomes"),
+            ("replay_missed_movers",     "missed_movers"),
+            ("replay_signal_candidates", "candidates"),
+        ]:
+            r = await conn.execute(
+                text(f"DELETE FROM {tbl} WHERE replay_run_id = ANY(:ids)"),
+                {"ids": to_delete_ids},
+            )
+            total_counts[label] = r.rowcount
+
+        r = await conn.execute(
+            text("DELETE FROM replay_runs WHERE id = ANY(:ids)"),
+            {"ids": to_delete_ids},
+        )
+        total_counts["runs"] = r.rowcount
+
+    return {
+        "dry_run": False, "keep_last_n": keep_last_n,
+        "runs_kept": len(complete_runs) - len(to_delete),
+        "runs_to_delete": preview, "deleted": total_counts,
     }
 
 

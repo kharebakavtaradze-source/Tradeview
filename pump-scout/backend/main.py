@@ -3134,6 +3134,46 @@ async def raw_pattern_study_cleanup(body: CleanupRequest = CleanupRequest()):
     return result
 
 
+@app.post("/api/replay/pump-study/cleanup")
+async def pump_study_cleanup(body: CleanupRequest = CleanupRequest()):
+    """
+    Admin: bulk-delete old pump-study runs to reclaim DB storage.
+    Keeps the N most-recent complete runs; deletes all child rows
+    (snapshots, events, detections, episodes, clusters, comparisons).
+    Default is dry_run=true — pass dry_run=false to execute.
+    """
+    from database import cleanup_pump_study_runs
+    try:
+        result = await cleanup_pump_study_runs(
+            keep_last_n=body.keep_last_n,
+            dry_run=body.dry_run,
+        )
+    except Exception as exc:
+        logger.exception("pump_study_cleanup failed")
+        raise HTTPException(500, detail=str(exc))
+    return result
+
+
+@app.post("/api/replay/cleanup")
+async def replay_cleanup(body: CleanupRequest = CleanupRequest()):
+    """
+    Admin: bulk-delete old replay runs to reclaim DB storage.
+    Keeps the N most-recent complete runs; deletes all child rows
+    (signal candidates, outcomes, missed movers).
+    Default is dry_run=true — pass dry_run=false to execute.
+    """
+    from database import cleanup_replay_runs
+    try:
+        result = await cleanup_replay_runs(
+            keep_last_n=body.keep_last_n,
+            dry_run=body.dry_run,
+        )
+    except Exception as exc:
+        logger.exception("replay_cleanup failed")
+        raise HTTPException(500, detail=str(exc))
+    return result
+
+
 async def _build_research_context_text(run_id: int) -> str:
     """
     Build a compact, AI-prompt-ready research context string from a completed
