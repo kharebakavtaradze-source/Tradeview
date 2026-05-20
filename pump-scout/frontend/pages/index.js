@@ -806,9 +806,35 @@ function DetailDrawer({ row, onClose, narrative, narrativeLoading, onFetchNarrat
   );
 }
 
+// ── Add-to-Journal button ─────────────────────────────────────────────────────
+
+function JournalBtn({ r, journaled, adding, added, onAdd }) {
+  if (journaled || added) {
+    return (
+      <span style={{ color: '#34d399', fontSize: 10, fontWeight: 700 }}>✓ Added</span>
+    );
+  }
+  return (
+    <button
+      onClick={e => { e.stopPropagation(); onAdd(r); }}
+      disabled={adding}
+      style={{
+        background: adding ? '#1f2937' : 'rgba(29,78,216,0.2)',
+        border: `1px solid ${adding ? '#374151' : '#3b82f6'}`,
+        color: adding ? '#6b7280' : '#93c5fd',
+        borderRadius: 5, padding: '2px 8px', fontSize: 10,
+        fontWeight: 600, cursor: adding ? 'not-allowed' : 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {adding ? '…' : '+ Journal'}
+    </button>
+  );
+}
+
 // ── Main table row ────────────────────────────────────────────────────────────
 
-function ResultRow({ r, onClick, livePrice }) {
+function ResultRow({ r, onClick, livePrice, journaled, addingJournal, addedJournal, onAddToJournal }) {
   const tier = TIER_META[r.demand_composite_tier] || TIER_META.SKIP;
   const price = livePrice?.price ?? r.price;
   const changePct = livePrice?.change_pct;
@@ -873,6 +899,15 @@ function ResultRow({ r, onClick, livePrice }) {
       </td>
       <td style={{ padding: '8px 8px', fontSize: 10, color: '#6b7280' }}>
         {r.sector || '—'}
+      </td>
+      <td style={{ padding: '8px 8px' }} onClick={e => e.stopPropagation()}>
+        <JournalBtn
+          r={r}
+          journaled={journaled}
+          adding={addingJournal === r.symbol}
+          added={addedJournal.has(r.symbol)}
+          onAdd={onAddToJournal}
+        />
       </td>
     </tr>
   );
@@ -951,6 +986,11 @@ export default function DashboardPage() {
   const [scanning,     setScanning]     = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
   const [scanError,    setScanError]    = useState(null);
+
+  // Journal integration
+  const [journaledSet,  setJournaledSet]  = useState(new Set());
+  const [addingJournal, setAddingJournal] = useState(null);
+  const [addedJournal,  setAddedJournal]  = useState(new Set());
 
   // Dashboard context state
   const [marketTimer, setMarketTimer] = useState({ open: false, label: '00:00:00' });
@@ -1056,6 +1096,73 @@ export default function DashboardPage() {
       setScanError(`Failed to start scan: ${e}`);
     }
   }, []);
+
+  // Journal check — run after data loads to know which symbols are already journaled
+  const checkJournaled = useCallback(async (results) => {
+    if (!results?.length) return;
+    const syms = results.map(r => r.symbol).join(',');
+    try {
+      const res = await fetch(`${API_URL}/api/demand-scanner/journal-check?symbols=${encodeURIComponent(syms)}`);
+      if (res.ok) {
+        const d = await res.json();
+        setJournaledSet(new Set(d.journaled || []));
+      }
+    } catch { /* optional — silent fail */ }
+  }, []);
+
+  useEffect(() => {
+    if (data?.results?.length) checkJournaled(data.results);
+  }, [data, checkJournaled]);
+
+  const addToJournal = useCallback(async (row) => {
+    const sym = row.symbol;
+    setAddingJournal(sym);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const liveP = livePrices[sym];
+      const entryPrice = liveP?.price ?? row.price;
+      const payload = {
+        symbol: sym,
+        entry_price: entryPrice,
+        entry_date: today,
+        source: 'demand_scanner',
+        tier: row.demand_composite_tier || '',
+        score: row.demand_composite_score ?? 0,
+        signal_date: data?.scanned_at?.slice(0, 10) || today,
+        notes: [
+          row.demand_composite_tier ? `Demand tier: ${row.demand_composite_tier}` : null,
+          row.ats_signal && row.ats_signal !== 'ATS_NONE' ? `ATS: ${row.ats_signal}` : null,
+          row.readiness_tier ? `Readiness: ${row.readiness_tier}` : null,
+          (row.demand_buy_reasons || []).slice(0, 3).join(', '),
+        ].filter(Boolean).join(' · '),
+        indicators_snapshot: {
+          demand_composite_score: row.demand_composite_score,
+          demand_composite_tier:  row.demand_composite_tier,
+          ats_signal:             row.ats_signal,
+          readiness_tier:         row.readiness_tier,
+          readiness_score:        row.readiness_score,
+          demand_buy_reasons:     row.demand_buy_reasons,
+          scan_price:             row.price,
+          live_price_at_add:      liveP?.price ?? null,
+        },
+      };
+      const res = await fetch(`${API_URL}/api/journal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setAddedJournal(prev => new Set([...prev, sym]));
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to add ${sym}: ${err.detail || res.statusText}`);
+      }
+    } catch (e) {
+      alert(`Error adding to journal: ${e}`);
+    } finally {
+      setAddingJournal(null);
+    }
+  }, [data, livePrices]);
 
   // Poll scan progress
   useEffect(() => {
@@ -1301,6 +1408,9 @@ export default function DashboardPage() {
                   <th style={{ padding: '8px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280', borderBottom: '1px solid #1f2937' }}>
                     Sector
                   </th>
+                  <th style={{ padding: '8px 8px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6b7280', borderBottom: '1px solid #1f2937' }}>
+                    Journal
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -1317,6 +1427,10 @@ export default function DashboardPage() {
                     r={r}
                     onClick={setDrawerRow}
                     livePrice={livePrices[r.symbol]}
+                    journaled={journaledSet.has(r.symbol)}
+                    addingJournal={addingJournal}
+                    addedJournal={addedJournal}
+                    onAddToJournal={addToJournal}
                   />
                 ))}
               </tbody>

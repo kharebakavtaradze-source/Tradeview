@@ -41,7 +41,6 @@ export default function AdminPage() {
   const [universeResult, setUniverseResult] = useState(null);
   const [regimeResult, setRegimeResult] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
-  const [npScanStatus, setNpScanStatus] = useState(null);
   const [loading, setLoading] = useState({});
   const [error, setError] = useState({});
   const [replayRunId, setReplayRunId] = useState('');
@@ -50,7 +49,6 @@ export default function AdminPage() {
   const [refreshSectorResult, setRefreshSectorResult] = useState(null);
   const [refreshSectorStatus, setRefreshSectorStatus] = useState(null);
   const pollRef = useRef(null);
-  const npPollRef = useRef(null);
   const sectorRefreshPollRef = useRef(null);
 
   // ── Clean DB state ──────────────────────────────────────────────────────────
@@ -81,21 +79,6 @@ export default function AdminPage() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
 
-  const startNpPolling = () => {
-    if (npPollRef.current) return;
-    npPollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/admin/new-pump-scan/status`);
-        const data = await res.json();
-        setNpScanStatus(data);
-        if (!data.running) stopNpPolling();
-      } catch (_) {}
-    }, 5000);
-  };
-  const stopNpPolling = () => {
-    if (npPollRef.current) { clearInterval(npPollRef.current); npPollRef.current = null; }
-  };
-
   const startSectorRefreshPolling = () => {
     if (sectorRefreshPollRef.current) return;
     sectorRefreshPollRef.current = setInterval(async () => {
@@ -120,14 +103,7 @@ export default function AdminPage() {
         if (data.running) startPolling();
       })
       .catch(() => {});
-    fetch(`${API_URL}/api/admin/new-pump-scan/status`)
-      .then(r => r.json())
-      .then(data => {
-        setNpScanStatus(data);
-        if (data.running) startNpPolling();
-      })
-      .catch(() => {});
-    return () => { stopPolling(); stopNpPolling(); };
+    return () => { stopPolling(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -154,13 +130,6 @@ export default function AdminPage() {
         setTimeout(() => {
           fetch(`${API_URL}/api/admin/universe-scan/status`)
             .then(r => r.json()).then(d => { setScanStatus(d); if (d.running) startPolling(); })
-            .catch(() => {});
-        }, 1500);
-      }
-      if (key === 'newpump') {
-        setTimeout(() => {
-          fetch(`${API_URL}/api/admin/new-pump-scan/status`)
-            .then(r => r.json()).then(d => { setNpScanStatus(d); if (d.running) startNpPolling(); })
             .catch(() => {});
         }, 1500);
       }
@@ -426,72 +395,6 @@ export default function AdminPage() {
 
               {scanStatus.last_error && (
                 <div style={{ marginTop: 8, fontSize: 10, color: '#ff8888' }}>Error: {scanStatus.last_error}</div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ── New Pump Universe Scan ── */}
-        <div style={card}>
-          <p style={label}>New Pump Universe Scan (Massive / Polygon)</p>
-          <p style={{ margin: '0 0 12px', fontSize: 11, color: '#9898c0', lineHeight: 1.6 }}>
-            Standalone New Pump pipeline — no old-scanner input, no Finviz, no Yahoo.<br />
-            <span style={{ color: '#56567a' }}>Fetches all US stocks via Polygon grouped daily → neutral price/vol filter → 200-bar candle history → new_pump_engine.analyze() per ticker → ranks by score.</span>
-          </p>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button
-              onClick={() => call('newpump', `${API_URL}/api/admin/run-new-pump-scan`)}
-              disabled={loading.newpump || npScanStatus?.running}
-              style={{ background: 'rgba(255,68,0,0.12)', border: '1px solid rgba(255,68,0,0.4)', borderRadius: 4, padding: '7px 18px', color: '#ff6622', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}
-            >
-              {loading.newpump || npScanStatus?.running ? '⏳ Scanning…' : '🔥 Run New Pump Scan'}
-            </button>
-            <a
-              href="/new-pump"
-              style={{ fontSize: 10, color: '#56567a', textDecoration: 'none' }}
-            >
-              view results ↗
-            </a>
-          </div>
-          {error.newpump && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.newpump}</div>}
-
-          {/* Live progress */}
-          {npScanStatus && npScanStatus.phase !== 'idle' && (
-            <div style={{ marginTop: 14, background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '12px 14px', border: `1px solid ${npScanStatus.running ? 'rgba(255,100,0,0.3)' : npScanStatus.phase === 'done' ? 'rgba(40,217,113,0.25)' : 'rgba(255,100,100,0.25)'}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                {npScanStatus.running && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ff6622', boxShadow: '0 0 6px #ff6622', display: 'inline-block', animation: 'pulse 1.2s infinite' }} />}
-                {!npScanStatus.running && npScanStatus.phase === 'done' && <span style={{ color: '#44ff64', fontSize: 13 }}>✓</span>}
-                {!npScanStatus.running && npScanStatus.phase === 'error' && <span style={{ color: '#ff6b6b', fontSize: 13 }}>✗</span>}
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#eaeaf6' }}>
-                  {{
-                    fetching_universe: 'Fetching universe from Polygon…',
-                    filtering:         'Applying neutral prefilters…',
-                    fetching_candles:  'Fetching 200-bar candle history…',
-                    analyzing:         'Running new_pump_engine.analyze()…',
-                    done:              'Scan complete',
-                    error:             'Scan failed',
-                  }[npScanStatus.phase] || npScanStatus.phase}
-                </span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                {[
-                  ['Universe', npScanStatus.universe_size || '—'],
-                  ['Fetched',  npScanStatus.fetched_count || '—'],
-                  ['Analyzed', npScanStatus.analyzed_count || '—'],
-                  ['Skipped',  npScanStatus.skipped_count ?? '—'],
-                  ['🔥 FIRE',  npScanStatus.fire_count   || '—'],
-                  ['💪 STRONG',npScanStatus.strong_count || '—'],
-                  ['📐 SETUP', npScanStatus.setup_count  || '—'],
-                  ['Elapsed',  npScanStatus.elapsed_secs != null ? `${npScanStatus.elapsed_secs}s` : '—'],
-                ].map(([lbl, val]) => (
-                  <div key={lbl} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '5px 8px', textAlign: 'center' }}>
-                    <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginBottom: 2 }}>{lbl}</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#e0e0e0' }}>{val}</div>
-                  </div>
-                ))}
-              </div>
-              {npScanStatus.last_error && (
-                <div style={{ marginTop: 8, fontSize: 10, color: '#ff8888' }}>Error: {npScanStatus.last_error}</div>
               )}
             </div>
           )}
@@ -788,9 +691,7 @@ export default function AdminPage() {
                 ['/api/admin/refresh-sector-data/status', 'Sector refresh status'],
                 ['/api/market-regime/refresh', 'Refresh ETF / market regime (background)'],
                 ['/api/market-regime', 'Latest market regime'],
-                ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
-                ['/api/scan/intraday/latest', 'Latest intraday scan results'],
-                ['/api/scan/latest', 'Latest scan (any type)'],
+                ['/api/demand-scanner/latest', 'Latest demand scanner results'],
                 ['/api/replay/history', 'Replay run history'],
                 ['/health', 'Health check'],
               ],

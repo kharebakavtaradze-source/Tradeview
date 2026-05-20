@@ -7,12 +7,9 @@ import { useRouter } from 'next/router';
 
 const NAV_LINKS = [
   { href: '/',             label: 'Dashboard' },
-  { href: '/new-pump',       label: 'New Pump' },
   { href: '/scanner-v2',     label: 'Scanner v2' },
-  { href: '/signal-anatomy', label: 'Signal Anatomy' },
   { href: '/sectors',      label: 'Sectors' },
   { href: '/journal',      label: 'Journal' },
-  { href: '/ai-portfolio', label: 'AI Portfolio' },
   { href: '/macro-events', label: 'Macro' },
   { href: '/replay',            label: 'Replay' },
   { href: '/pump-study',        label: 'Pump Study' },
