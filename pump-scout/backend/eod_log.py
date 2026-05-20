@@ -13,8 +13,6 @@ from database import (
     get_journal_stats,
     get_latest_scan,
     get_watchlist,
-    get_portfolio_state,
-    get_open_ai_positions,
     get_candidates_missed,
     save_eod_log,
     update_journal_entry,
@@ -238,33 +236,6 @@ async def generate_eod_log() -> str:
             lines.append("_Watchlist is empty._")
     except Exception as e:
         lines.append(f"_Watchlist unavailable: {e}_")
-    lines.append("")
-
-    # ── AI Portfolio ──────────────────────────────────────────────────────────
-    lines.append("## AI Paper Portfolio")
-    try:
-        state = await get_portfolio_state()
-        ai_open = await get_open_ai_positions()
-        lines += [
-            f"**Total Value:** {_price(state.get('total_value'))}  |  "
-            f"**Cash:** {_price(state.get('cash'))}  |  "
-            f"**P&L:** {_pct(state.get('total_pnl_pct'))}",
-            "",
-        ]
-        if ai_open:
-            lines.append("| Symbol | Entry | P&L % | Days |")
-            lines.append("|--------|-------|-------|------|")
-            for p in ai_open:
-                lines.append(
-                    f"| {p['symbol']} "
-                    f"| {_price(p.get('entry_price'))} "
-                    f"| {_pct(p.get('pnl_pct'))} "
-                    f"| {p.get('days_held', 0)}d |"
-                )
-        else:
-            lines.append("_No open AI positions._")
-    except Exception as e:
-        lines.append(f"_AI portfolio unavailable: {e}_")
     lines.append("")
 
     # ── Footer ────────────────────────────────────────────────────────────────
