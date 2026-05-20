@@ -1155,6 +1155,8 @@ function RunDetailHeader({ run }) {
     { label: 'Min Volume',     value: run.min_volume != null ? fmtNum(run.min_volume) : '—' },
   ];
 
+  const base = `${API_URL}/api/replay/pump-study/${run.id}/export`;
+
   return (
     <div className={styles.bundleSection}>
       {/* Status row */}
@@ -1170,6 +1172,24 @@ function RunDetailHeader({ run }) {
         <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>
           Created {ago(run.created_at)}
         </span>
+        {/* Export buttons */}
+        <button className={styles.exportBtn}
+          onClick={() => window.open(`${base}?format=json`)}
+          title="Download full structured bundle (run + episodes + clusters + timeline)">
+          ↓ JSON
+        </button>
+        <button className={styles.exportBtn}
+          onClick={() => window.open(`${base}?format=csv`)}
+          title="Download flat CSV of all episodes"
+          style={{ color: 'var(--lime, #22c55e)' }}>
+          ↓ CSV
+        </button>
+        <button className={styles.exportBtn}
+          onClick={() => window.open(`${base}?format=markdown`)}
+          title="Download Markdown summary"
+          style={{ color: 'var(--cyan, #22d3ee)' }}>
+          ↓ MD
+        </button>
       </div>
 
       {/* KPI grid */}
