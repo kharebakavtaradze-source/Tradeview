@@ -788,6 +788,14 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("pump_watch_diagnostic_labels",         "TEXT"),       # JSON list of diagnostic label IDs
     ("pump_watch_pattern_id",                "VARCHAR(60)"), # primary diagnostic ID
     ("pump_watch_rescue_reason",             "VARCHAR(80)"), # human-readable rescue note
+    # Demand composite enrichment (Option B)
+    ("demand_score_at_breakout",   "FLOAT"),
+    ("demand_tier_at_breakout",    "VARCHAR(20)"),
+    ("ats_at_breakout",            "VARCHAR(20)"),
+    ("readiness_at_breakout",      "FLOAT"),
+    ("readiness_tier_at_breakout", "VARCHAR(10)"),
+    ("had_prime_buy_pre",          "BOOLEAN"),
+    ("had_ats_prime_pre",          "BOOLEAN"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -845,6 +853,32 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("d_confluence_family",            "VARCHAR(20)"),
     ("d_confluence_timing",            "VARCHAR(20)"),
     ("scanner_v2_rank",                "INTEGER"),
+    # Demand composite enrichment (Option B)
+    ("demand_composite_score",  "FLOAT"),
+    ("demand_composite_tier",   "VARCHAR(20)"),
+    ("ats_signal",              "VARCHAR(20)"),
+    ("readiness_score",         "FLOAT"),
+    ("readiness_tier",          "VARCHAR(10)"),
+    ("flow_score",              "FLOAT"),
+    ("flow_signals_json",       "TEXT"),
+    ("flow_risks_json",         "TEXT"),
+    ("demand_breakdown_json",   "TEXT"),
+    ("demand_risk_flags_json",  "TEXT"),
+]
+
+_PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
+    # Demand composite enrichment (Option B)
+    ("demand_score_at_breakout",   "FLOAT"),
+    ("demand_tier_at_breakout",    "VARCHAR(20)"),
+    ("ats_at_breakout",            "VARCHAR(20)"),
+    ("readiness_at_breakout",      "FLOAT"),
+    ("readiness_tier_at_breakout", "VARCHAR(10)"),
+]
+
+_AI_JOURNAL_POSITION_MIGRATIONS: list[tuple[str, str]] = [
+    # Added for Opus 4.7 / pattern memory integration
+    ("readiness_tier",     "VARCHAR(10)"),
+    ("confluence_signals", "TEXT"),
 ]
 
 _UNIVERSE_CACHE_MIGRATIONS: list[tuple[str, str]] = []
@@ -855,6 +889,7 @@ _DISCOVERED_PATTERN_MIGRATIONS: list[tuple[str, str]] = [
     ("source_type",    "VARCHAR(30)"),
     ("feature_family", "VARCHAR(30)"),
 ]
+
 
 _JOURNAL_MIGRATIONS = [
     ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
@@ -941,6 +976,16 @@ async def _run_migrations(conn):
         for col, coltype in _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS:
             try:
                 await conn.execute(text(f"ALTER TABLE replay_signal_candidates ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
+        for col, coltype in _PUMP_EPISODE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE pump_episodes ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
+        for col, coltype in _AI_JOURNAL_POSITION_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE ai_journal_position ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
         for col, coltype in _UNIVERSE_CACHE_MIGRATIONS:
@@ -1043,6 +1088,23 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration replay_outcomes.{col} failed (non-fatal): {e}")
+
+        # Demand composite enrichment columns on replay + pump + ai_journal_position
+        for col, coltype in _PUMP_EPISODE_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE pump_episodes ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration pump_episodes.{col} failed (non-fatal): {e}")
+
+        for col, coltype in _AI_JOURNAL_POSITION_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE ai_journal_position ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration ai_journal_position.{col} failed (non-fatal): {e}")
 
         # Drop removed AI advisory tables (idempotent)
         for tbl in ("ai_signal_analysis", "ai_review_reports", "ai_insights"):
