@@ -5,9 +5,8 @@
  * classified by sector impact. NEVER affects scores, tiers, or rankings.
  */
 import { useCallback, useEffect, useState } from 'react';
-import Head from 'next/head';
 import styles from '../styles/MacroEvents.module.css';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 min
@@ -426,13 +425,8 @@ export default function MacroEventsPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <Head>
-        <title>Macro Events — Pump Scout</title>
-      </Head>
+    <PumpLayout title="Macro Events">
       <div className={styles.page}>
-
-        <AppNav />
 
         {/* Header */}
         <div className={styles.header}>
@@ -515,6 +509,6 @@ export default function MacroEventsPage() {
           </div>
         )}
       </div>
-    </>
+    </PumpLayout>
   );
 }

@@ -4,8 +4,7 @@
  * strict temporal isolation (no future leakage).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Head from 'next/head';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 import BarLabels from '../components/BarLabels';
 import styles from '../styles/Replay.module.css';
 
@@ -1135,12 +1134,7 @@ export default function ReplayPage() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <Head>
-        <title>Replay · Pump Scout</title>
-      </Head>
-      <AppNav />
-
+    <PumpLayout title="Replay">
       <div className={styles.page}>
         <div className={styles.header}>
           <div className={styles.advisory}>⏪ HISTORICAL REPLAY — RESEARCH ONLY</div>
@@ -1799,6 +1793,6 @@ export default function ReplayPage() {
           </div>
         </div>
       )}
-    </>
+    </PumpLayout>
   );
 }

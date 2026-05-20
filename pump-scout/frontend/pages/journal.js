@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import Head from 'next/head';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 import JournalModal from '../components/JournalModal';
 import styles from '../styles/Journal.module.css';
 
@@ -352,13 +351,8 @@ export default function Journal() {
   const lossCount = entries.filter(e => e.outcome === 'loss').length;
 
   return (
-    <>
-      <Head>
-        <title>Trade Journal — Pump Scout</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-      </Head>
+    <PumpLayout title="Journal">
       <div className={styles.container}>
-        <AppNav />
 
         {/* Capital bar + Reset */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -1006,7 +1000,7 @@ export default function Journal() {
           </div>
         </div>
       )}
-    </>
+    </PumpLayout>
   );
 }
 

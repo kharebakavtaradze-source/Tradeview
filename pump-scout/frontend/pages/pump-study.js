@@ -7,8 +7,7 @@
  * Phase 6:  AI recommendation layer.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Head from 'next/head';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 import BarLabels from '../components/BarLabels';
 import styles from '../styles/PumpStudy.module.css';
 
@@ -1433,10 +1432,7 @@ export default function PumpStudyPage() {
   }
 
   return (
-    <>
-      <Head><title>Pump Study — Pump Scout</title></Head>
-      <AppNav />
-
+    <PumpLayout title="Pump Study">
       <div className={styles.page}>
         {/* ── Header ──────────────────────────────────────────────────────── */}
         <div className={styles.header}>
@@ -1565,6 +1561,6 @@ export default function PumpStudyPage() {
           </div>
         </div>
       )}
-    </>
+    </PumpLayout>
   );
 }

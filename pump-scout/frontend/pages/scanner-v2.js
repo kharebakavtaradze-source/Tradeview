@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
 import styles from '../styles/ScannerV2.module.css';
-import AppNav from '../components/AppNav';
+import PumpLayout from '../components/PumpLayout';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -594,9 +593,7 @@ export default function ScannerV2Page() {
   });
 
   return (
-    <>
-      <Head><title>Scanner v2 — Pump Scout</title></Head>
-      <AppNav />
+    <PumpLayout title="Scanner" subtitle="v2">
       <div className={styles.page}>
 
         {/* Header */}
@@ -836,6 +833,6 @@ export default function ScannerV2Page() {
       </div>
 
       {drawerRow && <V2Drawer row={drawerRow} onClose={() => setDrawerRow(null)} />}
-    </>
+    </PumpLayout>
   );
 }
