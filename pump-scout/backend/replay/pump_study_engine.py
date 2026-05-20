@@ -1464,6 +1464,14 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
     except Exception:
         logger.warning("[CustomFlags] abr_tz_engine unavailable — ABR fields skipped")
 
+    # 260521 Line3/4/5: body/wick/gap/range/VIX-Fix/PSAR/RSI2
+    bar_labels_260521: list[dict] = []
+    try:
+        from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+        bar_labels_260521 = compute_combined_bar_labels(candles, last_n=len(candles))
+    except Exception:
+        logger.warning("[CustomFlags] compute_combined_bar_labels L3/4/5 unavailable — skipped")
+
     result: list[dict] = []
     for i, w in enumerate(wlnbb_series):
         d    = d_series[i]
@@ -1545,6 +1553,18 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
         }
         if i < len(abr_series) and abr_series[i]:
             flags.update(abr_series[i])
+
+        # Inject 260521 L3/4/5 token fields
+        if i < len(bar_labels_260521):
+            lbl = bar_labels_260521[i]
+            flags["body_class"]  = lbl.get("body_class",  "") or ""
+            flags["wick_class"]  = lbl.get("wick_class",  "") or ""
+            flags["gap_class"]   = lbl.get("gap_class",   "") or ""
+            flags["range_class"] = lbl.get("range_class", "") or ""
+            flags["vix_token"]   = lbl.get("vix_token",   "") or ""
+            flags["psar_token"]  = lbl.get("psar_token",  "") or ""
+            flags["rsi2_token"]  = lbl.get("rsi2_token",  "") or ""
+
         result.append(flags)
 
     return result

@@ -1093,6 +1093,159 @@ def compute_d_wlnbb_pre_counts(
     return {f"{f}_count_pre": counts[f] for f in _D_COUNT_FIELDS}
 
 
+# ── Part 5 helpers: ATR / Williams VIX-Fix / PSAR / RSI2 tokens ──────────────
+
+def _atr_series(
+    highs: list[float], lows: list[float], closes: list[float], period: int = 14
+) -> list[Optional[float]]:
+    """Wilder ATR — matches Pine ta.atr(period). None during warm-up."""
+    n = len(closes)
+    out: list[Optional[float]] = [None] * n
+    if n < period:
+        return out
+    trs: list[float] = []
+    for i in range(n):
+        if i == 0:
+            trs.append(highs[i] - lows[i])
+        else:
+            trs.append(max(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1]),
+            ))
+    seed = sum(trs[:period]) / period
+    out[period - 1] = seed
+    for i in range(period, n):
+        out[i] = (out[i - 1] * (period - 1) + trs[i]) / period
+    return out
+
+
+def _wvf_tokens_series(
+    closes: list[float],
+    lows:   list[float],
+    lookback:   int   = 22,
+    sdev_len:   int   = 20,
+    sdev_mult:  float = 2.0,
+    range_len:  int   = 50,
+    range_pct:  float = 0.85,
+) -> list[str]:
+    """Williams VIX-Fix token per bar: 'VX' (spike) | 'VR' (range) | ''."""
+    n = len(closes)
+    out: list[str] = [""] * n
+    _TINY = 1e-10
+
+    # highest close over lookback window
+    hc: list[Optional[float]] = [None] * n
+    for i in range(n):
+        if i >= lookback - 1:
+            hc[i] = max(closes[i - lookback + 1: i + 1])
+
+    # wvf = (highest_close - low) / highest_close * 100
+    wvf: list[float] = [0.0] * n
+    for i in range(n):
+        if hc[i] is not None and hc[i] > _TINY:
+            wvf[i] = (hc[i] - lows[i]) / hc[i] * 100.0
+
+    wvf_sma = _sma_series(wvf, sdev_len)
+    wvf_std = _std_series(wvf, sdev_len)
+
+    for i in range(n):
+        mid = wvf_sma[i]
+        std = wvf_std[i]
+        if mid is None or std is None:
+            continue
+        upper = mid + sdev_mult * std
+
+        # highest wvf over last range_len bars
+        wvf_range_thresh: Optional[float] = None
+        if i >= range_len - 1:
+            window = wvf[i - range_len + 1: i + 1]
+            peak = max(window) if window else 0.0
+            wvf_range_thresh = peak * range_pct
+
+        spike = wvf[i] >= upper
+        in_range = (wvf_range_thresh is not None) and (wvf[i] >= wvf_range_thresh) and not spike
+
+        if spike:
+            out[i] = "VX"
+        elif in_range:
+            out[i] = "VR"
+    return out
+
+
+def _psar_tokens_series(
+    highs:   list[float],
+    lows:    list[float],
+    closes:  list[float],
+    start:   float = 0.02,
+    inc:     float = 0.02,
+    max_af:  float = 0.2,
+) -> list[str]:
+    """Parabolic SAR token per bar: 'PB' (close > SAR) | 'PS' (close ≤ SAR)."""
+    n = len(closes)
+    out: list[str] = ["PS"] * n
+    if n < 2:
+        return out
+
+    bull = True
+    af   = start
+    ep   = highs[0]
+    sar  = lows[0]
+
+    for i in range(1, n):
+        if bull:
+            sar = sar + af * (ep - sar)
+            # SAR cannot be above previous two lows
+            sar = min(sar, lows[i - 1])
+            if i >= 2:
+                sar = min(sar, lows[i - 2])
+            if highs[i] > ep:
+                ep = highs[i]
+                af = min(af + inc, max_af)
+            if lows[i] < sar:
+                bull = False
+                sar  = ep
+                ep   = lows[i]
+                af   = start
+        else:
+            sar = sar + af * (ep - sar)
+            # SAR cannot be below previous two highs
+            sar = max(sar, highs[i - 1])
+            if i >= 2:
+                sar = max(sar, highs[i - 2])
+            if lows[i] < ep:
+                ep = lows[i]
+                af = min(af + inc, max_af)
+            if highs[i] > sar:
+                bull = True
+                sar  = ep
+                ep   = highs[i]
+                af   = start
+
+        out[i] = "PB" if closes[i] > sar else "PS"
+    return out
+
+
+def _rsi2_tokens_series(
+    rsi_series: list[Optional[float]],
+    low:  float = 20.0,
+    high: float = 80.0,
+) -> list[str]:
+    """RSI2 token per bar: 'R2X' | 'R2D' | 'R2L' | 'R2H' | ''."""
+    n = len(rsi_series)
+    out: list[str] = [""] * n
+    for i in range(1, n):
+        prev = rsi_series[i - 1]
+        curr = rsi_series[i]
+        if prev is None or curr is None:
+            continue
+        if prev < low  and curr >= low:   out[i] = "R2X"   # oversold reclaim
+        elif prev > high and curr <= high: out[i] = "R2D"   # overbought drop
+        elif curr < low:                   out[i] = "R2L"
+        elif curr > high:                  out[i] = "R2H"
+    return out
+
+
 # ── Part 5: Combined bar labels (T/Z + WLNBB + PREUP/PREDN + suffix) ─────────
 
 def compute_combined_bar_labels(
@@ -1134,6 +1287,13 @@ def compute_combined_bar_labels(
     # for the extended L1-L6 digits (vol_down_adapted not in compute_wlnbb_features output)
     # Use the existing function for l34/l43/l64/be_up, add digits separately.
     wlnbb_all = compute_wlnbb_features(candles)
+
+    # ── Line 3/4/5 pre-computed series (260521 additions) ────────────────────
+    atr_ser   = _atr_series(highs, lows, closes, period=14)
+    vix_toks  = _wvf_tokens_series(closes, lows)
+    psar_toks = _psar_tokens_series(highs, lows, closes)
+    rsi2_ser  = _rsi_series(closes, 2)
+    rsi2_toks = _rsi2_tokens_series(rsi2_ser)
 
     # ── T/Z priority code → label string ─────────────────────────────────────
     _BULL_LABELS = {
@@ -1356,6 +1516,58 @@ def compute_combined_bar_labels(
             close_suffix = "I"
             append_close = False
 
+        # ── Line 3 — Body size / Wick proportion (260521) ────────────────────
+        _TINY = 1e-10
+        body_now   = abs(c - o)
+        body_prev  = abs(closes[i - 1] - opens_[i - 1]) if i > 0 else 0.0
+        body_prev_s = max(body_prev, _TINY)
+        body_ratio_l3 = body_now / body_prev_s
+        bar_range   = h - l
+        bar_range_s = max(bar_range, _TINY)
+        upper_wick  = h - max(o, c)
+        lower_wick  = min(o, c) - l
+        upper_frac  = upper_wick / bar_range_s
+        lower_frac  = lower_wick / bar_range_s
+        body_frac_l3 = body_now / bar_range_s
+
+        if i == 0:
+            body_class = "S"
+            wick_class = ""
+        else:
+            body_class = "X" if body_ratio_l3 >= 1.5 else "M" if body_ratio_l3 <= 0.5 else "S"
+            wick_class = (
+                "J"  if body_frac_l3 <= 0.2 else
+                "TB" if upper_frac >= 0.5   else
+                "BB" if lower_frac >= 0.5   else
+                "F"  if (upper_frac < 0.3 and lower_frac < 0.3) else ""
+            )
+        line3 = body_class + wick_class  # e.g. "XTB", "MBB", "SJ", "SF", "S"
+
+        # ── Line 4 — Gap (ATR-relative) + Range vs ATR (260521) ──────────────
+        atr_val  = atr_ser[i]
+        atr_safe = max(atr_val, _TINY) if atr_val is not None else _TINY
+        has_gap  = (o > highs[i - 1] or o < lows[i - 1]) if i > 0 else False
+        gap_abs  = abs(o - closes[i - 1]) if (has_gap and i > 0) else 0.0
+        gap_atr_ratio = gap_abs / atr_safe
+
+        if has_gap:
+            gap_class = "G1" if gap_atr_ratio < 0.2 else "G2" if gap_atr_ratio < 0.5 else "G3"
+        else:
+            gap_class = ""
+
+        range_ratio = (h - l) / atr_safe
+        range_class = "V" if range_ratio > 1.5 else "C" if range_ratio < 0.5 else "N"
+
+        line4_parts = [p for p in [gap_class, range_class] if p]
+        line4 = "-".join(line4_parts)   # e.g. "G2-V", "N", "G1-C"
+
+        # ── Line 5 — VIX-Fix / PSAR / RSI2 (260521) ─────────────────────────
+        vix_token  = vix_toks[i]
+        psar_token = psar_toks[i]
+        rsi2_token = rsi2_toks[i]
+        line5_parts = [t for t in [vix_token, psar_token, rsi2_token] if t]
+        line5 = "-".join(line5_parts)   # e.g. "VX-PB-R2L", "PB-R2H", "PB"
+
         # ── Label construction ────────────────────────────────────────────────
         l_part = ("L" + l_digits) if l_digits else ""
 
@@ -1404,6 +1616,19 @@ def compute_combined_bar_labels(
             "append_close": append_close,
             # Combined label
             "label": label,
+            # ── Line 3 — Body size / Wick proportion (260521) ────────────────
+            "body_class": body_class,   # "X" | "M" | "S"
+            "wick_class": wick_class,   # "TB" | "BB" | "J" | "F" | ""
+            "line3":      line3,        # e.g. "XTB", "MBB", "SJ", "SF", "S"
+            # ── Line 4 — Gap (ATR-relative) + Range vs ATR (260521) ──────────
+            "gap_class":   gap_class,   # "G1" | "G2" | "G3" | ""
+            "range_class": range_class, # "V" | "N" | "C"
+            "line4":       line4,       # e.g. "G2-V", "N", "G1-C"
+            # ── Line 5 — VIX-Fix / PSAR / RSI2 (260521) ─────────────────────
+            "vix_token":  vix_token,    # "VX" | "VR" | ""
+            "psar_token": psar_token,   # "PB" | "PS"
+            "rsi2_token": rsi2_token,   # "R2X" | "R2D" | "R2L" | "R2H" | ""
+            "line5":      line5,        # e.g. "VX-PB-R2L", "PB-R2H", "PB"
         })
 
     # Return only last `last_n` bars (oldest → newest)
