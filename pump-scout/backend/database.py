@@ -4013,6 +4013,23 @@ class RawPatternEpisodeFeatures(Base):
     readiness_tier_at_breakout = Column(String(10), nullable=True)
     had_prime_buy_pre          = Column(Boolean,    nullable=True)  # any PRIME_BUY in DemandTickerHistory within 7d before breakout
     had_ats_prime_pre          = Column(Boolean,    nullable=True)
+    # Demand Scanner at breakout — extended fields
+    ats_score_at_breakout              = Column(Float,   nullable=True)
+    ats_conditions_met_at_breakout     = Column(Text,    nullable=True)  # JSON list
+    ats_conditions_missing_at_breakout = Column(Text,    nullable=True)  # JSON list
+    demand_action_at_breakout          = Column(String(20), nullable=True)
+    demand_reasons_at_breakout         = Column(Text,    nullable=True)  # JSON list
+    demand_risk_flags_at_breakout      = Column(Text,    nullable=True)  # JSON list
+    demand_compute_status              = Column(String(20), nullable=True)  # OK|PARTIAL|MISSING_INPUT|ERROR
+    demand_missing_inputs              = Column(Text,    nullable=True)  # JSON list
+    # Demand comparison booleans (PART 4) — NULL treated as false in aggregation
+    demand_prime_at_breakout           = Column(Boolean, nullable=True)
+    demand_high_at_breakout            = Column(Boolean, nullable=True)
+    demand_watch_or_better_at_breakout = Column(Boolean, nullable=True)
+    ats_prime_at_breakout              = Column(Boolean, nullable=True)
+    ats_setup_or_better_at_breakout    = Column(Boolean, nullable=True)
+    split_capped_demand_at_breakout    = Column(Boolean, nullable=True)
+    illiquidity_capped_demand_at_breakout = Column(Boolean, nullable=True)
 
 
 class RawPatternComparison(Base):

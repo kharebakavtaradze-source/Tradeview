@@ -148,6 +148,54 @@ async def _fetch_candles_range(
         return []
 
 
+# ── Date helper ───────────────────────────────────────────────────────────────
+
+def _date_add(date_str: str, days: int) -> str:
+    """Add `days` to a YYYY-MM-DD string and return YYYY-MM-DD."""
+    from datetime import date, timedelta
+    d = date.fromisoformat(date_str)
+    return (d + timedelta(days=days)).isoformat()
+
+
+# ── Sector resolution helper ──────────────────────────────────────────────────
+
+async def _resolve_sector_for_symbol(symbol: str) -> tuple[str | None, str | None]:
+    """
+    Look up sector/industry for a symbol from SectorCache or UniverseCache.
+    Returns (sector, industry) or (None, None) if not found.
+    """
+    try:
+        from database import get_session_factory, SectorCache, UniverseCache
+        from scanner.sector_resolver import resolve_sector
+        from sqlalchemy import select as _sa_select
+
+        async with get_session_factory()() as session:
+            # Try SectorCache first
+            row = (await session.execute(
+                _sa_select(SectorCache).where(SectorCache.symbol == symbol.upper())
+            )).scalar_one_or_none()
+            if row and row.sector and row.sector not in ("Unknown", "UNKNOWN", ""):
+                return row.sector, row.industry
+
+            # Try UniverseCache
+            urow = (await session.execute(
+                _sa_select(UniverseCache).where(UniverseCache.symbol == symbol.upper())
+            )).scalar_one_or_none()
+            if urow:
+                sector, industry, _ = resolve_sector(
+                    symbol=symbol,
+                    raw_sector=getattr(urow, "sector", None),
+                    raw_industry=getattr(urow, "industry", None),
+                    sic_code=getattr(urow, "sic_code", None),
+                    sic_description=getattr(urow, "sic_description", None),
+                )
+                if sector and sector not in ("Unknown", "UNKNOWN"):
+                    return sector, industry
+    except Exception:
+        pass
+    return None, None
+
+
 # ── Raw detection ─────────────────────────────────────────────────────────────
 
 def _detect_raw_pumps(
@@ -2933,6 +2981,60 @@ _D_BEST_TYPE_RANK = {
     "SECONDARY_D_CONFLUENCE": 17,
     "NONE":                   18,
 }
+
+
+def _build_demand_result_from_snapshot(
+    snap: dict,
+    feature_json: dict | None,
+    ep: dict,
+) -> tuple[dict, list[str]]:
+    """
+    Reconstruct a demand-scorer-compatible result dict from a pump study snapshot
+    + optional feature_json from raw_pattern_daily_features.
+    Returns (result_dict, missing_inputs_list).
+    """
+    sj       = snap.get("snapshot") or {} if snap else {}
+    np_data  = sj.get("new_pump") or {}
+    fj       = feature_json or {}
+    missing  = []
+
+    result: dict = {
+        "price":                        snap.get("close") if snap else None,
+        "compression_expansion_state":  np_data.get("compression_expansion_state"),
+        "new_pump_label":               np_data.get("decision"),
+        "decision":                     np_data.get("decision"),
+        "expansion_timing_risk":        np_data.get("expansion_timing_risk"),
+        "fake_trigger_risk":            np_data.get("fake_trigger_risk"),
+        "scanner_v2_decision":          np_data.get("decision"),  # best proxy
+        # D-WLNBB / custom flags from feature_json
+        "l34_wlnbb":           fj.get("l34_wlnbb"),
+        "l43_wlnbb":           fj.get("l43_wlnbb"),
+        "l64_wlnbb":           fj.get("l64_wlnbb"),
+        "d6_beup":             fj.get("d6_beup"),
+        "d4_beup":             fj.get("d4_beup"),
+        "d3_beup":             fj.get("d3_beup"),
+        "core_d_beup":         fj.get("core_d_beup"),
+        "core_d_l34":          fj.get("core_d_l34"),
+        "d4_l34":              fj.get("d4_l34"),
+        "d3_l34":              fj.get("d3_l34"),
+        "has_l34_np_ld":       fj.get("has_l34_np_ld"),
+        "has_wc_gap_ld":       fj.get("has_wc_gap_ld"),
+        "has_triple_d_l34_beup": fj.get("has_triple_d_l34_beup"),
+        # Context fields not available from historical snapshots — scorer handles None
+        "sector_context":      None,
+        "macro_context":       None,
+        "news_hype_context":   None,
+        "sympathy_context":    None,
+    }
+
+    if not snap:
+        missing.append("no_snapshot")
+    if not feature_json:
+        missing += ["l34_wlnbb", "d6_beup", "has_l34_np_ld", "has_wc_gap_ld"]
+    if result.get("compression_expansion_state") is None:
+        missing.append("compression_expansion_state")
+
+    return result, missing
 
 
 async def build_raw_pattern_episode_features_structural_v2(
