@@ -241,7 +241,6 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
     { label: 'Days to 2×',    val: ep.days_to_double ?? '—' },
     { label: 'Caught',        val: caught == null ? '—' : caught ? 'CAUGHT' : 'MISSED',
                               color: caught == null ? null : caught ? 'var(--lime)' : 'var(--red)' },
-    { label: 'Wyckoff',       val: ep.strongest_wyckoff_state || '—' },
     { label: 'Max Gap',       val: ep.largest_gap_pct != null ? fmtPct(ep.largest_gap_pct) : '—' },
     { label: 'Max Vol',       val: ep.max_volume_anomaly != null ? `${Number(ep.max_volume_anomaly).toFixed(1)}×` : '—',
                               color: ep.max_volume_anomaly >= 3 ? 'var(--amber)' : null },
@@ -373,14 +372,9 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                   <th title="Overnight gap %">Gap%</th>
                   <th title="Daily return">Day%</th>
                   <th title="Cumulative return from start">Cum%</th>
-                  <th>Wyckoff</th>
                   <th title="Sequence type">Seq</th>
                   <th title="Structural bias">Bias</th>
                   <th title="Toxicity score">Tox</th>
-                  <th title="Scanner v2 structure phase">NP Phase</th>
-                  <th title="NP structure score">Sc</th>
-                  <th title="Compression / expansion state">CE</th>
-                  <th title="NP decision">Decision</th>
                 </tr>
               </thead>
               <tbody>
@@ -438,9 +432,6 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                         {(s.cum_return_pct ?? s.cumulative_return_from_start) != null
                           ? fmtPct(s.cum_return_pct ?? s.cumulative_return_from_start, true) : '—'}
                       </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)' }}>
-                        {s.wyckoff_state || '—'}
-                      </td>
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>
                         {seqType !== '—' ? String(seqType).slice(0, 8) : '—'}
                       </td>
@@ -451,15 +442,6 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
                                    color: tox >= 45 ? 'var(--red)' : tox >= 20 ? 'var(--amber)' : 'var(--text-muted)' }}>
                         {tox != null ? tox : '—'}
                       </td>
-                      <td><NPPhaseBadge phase={npPhase} /></td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9,
-                                   color: npScore != null ? (npScore >= 70 ? '#86efac' : npScore >= 40 ? '#22d3ee' : 'var(--text-dim)') : 'var(--text-muted)' }}>
-                        {npScore ?? '—'}
-                      </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: ceShort ? 700 : 400, color: ceColor }}>
-                        {ceShort ?? '—'}
-                      </td>
-                      <td><NPDecisionBadge decision={npDecision} /></td>
                     </tr>
                   );
                 })}
@@ -644,11 +626,8 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                 <th title="Trading days from start to peak">Days</th>
                 <th>Family</th>
                 <th title="Was it in scanner output on start date?">Caught</th>
-                <th title="Highest Wyckoff state reached in PRE window">Wyckoff</th>
                 <th title="Largest gap up % in PRE+PUMP window">Max Gap</th>
                 <th title="Max volume vs 20-day average">Max Vol</th>
-                <th title="Scanner v2 structure phase at pump start">NP Phase</th>
-                <th title="New Pump signal label">NP Label</th>
               </tr>
             </thead>
             <tbody>
@@ -692,19 +671,12 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                           </span>
                       }
                     </td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-dim)' }}>
-                      {ep.strongest_wyckoff_state || '—'}
-                    </td>
                     <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
                       {ep.largest_gap_pct != null ? fmtPct(ep.largest_gap_pct) : '—'}
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)',
                                  color: ep.max_volume_anomaly >= 3 ? 'var(--amber)' : 'var(--text-dim)' }}>
                       {ep.max_volume_anomaly != null ? `${Number(ep.max_volume_anomaly).toFixed(1)}×` : '—'}
-                    </td>
-                    <td><NPPhaseBadge phase={ep.np_structure_phase} /></td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: npLabel ? 700 : 400, color: npLabelColor }}>
-                      {npLabel || '—'}
                     </td>
                   </tr>
                 );
