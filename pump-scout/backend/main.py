@@ -540,11 +540,6 @@ async def journal_insights():
 
     # ── Load research memory (gracefully — never blocks insights if unavailable) ─
     research: dict = {"text": "", "sources": [], "has_data": False}
-    try:
-        from replay.ai_context import build_research_digest
-        research = await build_research_digest()
-    except Exception as _rc_err:
-        logger.warning(f"[journal_insights] research context unavailable: {_rc_err}")
 
     # ── Build system prompt ───────────────────────────────────────────────────
     system_base = (
@@ -1184,96 +1179,6 @@ async def demand_scanner_journal_check(symbols: str = ""):
 
 
 # ─── Scanner v2 — New Pump as structural core ─────────────────────────────────
-
-@app.get("/api/scanner/v2/latest")
-async def scanner_v2_latest(
-    decision:        str   = "",    # filter by np_decision (BUY_CANDIDATE | WATCH | AVOID | IMPULSE_RISK)
-    final_decision:  str   = "",    # filter by scanner_v2_decision
-    priority_label:  str   = "",    # PRIORITY_HIGH | PRIORITY_MEDIUM | PRIORITY_LOW | PRIORITY_RISKY
-    structure_phase: str   = "",    # CONFIRMED_STRUCTURE | TRIGGERED_STRUCTURE | …
-    sector:          str   = "",    # e.g. "Information Technology"
-    subsector:       str   = "",    # e.g. "Semiconductors"
-    min_score:       float = 0.0,   # filter by scanner_v2_score
-    limit:           int   = 500,
-):
-    """
-    Scanner v2 — uses the latest New Pump results as the structural core.
-
-    np_decision is the eligibility gate (never overridden).
-    priority_score / priority_label provide the ranking layer.
-    scanner_v2_decision is the final classification:
-      BUY_CANDIDATE_HIGH | BUY_CANDIDATE_NORMAL
-      WATCH_HIGH | WATCH_MEDIUM | WATCH_LOW
-      AVOID_RISK | AVOID_LOTTERY | AVOID_DEAD
-
-    Sorted: scanner_v2_score desc → structure_score desc → symbol.
-    """
-    from scanner.new_pump_runner import get_latest
-    from scanner.scanner_v2 import build_v2_results, decision_counts, np_decision_counts
-
-    data = get_latest()
-    np_results = data.get("results", [])
-
-    exclusions = await _get_exclusion_set()
-    np_results = _strip_non_stocks(np_results, exclusions)
-
-    # Build and sort all v2 rows first (ranking uses full-set scores)
-    v2_results = build_v2_results(np_results)
-
-    # ── Filters ───────────────────────────────────────────────────────────────
-    if decision:
-        v2_results = [
-            r for r in v2_results
-            if (r.get("new_pump") or {}).get("np_decision") == decision
-        ]
-    if final_decision:
-        v2_results = [r for r in v2_results if r.get("scanner_v2_decision") == final_decision]
-    if priority_label:
-        v2_results = [
-            r for r in v2_results
-            if (r.get("priority") or {}).get("priority_label") == priority_label
-        ]
-    if structure_phase:
-        v2_results = [
-            r for r in v2_results
-            if (r.get("new_pump") or {}).get("structure_phase") == structure_phase
-        ]
-    if sector:
-        v2_results = [
-            r for r in v2_results
-            if (r.get("sector") or "").lower() == sector.lower()
-        ]
-    if subsector:
-        v2_results = [
-            r for r in v2_results
-            if (r.get("subsector") or "").lower() == subsector.lower()
-        ]
-    if min_score > 0:
-        v2_results = [r for r in v2_results if (r.get("scanner_v2_score") or 0) >= min_score]
-
-    return {
-        "results":              v2_results[:min(limit, 1000)],
-        "total":                len(v2_results),
-        "v2_decision_counts":   decision_counts(v2_results),
-        "np_decision_counts":   np_decision_counts(v2_results),
-        "scanned_at":           data.get("scanned_at"),
-        "universe":             data.get("universe", 0),
-        "elapsed_secs":         data.get("elapsed_secs"),
-        "source":               "new_pump_runner",
-        "decision_engine":      "scanner_v2",
-        "engine_version":       "v2.0",
-        "filters": {
-            "decision":        decision,
-            "final_decision":  final_decision,
-            "priority_label":  priority_label,
-            "structure_phase": structure_phase,
-            "sector":          sector,
-            "subsector":       subsector,
-            "min_score":       min_score,
-            "limit":           limit,
-        },
-    }
-
 
 @app.get("/api/sector-performance/latest")
 async def sector_performance_latest():
@@ -2058,9 +1963,7 @@ async def replay_export_candidates(run_id: int, format: str = "csv"):
         "id", "scan_date", "symbol", "price", "tier", "total_score",
         "wyckoff_state", "sector",
         "new_pump_score", "new_pump_label", "new_pump_sequence_label",
-        "np_decision", "priority_score", "priority_label",
-        "scanner_v2_decision", "scanner_v2_score", "scanner_v2_rank",
-        "d_confluence_family", "d_confluence_timing",
+        "np_decision",
         "demand_composite_score", "demand_composite_tier",
         "ats_signal", "readiness_score", "readiness_tier", "flow_score",
     ]
@@ -2135,22 +2038,28 @@ async def replay_get_summary(run_id: int):
     best5  = [{"symbol": o["symbol"], "return_5d": o["return_pct"], "label": o.get("outcome_label")} for o in five_d[:5]]
     worst5 = [{"symbol": o["symbol"], "return_5d": o["return_pct"], "label": o.get("outcome_label")} for o in five_d[-5:]]
 
-    # Tier distribution of candidates
+    # Tier distribution of candidates (legacy score tier)
     tier_dist: dict = defaultdict(int)
     for c in candidates:
         tier_dist[c.get("tier", "?")] += 1
 
+    # Demand composite tier distribution
+    demand_tier_dist: dict = defaultdict(int)
+    for c in candidates:
+        demand_tier_dist[c.get("demand_composite_tier") or "SKIP"] += 1
+
     return {
-        "run_id":            run_id,
-        "run":               run,
-        "total_candidates":  len(candidates),
-        "total_outcomes":    len(outcomes),
-        "missed_movers":     len(missed),
-        "avg_returns":       avg_returns,
-        "outcome_labels":    dict(label_dist),
-        "tier_distribution": dict(tier_dist),
-        "best_5":            best5,
-        "worst_5":           worst5,
+        "run_id":                   run_id,
+        "run":                      run,
+        "total_candidates":         len(candidates),
+        "total_outcomes":           len(outcomes),
+        "missed_movers":            len(missed),
+        "avg_returns":              avg_returns,
+        "outcome_labels":           dict(label_dist),
+        "tier_distribution":        dict(tier_dist),
+        "demand_tier_distribution": dict(demand_tier_dist),
+        "best_5":                   best5,
+        "worst_5":                  worst5,
     }
 
 
@@ -2158,23 +2067,19 @@ async def replay_get_summary(run_id: int):
 # Read-only reporting layer. Never modifies live scanner, scoring, or journal.
 
 @app.get("/api/replay/{run_id}/research-bundle")
-async def replay_research_bundle(run_id: int, raw_pattern_run_id: Optional[int] = None):
+async def replay_research_bundle(run_id: int):
     """
-    Build and return the full structured research bundle for a replay run.
-    Covers: summary, performance by bucket, false positives, missed movers,
-    pattern review, and suggested experiments (proposals only).
-
-    ?raw_pattern_run_id=X  — include ABR/TZ signal quality analysis (Section K)
-      from the specified raw_pattern_run. If omitted, auto-detects the most
-      recent completed run whose date range overlaps this replay run.
+    Build and return the full demand-engine research bundle for a replay run.
+    Covers: summary, performance by demand tier, ATS signal, readiness tier,
+    NP label, best/worst candidates, and missed movers.
     """
     run = await get_replay_run(run_id)
     if not run:
         raise HTTPException(404, detail=f"Replay run {run_id} not found")
 
-    from replay.research_bundle import build_research_bundle
+    from replay.research_bundle_demand import build_research_bundle
     try:
-        bundle = await build_research_bundle(run_id, raw_pattern_run_id=raw_pattern_run_id)
+        bundle = await build_research_bundle(run_id)
         return bundle
     except Exception as exc:
         logger.error(f"[BUNDLE] run_id={run_id} build failed: {exc}", exc_info=True)
@@ -2182,21 +2087,19 @@ async def replay_research_bundle(run_id: int, raw_pattern_run_id: Optional[int] 
 
 
 @app.get("/api/replay/{run_id}/research-bundle/markdown")
-async def replay_research_bundle_markdown(run_id: int, raw_pattern_run_id: Optional[int] = None):
+async def replay_research_bundle_markdown(run_id: int):
     """
-    Return the research bundle as a human-readable Markdown report.
+    Return the demand research bundle as a human-readable Markdown report.
     Suitable for pasting into AI chat or saving as a .md file.
-
-    ?raw_pattern_run_id=X  — include ABR/TZ signal quality analysis (Section K).
     """
     from fastapi.responses import PlainTextResponse
     run = await get_replay_run(run_id)
     if not run:
         raise HTTPException(404, detail=f"Replay run {run_id} not found")
 
-    from replay.research_bundle import build_research_bundle, render_research_bundle_markdown
+    from replay.research_bundle_demand import build_research_bundle, render_research_bundle_markdown
     try:
-        bundle   = await build_research_bundle(run_id, raw_pattern_run_id=raw_pattern_run_id)
+        bundle   = await build_research_bundle(run_id)
         markdown = render_research_bundle_markdown(bundle)
         return PlainTextResponse(content=markdown, media_type="text/markdown")
     except Exception as exc:
@@ -2208,13 +2111,11 @@ async def replay_research_bundle_markdown(run_id: int, raw_pattern_run_id: Optio
 async def replay_research_bundle_download(
     run_id: int,
     format: str = "json",
-    raw_pattern_run_id: Optional[int] = None,
 ):
     """
-    Download the research bundle as a JSON or Markdown file.
+    Download the demand research bundle as a JSON or Markdown file.
     ?format=json  (default) — downloads bundle.json
     ?format=markdown         — downloads bundle.md
-    ?raw_pattern_run_id=X   — include ABR/TZ signal quality analysis (Section K).
     """
     import json as _json
     from fastapi.responses import Response
@@ -2222,9 +2123,9 @@ async def replay_research_bundle_download(
     if not run:
         raise HTTPException(404, detail=f"Replay run {run_id} not found")
 
-    from replay.research_bundle import build_research_bundle, render_research_bundle_markdown
+    from replay.research_bundle_demand import build_research_bundle, render_research_bundle_markdown
     try:
-        bundle = await build_research_bundle(run_id, raw_pattern_run_id=raw_pattern_run_id)
+        bundle = await build_research_bundle(run_id)
         if format == "markdown":
             content  = render_research_bundle_markdown(bundle)
             filename = f"replay_{run_id}_research_bundle.md"
@@ -2244,181 +2145,6 @@ async def replay_research_bundle_download(
     except Exception as exc:
         logger.error(f"[BUNDLE/DL] run_id={run_id} failed: {exc}", exc_info=True)
         raise HTTPException(500, detail=f"Download failed: {str(exc)[:200]}")
-
-
-# ── Replay recalculation (fast refresh, no full rescan) ───────────────────────
-# Three-tier refresh architecture:
-#   1. rebuild-research-bundle           — rebuild summary/buckets only
-#   2. recalculate-derived-fields        — re-run decision layer + rebuild
-#   3. POST /api/replay/run              — full replay (existing, unchanged)
-#
-# Recalc mode is ONLY for interpretation changes (decision-layer thresholds,
-# bundle bucketing). Changes to candidate generation, scanner gates, or any
-# upstream raw-detection logic still require a full replay.
-
-@app.post("/api/replay/{run_id}/rebuild-research-bundle")
-async def replay_rebuild_bundle(run_id: int):
-    """
-    Rebuild the research bundle for an existing replay run without touching
-    candidates. Use after bundle/bucketing/summary logic changes.
-    """
-    from database import get_replay_run
-    from replay.recalc_service import rebuild_research_bundle
-
-    run = await get_replay_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Replay run {run_id} not found")
-    try:
-        stats = await rebuild_research_bundle(run_id)
-    except Exception as exc:
-        logger.error(f"[REPLAY/REBUILD] run_id={run_id} failed: {exc}", exc_info=True)
-        raise HTTPException(500, detail=f"Rebuild failed: {str(exc)[:200]}")
-    return {
-        "ok":                      True,
-        "run_id":                  run_id,
-        "mode":                    "rebuild_research_bundle",
-        "research_bundle_rebuilt": True,
-        "stats":                   stats,
-    }
-
-
-@app.post("/api/replay/{run_id}/recalculate-derived-fields")
-async def replay_recalculate_derived(run_id: int):
-    """
-    Re-run the decision layer for every candidate in an existing replay run
-    using current `_decide()` logic, then rebuild the research bundle.
-
-    Upstream engine outputs (state, base_quality, sustain, fake_trigger,
-    compression-expansion, impulse) are NOT recomputed — they need raw
-    candles that are not persisted on replay candidate rows. Change
-    detection / generation logic requires a full replay.
-    """
-    from database import get_replay_run
-    from replay.recalc_service import (
-        recalculate_decision_layer, rebuild_research_bundle,
-        RECALCULATED_FIELDS, SKIPPED_FIELDS_NEED_FULL_REPLAY,
-        REQUIRES_FULL_REPLAY_FOR,
-    )
-
-    run = await get_replay_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Replay run {run_id} not found")
-
-    try:
-        recalc_stats = await recalculate_decision_layer(run_id)
-    except Exception as exc:
-        logger.error(f"[REPLAY/RECALC] run_id={run_id} decide failed: {exc}", exc_info=True)
-        raise HTTPException(500, detail=f"Recalc failed: {str(exc)[:200]}")
-
-    bundle_rebuilt = True
-    bundle_stats   = None
-    try:
-        bundle_stats = await rebuild_research_bundle(run_id)
-    except Exception as exc:
-        logger.warning(f"[REPLAY/RECALC] bundle rebuild failed: {exc}")
-        bundle_rebuilt = False
-
-    return {
-        "ok":                         True,
-        "run_id":                     run_id,
-        "mode":                       "recalculate_derived_fields",
-        "candidate_count_total":      recalc_stats["candidate_count_total"],
-        "updated_candidate_count":    recalc_stats["updated_candidate_count"],
-        "skipped_insufficient_count": recalc_stats["skipped_insufficient"],
-        "recalculated_fields":        RECALCULATED_FIELDS,
-        "skipped_fields":             SKIPPED_FIELDS_NEED_FULL_REPLAY,
-        "requires_full_replay_for":   REQUIRES_FULL_REPLAY_FOR,
-        "research_bundle_rebuilt":    bundle_rebuilt,
-        "bundle_stats":               bundle_stats,
-    }
-
-
-@app.post("/api/replay/{run_id}/refresh-derived-and-research")
-async def replay_refresh_combined(run_id: int):
-    """Alias combining decision-layer recalc + research bundle rebuild."""
-    return await replay_recalculate_derived(run_id)
-
-
-@app.post("/api/replay/{run_id}/recalculate-scanner-v2")
-async def replay_recalculate_scanner_v2(run_id: int):
-    """
-    Backfill priority_score / priority_label / scanner_v2_decision /
-    scanner_v2_score (plus contexts in snapshot) for every candidate of an
-    existing replay run, then rebuild the research bundle.
-
-    Safe to run on pre-Task-9 replay runs that lack Scanner v2 fields.
-    Does NOT re-fetch candles or rescan the universe.
-    """
-    from database import get_replay_run
-    from replay.recalc_service import (
-        recalculate_priority_and_v2, rebuild_research_bundle,
-    )
-
-    run = await get_replay_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Replay run {run_id} not found")
-
-    try:
-        recalc_stats = await recalculate_priority_and_v2(run_id)
-    except Exception as exc:
-        logger.error(f"[REPLAY/V2-RECALC] run_id={run_id} failed: {exc}", exc_info=True)
-        raise HTTPException(500, detail=f"Scanner v2 recalc failed: {str(exc)[:200]}")
-
-    bundle_rebuilt = True
-    bundle_stats   = None
-    try:
-        bundle_stats = await rebuild_research_bundle(run_id)
-    except Exception as exc:
-        logger.warning(f"[REPLAY/V2-RECALC] bundle rebuild failed: {exc}")
-        bundle_rebuilt = False
-
-    return {
-        "ok":                         True,
-        "run_id":                     run_id,
-        "mode":                       "recalculate_scanner_v2",
-        "candidate_count_total":      recalc_stats["candidate_count_total"],
-        "updated_candidate_count":    recalc_stats["updated_candidate_count"],
-        "skipped_insufficient_count": recalc_stats["skipped_insufficient"],
-        "recalculated_fields": [
-            "priority_score", "priority_label", "priority_flags", "priority_reason",
-            "scanner_v2_decision", "scanner_v2_score", "scanner_v2_flags", "scanner_v2_reason",
-            "sector_context", "macro_context", "news_hype_context", "sympathy_context",
-            "subsector", "decision_flags",
-        ],
-        "research_bundle_rebuilt":    bundle_rebuilt,
-        "bundle_stats":               bundle_stats,
-    }
-
-
-# ── Decision-aligned research (additive to legacy Raw Pattern / Pump Study) ──
-
-@app.get("/api/replay/{run_id}/decision-aligned-research")
-async def replay_decision_aligned_research(run_id: int, format: str = "json"):
-    """
-    Return the decision-aligned research payload for a replay run.
-    Groups by current production decision buckets (BUY_CANDIDATE / WATCH /
-    IMPULSE_RISK / AVOID) with pairwise separation + chronology by decision.
-
-    ?format=json      (default) — returns JSON body
-    ?format=markdown           — returns rendered markdown string
-    Does NOT replace legacy Raw Pattern / Pump Study comparisons.
-    """
-    from replay.decision_aligned_research import (
-        build_decision_aligned_research, render_decision_aligned_markdown,
-    )
-    try:
-        payload = await build_decision_aligned_research(run_id)
-    except ValueError as exc:
-        raise HTTPException(404, detail=str(exc))
-    except Exception as exc:
-        logger.error(f"[DAR] run_id={run_id} failed: {exc}", exc_info=True)
-        raise HTTPException(500, detail=f"Decision-aligned research failed: {str(exc)[:200]}")
-
-    if format == "markdown":
-        from fastapi.responses import Response
-        md = render_decision_aligned_markdown(payload)
-        return Response(content=md, media_type="text/markdown; charset=utf-8")
-    return payload
 
 
 @app.delete("/api/replay/{run_id}")
@@ -3608,6 +3334,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             build_raw_pattern_episode_features_structure,
             build_raw_pattern_episode_features_ema,
             build_raw_pattern_episode_features_new_pump,
+            build_raw_pattern_episode_features_demand,
             build_raw_pattern_episode_features_structural_v2,
             build_raw_pattern_episode_features_splits,
             build_raw_pattern_comparisons,
@@ -3622,16 +3349,13 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_ema(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_new_pump(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_demand(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_structural_v2(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_splits(raw_run_id, pump_study_run_id)
             await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
             await _upd(raw_run_id, {"status": "complete",
                                     "finished_at": datetime.utcnow()})
-            try:
-                from replay.ai_context import invalidate_cache
-                invalidate_cache()
-            except Exception:
-                pass
+
         except Exception as exc:
             logger.error("raw_pattern_study run_id=%s failed: %s", raw_run_id, exc)
             await _upd(raw_run_id, {"status": "error",
@@ -4350,270 +4074,3 @@ async def raw_pattern_split_impact(run_id: int):
 
     return result
 
-
-# ── Pattern Discovery endpoints ───────────────────────────────────────────────
-
-class DiscoverRequest(BaseModel):
-    mode: str = "both"
-    """
-    Discovery mode:
-      episode_aggregate — mine only episode-level aggregate features (V1A, fast)
-      bar_sequence      — mine only per-bar symbolic tag sequences (V1B)
-      both              — run both V1A and V1B (default)
-      flow              — V1C: mine flow/delta proxy sequences only (OHLCV proxies)
-      combined          — V1C: mine combined price+flow sequences only
-      all               — run V1A + V1B + V1C flow + V1C combined
-    """
-    windows: list[int] = [1, 2, 3, 5, 10]
-    """Window sizes for bar-sequence mining. Only used when mode includes bar_sequence, flow, or combined."""
-    exclude_split_artifacts: bool = False
-    """If True, exclude split_artifact episodes from episode-level mining counts."""
-    save_mode: str = "compact"
-    """
-    Storage filter mode:
-      compact  — drop CUSTOM_FLAT-only, FLOW_CUSTOM duplicates, low-quality rejects; keep ≤500 rejects (default)
-      research — keep more rejects (≤2000), still drop CUSTOM_FLAT and FLOW_CUSTOM noise
-      debug    — save everything; no filters applied (large storage cost)
-    """
-
-
-@app.post("/api/replay/raw-pattern-study/{run_id}/discover")
-async def raw_pattern_discover(
-    run_id: int,
-    background_tasks: BackgroundTasks,
-    body: DiscoverRequest = DiscoverRequest(),
-):
-    """
-    Launch the Pattern Discovery Engine for a completed raw-pattern run.
-
-    Accepts optional JSON body to control discovery mode:
-      { "mode": "both", "windows": [1,2,3,5,10], "exclude_split_artifacts": false }
-
-    mode values:
-      episode_aggregate — V1A: mine episode-level aggregate features (fast)
-      bar_sequence      — V1B: mine per-bar symbolic tag sequences
-      both              — run V1A then V1B (default)
-      flow              — V1C: mine OHLCV-derived flow proxy sequences (NOT true bid/ask delta)
-      combined          — V1C: mine combined price+flow sequences
-      all               — run V1A + V1B + V1C flow + V1C combined
-
-    Runs the full pipeline asynchronously. Does NOT modify Scanner V2
-    BUY/WATCH/AVOID routing. All outputs are EXPERIMENTAL or PUMP_WATCH only.
-    """
-    from database import get_raw_pattern_run
-    from replay.pattern_discovery_engine import run_pattern_discovery, get_discovery_progress
-
-    valid_modes = {"episode_aggregate", "bar_sequence", "both", "flow", "combined", "all"}
-    if body.mode not in valid_modes:
-        raise HTTPException(400, detail=f"Invalid mode '{body.mode}'. Must be one of: {valid_modes}")
-
-    valid_windows = {1, 2, 3, 5, 10}
-    bad_w = [w for w in body.windows if w not in valid_windows]
-    if bad_w:
-        raise HTTPException(400, detail=f"Invalid window sizes {bad_w}. Must be subset of {valid_windows}")
-
-    valid_save_modes = {"compact", "research", "debug"}
-    if body.save_mode not in valid_save_modes:
-        raise HTTPException(400, detail=f"Invalid save_mode '{body.save_mode}'. Must be one of: {valid_save_modes}")
-
-    run = await get_raw_pattern_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
-    if run.get("status") != "complete":
-        raise HTTPException(400, detail="Run must be complete before running pattern discovery.")
-
-    progress = get_discovery_progress()
-    if progress.get("running"):
-        return {
-            "status": "ALREADY_RUNNING",
-            "run_id": progress.get("run_id"),
-            "phase":  progress.get("phase"),
-        }
-
-    background_tasks.add_task(
-        run_pattern_discovery,
-        run_id,
-        mode=body.mode,
-        windows=tuple(body.windows),
-        exclude_split_artifacts=body.exclude_split_artifacts,
-        save_mode=body.save_mode,
-    )
-    return {
-        "status":    "STARTED",
-        "run_id":    run_id,
-        "mode":      body.mode,
-        "windows":   body.windows,
-        "save_mode": body.save_mode,
-    }
-
-
-@app.get("/api/replay/raw-pattern-study/{run_id}/discover/status")
-async def raw_pattern_discover_status(run_id: int):
-    """Return progress of a running (or recently completed) discovery run."""
-    from replay.pattern_discovery_engine import get_discovery_progress
-    return get_discovery_progress()
-
-
-@app.get("/api/replay/raw-pattern-study/{run_id}/discover/results")
-async def raw_pattern_discover_results(run_id: int):
-    """
-    Return pattern discovery results for a run:
-      - Discovered patterns with lift / FP rates
-      - Pump Watch distribution by group and label
-      - Registry contents
-    """
-    from database import get_raw_pattern_run
-    from replay.pattern_discovery_engine import get_discovery_results
-
-    run = await get_raw_pattern_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
-
-    try:
-        return await get_discovery_results(run_id)
-    except Exception as exc:
-        logger.exception("discover_results run_id=%s failed", run_id)
-        raise HTTPException(500, detail=str(exc))
-
-
-@app.get("/api/replay/raw-pattern-study/{run_id}/discover/export-full")
-async def raw_pattern_discover_export_full(
-    run_id: int,
-    section: str = "full",
-    include_rejected: Optional[bool] = None,
-    top_n: Optional[int] = None,
-    source_type: Optional[str] = None,
-    status: Optional[str] = None,
-    min_4x_ep: Optional[int] = None,
-    max_fp_rate: Optional[float] = None,
-    hide_split_contaminated: Optional[bool] = None,
-):
-    """
-    Sectioned JSON export of Pattern Discovery results for a run.
-
-    Sections (default: full):
-      compact   — ChatGPT-optimised: accepted only, sample episodes, key fields
-      summary   — Metadata + stats only, no patterns list
-      accepted  — All accepted patterns with full detail, no episodes
-      rankings  — Ranking tables only (top_lift / top_missed / top_reliability / by_source_type)
-      episodes  — Episode list with pump_watch fields, no patterns
-      patterns  — All patterns (accepted + rejected) without episode data
-      rejected  — Rejected patterns only with reject_reason
-      full      — Everything (may be large)
-
-    Filename: raw-pattern-run-{run_id}-discovery-{section}.json
-    """
-    from database import get_raw_pattern_run
-    from replay.pattern_discovery_engine import build_discovery_export
-
-    _VALID_SECTIONS = {"compact", "summary", "accepted", "rankings", "episodes", "patterns", "rejected", "full"}
-    if section not in _VALID_SECTIONS:
-        raise HTTPException(400, detail=f"Invalid section '{section}'. Valid: {sorted(_VALID_SECTIONS)}")
-
-    run = await get_raw_pattern_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
-
-    try:
-        payload = await build_discovery_export(
-            run_id,
-            section=section,
-            include_rejected=include_rejected,
-            top_n=top_n,
-            source_type_filter=source_type,
-            status_filter=status,
-            min_4x_ep=min_4x_ep,
-            max_fp_rate=max_fp_rate,
-            hide_split_contaminated=hide_split_contaminated,
-        )
-    except Exception as exc:
-        logger.exception("discover_export_full run_id=%s section=%s failed", run_id, section)
-        raise HTTPException(500, detail=str(exc))
-
-    content = json.dumps(payload, default=str)
-    filename = f"raw-pattern-run-{run_id}-discovery-{section}.json"
-    return StreamingResponse(
-        iter([content]),
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@app.get("/api/replay/raw-pattern-study/{run_id}/pump-watch")
-async def raw_pattern_pump_watch(
-    run_id: int,
-    label: str | None = None,
-    group_type: str | None = None,
-    limit: int = 200,
-):
-    """
-    Return episodes for a run filtered by pump_watch_label and/or group_type.
-    Useful for inspecting which episodes got PUMP_WATCH_HIGH vs PUMP_IGNORE.
-
-    This does NOT affect Scanner V2 routing — it is research-only output.
-    """
-    from database import get_raw_pattern_run, get_raw_pattern_episode_features
-
-    run = await get_raw_pattern_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
-
-    episodes = await get_raw_pattern_episode_features(
-        run_id=run_id, group_type=group_type, limit=limit
-    )
-
-    if label:
-        episodes = [ep for ep in episodes if ep.get("pump_watch_label") == label]
-
-    return {
-        "run_id":          run_id,
-        "total":           len(episodes),
-        "label_filter":    label,
-        "group_type_filter": group_type,
-        "episodes":        episodes,
-    }
-
-
-@app.get("/api/replay/signal-registry")
-async def get_signal_registry():
-    """Return the current discovered_signal_registry.json content."""
-    from replay.pattern_discovery_engine import _load_registry
-    try:
-        registry = _load_registry()
-        return {"total": len(registry), "signals": registry}
-    except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
-
-
-@app.post("/api/replay/raw-pattern-study/{run_id}/pump-watch/score")
-async def raw_pattern_pump_watch_score_now(run_id: int):
-    """
-    Synchronously compute and persist Pump Watch scores for all episodes in a run.
-    Useful for quick rescoring without rerunning the full discovery pipeline.
-
-    Note: HIGH expansion_timing_risk does NOT reject Pump Watch scoring.
-    For Scanner V2 BUY routing, HIGH expansion risk remains a hard AVOID.
-    """
-    from database import get_raw_pattern_run, get_raw_pattern_episode_features
-    from replay.pump_watch_scorer import score_episodes, summarize_pump_watch_distribution
-    from replay.pattern_discovery_engine import _persist_pump_watch_scores
-
-    run = await get_raw_pattern_run(run_id)
-    if not run:
-        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
-
-    episodes = await get_raw_pattern_episode_features(run_id=run_id, limit=10000)
-    if not episodes:
-        return {"status": "NO_EPISODES", "run_id": run_id}
-
-    scored = score_episodes(episodes)
-    updated = await _persist_pump_watch_scores(run_id, scored)
-    distribution = summarize_pump_watch_distribution(scored)
-
-    return {
-        "status":            "COMPLETE",
-        "run_id":            run_id,
-        "episodes_scored":   len(scored),
-        "episodes_updated":  updated,
-        "distribution":      distribution,
-    }
