@@ -1341,7 +1341,29 @@ async def save_candle_cache(symbol: str, bars: list[dict]) -> None:
         await session.commit()
 
 
-async def get_demand_all_histories(limit_per_sym: int = 10) -> list[dict]:
+async def prune_candle_cache(keep_days: int = 200, dry_run: bool = True) -> dict:
+    """
+    Bulk-delete all candle_cache rows older than keep_days from today.
+    Returns count of rows deleted (or would-delete if dry_run=True).
+    """
+    from datetime import date as _date, timedelta
+    cutoff = (_date.today() - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+    async with get_engine().begin() as conn:
+        count_result = await conn.execute(
+            text("SELECT COUNT(*) FROM candle_cache WHERE date < :cutoff"),
+            {"cutoff": cutoff},
+        )
+        to_delete = count_result.scalar() or 0
+        if dry_run or to_delete == 0:
+            return {"dry_run": dry_run, "cutoff": cutoff, "rows_to_delete": to_delete, "deleted": 0}
+        del_result = await conn.execute(
+            text("DELETE FROM candle_cache WHERE date < :cutoff"),
+            {"cutoff": cutoff},
+        )
+        return {"dry_run": False, "cutoff": cutoff, "rows_to_delete": to_delete, "deleted": del_result.rowcount}
+
+
+
     """Return recent history rows for all symbols that appeared in last scan (for timeline view)."""
     async with get_session_factory()() as session:
         # Get distinct symbols that have appeared recently

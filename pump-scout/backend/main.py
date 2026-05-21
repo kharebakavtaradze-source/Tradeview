@@ -2845,6 +2845,62 @@ async def replay_cleanup(body: CleanupRequest = CleanupRequest()):
     return result
 
 
+@app.post("/api/admin/cleanup-all")
+async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, dry_run: bool = True):
+    """
+    Run all cleanup operations in one call:
+      - Delete old replay runs (keep_last_n most recent complete)
+      - Delete old raw-pattern-study runs (keep_last_n most recent complete)
+      - Delete old pump-study runs (keep_last_n most recent complete)
+      - Prune candle_cache rows older than keep_candle_days
+      - VACUUM ANALYZE all major tables (only when dry_run=false)
+
+    Default is dry_run=true — pass ?dry_run=false to execute.
+    """
+    from database import (
+        cleanup_replay_runs,
+        cleanup_raw_pattern_runs,
+        cleanup_pump_study_runs,
+        prune_candle_cache,
+    )
+    results = {}
+    try:
+        results["replay"]          = await cleanup_replay_runs(keep_last_n=keep_last_n, dry_run=dry_run)
+        results["raw_pattern"]     = await cleanup_raw_pattern_runs(keep_last_n=keep_last_n, dry_run=dry_run, vacuum=False)
+        results["pump_study"]      = await cleanup_pump_study_runs(keep_last_n=keep_last_n, dry_run=dry_run)
+        results["candle_cache"]    = await prune_candle_cache(keep_days=keep_candle_days, dry_run=dry_run)
+    except Exception as exc:
+        logger.exception("admin_cleanup_all failed")
+        raise HTTPException(500, detail=str(exc))
+
+    if not dry_run:
+        # VACUUM ANALYZE reclaims space from dropped columns and deleted rows
+        try:
+            from database import get_engine
+            async with get_engine().connect() as conn:
+                await conn.execution_options(isolation_level="AUTOCOMMIT")
+                for tbl in (
+                    "candle_cache",
+                    "discovered_patterns",
+                    "replay_signal_candidates",
+                    "raw_pattern_episode_features",
+                    "raw_pattern_daily_features",
+                    "pump_episodes",
+                    "pump_episode_snapshots",
+                    "pump_episode_detections",
+                ):
+                    try:
+                        await conn.execute(text(f"VACUUM ANALYZE {tbl}"))
+                    except Exception as ve:
+                        logger.warning(f"VACUUM {tbl} failed (non-fatal): {ve}")
+            results["vacuum"] = "done"
+        except Exception as ve:
+            results["vacuum"] = f"failed: {ve}"
+
+    results["dry_run"] = dry_run
+    return results
+
+
 async def _build_research_context_text(run_id: int) -> str:
     """
     Build a compact, AI-prompt-ready research context string from a completed
