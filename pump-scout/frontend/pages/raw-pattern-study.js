@@ -1266,7 +1266,7 @@ const REC_AREA_LABEL = {
   accumulation_spring_reclaim:'Accumulation / Spring / Reclaim',
   ema_ribbon_quality:         'EMA Structure Quality',
   body_wick_noise_reduction:  'Body / Wick Noise Reduction',
-  scanner_v2_structural:      'Scanner v2 — NP Signal Chain',
+  scanner_v2_structural:      'Demand Scanner — NP Signal Chain',
 };
 
 function EnginePatchPlan({ runId }) {
@@ -1308,7 +1308,7 @@ function EnginePatchPlan({ runId }) {
       {/* Summary row */}
       <div className={styles.tableCard} style={{ marginBottom: 12 }}>
         <div className={styles.tableHeader}>
-          <span className={styles.tableTitle}>Scanner v2 Patch Plan</span>
+          <span className={styles.tableTitle}>Demand Engine Patch Plan</span>
           <span className={styles.tableHint}>deterministic · based on comparison medians · no AI</span>
         </div>
         <div style={{ display: 'flex', gap: 16, padding: '8px 12px', flexWrap: 'wrap' }}>
@@ -1762,7 +1762,7 @@ function SplitImpactPanel({ runId }) {
       {recs.length > 0 && (
         <div className={styles.tableCard}>
           <div className={styles.tableHeader}>
-            <span className={styles.tableTitle}>Scanner v2 Split Patch Recommendations</span>
+            <span className={styles.tableTitle}>Demand Engine Split Patch Recommendations</span>
             <span className={styles.tableHint}>reporting only — no scoring changes applied</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' }}>
@@ -2160,7 +2160,7 @@ function PatternDiscoveryPanel({ runId }) {
       <div className={styles.discoveryControls}>
         <div className={styles.discoveryControlsTitle}>Pattern Discovery</div>
         <div className={styles.discoveryNote}>
-          Mines pre-breakout bar patterns from completed run data. Does NOT modify Scanner V2 routing.
+          Mines pre-breakout bar patterns from completed run data. Does NOT modify Demand Scanner routing.
         </div>
 
         <div className={styles.discoveryRow}>
@@ -2766,7 +2766,7 @@ function FlowImpactTab({ data, loading, error }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Research-only banner */}
       <div className={styles.discoveryWarning} style={{ borderColor: 'var(--blue)', background: 'rgba(59,130,246,0.08)' }}>
-        <strong>RESEARCH ONLY</strong> — scores and routing here do NOT affect Scanner V2.
+        <strong>RESEARCH ONLY</strong> — scores and routing here do NOT affect Demand Scanner.
         No BUY promotions. No score boosts. Analysis only.
       </div>
 
@@ -3132,7 +3132,7 @@ function CuratedFlowTab({ data, loading, error }) {
       <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
         <strong>RESEARCH ONLY</strong> — Curated FLOW layer: 6 frozen rules from run 139/142 top patterns.
         Exact badge required for CF HIGH/MEDIUM. Proxy-only score capped at CF LOW.
-        No BUY promotion. No Scanner V2 change.
+        No BUY promotion. No Demand Scanner change.
         {data.anti_leakage_note && <span> · {data.anti_leakage_note}</span>}
       </div>
 
@@ -3563,7 +3563,7 @@ function CustomSignalsTab({ results }) {
       {/* Safety note */}
       <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
         <strong>RESEARCH ONLY</strong> — Custom D/L/WLNBB signal layer (V1D/V1E).
-        No BUY promotion. No Scanner V2 change. All output is experimental.
+        No BUY promotion. No Demand Scanner change. All output is experimental.
         Tags read from pre-computed feature_json flags (has_l43, has_d4_beup, etc.).
       </div>
 
@@ -4110,7 +4110,7 @@ function RegimesTab({ results }) {
       <div className={styles.discoveryNote} style={{ padding: '8px 12px', fontSize: 11 }}>
         <strong>RESEARCH ONLY</strong> — Price / Volatility Regime Layer (V1F).
         Regime buckets computed from PRE-window daily bars.
-        No BUY promotion. No Scanner V2 change.
+        No BUY promotion. No Demand Scanner change.
         {!hasFullData && (
           <span style={{ color: 'var(--yellow)', marginLeft: 8 }}>
             ⚠ Partial data — price and ATR buckets require a fresh discovery run in the same session.
