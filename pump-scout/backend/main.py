@@ -2631,7 +2631,11 @@ async def pump_study_comparisons(run_id: int):
 # ── 10. Export ────────────────────────────────────────────────────────────────
 
 @app.get("/api/replay/pump-study/{run_id}/export")
-async def pump_study_export(run_id: int, format: str = "json"):
+async def pump_study_export(
+    run_id: int,
+    format: str = "json",
+    min_multiple: float = 4.0,
+):
     """
     Download a pump study export.
 
@@ -2640,7 +2644,8 @@ async def pump_study_export(run_id: int, format: str = "json"):
     ?format=csv           Flat CSV of canonical episodes (one row per episode).
     ?format=markdown      Deterministic markdown summary — no AI, no external calls.
     ?format=snapshots_4x  Bar-by-bar signal data (T/Z/L/VIX/PSAR/RSI2) for
-                          4x+ episodes only. Suitable for per-bar analysis.
+                          episodes >= min_multiple (default 4.0). Use
+                          ?min_multiple=2 to include all 2x+ episodes.
     """
     from fastapi.responses import Response
     from database import (
@@ -2663,9 +2668,9 @@ async def pump_study_export(run_id: int, format: str = "json"):
 
     episodes = await get_pump_episodes(run_id, limit=10000)
 
-    # ── snapshots_4x — per-bar bar labels for 4x+ episodes only ─────────────
+    # ── snapshots_4x — per-bar bar labels filtered by min_multiple ───────────
     if fmt == "snapshots_4x":
-        _min_multiple = 4.0
+        _min_multiple = max(1.0, min_multiple)
         pumps_4x = [e for e in episodes if (e.get("pump_multiple") or 0) >= _min_multiple]
         ep_ids   = [e["id"] for e in pumps_4x]
         raw_snaps = await get_snapshots_for_episodes(ep_ids)
@@ -2744,7 +2749,7 @@ async def pump_study_export(run_id: int, format: str = "json"):
             media_type="application/json",
             headers={
                 "Content-Disposition":
-                    f'attachment; filename="pump_study_{run_id}_bar_labels_4x.json"'
+                    f'attachment; filename="pump_study_{run_id}_bar_labels_{_min_multiple}x.json"'
             },
         )
 

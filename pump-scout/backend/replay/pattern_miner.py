@@ -334,6 +334,8 @@ def _mine_v1a(
 
 def _bar_tag(bar: dict) -> str:
     """Convert a daily feature row into a compact single-bar tag string."""
+    fj = bar.get("feature_json") or {}
+
     tags = []
     if bar.get("expansion_bar"):
         tags.append("EXP")
@@ -364,6 +366,43 @@ def _bar_tag(bar: dict) -> str:
         tags.append("SC")
     elif bar.get("weak_close_near_low"):
         tags.append("WC")
+
+    # ── L3: Body class ────────────────────────────────────────────────────────
+    body_cls = fj.get("body_class") or ""
+    if body_cls:
+        tags.append(f"BODY_{body_cls}")
+
+    # ── L4: Wick / gap / range class ─────────────────────────────────────────
+    wick_cls  = fj.get("wick_class") or ""
+    gap_cls   = fj.get("gap_class") or ""
+    range_cls = fj.get("range_class") or ""
+    if wick_cls:
+        tags.append(f"WICK_{wick_cls}")
+    if gap_cls:
+        tags.append(f"GAP_{gap_cls}")
+    if range_cls:
+        tags.append(f"RANGE_{range_cls}")
+
+    # ── L5: VIX / PSAR / RSI2 tokens ─────────────────────────────────────────
+    vix  = fj.get("vix_token") or ""
+    psar = fj.get("psar_token") or ""
+    rsi2 = fj.get("rsi2_token") or ""
+    if vix == "VX":
+        tags.append("VIX_X")
+    elif vix == "VR":
+        tags.append("VIX_R")
+    if psar in ("PS", "PS-R2L", "PS-R2X", "PS-R2D", "PS-R2H"):
+        tags.append("PSAR_BULL")
+    elif psar in ("PB", "PB-R2L", "PB-R2X", "PB-R2D", "PB-R2H"):
+        tags.append("PSAR_BEAR")
+    if rsi2 == "R2X":
+        tags.append("RSI2_X")
+    elif rsi2 == "R2D":
+        tags.append("RSI2_D")
+    elif rsi2 == "R2L":
+        tags.append("RSI2_L")
+    elif rsi2 == "R2H":
+        tags.append("RSI2_H")
 
     return "+".join(tags) if tags else "NORM"
 
