@@ -712,17 +712,6 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("had_late_confirm_sequence_pre",        "BOOLEAN"),
     ("had_expansion_risk_flag_pre",          "BOOLEAN"),
     ("had_setup_only_l34_mid_avoid_pre",     "BOOLEAN"),
-    # Pattern Discovery / Pump Watch (Phase 2B-PD)
-    ("pump_watch_score",                     "INTEGER"),
-    ("pump_watch_label",                     "VARCHAR(30)"),
-    ("pump_watch_reasons",                   "TEXT"),
-    ("pump_watch_risk_flags",                "TEXT"),
-    ("pump_watch_pattern_ids",               "TEXT"),
-    ("pump_watch_split_context",             "VARCHAR(30)"),
-    ("pump_watch_confidence",                "VARCHAR(10)"),
-    ("pump_watch_diagnostic_labels",         "TEXT"),       # JSON list of diagnostic label IDs
-    ("pump_watch_pattern_id",                "VARCHAR(60)"), # primary diagnostic ID
-    ("pump_watch_rescue_reason",             "VARCHAR(80)"), # human-readable rescue note
     # Demand composite enrichment (Option B)
     ("demand_score_at_breakout",   "FLOAT"),
     ("demand_tier_at_breakout",    "VARCHAR(20)"),
@@ -803,17 +792,6 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("np_expansion_timing_risk",       "VARCHAR(10)"),
     ("np_decision",                    "VARCHAR(20)"),
     ("np_decision_reason",             "VARCHAR(200)"),
-    # Scanner v2 / priority enrichment (Task 9)
-    ("priority_score",                 "FLOAT"),
-    ("priority_label",                 "VARCHAR(20)"),
-    ("scanner_v2_decision",            "VARCHAR(25)"),
-    ("scanner_v2_score",               "FLOAT"),
-    # Scanner v2 enrichment gap-fill: structure + d_confluence + rank
-    ("np_structure_phase",             "VARCHAR(30)"),
-    ("np_structure_score",             "FLOAT"),
-    ("d_confluence_family",            "VARCHAR(20)"),
-    ("d_confluence_timing",            "VARCHAR(20)"),
-    ("scanner_v2_rank",                "INTEGER"),
     # Demand composite enrichment (Option B)
     ("demand_composite_score",  "FLOAT"),
     ("demand_composite_tier",   "VARCHAR(20)"),
@@ -1055,6 +1033,37 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration ai_journal_position.{col} failed (non-fatal): {e}")
+
+        # Drop legacy scanner v2 / priority columns from replay_signal_candidates
+        _DROP_REPLAY_LEGACY = [
+            "priority_score", "priority_label",
+            "scanner_v2_decision", "scanner_v2_score", "scanner_v2_rank",
+            "np_structure_phase", "np_structure_score",
+            "d_confluence_family", "d_confluence_timing",
+        ]
+        for col in _DROP_REPLAY_LEGACY:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE replay_signal_candidates DROP COLUMN IF EXISTS {col}"
+                ))
+            except Exception as e:
+                logger.warning(f"Drop replay_signal_candidates.{col} failed (non-fatal): {e}")
+
+        # Drop legacy pump_watch columns from raw_pattern_episode_features
+        _DROP_PUMP_WATCH = [
+            "pump_watch_score", "pump_watch_label", "pump_watch_reasons",
+            "pump_watch_risk_flags", "pump_watch_pattern_ids",
+            "pump_watch_split_context", "pump_watch_confidence",
+            "pump_watch_diagnostic_labels", "pump_watch_pattern_id",
+            "pump_watch_rescue_reason",
+        ]
+        for col in _DROP_PUMP_WATCH:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE raw_pattern_episode_features DROP COLUMN IF EXISTS {col}"
+                ))
+            except Exception as e:
+                logger.warning(f"Drop raw_pattern_episode_features.{col} failed (non-fatal): {e}")
 
         # Drop removed AI advisory tables (idempotent)
         for tbl in ("ai_signal_analysis", "ai_review_reports", "ai_insights"):
@@ -3974,17 +3983,6 @@ class RawPatternEpisodeFeatures(Base):
     had_late_confirm_sequence_pre     = Column(Boolean,    nullable=True)
     had_expansion_risk_flag_pre       = Column(Boolean,    nullable=True)
     had_setup_only_l34_mid_avoid_pre  = Column(Boolean,    nullable=True)
-    # Pattern Discovery / Pump Watch fields (Phase 2B-PD)
-    pump_watch_score                  = Column(Integer,    nullable=True)
-    pump_watch_label                  = Column(String(30), nullable=True)
-    pump_watch_reasons                = Column(Text,       nullable=True)   # JSON list
-    pump_watch_risk_flags             = Column(Text,       nullable=True)   # JSON list
-    pump_watch_pattern_ids            = Column(Text,       nullable=True)   # JSON list
-    pump_watch_split_context          = Column(String(30), nullable=True)
-    pump_watch_confidence             = Column(String(10), nullable=True)
-    pump_watch_diagnostic_labels      = Column(Text,       nullable=True)   # JSON list
-    pump_watch_pattern_id             = Column(String(60), nullable=True)
-    pump_watch_rescue_reason          = Column(String(80), nullable=True)
     demand_score_at_breakout   = Column(Float,      nullable=True)
     demand_tier_at_breakout    = Column(String(20), nullable=True)
     ats_at_breakout            = Column(String(20), nullable=True)
