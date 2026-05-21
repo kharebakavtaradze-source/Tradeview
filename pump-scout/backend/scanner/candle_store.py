@@ -19,7 +19,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_KEEP_DAYS       = 260    # bars to retain per symbol (EMA200 + buffer)
+_KEEP_DAYS       = 200    # bars to retain per symbol (EMA200)
 _OVERLAP_DAYS    = 5      # days of overlap to fetch for split detection
 _SPLIT_THRESHOLD = 0.08   # >8% price difference in overlap → adjustment happened
 _FRESH_WINDOW    = 3      # days: if cache is within this window, skip full fetch

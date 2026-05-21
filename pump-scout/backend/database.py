@@ -1243,14 +1243,14 @@ async def get_candle_cache(symbol: str) -> list[dict]:
 
 async def save_candle_cache(symbol: str, bars: list[dict]) -> None:
     """
-    Upsert bars into candle_cache for symbol. Bars older than 260 days are pruned.
+    Upsert bars into candle_cache for symbol. Bars older than 200 days are pruned.
     Each bar dict must have keys: date (YYYY-MM-DD), o, h, l, c, v, t.
     """
     if not bars:
         return
     from datetime import date as _date, timedelta
     sym     = symbol.upper()
-    cutoff  = (_date.today() - timedelta(days=260)).strftime("%Y-%m-%d")
+    cutoff  = (_date.today() - timedelta(days=200)).strftime("%Y-%m-%d")
 
     async with get_session_factory()() as session:
         # Upsert each bar
