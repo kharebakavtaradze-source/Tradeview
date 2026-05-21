@@ -310,7 +310,6 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
     from scanner.massive_data import (
         fetch_grouped_daily,
         fetch_candles_massive,
-        fetch_ticker_type,
         get_us_etf_symbols,
     )
     from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
@@ -347,6 +346,10 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
         etf_symbols = await get_us_etf_symbols()
     except Exception:
         pass
+
+    # Load in-memory ticker type cache once — avoids per-ticker API calls later.
+    # Same approach as live scanner: get_cached_ticker is a DB cache, zero API calls.
+    from scanner.massive_reference import get_cached_ticker as _get_cached_ticker
 
     filtered = {}
     for sym, bar in all_bars.items():
@@ -387,20 +390,13 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
 
     async def _process(sym: str, eod: dict) -> Optional[dict]:
         try:
-            # Hard allowlist: verify this is a common stock before fetching
-            # full candle history.  Saves API calls for ETFs/funds that slip
-            # through the bulk exclusion list.
-            # None = type lookup failed → allow through (conservative).
-            ticker_type = await fetch_ticker_type(sym)
-            if ticker_type is not None:
-                meta = {"type": ticker_type}
-                if not is_common_stock(meta):
-                    reason = get_universe_filter_reason(meta)
-                    logger.debug(
-                        f"[REPLAY] {sym} excluded: "
-                        f"type={ticker_type!r} universe_filter_reason={reason}"
-                    )
-                    return None
+            # Check type via in-memory cache (no API call).
+            # Falls back to allow-through when cache has no entry (conservative).
+            _meta = _get_cached_ticker(sym)
+            if _meta is not None and not is_common_stock(_meta):
+                reason = get_universe_filter_reason(_meta)
+                logger.debug(f"[REPLAY] {sym} excluded via cache: {reason}")
+                return None
 
             candles = await fetch_candles_massive(sym, days=200, as_of_date=as_of_date)
             if not candles or len(candles) < 30:
@@ -588,7 +584,7 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             return None
 
     # Process in batches with a semaphore to stay polite to the Massive API
-    sem = asyncio.Semaphore(8)
+    sem = asyncio.Semaphore(20)
 
     async def _bounded(sym, eod):
         async with sem:

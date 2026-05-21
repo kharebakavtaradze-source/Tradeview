@@ -871,13 +871,22 @@ async def demand_scanner_latest(
 
 @app.post("/api/demand-scanner/run")
 @app.get("/api/demand-scanner/run")
-async def demand_scanner_run(background_tasks: BackgroundTasks):
-    """Trigger a fresh demand scan in the background. Poll /api/demand-scanner/status."""
+async def demand_scanner_run(background_tasks: BackgroundTasks, scan_mode: str = "full"):
+    """
+    Trigger a demand scan in the background. Poll /api/demand-scanner/status.
+
+    scan_mode:
+      full        — full universe fetch + candle fetch + analyze all tickers (default)
+      incremental — 1 API call; only re-analyze tickers with a new bar since last scan
+      recalculate — zero API calls; reload from DB cache and re-run all signals
+    """
     from scanner.new_pump_runner import is_running, run_new_pump_scan
     if is_running():
         return {"status": "already_running", "message": "Scan already in progress"}
-    background_tasks.add_task(run_new_pump_scan)
-    return {"status": "started", "message": "Demand scan started"}
+    if scan_mode not in ("full", "incremental", "recalculate"):
+        scan_mode = "full"
+    background_tasks.add_task(run_new_pump_scan, scan_mode=scan_mode)
+    return {"status": "started", "message": f"Demand scan started (mode={scan_mode})", "scan_mode": scan_mode}
 
 
 @app.get("/api/demand-scanner/status")
@@ -885,11 +894,18 @@ async def demand_scanner_status():
     """Live progress for the running demand scan."""
     from scanner.new_pump_runner import is_running, get_progress, get_latest
     data = get_latest()
+    prog = get_progress()
     return {
-        **get_progress(),
-        "has_results": bool(data.get("results")),
-        "scanned_at":  data.get("scanned_at"),
-        "result_count": len(data.get("results", [])),
+        **prog,
+        "has_results":         bool(data.get("results")),
+        "scanned_at":          data.get("scanned_at"),
+        "result_count":        len(data.get("results", [])),
+        "demand_prime_count":  data.get("demand_prime_count", 0),
+        "demand_high_count":   data.get("demand_high_count", 0),
+        "demand_watch_count":  data.get("demand_watch_count", 0),
+        "ats_prime_count":     data.get("ats_prime_count", 0),
+        "fetched_count":       data.get("fetched", prog.get("fetched_count", 0)),
+        "scan_mode":           data.get("scan_mode", prog.get("scan_mode", "full")),
     }
 
 
@@ -3698,6 +3714,137 @@ async def raw_pattern_daily_features_export(run_id: int, phase: Optional[str] = 
         headers={"Content-Disposition":
                  f'attachment; filename="raw_pattern_{run_id}_bars{suffix}.csv"'},
     )
+
+
+# ── Pattern Discovery endpoints ───────────────────────────────────────────────
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/discover")
+async def start_pattern_discovery(run_id: int, body: dict, background_tasks: BackgroundTasks):
+    """
+    Launch pattern discovery for a completed raw-pattern-study run.
+    body: { mode, windows, exclude_split_artifacts, save_mode }
+    Runs in background; poll /discover/status to track progress.
+    """
+    from replay.pattern_miner import run_discovery, get_discovery_status
+
+    status = get_discovery_status(run_id)
+    if status.get("running"):
+        return {"status": "ALREADY_RUNNING", "phase": status.get("phase")}
+
+    mode          = body.get("mode", "both")
+    windows       = body.get("windows", [1, 2, 3, 5, 10])
+    exclude_split = body.get("exclude_split_artifacts", True)
+    save_mode     = body.get("save_mode", "compact")
+
+    async def _run():
+        try:
+            await run_discovery(run_id, mode=mode, windows=windows,
+                                exclude_split_artifacts=exclude_split,
+                                save_mode=save_mode)
+        except Exception as exc:
+            from replay.pattern_miner import _set_phase
+            _set_phase(run_id, "ERROR", error=str(exc)[:300])
+            logger.exception(f"[Discovery] run={run_id} failed: {exc}")
+
+    background_tasks.add_task(_run)
+    return {"status": "STARTED", "run_id": run_id, "mode": mode,
+            "windows": windows, "save_mode": save_mode}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/status")
+async def get_pattern_discovery_status(run_id: int):
+    """Poll discovery progress for a run."""
+    from replay.pattern_miner import get_discovery_status
+    return get_discovery_status(run_id)
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/results")
+async def get_pattern_discovery_results(run_id: int):
+    """Return all discovered patterns for a run, grouped by source_type."""
+    from database import get_discovered_patterns
+    patterns = await get_discovered_patterns(run_id)
+    if not patterns:
+        raise HTTPException(404, detail="No discovered patterns found for this run. Run Pattern Discovery first.")
+
+    by_source: dict = {}
+    for p in patterns:
+        src = p.get("source_type") or "EPISODE_AGGREGATE"
+        by_source.setdefault(src, []).append(p)
+
+    boost    = [p for p in patterns if p.get("recommendation") == "BOOST"]
+    increase = [p for p in patterns if p.get("recommendation") == "INCREASE"]
+    top_lift = sorted(
+        [p for p in patterns if p.get("lift_vs_false_positive") is not None],
+        key=lambda p: p["lift_vs_false_positive"], reverse=True,
+    )[:20]
+
+    return {
+        "patterns":         patterns,
+        "by_source_type":   by_source,
+        "top_by_lift":      top_lift,
+        "boost_patterns":   boost,
+        "increase_patterns": increase,
+        "summary": {
+            "total":          len(patterns),
+            "boost_count":    len(boost),
+            "increase_count": len(increase),
+            "penalize_count": len([p for p in patterns if p.get("recommendation") == "PENALIZE"]),
+            "v1a_count":      len(by_source.get("EPISODE_AGGREGATE", [])),
+            "v1b_count":      sum(len(v) for k, v in by_source.items() if k != "EPISODE_AGGREGATE"),
+        },
+    }
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/export-full")
+async def export_pattern_discovery(run_id: int, section: str = "compact"):
+    """
+    Export discovered patterns.
+    section: compact | accepted | rankings | summary | episodes | full
+    """
+    from database import get_discovered_patterns
+    patterns = await get_discovered_patterns(run_id)
+
+    if section == "accepted":
+        data = [p for p in patterns if p.get("status") == "ACCEPTED"]
+    elif section == "rankings":
+        data = sorted(
+            [p for p in patterns if p.get("lift_vs_false_positive") is not None],
+            key=lambda p: p["lift_vs_false_positive"], reverse=True,
+        )
+    elif section == "compact":
+        data = [p for p in patterns
+                if p.get("recommendation") in ("BOOST", "INCREASE", "PENALIZE")
+                or (p.get("count_detected_4x") or 0) >= 3]
+    elif section == "summary":
+        boost    = [p for p in patterns if p.get("recommendation") == "BOOST"]
+        increase = [p for p in patterns if p.get("recommendation") == "INCREASE"]
+        penalize = [p for p in patterns if p.get("recommendation") == "PENALIZE"]
+        # Group by family
+        by_family: dict = {}
+        for p in patterns:
+            fam = p.get("feature_family") or "OTHER"
+            by_family.setdefault(fam, []).append(p)
+        return {
+            "run_id":            run_id,
+            "total_patterns":    len(patterns),
+            "boost_count":       len(boost),
+            "increase_count":    len(increase),
+            "penalize_count":    len(penalize),
+            "by_family":         {k: len(v) for k, v in by_family.items()},
+            "top_boost":         boost[:10],
+            "top_increase":      increase[:10],
+            "top_penalize":      penalize[:10],
+        }
+    elif section == "episodes":
+        # Map signal_id → list of episode conditions
+        return {"run_id": run_id, "patterns": patterns,
+                "note": "Use machine_conditions field on each pattern for episode matching logic"}
+    else:  # full
+        data = patterns
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"run_id": run_id, "section": section,
+                         "count": len(data), "patterns": data})
 
 
 # ── 8. AI summary ─────────────────────────────────────────────────────────────
