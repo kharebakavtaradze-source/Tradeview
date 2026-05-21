@@ -439,6 +439,26 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             except Exception as _dw_exc:
                 logger.debug(f"[REPLAY] {sym} d_wlnbb failed: {_dw_exc}")
 
+            # TZ / bar label at scan date (260521_TZ_F_WLNBB_CMB)
+            _tz: dict = {}
+            try:
+                from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+                if _np_bars:
+                    _lbls = compute_combined_bar_labels(_np_bars, last_n=1)
+                    if _lbls:
+                        _l = _lbls[0]
+                        _tz = {
+                            "tz_t_signal": _l.get("t_signal") or "",
+                            "tz_z_signal": _l.get("z_signal") or "",
+                            "preup_token": _l.get("preup")    or "",
+                            "predn_token": _l.get("predn")    or "",
+                            "line3":       _l.get("line3")    or "",
+                            "line4":       _l.get("line4")    or "",
+                            "line5":       _l.get("line5")    or "",
+                        }
+            except Exception as _tz_exc:
+                logger.debug(f"[REPLAY] {sym} tz_labels failed: {_tz_exc}")
+
             # Sector + industry from cache (best-effort, not time-sensitive for training)
             sector   = None
             industry = None
@@ -547,6 +567,8 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                 "demand_buy_reasons":      dc.get("demand_buy_reasons") or [],
                 # D/WLNBB research fields — spread via **_dw
                 **_dw,
+                # TZ / bar label at scan date (260521_TZ_F_WLNBB_CMB)
+                **_tz,
                 "snapshot": clean_snapshot,
             }
         except Exception as exc:

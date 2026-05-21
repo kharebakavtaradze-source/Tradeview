@@ -324,6 +324,52 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
         </div>
       )}
 
+      {/* TZ Signal Analytics */}
+      {(bundle.performance_by_tz_t_signal?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#34d399' }}>
+            ◈ TZ Signal — Performance by T/Z Bar Pattern
+          </div>
+          <BucketTable data={bundle.performance_by_tz_t_signal} />
+        </div>
+      )}
+
+      {(bundle.performance_by_preup_token?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#60a5fa' }}>
+            ◈ PREUP Token — EMA Cross Signals
+          </div>
+          <BucketTable data={bundle.performance_by_preup_token} />
+        </div>
+      )}
+
+      {(bundle.performance_by_line5?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#a78bfa' }}>
+            ◈ Line5 — VIX-Fix / PSAR / RSI2 Composite
+          </div>
+          <BucketTable data={bundle.performance_by_line5} />
+        </div>
+      )}
+
+      {(bundle.tz_demand_tier_combos?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#fbbf24' }}>
+            ◈ TZ × Demand Tier Combinations (min 3 occurrences)
+          </div>
+          <BucketTable data={bundle.tz_demand_tier_combos} />
+        </div>
+      )}
+
+      {(bundle.tz_ats_combos?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#fbbf24' }}>
+            ◈ TZ × ATS Signal Combinations (min 3 occurrences)
+          </div>
+          <BucketTable data={bundle.tz_ats_combos} />
+        </div>
+      )}
+
       {/* Best/Worst candidates */}
       {(best.length > 0 || worst.length > 0) && (
         <div className={styles.bundleSection}>
@@ -951,6 +997,9 @@ export default function ReplayPage() {
                             <th>ATS</th>
                             <th>Ready</th>
                             <th>D Score</th>
+                            <th>TZ</th>
+                            <th>PREUP</th>
+                            <th>Line5</th>
                             <th>NP Score</th>
                             <th>NP Label</th>
                             <th>NP Sequence</th>
@@ -995,6 +1044,15 @@ export default function ReplayPage() {
                               </td>
                               <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
                                 {c.demand_composite_score != null ? Number(c.demand_composite_score).toFixed(1) : '—'}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: c.tz_t_signal ? '#34d399' : 'var(--text-muted)' }}>
+                                {c.tz_t_signal || c.tz_z_signal || '—'}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: c.preup_token ? '#60a5fa' : 'var(--text-muted)' }}>
+                                {c.preup_token || c.predn_token || '—'}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)' }}>
+                                {c.line5 || '—'}
                               </td>
                               <td style={{ fontFamily: 'var(--font-mono)', color: npScoreColor(c.new_pump_score) }}>
                                 {c.new_pump_score != null ? Number(c.new_pump_score).toFixed(1) : '—'}

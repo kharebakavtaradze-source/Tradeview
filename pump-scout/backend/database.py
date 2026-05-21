@@ -731,6 +731,16 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("readiness_tier_at_breakout", "VARCHAR(10)"),
     ("had_prime_buy_pre",          "BOOLEAN"),
     ("had_ats_prime_pre",          "BOOLEAN"),
+    # TZ bar label at breakout + PRE-window TZ aggregates (260521_TZ_F_WLNBB_CMB)
+    ("tz_t_signal_at_breakout",  "VARCHAR(10)"),
+    ("tz_z_signal_at_breakout",  "VARCHAR(10)"),
+    ("preup_token_at_breakout",  "VARCHAR(10)"),
+    ("predn_token_at_breakout",  "VARCHAR(10)"),
+    ("line3_at_breakout",        "VARCHAR(10)"),
+    ("line4_at_breakout",        "VARCHAR(15)"),
+    ("line5_at_breakout",        "VARCHAR(30)"),
+    ("strong_tz_count_pre",      "INTEGER"),
+    ("preup_count_pre",          "INTEGER"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -799,6 +809,14 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("flow_risks_json",         "TEXT"),
     ("demand_breakdown_json",   "TEXT"),
     ("demand_risk_flags_json",  "TEXT"),
+    # TZ / bar label at scan date (260521_TZ_F_WLNBB_CMB)
+    ("tz_t_signal",  "VARCHAR(10)"),
+    ("tz_z_signal",  "VARCHAR(10)"),
+    ("preup_token",  "VARCHAR(10)"),
+    ("predn_token",  "VARCHAR(10)"),
+    ("line3",        "VARCHAR(10)"),
+    ("line4",        "VARCHAR(15)"),
+    ("line5",        "VARCHAR(30)"),
 ]
 
 _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
@@ -2859,6 +2877,14 @@ class ReplaySignalCandidate(Base):
     demand_risk_flags_json  = Column(Text,       nullable=True)   # JSON list
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
+    # TZ / bar label at scan date (260521_TZ_F_WLNBB_CMB)
+    tz_t_signal           = Column(String(10), nullable=True)  # T4, T6, T1G, T2G, etc.
+    tz_z_signal           = Column(String(10), nullable=True)  # Z4, Z6, Z1G, Z2G, etc.
+    preup_token           = Column(String(10), nullable=True)  # P66, P55, P89, P3, P2, P50
+    predn_token           = Column(String(10), nullable=True)  # D66, D55, etc.
+    line3                 = Column(String(10), nullable=True)  # body/wick class: XTB, MBB, SF, etc.
+    line4                 = Column(String(15), nullable=True)  # gap/range: G2-V, N, etc.
+    line5                 = Column(String(30), nullable=True)  # VIX-Fix/PSAR/RSI2: VX-PB-R2L
 
 
 class ReplayOutcome(Base):
@@ -3083,6 +3109,13 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 demand_breakdown_json   = json.dumps(c.get("demand_score_breakdown") or {}),
                 demand_risk_flags_json  = json.dumps(c.get("demand_risk_flags") or []),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
+                tz_t_signal             = c.get("tz_t_signal") or None,
+                tz_z_signal             = c.get("tz_z_signal") or None,
+                preup_token             = c.get("preup_token") or None,
+                predn_token             = c.get("predn_token") or None,
+                line3                   = c.get("line3") or None,
+                line4                   = c.get("line4") or None,
+                line5                   = c.get("line5") or None,
             )
             session.add(row)
         await session.commit()
@@ -3316,6 +3349,13 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "demand_risk_flags":       json.loads(r.demand_risk_flags_json or "[]"),
         "snapshot":                json.loads(r.candidate_snapshot_json or "{}"),
         "created_at":              r.created_at.isoformat() if r.created_at else None,
+        "tz_t_signal":             r.tz_t_signal,
+        "tz_z_signal":             r.tz_z_signal,
+        "preup_token":             r.preup_token,
+        "predn_token":             r.predn_token,
+        "line3":                   r.line3,
+        "line4":                   r.line4,
+        "line5":                   r.line5,
     }
 
 
@@ -3944,6 +3984,17 @@ class RawPatternEpisodeFeatures(Base):
     ats_setup_or_better_at_breakout    = Column(Boolean, nullable=True)
     split_capped_demand_at_breakout    = Column(Boolean, nullable=True)
     illiquidity_capped_demand_at_breakout = Column(Boolean, nullable=True)
+    # TZ bar label at breakout (260521_TZ_F_WLNBB_CMB)
+    tz_t_signal_at_breakout  = Column(String(10), nullable=True)  # T4, T6, T1G, T2G, etc.
+    tz_z_signal_at_breakout  = Column(String(10), nullable=True)  # Z4, Z6, Z1G, Z2G, etc.
+    preup_token_at_breakout  = Column(String(10), nullable=True)  # P66, P55, P89, etc.
+    predn_token_at_breakout  = Column(String(10), nullable=True)  # D66, D55, etc.
+    line3_at_breakout        = Column(String(10), nullable=True)  # body/wick: XTB, MBB, SF
+    line4_at_breakout        = Column(String(15), nullable=True)  # gap/range: G2-V, N
+    line5_at_breakout        = Column(String(30), nullable=True)  # VX-PB-R2L, PB, etc.
+    # TZ PRE-window aggregates
+    strong_tz_count_pre      = Column(Integer,    nullable=True)  # T4+T6+T1G count in PRE window
+    preup_count_pre          = Column(Integer,    nullable=True)  # PREUP bars in PRE window
 
 
 class RawPatternComparison(Base):
