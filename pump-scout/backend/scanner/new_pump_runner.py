@@ -683,7 +683,14 @@ async def run_new_pump_scan(
             "finished_at":  datetime.now(timezone.utc).isoformat(),
         })
 
-        # ── Step 9: Record signal outcomes for AI pattern learning ──────────────
+        # ── Step 9: Persist to DB so results survive deploys ─────────────────
+        try:
+            from database import save_scan as _save_scan
+            await _save_scan(_latest)
+        except Exception as _sv_exc:
+            logger.warning(f"[NpRunner] scan DB save failed (non-fatal): {_sv_exc}")
+
+        # ── Step 10: Record signal outcomes for AI pattern learning ───────────
         try:
             from ai_journal import record_scan_signals
             asyncio.create_task(record_scan_signals(results))
