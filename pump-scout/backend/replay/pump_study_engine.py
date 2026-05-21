@@ -148,6 +148,54 @@ async def _fetch_candles_range(
         return []
 
 
+# ── Date helper ───────────────────────────────────────────────────────────────
+
+def _date_add(date_str: str, days: int) -> str:
+    """Add `days` to a YYYY-MM-DD string and return YYYY-MM-DD."""
+    from datetime import date, timedelta
+    d = date.fromisoformat(date_str)
+    return (d + timedelta(days=days)).isoformat()
+
+
+# ── Sector resolution helper ──────────────────────────────────────────────────
+
+async def _resolve_sector_for_symbol(symbol: str) -> tuple[str | None, str | None]:
+    """
+    Look up sector/industry for a symbol from SectorCache or UniverseCache.
+    Returns (sector, industry) or (None, None) if not found.
+    """
+    try:
+        from database import get_session_factory, SectorCache, UniverseCache
+        from scanner.sector_resolver import resolve_sector
+        from sqlalchemy import select as _sa_select
+
+        async with get_session_factory()() as session:
+            # Try SectorCache first
+            row = (await session.execute(
+                _sa_select(SectorCache).where(SectorCache.symbol == symbol.upper())
+            )).scalar_one_or_none()
+            if row and row.sector and row.sector not in ("Unknown", "UNKNOWN", ""):
+                return row.sector, row.industry
+
+            # Try UniverseCache
+            urow = (await session.execute(
+                _sa_select(UniverseCache).where(UniverseCache.symbol == symbol.upper())
+            )).scalar_one_or_none()
+            if urow:
+                sector, industry, _ = resolve_sector(
+                    symbol=symbol,
+                    raw_sector=getattr(urow, "sector", None),
+                    raw_industry=getattr(urow, "industry", None),
+                    sic_code=getattr(urow, "sic_code", None),
+                    sic_description=getattr(urow, "sic_description", None),
+                )
+                if sector and sector not in ("Unknown", "UNKNOWN"):
+                    return sector, industry
+    except Exception:
+        pass
+    return None, None
+
+
 # ── Raw detection ─────────────────────────────────────────────────────────────
 
 def _detect_raw_pumps(
@@ -2255,6 +2303,20 @@ _COMPARISON_FEATURES = [
     "had_late_confirm_sequence_pre",
     "had_expansion_risk_flag_pre",
     "had_setup_only_l34_mid_avoid_pre",
+    # ── PRIMARY: Demand Scanner at breakout ──
+    "had_prime_buy_pre",
+    "had_ats_prime_pre",
+    "demand_prime_at_breakout",
+    "demand_high_at_breakout",
+    "demand_watch_or_better_at_breakout",
+    "ats_prime_at_breakout",
+    "ats_setup_or_better_at_breakout",
+    "split_capped_demand_at_breakout",
+    "illiquidity_capped_demand_at_breakout",
+    # ── SECONDARY: Demand Scanner numeric scores ──
+    "demand_score_at_breakout",
+    "ats_score_at_breakout",
+    "readiness_at_breakout",
 ]
 
 # Priority tier for each feature.  Used to populate stats_json["priority"]
@@ -2411,6 +2473,12 @@ _BINARY_FEATURES = {
     "had_np_buy_candidate_pre", "had_np_watch_pre", "had_np_avoid_pre",
     "had_late_confirm_sequence_pre", "had_expansion_risk_flag_pre",
     "had_setup_only_l34_mid_avoid_pre",
+    # Demand Scanner booleans — NULL treated as False in aggregation
+    "had_prime_buy_pre", "had_ats_prime_pre",
+    "demand_prime_at_breakout", "demand_high_at_breakout",
+    "demand_watch_or_better_at_breakout",
+    "ats_prime_at_breakout", "ats_setup_or_better_at_breakout",
+    "split_capped_demand_at_breakout", "illiquidity_capped_demand_at_breakout",
 }
 
 _COMPARISON_GROUPS = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
@@ -2933,6 +3001,60 @@ _D_BEST_TYPE_RANK = {
     "SECONDARY_D_CONFLUENCE": 17,
     "NONE":                   18,
 }
+
+
+def _build_demand_result_from_snapshot(
+    snap: dict,
+    feature_json: dict | None,
+    ep: dict,
+) -> tuple[dict, list[str]]:
+    """
+    Reconstruct a demand-scorer-compatible result dict from a pump study snapshot
+    + optional feature_json from raw_pattern_daily_features.
+    Returns (result_dict, missing_inputs_list).
+    """
+    sj       = snap.get("snapshot") or {} if snap else {}
+    np_data  = sj.get("new_pump") or {}
+    fj       = feature_json or {}
+    missing  = []
+
+    result: dict = {
+        "price":                        snap.get("close") if snap else None,
+        "compression_expansion_state":  np_data.get("compression_expansion_state"),
+        "new_pump_label":               np_data.get("decision"),
+        "decision":                     np_data.get("decision"),
+        "expansion_timing_risk":        np_data.get("expansion_timing_risk"),
+        "fake_trigger_risk":            np_data.get("fake_trigger_risk"),
+        "scanner_v2_decision":          np_data.get("decision"),  # best proxy
+        # D-WLNBB / custom flags from feature_json
+        "l34_wlnbb":           fj.get("l34_wlnbb"),
+        "l43_wlnbb":           fj.get("l43_wlnbb"),
+        "l64_wlnbb":           fj.get("l64_wlnbb"),
+        "d6_beup":             fj.get("d6_beup"),
+        "d4_beup":             fj.get("d4_beup"),
+        "d3_beup":             fj.get("d3_beup"),
+        "core_d_beup":         fj.get("core_d_beup"),
+        "core_d_l34":          fj.get("core_d_l34"),
+        "d4_l34":              fj.get("d4_l34"),
+        "d3_l34":              fj.get("d3_l34"),
+        "has_l34_np_ld":       fj.get("has_l34_np_ld"),
+        "has_wc_gap_ld":       fj.get("has_wc_gap_ld"),
+        "has_triple_d_l34_beup": fj.get("has_triple_d_l34_beup"),
+        # Context fields not available from historical snapshots — scorer handles None
+        "sector_context":      None,
+        "macro_context":       None,
+        "news_hype_context":   None,
+        "sympathy_context":    None,
+    }
+
+    if not snap:
+        missing.append("no_snapshot")
+    if not feature_json:
+        missing += ["l34_wlnbb", "d6_beup", "has_l34_np_ld", "has_wc_gap_ld"]
+    if result.get("compression_expansion_state") is None:
+        missing.append("compression_expansion_state")
+
+    return result, missing
 
 
 async def build_raw_pattern_episode_features_structural_v2(
@@ -3614,6 +3736,205 @@ async def build_raw_pattern_episode_features_new_pump(
     return patched
 
 
+async def build_raw_pattern_episode_features_demand(
+    raw_run_id: int,
+    pump_study_run_id: int,
+) -> int:
+    """
+    PART 1+2+3: Compute Demand Scanner fields at/near breakout for each episode.
+
+    For each episode:
+    - Finds the breakout evaluation bar (last PRE bar ≈ pump_start_date)
+    - Gets the matching pump_episode_snapshot + feature_json
+    - Reconstructs scorer input from snapshot new_pump fields + D-WLNBB feature_json
+    - Calls score_demand_composite()
+    - Writes demand fields to raw_pattern_episode_features
+    - Also resolves and writes sector/industry if currently null (PART 3)
+    """
+    import json as _json
+    from scanner.demand_composite_scanner import score_demand_composite
+
+    from database import (
+        get_pump_episodes,
+        get_raw_pattern_daily_features,
+        get_run_snapshots,
+        update_raw_pattern_episode_features,
+    )
+
+    episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
+    patched  = 0
+
+    for ep in episodes:
+        episode_id = ep.get("id")
+        symbol     = ep.get("symbol", "")
+        pump_start = ep.get("pump_start_date") or ep.get("pump_peak_date")
+        if not episode_id or not symbol:
+            continue
+
+        patch: dict = {}
+
+        # ── PART 3: sector / industry resolution ────────────────────────────────
+        if not ep.get("sector"):
+            sec, ind = await _resolve_sector_for_symbol(symbol)
+            if sec:
+                patch["sector"]   = sec
+                patch["industry"] = ind
+
+        # ── Find breakout bar ────────────────────────────────────────────────────
+        # Primary: last PRE bar (closest bar before pump_start)
+        pre_bars = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PRE", limit=200
+        )
+        pump_bars_df = await get_raw_pattern_daily_features(
+            raw_run_id, episode_id=episode_id, phase="PUMP", limit=5
+        )
+
+        breakout_bar: dict | None = None
+        if pre_bars:
+            breakout_bar = sorted(pre_bars, key=lambda x: x.get("date", ""))[-1]
+        elif pump_bars_df:
+            breakout_bar = sorted(pump_bars_df, key=lambda x: x.get("date", ""))[0]
+
+        if not breakout_bar:
+            patch.update({
+                "demand_compute_status": "MISSING_INPUT",
+                "demand_missing_inputs": _json.dumps(["no_bars_found"]),
+            })
+            if any(v is not None for v in patch.values()):
+                await update_raw_pattern_episode_features(raw_run_id, episode_id, patch)
+            continue
+
+        breakout_date = breakout_bar.get("date", "")
+        feature_json  = breakout_bar.get("feature_json") or {}
+        if isinstance(feature_json, str):
+            try:
+                feature_json = _json.loads(feature_json)
+            except Exception:
+                feature_json = {}
+
+        # ── Get matching snapshot ────────────────────────────────────────────────
+        all_snaps = await get_run_snapshots(
+            run_id=pump_study_run_id, episode_id=episode_id, phase="PRE"
+        )
+        breakout_snap: dict | None = None
+        if all_snaps:
+            # Exact date match first
+            breakout_snap = next(
+                (s for s in all_snaps if s.get("snap_date") == breakout_date), None
+            )
+            if not breakout_snap:
+                # Fallback: last PRE snapshot
+                breakout_snap = sorted(
+                    all_snaps, key=lambda x: x.get("snap_date", "")
+                )[-1]
+
+        if not breakout_snap:
+            pump_snaps = await get_run_snapshots(
+                run_id=pump_study_run_id, episode_id=episode_id, phase="PUMP"
+            )
+            breakout_snap = pump_snaps[0] if pump_snaps else None
+
+        # ── Build result dict ────────────────────────────────────────────────────
+        result_dict, missing_inputs = _build_demand_result_from_snapshot(
+            breakout_snap, feature_json, ep
+        )
+
+        # ── Fetch recent candles for readiness computation ───────────────────────
+        candles: list[dict] = []
+        if pump_start:
+            try:
+                fetch_start = _date_add(pump_start, -30)
+                candles = await _fetch_candles_range(symbol, fetch_start, pump_start)
+            except Exception:
+                pass
+
+        # ── Score ────────────────────────────────────────────────────────────────
+        try:
+            scored = score_demand_composite(result_dict, candles if candles else None)
+
+            tier   = scored.get("demand_composite_tier") or ""
+            ats    = scored.get("ats_signal") or ""
+            r_tier = scored.get("readiness_tier") or ""
+
+            # ATS score from breakdown
+            breakdown = scored.get("demand_score_breakdown") or {}
+            ats_score = breakdown.get("ats") or 0.0
+
+            patch.update({
+                "demand_score_at_breakout":              scored.get("demand_composite_score"),
+                "demand_tier_at_breakout":               tier or None,
+                "ats_at_breakout":                       ats or None,
+                "ats_score_at_breakout":                 ats_score or None,
+                "ats_conditions_met_at_breakout":        _json.dumps(scored.get("ats_conditions_met") or []),
+                "ats_conditions_missing_at_breakout":    _json.dumps(scored.get("ats_conditions_missing") or []),
+                "readiness_at_breakout":                 scored.get("readiness_score"),
+                "readiness_tier_at_breakout":            r_tier or None,
+                "demand_action_at_breakout":             tier or None,
+                "demand_reasons_at_breakout":            _json.dumps(scored.get("demand_buy_reasons") or []),
+                "demand_risk_flags_at_breakout":         _json.dumps(scored.get("demand_risk_flags") or []),
+                "demand_compute_status":                 "PARTIAL" if missing_inputs else "OK",
+                "demand_missing_inputs":                 _json.dumps(missing_inputs) if missing_inputs else None,
+                # Comparison booleans (NULL = false in aggregation)
+                "demand_prime_at_breakout":              True if tier == "PRIME_BUY" else None,
+                "demand_high_at_breakout":               True if tier == "HIGH_CONF_BUY" else None,
+                "demand_watch_or_better_at_breakout":    True if tier in ("PRIME_BUY", "HIGH_CONF_BUY", "BUY_WATCH") else None,
+                "ats_prime_at_breakout":                 True if ats == "ATS_PRIME" else None,
+                "ats_setup_or_better_at_breakout":       True if ats in ("ATS_PRIME", "ATS_SETUP") else None,
+                "split_capped_demand_at_breakout":       True if "split" in " ".join(scored.get("demand_risk_flags") or []).lower() else None,
+                "illiquidity_capped_demand_at_breakout": True if "illiquid" in " ".join(scored.get("demand_risk_flags") or []).lower() else None,
+                # had_*_pre: True if any PRE bar had this tier (updated below)
+                "had_prime_buy_pre":  None,
+                "had_ats_prime_pre":  None,
+            })
+
+        except Exception as exc:
+            patch.update({
+                "demand_compute_status": "ERROR",
+                "demand_missing_inputs": _json.dumps([str(exc)[:200]]),
+            })
+
+        # ── had_*_pre: scan all PRE bars ─────────────────────────────────────────
+        # Score each PRE bar and check if any reached PRIME_BUY / ATS_PRIME
+        had_prime  = False
+        had_ats_p  = False
+        if pre_bars:
+            all_pre_snaps = sorted(
+                await get_run_snapshots(run_id=pump_study_run_id, episode_id=episode_id, phase="PRE"),
+                key=lambda x: x.get("snap_date", ""),
+            )
+            snap_by_date = {s.get("snap_date"): s for s in all_pre_snaps}
+            for bar in pre_bars:
+                bdate  = bar.get("date", "")
+                fj_bar = bar.get("feature_json") or {}
+                if isinstance(fj_bar, str):
+                    try: fj_bar = _json.loads(fj_bar)
+                    except: fj_bar = {}
+                snap_bar = snap_by_date.get(bdate)
+                if not snap_bar:
+                    continue
+                try:
+                    r_bar, _ = _build_demand_result_from_snapshot(snap_bar, fj_bar, ep)
+                    s_bar    = score_demand_composite(r_bar, None)
+                    if s_bar.get("demand_composite_tier") == "PRIME_BUY":
+                        had_prime = True
+                    if s_bar.get("ats_signal") == "ATS_PRIME":
+                        had_ats_p = True
+                    if had_prime and had_ats_p:
+                        break
+                except Exception:
+                    pass
+
+        patch["had_prime_buy_pre"] = True if had_prime else None
+        patch["had_ats_prime_pre"] = True if had_ats_p else None
+
+        if any(v is not None for v in patch.values()):
+            await update_raw_pattern_episode_features(raw_run_id, episode_id, patch)
+            patched += 1
+
+    logger.info(f"[RawDemand] Demand episode features patched: {patched}/{len(episodes)}")
+    return patched
+
+
 async def build_raw_pattern_comparisons(
     raw_run_id: int,
     pump_study_run_id: int,
@@ -3689,13 +4010,19 @@ async def build_raw_pattern_comparisons(
         # ── Per-feature stats ──────────────────────────────────────────────
         comp_rows: list[dict] = []
         for feat in _COMPARISON_FEATURES:
-            # Boolean fields (had_*): coerce True→1 / None→skip for stats
             raw_vals = [ef.get(feat) for ef in ep_features]
             numeric  = []
-            for v in raw_vals:
-                if v is None:
-                    continue
-                numeric.append(1 if v is True else (0 if v is False else v))
+            if feat in _BINARY_FEATURES:
+                # For boolean columns, NULL means False — count over full group size
+                # so rates reflect the true proportion, not just the non-null subset.
+                for v in raw_vals:
+                    numeric.append(1 if v is True else 0)
+            else:
+                # For numeric features, skip NULLs (missing data ≠ zero)
+                for v in raw_vals:
+                    if v is None:
+                        continue
+                    numeric.append(1 if v is True else (0 if v is False else v))
 
             stats = _compute_stats(numeric)
             if stats["count"] == 0:
