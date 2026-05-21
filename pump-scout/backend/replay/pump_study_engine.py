@@ -3891,6 +3891,8 @@ async def build_raw_pattern_episode_features_demand(
             # ── TZ bar label at breakout ─────────────────────────────────────────
             try:
                 from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+                _TZ_T_PRIO = ["T4","T6","T1G","T2G","T1","T2","T9","T10","T3","T11","T5","T12"]
+                _TZ_Z_PRIO = ["Z4","Z6","Z1G","Z2G","Z1","Z2","Z9","Z10","Z3","Z11","Z5","Z12","Z7"]
                 if candles:
                     _lbls = compute_combined_bar_labels(candles, last_n=1)
                     if _lbls:
@@ -3915,6 +3917,16 @@ async def build_raw_pattern_episode_features_demand(
                         _preup_cnt = sum(1 for b in _pre_lbls if b.get("preup"))
                         patch["strong_tz_count_pre"] = _strong_tz
                         patch["preup_count_pre"]      = _preup_cnt
+                    # 15-bar best TZ signal
+                    if len(candles) >= 2:
+                        _n15 = min(15, len(candles))
+                        _lbls_15 = compute_combined_bar_labels(candles, last_n=_n15)
+                        _all_t = [b.get("t_signal") for b in _lbls_15 if b.get("t_signal")]
+                        _all_z = [b.get("z_signal") for b in _lbls_15 if b.get("z_signal")]
+                        _best_t = min((_s for _s in _all_t if _s in _TZ_T_PRIO), key=lambda _s: _TZ_T_PRIO.index(_s), default=None)
+                        _best_z = min((_s for _s in _all_z if _s in _TZ_Z_PRIO), key=lambda _s: _TZ_Z_PRIO.index(_s), default=None)
+                        patch["best_tz_t_signal_15bar"] = _best_t
+                        patch["best_tz_z_signal_15bar"] = _best_z
             except Exception:
                 pass
 
@@ -3968,6 +3980,7 @@ async def build_raw_pattern_episode_features_demand(
                 "ats_at_breakout", "readiness_at_breakout", "readiness_tier_at_breakout",
                 "tz_t_signal_at_breakout", "tz_z_signal_at_breakout",
                 "preup_token_at_breakout", "line5_at_breakout",
+                "best_tz_t_signal_15bar", "best_tz_z_signal_15bar",
             ):
                 if fld in patch and patch[fld] is not None:
                     pump_ep_patch[fld] = patch[fld]

@@ -397,9 +397,19 @@ const EP_COLS = [
   { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠ YES' : '—', colorFn: v => v ? '#fb7185' : undefined },
   // ── Demand composite signals ──────────────────────────────────────────────────
   { key: 'demand_tier_at_breakout',                 label: 'DemandTier',      mono: false },
+  { key: 'demand_score_at_breakout',                label: 'DScore',          mono: true,  fmt: v => v != null ? Number(v).toFixed(1) : '—' },
   { key: 'ats_at_breakout',                         label: 'ATS',             mono: true,  fmt: v => v || '—', small: true },
+  { key: 'readiness_tier_at_breakout',              label: 'Ready',           mono: true,  fmt: v => v || '—', small: true },
   { key: 'had_prime_buy_pre',                       label: 'Prime7d?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#34d399' : undefined },
   { key: 'had_ats_prime_pre',                       label: 'ATS7d?',          mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#60a5fa' : undefined },
+  // ── TZ / bar-label signals at breakout ───────────────────────────────────────
+  { key: 'tz_t_signal_at_breakout',                label: 'TZ',              mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#34d399' : undefined },
+  { key: 'tz_z_signal_at_breakout',                label: 'Z-Sig',           mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#fb7185' : undefined },
+  { key: 'best_tz_t_signal_15bar',                 label: 'BestTZ15',        mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#22d3ee' : undefined },
+  { key: 'preup_token_at_breakout',                label: 'PREUP',           mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#60a5fa' : undefined },
+  { key: 'line5_at_breakout',                      label: 'Line5',           mono: true,  fmt: v => v || '—', small: true },
+  { key: 'strong_tz_count_pre',                    label: 'StrongTZ',        mono: true,  fmt: v => v != null ? v : '—', colorFn: v => v >= 2 ? '#34d399' : undefined },
+  { key: 'preup_count_pre',                        label: 'PREUPn',          mono: true,  fmt: v => v != null ? v : '—', colorFn: v => v >= 2 ? '#60a5fa' : undefined },
   // ── Demand bar flags ─────────────────────────────────────────────────────────
   { key: 'has_ld',                                  label: 'LD?',             mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
   { key: 'has_wc_gap_ld',                           label: 'WcGapLD?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#6ee7b7' : undefined },
@@ -409,6 +419,131 @@ const EP_COLS = [
   { key: 'had_np_buy_candidate_pre',                label: 'NPBuy?',          mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
   { key: 'd_confluence_best_type_pre',              label: 'DType',           mono: true,  fmt: v => v || '—', small: true },
 ];
+
+function computeStatGroups(episodes, field) {
+  const groups = {};
+  for (const ep of episodes) {
+    const key = ep[field] || 'NONE';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(ep);
+  }
+  return Object.entries(groups)
+    .map(([bucket, eps]) => {
+      const mults = eps.map(e => e.pump_multiple).filter(v => v != null);
+      const rets  = eps.map(e => e.pump_return_pct).filter(v => v != null);
+      return {
+        bucket,
+        count:          eps.length,
+        avg_multiple:   mults.length ? mults.reduce((a, b) => a + b, 0) / mults.length : null,
+        win2x_rate:     mults.length ? mults.filter(v => v >= 2).length / mults.length : null,
+        win4x_rate:     mults.length ? mults.filter(v => v >= 4).length / mults.length : null,
+        avg_return_pct: rets.length  ? rets.reduce((a, b) => a + b, 0)  / rets.length  : null,
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+}
+
+function computeCombos(episodes, fieldA, fieldB) {
+  const groups = {};
+  for (const ep of episodes) {
+    const key = `${ep[fieldA] || 'NONE'} × ${ep[fieldB] || 'NONE'}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(ep);
+  }
+  return Object.entries(groups)
+    .filter(([, eps]) => eps.length >= 3)
+    .map(([bucket, eps]) => {
+      const mults = eps.map(e => e.pump_multiple).filter(v => v != null);
+      const rets  = eps.map(e => e.pump_return_pct).filter(v => v != null);
+      return {
+        bucket,
+        count:          eps.length,
+        avg_multiple:   mults.length ? mults.reduce((a, b) => a + b, 0) / mults.length : null,
+        win2x_rate:     mults.length ? mults.filter(v => v >= 2).length / mults.length : null,
+        win4x_rate:     mults.length ? mults.filter(v => v >= 4).length / mults.length : null,
+        avg_return_pct: rets.length  ? rets.reduce((a, b) => a + b, 0)  / rets.length  : null,
+      };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 25);
+}
+
+function SigTable({ title, rows }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 5,
+                    letterSpacing: '0.08em', textTransform: 'uppercase' }}>{title}</div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              {['Bucket','N','Avg×','2× Rate','4× Rate','Avg Ret%'].map(h => (
+                <th key={h} style={{ padding: '3px 8px', textAlign: h === 'Bucket' ? 'left' : 'right',
+                                     color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.bucket} style={{ borderBottom: '1px solid var(--border-faint, #2a2a2a)' }}>
+                <td style={{ padding: '3px 8px', fontFamily: 'var(--font-mono)', fontWeight: 700,
+                              fontSize: 9, whiteSpace: 'nowrap' }}>{r.bucket}</td>
+                <td style={{ padding: '3px 8px', textAlign: 'right' }}>{r.count}</td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.avg_multiple >= 3 ? '#86efac' : r.avg_multiple >= 2 ? '#fbbf24' : undefined,
+                              fontWeight: r.avg_multiple >= 3 ? 700 : undefined }}>
+                  {r.avg_multiple != null ? `${r.avg_multiple.toFixed(2)}×` : '—'}
+                </td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.win2x_rate >= 0.6 ? '#86efac' : r.win2x_rate >= 0.4 ? '#fbbf24' : undefined,
+                              fontWeight: r.win2x_rate >= 0.6 ? 700 : undefined }}>
+                  {r.win2x_rate != null ? `${(r.win2x_rate * 100).toFixed(0)}%` : '—'}
+                </td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.win4x_rate >= 0.4 ? '#86efac' : r.win4x_rate >= 0.2 ? '#fbbf24' : undefined,
+                              fontWeight: r.win4x_rate >= 0.4 ? 700 : undefined }}>
+                  {r.win4x_rate != null ? `${(r.win4x_rate * 100).toFixed(0)}%` : '—'}
+                </td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.avg_return_pct >= 100 ? '#86efac' : undefined }}>
+                  {r.avg_return_pct != null ? `${r.avg_return_pct.toFixed(0)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function SignalStats({ episodes }) {
+  const withDemand = (episodes || []).filter(e => e.demand_tier_at_breakout);
+  if (!withDemand.length) return (
+    <div style={{ color: 'var(--text-muted)', fontSize: 11, padding: '12px 0' }}>
+      No demand scores yet — run demand scoring phase first.
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+        <SigTable title="By Demand Tier"     rows={computeStatGroups(withDemand, 'demand_tier_at_breakout')} />
+        <SigTable title="By ATS Signal"       rows={computeStatGroups(withDemand, 'ats_at_breakout')} />
+        <SigTable title="By Readiness Tier"   rows={computeStatGroups(withDemand, 'readiness_tier_at_breakout')} />
+        <SigTable title="By Best TZ Signal (15 bars)" rows={computeStatGroups(withDemand, 'best_tz_t_signal_15bar')} />
+        <SigTable title="By PREUP Token"      rows={computeStatGroups(withDemand, 'preup_token_at_breakout')} />
+        <SigTable title="By Line5"            rows={computeStatGroups(withDemand, 'line5_at_breakout')} />
+      </div>
+      <SigTable title="Best TZ (15-bar) × Demand Tier (min 3 episodes)"
+        rows={computeCombos(withDemand, 'best_tz_t_signal_15bar', 'demand_tier_at_breakout')} />
+      <SigTable title="Best TZ (15-bar) × ATS Signal (min 3 episodes)"
+        rows={computeCombos(withDemand, 'best_tz_t_signal_15bar', 'ats_at_breakout')} />
+      <SigTable title="Demand Tier × ATS Signal (min 3 episodes)"
+        rows={computeCombos(withDemand, 'demand_tier_at_breakout', 'ats_at_breakout')} />
+    </div>
+  );
+}
 
 function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroupFilter }) {
   const [hideArtifacts, setHideArtifacts] = useState(false);
@@ -502,7 +637,42 @@ function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroup
                         return (
                           <td key={c.key} className={styles.dataCell}>
                             {raw ? (
-                              <span style={{ color: demandTierColor, fontWeight: 700, fontSize: 9 }}>{demandShort}</span>
+                              <span style={{ color: demandTierColor, fontWeight: 700, fontSize: 9,
+                                padding: '1px 5px', borderRadius: 4,
+                                background: `${demandTierColor}18`, border: `1px solid ${demandTierColor}44` }}>
+                                {demandShort}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        );
+                      }
+                      if (c.key === 'ats_at_breakout') {
+                        const atsColor = { ATS_PRIME: '#34d399', ATS_SETUP: '#60a5fa', ATS_WATCH: '#a78bfa', ATS_NONE: '#6b7280' }[raw] || '#6b7280';
+                        const atsShort = { ATS_PRIME: 'PRIME', ATS_SETUP: 'SETUP', ATS_WATCH: 'WATCH', ATS_NONE: 'NONE' }[raw] || raw;
+                        return (
+                          <td key={c.key} className={styles.dataCell}>
+                            {raw ? (
+                              <span style={{ color: atsColor, fontWeight: 700, fontSize: 9,
+                                padding: '1px 5px', borderRadius: 4,
+                                background: `${atsColor}18`, border: `1px solid ${atsColor}44` }}>
+                                {atsShort}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        );
+                      }
+                      if (c.key === 'tz_t_signal_at_breakout' || c.key === 'tz_z_signal_at_breakout') {
+                        const isBull = c.key === 'tz_t_signal_at_breakout';
+                        const col = raw ? (isBull ? '#34d399' : '#fb7185') : undefined;
+                        return (
+                          <td key={c.key} className={styles.dataCell}>
+                            {raw ? (
+                              <span style={{ color: col, fontWeight: 700, fontSize: 9,
+                                padding: '1px 5px', borderRadius: 4,
+                                background: `${col}18`, border: `1px solid ${col}44`,
+                                fontFamily: 'var(--font-mono)' }}>
+                                {raw}
+                              </span>
                             ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                           </td>
                         );
@@ -4637,10 +4807,11 @@ export default function RawPatternStudy() {
                 {/* Tab row */}
                 <div className={styles.tabRow}>
                   {[
-                    { id: 'schemes',     label: 'Top Schemes' },
-                    { id: 'episodes',    label: `Episodes (${episodes.length})` },
-                    { id: 'comparisons', label: 'Comparisons' },
-                    { id: 'np-bundle',     label: 'NP Bundle' },
+                    { id: 'schemes',      label: 'Top Schemes' },
+                    { id: 'episodes',     label: `Episodes (${episodes.length})` },
+                    { id: 'signal-combos', label: 'Signal Combos' },
+                    { id: 'comparisons',  label: 'Comparisons' },
+                    { id: 'np-bundle',    label: 'NP Bundle' },
                     { id: 'split-impact', label: 'Split Impact' },
                     { id: 'discovery',    label: 'Pattern Discovery' },
                     { id: 'patch-plan',   label: 'Engine Plan' },
@@ -4761,6 +4932,20 @@ export default function RawPatternStudy() {
                   run.status !== 'complete'
                     ? <div className={styles.statusMsg}>Engine plan available after run completes.</div>
                     : <EnginePatchPlan key={selectedId} runId={selectedId} />
+                )}
+
+                {/* Signal Combos tab */}
+                {activeTab === 'signal-combos' && (
+                  episodes.length === 0
+                    ? <div className={styles.statusMsg}>Load episodes first.</div>
+                    : <div className={styles.bundleSection}>
+                        <div className={styles.bundleSectionTitle}>SIGNAL COMBINATION ANALYTICS</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 12 }}>
+                          {episodes.filter(e => e.demand_tier_at_breakout).length} of {episodes.length} episodes have demand scores.
+                          Metrics: pump_multiple and pump_return_pct at episode level.
+                        </div>
+                        <SignalStats episodes={episodes} />
+                      </div>
                 )}
 
                 {/* Bar Labels tab */}

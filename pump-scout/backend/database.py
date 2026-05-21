@@ -712,17 +712,6 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("had_late_confirm_sequence_pre",        "BOOLEAN"),
     ("had_expansion_risk_flag_pre",          "BOOLEAN"),
     ("had_setup_only_l34_mid_avoid_pre",     "BOOLEAN"),
-    # Pattern Discovery / Pump Watch (Phase 2B-PD)
-    ("pump_watch_score",                     "INTEGER"),
-    ("pump_watch_label",                     "VARCHAR(30)"),
-    ("pump_watch_reasons",                   "TEXT"),
-    ("pump_watch_risk_flags",                "TEXT"),
-    ("pump_watch_pattern_ids",               "TEXT"),
-    ("pump_watch_split_context",             "VARCHAR(30)"),
-    ("pump_watch_confidence",                "VARCHAR(10)"),
-    ("pump_watch_diagnostic_labels",         "TEXT"),       # JSON list of diagnostic label IDs
-    ("pump_watch_pattern_id",                "VARCHAR(60)"), # primary diagnostic ID
-    ("pump_watch_rescue_reason",             "VARCHAR(80)"), # human-readable rescue note
     # Demand composite enrichment (Option B)
     ("demand_score_at_breakout",   "FLOAT"),
     ("demand_tier_at_breakout",    "VARCHAR(20)"),
@@ -757,6 +746,8 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("line5_at_breakout",        "VARCHAR(30)"),
     ("strong_tz_count_pre",      "INTEGER"),
     ("preup_count_pre",          "INTEGER"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -803,17 +794,6 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("np_expansion_timing_risk",       "VARCHAR(10)"),
     ("np_decision",                    "VARCHAR(20)"),
     ("np_decision_reason",             "VARCHAR(200)"),
-    # Scanner v2 / priority enrichment (Task 9)
-    ("priority_score",                 "FLOAT"),
-    ("priority_label",                 "VARCHAR(20)"),
-    ("scanner_v2_decision",            "VARCHAR(25)"),
-    ("scanner_v2_score",               "FLOAT"),
-    # Scanner v2 enrichment gap-fill: structure + d_confluence + rank
-    ("np_structure_phase",             "VARCHAR(30)"),
-    ("np_structure_score",             "FLOAT"),
-    ("d_confluence_family",            "VARCHAR(20)"),
-    ("d_confluence_timing",            "VARCHAR(20)"),
-    ("scanner_v2_rank",                "INTEGER"),
     # Demand composite enrichment (Option B)
     ("demand_composite_score",  "FLOAT"),
     ("demand_composite_tier",   "VARCHAR(20)"),
@@ -833,6 +813,8 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("line3",        "VARCHAR(10)"),
     ("line4",        "VARCHAR(15)"),
     ("line5",        "VARCHAR(30)"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
 _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
@@ -847,6 +829,8 @@ _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
     ("tz_z_signal_at_breakout",    "VARCHAR(10)"),
     ("preup_token_at_breakout",    "VARCHAR(10)"),
     ("line5_at_breakout",          "VARCHAR(30)"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
 _AI_JOURNAL_POSITION_MIGRATIONS: list[tuple[str, str]] = [
@@ -1055,6 +1039,37 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration ai_journal_position.{col} failed (non-fatal): {e}")
+
+        # Drop legacy scanner v2 / priority columns from replay_signal_candidates
+        _DROP_REPLAY_LEGACY = [
+            "priority_score", "priority_label",
+            "scanner_v2_decision", "scanner_v2_score", "scanner_v2_rank",
+            "np_structure_phase", "np_structure_score",
+            "d_confluence_family", "d_confluence_timing",
+        ]
+        for col in _DROP_REPLAY_LEGACY:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE replay_signal_candidates DROP COLUMN IF EXISTS {col}"
+                ))
+            except Exception as e:
+                logger.warning(f"Drop replay_signal_candidates.{col} failed (non-fatal): {e}")
+
+        # Drop legacy pump_watch columns from raw_pattern_episode_features
+        _DROP_PUMP_WATCH = [
+            "pump_watch_score", "pump_watch_label", "pump_watch_reasons",
+            "pump_watch_risk_flags", "pump_watch_pattern_ids",
+            "pump_watch_split_context", "pump_watch_confidence",
+            "pump_watch_diagnostic_labels", "pump_watch_pattern_id",
+            "pump_watch_rescue_reason",
+        ]
+        for col in _DROP_PUMP_WATCH:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE raw_pattern_episode_features DROP COLUMN IF EXISTS {col}"
+                ))
+            except Exception as e:
+                logger.warning(f"Drop raw_pattern_episode_features.{col} failed (non-fatal): {e}")
 
         # Drop removed AI advisory tables (idempotent)
         for tbl in ("ai_signal_analysis", "ai_review_reports", "ai_insights"):
@@ -2906,6 +2921,8 @@ class ReplaySignalCandidate(Base):
     line3                 = Column(String(10), nullable=True)  # body/wick class: XTB, MBB, SF, etc.
     line4                 = Column(String(15), nullable=True)  # gap/range: G2-V, N, etc.
     line5                 = Column(String(30), nullable=True)  # VIX-Fix/PSAR/RSI2: VX-PB-R2L
+    best_tz_t_signal_15bar = Column(String(10), nullable=True)
+    best_tz_z_signal_15bar = Column(String(10), nullable=True)
 
 
 class ReplayOutcome(Base):
@@ -3137,6 +3154,8 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 line3                   = c.get("line3") or None,
                 line4                   = c.get("line4") or None,
                 line5                   = c.get("line5") or None,
+                best_tz_t_signal_15bar = c.get("best_tz_t_signal_15bar") or None,
+                best_tz_z_signal_15bar = c.get("best_tz_z_signal_15bar") or None,
             )
             session.add(row)
         await session.commit()
@@ -3377,6 +3396,8 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "line3":                   r.line3,
         "line4":                   r.line4,
         "line5":                   r.line5,
+        "best_tz_t_signal_15bar": r.best_tz_t_signal_15bar,
+        "best_tz_z_signal_15bar": r.best_tz_z_signal_15bar,
     }
 
 
@@ -3494,6 +3515,8 @@ class PumpEpisode(Base):
     tz_z_signal_at_breakout    = Column(String(10), nullable=True)
     preup_token_at_breakout    = Column(String(10), nullable=True)
     line5_at_breakout          = Column(String(30), nullable=True)
+    best_tz_t_signal_15bar     = Column(String(10), nullable=True)
+    best_tz_z_signal_15bar     = Column(String(10), nullable=True)
     created_at               = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -3974,17 +3997,6 @@ class RawPatternEpisodeFeatures(Base):
     had_late_confirm_sequence_pre     = Column(Boolean,    nullable=True)
     had_expansion_risk_flag_pre       = Column(Boolean,    nullable=True)
     had_setup_only_l34_mid_avoid_pre  = Column(Boolean,    nullable=True)
-    # Pattern Discovery / Pump Watch fields (Phase 2B-PD)
-    pump_watch_score                  = Column(Integer,    nullable=True)
-    pump_watch_label                  = Column(String(30), nullable=True)
-    pump_watch_reasons                = Column(Text,       nullable=True)   # JSON list
-    pump_watch_risk_flags             = Column(Text,       nullable=True)   # JSON list
-    pump_watch_pattern_ids            = Column(Text,       nullable=True)   # JSON list
-    pump_watch_split_context          = Column(String(30), nullable=True)
-    pump_watch_confidence             = Column(String(10), nullable=True)
-    pump_watch_diagnostic_labels      = Column(Text,       nullable=True)   # JSON list
-    pump_watch_pattern_id             = Column(String(60), nullable=True)
-    pump_watch_rescue_reason          = Column(String(80), nullable=True)
     demand_score_at_breakout   = Column(Float,      nullable=True)
     demand_tier_at_breakout    = Column(String(20), nullable=True)
     ats_at_breakout            = Column(String(20), nullable=True)
@@ -4020,6 +4032,8 @@ class RawPatternEpisodeFeatures(Base):
     # TZ PRE-window aggregates
     strong_tz_count_pre      = Column(Integer,    nullable=True)  # T4+T6+T1G count in PRE window
     preup_count_pre          = Column(Integer,    nullable=True)  # PREUP bars in PRE window
+    best_tz_t_signal_15bar   = Column(String(10), nullable=True)
+    best_tz_z_signal_15bar   = Column(String(10), nullable=True)
 
 
 class RawPatternComparison(Base):
@@ -4688,6 +4702,8 @@ def _pump_episode_to_dict(r: PumpEpisode) -> dict:
         "tz_z_signal_at_breakout":    r.tz_z_signal_at_breakout,
         "preup_token_at_breakout":    r.preup_token_at_breakout,
         "line5_at_breakout":          r.line5_at_breakout,
+        "best_tz_t_signal_15bar":     r.best_tz_t_signal_15bar,
+        "best_tz_z_signal_15bar":     r.best_tz_z_signal_15bar,
         "created_at":               r.created_at.isoformat() if r.created_at else None,
     }
 

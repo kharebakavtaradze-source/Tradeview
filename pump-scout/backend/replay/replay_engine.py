@@ -456,6 +456,18 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
                             "line4":       _l.get("line4")    or "",
                             "line5":       _l.get("line5")    or "",
                         }
+                    # 15-bar best TZ signal
+                    if len(_np_bars) >= 2:
+                        _TZ_T_PRIO = ["T4","T6","T1G","T2G","T1","T2","T9","T10","T3","T11","T5","T12"]
+                        _TZ_Z_PRIO = ["Z4","Z6","Z1G","Z2G","Z1","Z2","Z9","Z10","Z3","Z11","Z5","Z12","Z7"]
+                        _n15 = min(15, len(_np_bars))
+                        _lbls_15 = compute_combined_bar_labels(_np_bars, last_n=_n15)
+                        _all_t = [b.get("t_signal") for b in _lbls_15 if b.get("t_signal")]
+                        _all_z = [b.get("z_signal") for b in _lbls_15 if b.get("z_signal")]
+                        _best_t = min((_s for _s in _all_t if _s in _TZ_T_PRIO), key=lambda _s: _TZ_T_PRIO.index(_s), default=None)
+                        _best_z = min((_s for _s in _all_z if _s in _TZ_Z_PRIO), key=lambda _s: _TZ_Z_PRIO.index(_s), default=None)
+                        _tz["best_tz_t_signal_15bar"] = _best_t or ""
+                        _tz["best_tz_z_signal_15bar"] = _best_z or ""
             except Exception as _tz_exc:
                 logger.debug(f"[REPLAY] {sym} tz_labels failed: {_tz_exc}")
 
