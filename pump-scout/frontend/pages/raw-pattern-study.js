@@ -397,9 +397,18 @@ const EP_COLS = [
   { key: 'split_artifact_risk',                     label: 'Artifact?',       mono: true,  fmt: v => v ? '⚠ YES' : '—', colorFn: v => v ? '#fb7185' : undefined },
   // ── Demand composite signals ──────────────────────────────────────────────────
   { key: 'demand_tier_at_breakout',                 label: 'DemandTier',      mono: false },
+  { key: 'demand_score_at_breakout',                label: 'DScore',          mono: true,  fmt: v => v != null ? Number(v).toFixed(1) : '—' },
   { key: 'ats_at_breakout',                         label: 'ATS',             mono: true,  fmt: v => v || '—', small: true },
+  { key: 'readiness_tier_at_breakout',              label: 'Ready',           mono: true,  fmt: v => v || '—', small: true },
   { key: 'had_prime_buy_pre',                       label: 'Prime7d?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#34d399' : undefined },
   { key: 'had_ats_prime_pre',                       label: 'ATS7d?',          mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#60a5fa' : undefined },
+  // ── TZ / bar-label signals at breakout ───────────────────────────────────────
+  { key: 'tz_t_signal_at_breakout',                label: 'TZ',              mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#34d399' : undefined },
+  { key: 'tz_z_signal_at_breakout',                label: 'Z-Sig',           mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#fb7185' : undefined },
+  { key: 'preup_token_at_breakout',                label: 'PREUP',           mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#60a5fa' : undefined },
+  { key: 'line5_at_breakout',                      label: 'Line5',           mono: true,  fmt: v => v || '—', small: true },
+  { key: 'strong_tz_count_pre',                    label: 'StrongTZ',        mono: true,  fmt: v => v != null ? v : '—', colorFn: v => v >= 2 ? '#34d399' : undefined },
+  { key: 'preup_count_pre',                        label: 'PREUPn',          mono: true,  fmt: v => v != null ? v : '—', colorFn: v => v >= 2 ? '#60a5fa' : undefined },
   // ── Demand bar flags ─────────────────────────────────────────────────────────
   { key: 'has_ld',                                  label: 'LD?',             mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#86efac' : undefined },
   { key: 'has_wc_gap_ld',                           label: 'WcGapLD?',        mono: true,  fmt: v => v ? '✓' : '—', colorFn: v => v ? '#6ee7b7' : undefined },
@@ -502,7 +511,42 @@ function EpisodeTable({ episodes, symFilter, setSymFilter, groupFilter, setGroup
                         return (
                           <td key={c.key} className={styles.dataCell}>
                             {raw ? (
-                              <span style={{ color: demandTierColor, fontWeight: 700, fontSize: 9 }}>{demandShort}</span>
+                              <span style={{ color: demandTierColor, fontWeight: 700, fontSize: 9,
+                                padding: '1px 5px', borderRadius: 4,
+                                background: `${demandTierColor}18`, border: `1px solid ${demandTierColor}44` }}>
+                                {demandShort}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        );
+                      }
+                      if (c.key === 'ats_at_breakout') {
+                        const atsColor = { ATS_PRIME: '#34d399', ATS_SETUP: '#60a5fa', ATS_WATCH: '#a78bfa', ATS_NONE: '#6b7280' }[raw] || '#6b7280';
+                        const atsShort = { ATS_PRIME: 'PRIME', ATS_SETUP: 'SETUP', ATS_WATCH: 'WATCH', ATS_NONE: 'NONE' }[raw] || raw;
+                        return (
+                          <td key={c.key} className={styles.dataCell}>
+                            {raw ? (
+                              <span style={{ color: atsColor, fontWeight: 700, fontSize: 9,
+                                padding: '1px 5px', borderRadius: 4,
+                                background: `${atsColor}18`, border: `1px solid ${atsColor}44` }}>
+                                {atsShort}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        );
+                      }
+                      if (c.key === 'tz_t_signal_at_breakout' || c.key === 'tz_z_signal_at_breakout') {
+                        const isBull = c.key === 'tz_t_signal_at_breakout';
+                        const col = raw ? (isBull ? '#34d399' : '#fb7185') : undefined;
+                        return (
+                          <td key={c.key} className={styles.dataCell}>
+                            {raw ? (
+                              <span style={{ color: col, fontWeight: 700, fontSize: 9,
+                                padding: '1px 5px', borderRadius: 4,
+                                background: `${col}18`, border: `1px solid ${col}44`,
+                                fontFamily: 'var(--font-mono)' }}>
+                                {raw}
+                              </span>
                             ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                           </td>
                         );
