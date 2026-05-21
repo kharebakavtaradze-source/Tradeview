@@ -373,6 +373,11 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
               <TzSignalBadge signal={tzSignal} />
             </>
           )}
+          {ep.best_tz_t_signal_15bar && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--cyan)' }}>
+              TZ15: {ep.best_tz_t_signal_15bar}
+            </span>
+          )}
           {preupToken && (
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--cyan)' }}>
               {preupToken}
@@ -752,14 +757,14 @@ function SignalStats({ episodes }) {
         <SigTable title="By Demand Tier"     rows={computeStatGroups(withDemand, 'demand_tier_at_breakout')} />
         <SigTable title="By ATS Signal"       rows={computeStatGroups(withDemand, 'ats_at_breakout')} />
         <SigTable title="By Readiness Tier"   rows={computeStatGroups(withDemand, 'readiness_tier_at_breakout')} />
-        <SigTable title="By TZ Signal"        rows={computeStatGroups(withDemand, 'tz_t_signal_at_breakout')} />
+        <SigTable title="By Best TZ Signal (15 bars)" rows={computeStatGroups(withDemand, 'best_tz_t_signal_15bar')} />
         <SigTable title="By PREUP Token"      rows={computeStatGroups(withDemand, 'preup_token_at_breakout')} />
         <SigTable title="By Line5"            rows={computeStatGroups(withDemand, 'line5_at_breakout')} />
       </div>
-      <SigTable title="TZ × Demand Tier (min 3 episodes)"
-        rows={computeCombos(withDemand, 'tz_t_signal_at_breakout', 'demand_tier_at_breakout')} />
-      <SigTable title="TZ × ATS Signal (min 3 episodes)"
-        rows={computeCombos(withDemand, 'tz_t_signal_at_breakout', 'ats_at_breakout')} />
+      <SigTable title="Best TZ (15-bar) × Demand Tier (min 3 episodes)"
+        rows={computeCombos(withDemand, 'best_tz_t_signal_15bar', 'demand_tier_at_breakout')} />
+      <SigTable title="Best TZ (15-bar) × ATS Signal (min 3 episodes)"
+        rows={computeCombos(withDemand, 'best_tz_t_signal_15bar', 'ats_at_breakout')} />
       <SigTable title="Demand Tier × ATS Signal (min 3 episodes)"
         rows={computeCombos(withDemand, 'demand_tier_at_breakout', 'ats_at_breakout')} />
     </div>
@@ -853,6 +858,7 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                 <th title="Demand Engine composite tier at breakout">Demand</th>
                 <th title="ATS signal at breakout">ATS</th>
                 <th title="TZ bar label at breakout">TZ</th>
+                <th title="Best TZ signal in last 15 bars before breakout">TZ 15bar</th>
                 <th title="PREUP token at breakout">PREUP</th>
                 <th title="Largest gap up % in PRE+PUMP window">Max Gap</th>
                 <th title="Max volume vs 20-day average">Max Vol</th>
@@ -902,6 +908,9 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                     <td><DemandTierBadge tier={ep.demand_tier_at_breakout} /></td>
                     <td><AtsBadge ats={ep.ats_at_breakout} /></td>
                     <td><TzSignalBadge signal={ep.tz_t_signal_at_breakout || ep.tz_z_signal_at_breakout} /></td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: ep.best_tz_t_signal_15bar ? 'var(--cyan)' : 'var(--text-muted)' }}>
+                      {ep.best_tz_t_signal_15bar || '—'}
+                    </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: ep.preup_token_at_breakout ? 'var(--cyan)' : 'var(--text-muted)' }}>
                       {ep.preup_token_at_breakout || '—'}
                     </td>

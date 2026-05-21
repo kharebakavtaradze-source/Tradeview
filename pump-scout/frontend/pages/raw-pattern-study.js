@@ -405,6 +405,7 @@ const EP_COLS = [
   // ── TZ / bar-label signals at breakout ───────────────────────────────────────
   { key: 'tz_t_signal_at_breakout',                label: 'TZ',              mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#34d399' : undefined },
   { key: 'tz_z_signal_at_breakout',                label: 'Z-Sig',           mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#fb7185' : undefined },
+  { key: 'best_tz_t_signal_15bar',                 label: 'BestTZ15',        mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#22d3ee' : undefined },
   { key: 'preup_token_at_breakout',                label: 'PREUP',           mono: true,  fmt: v => v || '—', small: true, colorFn: v => v ? '#60a5fa' : undefined },
   { key: 'line5_at_breakout',                      label: 'Line5',           mono: true,  fmt: v => v || '—', small: true },
   { key: 'strong_tz_count_pre',                    label: 'StrongTZ',        mono: true,  fmt: v => v != null ? v : '—', colorFn: v => v >= 2 ? '#34d399' : undefined },
@@ -530,14 +531,14 @@ function SignalStats({ episodes }) {
         <SigTable title="By Demand Tier"     rows={computeStatGroups(withDemand, 'demand_tier_at_breakout')} />
         <SigTable title="By ATS Signal"       rows={computeStatGroups(withDemand, 'ats_at_breakout')} />
         <SigTable title="By Readiness Tier"   rows={computeStatGroups(withDemand, 'readiness_tier_at_breakout')} />
-        <SigTable title="By TZ Signal"        rows={computeStatGroups(withDemand, 'tz_t_signal_at_breakout')} />
+        <SigTable title="By Best TZ Signal (15 bars)" rows={computeStatGroups(withDemand, 'best_tz_t_signal_15bar')} />
         <SigTable title="By PREUP Token"      rows={computeStatGroups(withDemand, 'preup_token_at_breakout')} />
         <SigTable title="By Line5"            rows={computeStatGroups(withDemand, 'line5_at_breakout')} />
       </div>
-      <SigTable title="TZ × Demand Tier (min 3 episodes)"
-        rows={computeCombos(withDemand, 'tz_t_signal_at_breakout', 'demand_tier_at_breakout')} />
-      <SigTable title="TZ × ATS Signal (min 3 episodes)"
-        rows={computeCombos(withDemand, 'tz_t_signal_at_breakout', 'ats_at_breakout')} />
+      <SigTable title="Best TZ (15-bar) × Demand Tier (min 3 episodes)"
+        rows={computeCombos(withDemand, 'best_tz_t_signal_15bar', 'demand_tier_at_breakout')} />
+      <SigTable title="Best TZ (15-bar) × ATS Signal (min 3 episodes)"
+        rows={computeCombos(withDemand, 'best_tz_t_signal_15bar', 'ats_at_breakout')} />
       <SigTable title="Demand Tier × ATS Signal (min 3 episodes)"
         rows={computeCombos(withDemand, 'demand_tier_at_breakout', 'ats_at_breakout')} />
     </div>

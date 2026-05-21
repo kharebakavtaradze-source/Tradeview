@@ -3515,6 +3515,8 @@ class PumpEpisode(Base):
     tz_z_signal_at_breakout    = Column(String(10), nullable=True)
     preup_token_at_breakout    = Column(String(10), nullable=True)
     line5_at_breakout          = Column(String(30), nullable=True)
+    best_tz_t_signal_15bar     = Column(String(10), nullable=True)
+    best_tz_z_signal_15bar     = Column(String(10), nullable=True)
     created_at               = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -4030,6 +4032,8 @@ class RawPatternEpisodeFeatures(Base):
     # TZ PRE-window aggregates
     strong_tz_count_pre      = Column(Integer,    nullable=True)  # T4+T6+T1G count in PRE window
     preup_count_pre          = Column(Integer,    nullable=True)  # PREUP bars in PRE window
+    best_tz_t_signal_15bar   = Column(String(10), nullable=True)
+    best_tz_z_signal_15bar   = Column(String(10), nullable=True)
 
 
 class RawPatternComparison(Base):
@@ -4698,6 +4702,8 @@ def _pump_episode_to_dict(r: PumpEpisode) -> dict:
         "tz_z_signal_at_breakout":    r.tz_z_signal_at_breakout,
         "preup_token_at_breakout":    r.preup_token_at_breakout,
         "line5_at_breakout":          r.line5_at_breakout,
+        "best_tz_t_signal_15bar":     r.best_tz_t_signal_15bar,
+        "best_tz_z_signal_15bar":     r.best_tz_z_signal_15bar,
         "created_at":               r.created_at.isoformat() if r.created_at else None,
     }
 
