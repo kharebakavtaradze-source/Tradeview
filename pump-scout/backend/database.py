@@ -4430,6 +4430,20 @@ async def get_run_snapshots(
         return [_snapshot_to_dict(r) for r in result.scalars().all()]
 
 
+async def get_snapshots_for_episodes(episode_ids: list[int]) -> list[dict]:
+    """Fetch all snapshots for a specific list of episode IDs (no limit)."""
+    if not episode_ids:
+        return []
+    async with get_session_factory()() as session:
+        q = (
+            select(PumpEpisodeSnapshot)
+            .where(PumpEpisodeSnapshot.episode_id.in_(episode_ids))
+            .order_by(PumpEpisodeSnapshot.episode_id, PumpEpisodeSnapshot.date)
+        )
+        result = await session.execute(q)
+        return [_snapshot_to_dict(r) for r in result.scalars().all()]
+
+
 # ── Events / timeline ─────────────────────────────────────────────────────────
 
 async def save_pump_episode_events(events: list[dict]) -> int:
