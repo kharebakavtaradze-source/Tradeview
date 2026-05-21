@@ -871,13 +871,22 @@ async def demand_scanner_latest(
 
 @app.post("/api/demand-scanner/run")
 @app.get("/api/demand-scanner/run")
-async def demand_scanner_run(background_tasks: BackgroundTasks):
-    """Trigger a fresh demand scan in the background. Poll /api/demand-scanner/status."""
+async def demand_scanner_run(background_tasks: BackgroundTasks, scan_mode: str = "full"):
+    """
+    Trigger a demand scan in the background. Poll /api/demand-scanner/status.
+
+    scan_mode:
+      full        — full universe fetch + candle fetch + analyze all tickers (default)
+      incremental — 1 API call; only re-analyze tickers with a new bar since last scan
+      recalculate — zero API calls; reload from DB cache and re-run all signals
+    """
     from scanner.new_pump_runner import is_running, run_new_pump_scan
     if is_running():
         return {"status": "already_running", "message": "Scan already in progress"}
-    background_tasks.add_task(run_new_pump_scan)
-    return {"status": "started", "message": "Demand scan started"}
+    if scan_mode not in ("full", "incremental", "recalculate"):
+        scan_mode = "full"
+    background_tasks.add_task(run_new_pump_scan, scan_mode=scan_mode)
+    return {"status": "started", "message": f"Demand scan started (mode={scan_mode})", "scan_mode": scan_mode}
 
 
 @app.get("/api/demand-scanner/status")
@@ -885,8 +894,9 @@ async def demand_scanner_status():
     """Live progress for the running demand scan."""
     from scanner.new_pump_runner import is_running, get_progress, get_latest
     data = get_latest()
+    prog = get_progress()
     return {
-        **get_progress(),
+        **prog,
         "has_results":         bool(data.get("results")),
         "scanned_at":          data.get("scanned_at"),
         "result_count":        len(data.get("results", [])),
@@ -894,7 +904,8 @@ async def demand_scanner_status():
         "demand_high_count":   data.get("demand_high_count", 0),
         "demand_watch_count":  data.get("demand_watch_count", 0),
         "ats_prime_count":     data.get("ats_prime_count", 0),
-        "fetched_count":       data.get("fetched", get_progress().get("fetched_count", 0)),
+        "fetched_count":       data.get("fetched", prog.get("fetched_count", 0)),
+        "scan_mode":           data.get("scan_mode", prog.get("scan_mode", "full")),
     }
 
 

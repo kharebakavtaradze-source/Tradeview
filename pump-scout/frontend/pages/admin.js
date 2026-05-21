@@ -50,6 +50,7 @@ export default function AdminPage() {
 
   const SCAN_PHASE_LABEL = {
     idle:               'Idle — not running',
+    loading_cache:      'Loading bars from DB cache…',
     fetching_universe:  'Fetching universe from Massive…',
     filtering:          'Filtering by price / volume / type…',
     fetching_candles:   'Fetching candles for candidates…',
@@ -83,11 +84,11 @@ export default function AdminPage() {
     scanPollRef.current = setInterval(fetchScanStatus, 2500);
   };
 
-  const handleRunScan = async () => {
+  const handleRunScan = async (mode = 'full') => {
     setScanLaunching(true);
     setScanError('');
     try {
-      const res = await fetch(`${API_URL}/api/demand-scanner/run`, { method: 'POST' });
+      const res = await fetch(`${API_URL}/api/demand-scanner/run?scan_mode=${mode}`, { method: 'POST' });
       const data = await res.json();
       if (data.status === 'already_running') {
         setScanError('Scan already in progress — check status below');
@@ -212,6 +213,7 @@ export default function AdminPage() {
           const pct = (() => {
             if (!s || phase === 'idle') return 0;
             if (isDone) return 100;
+            if (phase === 'loading_cache') return 15;
             if (phase === 'fetching_universe') return 5;
             if (phase === 'filtering') return 12;
             if (phase === 'fetching_candles') return 25;
@@ -332,14 +334,42 @@ export default function AdminPage() {
                 </div>
               )}
 
-              {/* Run button */}
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              {/* Scan mode badge */}
+              {s?.scan_mode && s.scan_mode !== 'full' && (
+                <div style={{ marginBottom: 10 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', padding: '2px 7px', borderRadius: 4, background: s.scan_mode === 'incremental' ? 'rgba(245,158,11,0.12)' : 'rgba(124,90,245,0.12)', border: s.scan_mode === 'incremental' ? '1px solid rgba(245,158,11,0.35)' : '1px solid rgba(124,90,245,0.35)', color: s.scan_mode === 'incremental' ? '#f59e0b' : '#c084fc', textTransform: 'uppercase' }}>
+                    {s.scan_mode === 'incremental' ? '⚡ Incremental' : '♻ Recalculate'}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#56567a', marginLeft: 8 }}>
+                    {s.scan_mode === 'incremental' ? 'Only re-analyzed tickers with new bars' : 'Re-ran signals from cached bars — no API calls'}
+                  </span>
+                </div>
+              )}
+
+              {/* Run buttons */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
-                  onClick={handleRunScan}
+                  onClick={() => handleRunScan('full')}
                   disabled={scanLaunching || isRunning}
-                  style={{ background: 'rgba(0,212,245,0.12)', border: '1px solid rgba(0,212,245,0.35)', borderRadius: 4, padding: '7px 20px', color: '#00d4f5', cursor: (scanLaunching || isRunning) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning) ? 0.5 : 1 }}
+                  style={{ background: 'rgba(0,212,245,0.12)', border: '1px solid rgba(0,212,245,0.35)', borderRadius: 4, padding: '7px 18px', color: '#00d4f5', cursor: (scanLaunching || isRunning) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning) ? 0.5 : 1 }}
                 >
-                  {scanLaunching ? '⏳ Starting…' : isRunning ? '⏳ Running…' : '▶ Run Scan'}
+                  {scanLaunching ? '⏳ Starting…' : isRunning ? '⏳ Running…' : '▶ Full Scan'}
+                </button>
+                <button
+                  onClick={() => handleRunScan('incremental')}
+                  disabled={scanLaunching || isRunning || !s?.has_results}
+                  title="Re-analyze only tickers with a new bar since last scan (1 API call)"
+                  style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 4, padding: '7px 16px', color: '#f59e0b', cursor: (scanLaunching || isRunning || !s?.has_results) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning || !s?.has_results) ? 0.4 : 1 }}
+                >
+                  ⚡ Refresh Today
+                </button>
+                <button
+                  onClick={() => handleRunScan('recalculate')}
+                  disabled={scanLaunching || isRunning || !s?.has_results}
+                  title="Re-run all signals from cached bars — zero API calls"
+                  style={{ background: 'rgba(124,90,245,0.10)', border: '1px solid rgba(124,90,245,0.35)', borderRadius: 4, padding: '7px 16px', color: '#c084fc', cursor: (scanLaunching || isRunning || !s?.has_results) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning || !s?.has_results) ? 0.4 : 1 }}
+                >
+                  ♻ Recalculate
                 </button>
                 <button
                   onClick={fetchScanStatus}
