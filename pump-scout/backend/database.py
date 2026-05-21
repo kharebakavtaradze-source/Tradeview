@@ -5580,6 +5580,51 @@ async def cleanup_replay_runs(
     }
 
 
+async def prune_orphaned_records(dry_run: bool = True) -> dict:
+    """
+    Delete child rows whose parent run no longer exists.
+
+    Covers:
+      - discovered_patterns with no matching raw_pattern_runs row
+      - raw_pattern_episode_features with no matching raw_pattern_runs row
+      - raw_pattern_daily_features with no matching raw_pattern_runs row
+      - raw_pattern_ai_summaries with no matching raw_pattern_runs row
+      - pump_episodes with no matching pump_study_runs row
+      - pump_episode_snapshots / pump_episode_detections with no matching pump_episodes row
+      - replay_signal_candidates / replay_outcomes / replay_missed_movers
+        with no matching replay_runs row
+    """
+    checks = [
+        # (child_table, child_fk_col, parent_table, parent_pk_col, label)
+        ("discovered_patterns",             "run_id",         "raw_pattern_runs", "id", "orphan_discovered_patterns"),
+        ("raw_pattern_episode_features",    "run_id",         "raw_pattern_runs", "id", "orphan_raw_ep_features"),
+        ("raw_pattern_daily_features",      "run_id",         "raw_pattern_runs", "id", "orphan_raw_daily_features"),
+        ("raw_pattern_ai_summaries",        "run_id",         "raw_pattern_runs", "id", "orphan_raw_ai_summaries"),
+        ("pump_episodes",                   "run_id",         "pump_study_runs",  "id", "orphan_pump_episodes"),
+        ("pump_episode_snapshots",          "episode_id",     "pump_episodes",    "id", "orphan_pump_snapshots"),
+        ("pump_episode_detections",         "episode_id",     "pump_episodes",    "id", "orphan_pump_detections"),
+        ("replay_signal_candidates",        "replay_run_id",  "replay_runs",      "id", "orphan_replay_candidates"),
+        ("replay_outcomes",                 "replay_run_id",  "replay_runs",      "id", "orphan_replay_outcomes"),
+        ("replay_missed_movers",            "replay_run_id",  "replay_runs",      "id", "orphan_replay_missed"),
+    ]
+    counts: dict[str, int] = {}
+    async with get_engine().begin() as conn:
+        for child_tbl, child_fk, parent_tbl, parent_pk, label in checks:
+            count_q = text(
+                f"SELECT COUNT(*) FROM {child_tbl} c "
+                f"WHERE NOT EXISTS (SELECT 1 FROM {parent_tbl} p WHERE p.{parent_pk} = c.{child_fk})"
+            )
+            n = (await conn.execute(count_q)).scalar() or 0
+            counts[label] = n
+            if not dry_run and n > 0:
+                del_q = text(
+                    f"DELETE FROM {child_tbl} c "
+                    f"WHERE NOT EXISTS (SELECT 1 FROM {parent_tbl} p WHERE p.{parent_pk} = c.{child_fk})"
+                )
+                await conn.execute(del_q)
+    return {"dry_run": dry_run, "orphans_found": counts}
+
+
 # ── StockSplitCache CRUD ──────────────────────────────────────────────────────
 
 async def save_stock_splits(splits: list[dict]) -> int:

@@ -2862,6 +2862,7 @@ async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, d
         cleanup_raw_pattern_runs,
         cleanup_pump_study_runs,
         prune_candle_cache,
+        prune_orphaned_records,
     )
     results = {}
     try:
@@ -2869,6 +2870,7 @@ async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, d
         results["raw_pattern"]     = await cleanup_raw_pattern_runs(keep_last_n=keep_last_n, dry_run=dry_run, vacuum=False)
         results["pump_study"]      = await cleanup_pump_study_runs(keep_last_n=keep_last_n, dry_run=dry_run)
         results["candle_cache"]    = await prune_candle_cache(keep_days=keep_candle_days, dry_run=dry_run)
+        results["orphans"]         = await prune_orphaned_records(dry_run=dry_run)
     except Exception as exc:
         logger.exception("admin_cleanup_all failed")
         raise HTTPException(500, detail=str(exc))
