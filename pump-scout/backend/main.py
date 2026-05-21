@@ -887,9 +887,14 @@ async def demand_scanner_status():
     data = get_latest()
     return {
         **get_progress(),
-        "has_results": bool(data.get("results")),
-        "scanned_at":  data.get("scanned_at"),
-        "result_count": len(data.get("results", [])),
+        "has_results":         bool(data.get("results")),
+        "scanned_at":          data.get("scanned_at"),
+        "result_count":        len(data.get("results", [])),
+        "demand_prime_count":  data.get("demand_prime_count", 0),
+        "demand_high_count":   data.get("demand_high_count", 0),
+        "demand_watch_count":  data.get("demand_watch_count", 0),
+        "ats_prime_count":     data.get("ats_prime_count", 0),
+        "fetched_count":       data.get("fetched", get_progress().get("fetched_count", 0)),
     }
 
 

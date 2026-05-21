@@ -42,7 +42,64 @@ export default function AdminPage() {
   const [pumpKeepN, setPumpKeepN]             = useState('3');
   const [pumpBulkDryRun, setPumpBulkDryRun]   = useState(true);
 
+  // ── Demand Scanner state ────────────────────────────────────────────────────
+  const [scanStatus,    setScanStatus]    = useState(null);   // progress dict
+  const [scanLaunching, setScanLaunching] = useState(false);
+  const [scanError,     setScanError]     = useState('');
+  const scanPollRef = useRef(null);
 
+  const SCAN_PHASE_LABEL = {
+    idle:               'Idle — not running',
+    fetching_universe:  'Fetching universe from Massive…',
+    filtering:          'Filtering by price / volume / type…',
+    fetching_candles:   'Fetching candles for candidates…',
+    analyzing:          'Running Demand Engine on tickers…',
+    enriching:          'Enriching: sector / hype / regime…',
+    enriching_context:  'Enriching: macro context…',
+    demand_composite:   'Computing demand composite scores…',
+    done:               'Scan complete',
+    error:              'Error',
+  };
+
+  const fetchScanStatus = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/demand-scanner/status`);
+      const data = await res.json();
+      setScanStatus(data);
+      if (!data.running && scanPollRef.current) {
+        clearInterval(scanPollRef.current);
+        scanPollRef.current = null;
+      }
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    fetchScanStatus();
+    return () => { if (scanPollRef.current) clearInterval(scanPollRef.current); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startScanPoll = () => {
+    if (scanPollRef.current) return;
+    scanPollRef.current = setInterval(fetchScanStatus, 2500);
+  };
+
+  const handleRunScan = async () => {
+    setScanLaunching(true);
+    setScanError('');
+    try {
+      const res = await fetch(`${API_URL}/api/demand-scanner/run`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'already_running') {
+        setScanError('Scan already in progress — check status below');
+      }
+      await fetchScanStatus();
+      startScanPoll();
+    } catch (e) {
+      setScanError(e.message);
+    } finally {
+      setScanLaunching(false);
+    }
+  };
 
   const startSectorRefreshPolling = () => {
     if (sectorRefreshPollRef.current) return;
@@ -143,6 +200,158 @@ export default function AdminPage() {
           </span>
         </div>
         <div style={{ padding: '0 28px' }}>
+
+        {/* ── Demand Scanner ── */}
+        {(() => {
+          const s = scanStatus;
+          const isRunning = s?.running;
+          const phase = s?.phase || 'idle';
+          const isDone = phase === 'done';
+          const isError = phase === 'error';
+
+          const pct = (() => {
+            if (!s || phase === 'idle') return 0;
+            if (isDone) return 100;
+            if (phase === 'fetching_universe') return 5;
+            if (phase === 'filtering') return 12;
+            if (phase === 'fetching_candles') return 25;
+            if (phase === 'analyzing') {
+              const total = s.universe_size || 1;
+              const done  = s.analyzed_count || 0;
+              return Math.round(25 + (done / total) * 50);
+            }
+            if (phase === 'enriching') return 80;
+            if (phase === 'enriching_context') return 88;
+            if (phase === 'demand_composite') return 94;
+            return 0;
+          })();
+
+          const fmtSecs = (s) => {
+            if (!s) return '—';
+            if (s < 60) return `${s}s`;
+            return `${Math.floor(s / 60)}m ${s % 60}s`;
+          };
+
+          const statBox = (label, value, color = '#eaeaf6') => (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 70, padding: '8px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: 6, border: '1px solid #1a1a32' }}>
+              <span style={{ fontSize: 18, fontWeight: 800, color, fontFamily: 'var(--font-mono, monospace)', lineHeight: 1 }}>{value ?? '—'}</span>
+              <span style={{ fontSize: 9, color: '#56567a', marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+            </div>
+          );
+
+          const tierChip = (label, count, color) => count > 0 ? (
+            <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: color + '22', border: `1px solid ${color}44`, color }}>
+              {label} {count}
+            </span>
+          ) : null;
+
+          return (
+            <div style={{ ...card, marginBottom: 24, border: isRunning ? '1px solid rgba(0,212,245,0.3)' : isError ? '1px solid rgba(248,113,113,0.3)' : '1px solid #1a1a32' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                <p style={{ ...label, margin: 0 }}>⚡ Demand Scanner</p>
+                {isRunning && (
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', background: 'rgba(0,212,245,0.12)', border: '1px solid rgba(0,212,245,0.35)', borderRadius: 4, padding: '2px 7px', color: '#00d4f5', animation: 'pulse 1.5s infinite' }}>
+                    RUNNING
+                  </span>
+                )}
+                {isDone && (
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', background: 'rgba(40,217,113,0.12)', border: '1px solid rgba(40,217,113,0.35)', borderRadius: 4, padding: '2px 7px', color: '#28d971' }}>
+                    COMPLETE
+                  </span>
+                )}
+                {isError && (
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.35)', borderRadius: 4, padding: '2px 7px', color: '#f87171' }}>
+                    ERROR
+                  </span>
+                )}
+                {s?.scanned_at && (
+                  <span style={{ fontSize: 10, color: '#56567a', marginLeft: 'auto' }}>
+                    Last scan: {new Date(s.scanned_at).toLocaleString()}
+                  </span>
+                )}
+              </div>
+
+              {/* Phase + progress bar */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                  <span style={{ fontSize: 11, color: isError ? '#f87171' : isRunning ? '#00d4f5' : isDone ? '#28d971' : '#56567a' }}>
+                    {SCAN_PHASE_LABEL[phase] || phase}
+                    {isRunning && phase === 'analyzing' && s?.analyzed_count != null && s?.universe_size != null && (
+                      <span style={{ color: '#56567a' }}> — {s.analyzed_count} / {s.universe_size}</span>
+                    )}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#56567a', fontFamily: 'monospace' }}>
+                    {isRunning || isDone ? `${pct}%` : ''}
+                    {s?.elapsed_secs ? `  ${fmtSecs(s.elapsed_secs)}` : ''}
+                  </span>
+                </div>
+                {(isRunning || isDone) && (
+                  <div style={{ height: 4, background: '#1a1a32', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, background: isError ? '#f87171' : isDone ? '#28d971' : '#00d4f5', borderRadius: 2, transition: 'width 0.5s ease' }} />
+                  </div>
+                )}
+                {isError && s?.last_error && (
+                  <div style={{ fontSize: 10, color: '#f87171', marginTop: 6 }}>{s.last_error}</div>
+                )}
+              </div>
+
+              {/* Stats row */}
+              {s && (s.universe_size > 0 || isDone) && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                  {statBox('Universe',  s.universe_size,  '#eaeaf6')}
+                  {statBox('Fetched',   s.fetched_count,  '#9898c0')}
+                  {statBox('Analyzed',  s.analyzed_count, '#9898c0')}
+                  {statBox('Skipped',   s.skipped_count,  '#56567a')}
+                  {statBox('Elapsed',   fmtSecs(s.elapsed_secs), '#56567a')}
+                  {statBox('Excluded',  s.excluded_non_common_stock_count, '#56567a')}
+                </div>
+              )}
+
+              {/* NP signal counts */}
+              {s && (s.fire_count > 0 || s.strong_count > 0 || s.setup_count > 0) && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: '#56567a', textTransform: 'uppercase', marginBottom: 6 }}>NP Structure</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {tierChip('FIRE',   s.fire_count,   '#f43f5e')}
+                    {tierChip('STRONG', s.strong_count, '#f59e0b')}
+                    {tierChip('SETUP',  s.setup_count,  '#3b82f6')}
+                  </div>
+                </div>
+              )}
+
+              {/* Demand tier counts */}
+              {s && (s.demand_prime_count > 0 || s.demand_high_count > 0 || s.demand_watch_count > 0) && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: '#56567a', textTransform: 'uppercase', marginBottom: 6 }}>Demand Tiers</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {tierChip('PRIME',    s.demand_prime_count, '#28d971')}
+                    {tierChip('HIGH',     s.demand_high_count,  '#00d4f5')}
+                    {tierChip('WATCH',    s.demand_watch_count, '#f59e0b')}
+                    {tierChip('ATS_PRIME',s.ats_prime_count,    '#c084fc')}
+                  </div>
+                </div>
+              )}
+
+              {/* Run button */}
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <button
+                  onClick={handleRunScan}
+                  disabled={scanLaunching || isRunning}
+                  style={{ background: 'rgba(0,212,245,0.12)', border: '1px solid rgba(0,212,245,0.35)', borderRadius: 4, padding: '7px 20px', color: '#00d4f5', cursor: (scanLaunching || isRunning) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning) ? 0.5 : 1 }}
+                >
+                  {scanLaunching ? '⏳ Starting…' : isRunning ? '⏳ Running…' : '▶ Run Scan'}
+                </button>
+                <button
+                  onClick={fetchScanStatus}
+                  style={{ background: 'transparent', border: '1px solid #2a2a4a', borderRadius: 4, padding: '7px 14px', color: '#56567a', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}
+                >
+                  ↻ Refresh
+                </button>
+                {scanError && <span style={{ fontSize: 10, color: '#f87171' }}>{scanError}</span>}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Automation Flow ── */}
         <div style={{ ...card, marginBottom: 24 }}>
