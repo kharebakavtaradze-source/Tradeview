@@ -5314,6 +5314,13 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             features = _extract_episode_features(ep_dict, snaps, evs)
             family, family_reason = _classify_pump_family(ep_dict, features, evs)
 
+            # Resolve sector/industry from cache (best-effort, non-fatal)
+            _sec, _ind = None, None
+            try:
+                _sec, _ind = await _resolve_sector_for_symbol(sym)
+            except Exception:
+                pass
+
             # Back-fill enriched fields onto the saved PumpEpisode row
             await update_pump_episode_enrichment(ep_id, {
                 "pump_type":               family,
@@ -5321,6 +5328,8 @@ async def run_pump_study(run_id: int, params: dict) -> None:
                 "max_volume_anomaly":      features.get("max_volume_anomaly"),
                 "largest_gap_pct":         features.get("largest_gap_pct"),
                 "summary_json":            json.dumps({"family_reason": family_reason}),
+                "sector":                  _sec,
+                "industry":                _ind,
             })
 
             all_ep_data.append({
