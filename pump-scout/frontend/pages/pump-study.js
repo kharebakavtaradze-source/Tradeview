@@ -641,6 +641,131 @@ const PUMP_TYPES = [
   'CHAOTIC_SPECULATIVE', 'SECTOR_SYMPATHY', 'UNKNOWN',
 ];
 
+function computeStatGroups(episodes, field) {
+  const groups = {};
+  for (const ep of episodes) {
+    const key = ep[field] || 'NONE';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(ep);
+  }
+  return Object.entries(groups)
+    .map(([bucket, eps]) => {
+      const mults = eps.map(e => e.pump_multiple).filter(v => v != null);
+      const rets  = eps.map(e => e.pump_return_pct).filter(v => v != null);
+      return {
+        bucket,
+        count:          eps.length,
+        avg_multiple:   mults.length ? mults.reduce((a, b) => a + b, 0) / mults.length : null,
+        win2x_rate:     mults.length ? mults.filter(v => v >= 2).length / mults.length : null,
+        win4x_rate:     mults.length ? mults.filter(v => v >= 4).length / mults.length : null,
+        avg_return_pct: rets.length  ? rets.reduce((a, b) => a + b, 0)  / rets.length  : null,
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+}
+
+function computeCombos(episodes, fieldA, fieldB) {
+  const groups = {};
+  for (const ep of episodes) {
+    const key = `${ep[fieldA] || 'NONE'} × ${ep[fieldB] || 'NONE'}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(ep);
+  }
+  return Object.entries(groups)
+    .filter(([, eps]) => eps.length >= 3)
+    .map(([bucket, eps]) => {
+      const mults = eps.map(e => e.pump_multiple).filter(v => v != null);
+      const rets  = eps.map(e => e.pump_return_pct).filter(v => v != null);
+      return {
+        bucket,
+        count:          eps.length,
+        avg_multiple:   mults.length ? mults.reduce((a, b) => a + b, 0) / mults.length : null,
+        win2x_rate:     mults.length ? mults.filter(v => v >= 2).length / mults.length : null,
+        win4x_rate:     mults.length ? mults.filter(v => v >= 4).length / mults.length : null,
+        avg_return_pct: rets.length  ? rets.reduce((a, b) => a + b, 0)  / rets.length  : null,
+      };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 25);
+}
+
+function SigTable({ title, rows }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 5,
+                    letterSpacing: '0.08em', textTransform: 'uppercase' }}>{title}</div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              {['Bucket','N','Avg×','2× Rate','4× Rate','Avg Ret%'].map(h => (
+                <th key={h} style={{ padding: '3px 8px', textAlign: h === 'Bucket' ? 'left' : 'right',
+                                     color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.bucket} style={{ borderBottom: '1px solid var(--border-faint, #2a2a2a)' }}>
+                <td style={{ padding: '3px 8px', fontFamily: 'var(--font-mono)', fontWeight: 700,
+                              fontSize: 9, whiteSpace: 'nowrap' }}>{r.bucket}</td>
+                <td style={{ padding: '3px 8px', textAlign: 'right' }}>{r.count}</td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.avg_multiple >= 3 ? '#86efac' : r.avg_multiple >= 2 ? '#fbbf24' : undefined,
+                              fontWeight: r.avg_multiple >= 3 ? 700 : undefined }}>
+                  {r.avg_multiple != null ? `${r.avg_multiple.toFixed(2)}×` : '—'}
+                </td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.win2x_rate >= 0.6 ? '#86efac' : r.win2x_rate >= 0.4 ? '#fbbf24' : undefined,
+                              fontWeight: r.win2x_rate >= 0.6 ? 700 : undefined }}>
+                  {r.win2x_rate != null ? `${(r.win2x_rate * 100).toFixed(0)}%` : '—'}
+                </td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.win4x_rate >= 0.4 ? '#86efac' : r.win4x_rate >= 0.2 ? '#fbbf24' : undefined,
+                              fontWeight: r.win4x_rate >= 0.4 ? 700 : undefined }}>
+                  {r.win4x_rate != null ? `${(r.win4x_rate * 100).toFixed(0)}%` : '—'}
+                </td>
+                <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)',
+                              color: r.avg_return_pct >= 100 ? '#86efac' : undefined }}>
+                  {r.avg_return_pct != null ? `${r.avg_return_pct.toFixed(0)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function SignalStats({ episodes }) {
+  const withDemand = (episodes || []).filter(e => e.demand_tier_at_breakout);
+  if (!withDemand.length) return (
+    <div style={{ color: 'var(--text-muted)', fontSize: 11, padding: '12px 0' }}>
+      No demand scores yet — run demand scoring phase first.
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+        <SigTable title="By Demand Tier"     rows={computeStatGroups(withDemand, 'demand_tier_at_breakout')} />
+        <SigTable title="By ATS Signal"       rows={computeStatGroups(withDemand, 'ats_at_breakout')} />
+        <SigTable title="By Readiness Tier"   rows={computeStatGroups(withDemand, 'readiness_tier_at_breakout')} />
+        <SigTable title="By TZ Signal"        rows={computeStatGroups(withDemand, 'tz_t_signal_at_breakout')} />
+        <SigTable title="By PREUP Token"      rows={computeStatGroups(withDemand, 'preup_token_at_breakout')} />
+        <SigTable title="By Line5"            rows={computeStatGroups(withDemand, 'line5_at_breakout')} />
+      </div>
+      <SigTable title="TZ × Demand Tier (min 3 episodes)"
+        rows={computeCombos(withDemand, 'tz_t_signal_at_breakout', 'demand_tier_at_breakout')} />
+      <SigTable title="TZ × ATS Signal (min 3 episodes)"
+        rows={computeCombos(withDemand, 'tz_t_signal_at_breakout', 'ats_at_breakout')} />
+      <SigTable title="Demand Tier × ATS Signal (min 3 episodes)"
+        rows={computeCombos(withDemand, 'demand_tier_at_breakout', 'ats_at_breakout')} />
+    </div>
+  );
+}
+
 function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelectEp, onReload }) {
   // ── Local filter state ──────────────────────────────────────────────────────
   const [symInput,    setSymInput]    = useState('');
@@ -1605,6 +1730,18 @@ export default function PumpStudyPage() {
                 loading={cmpLoading}
                 error={cmpError}
               />
+            </div>
+          )}
+
+          {/* Signal Combos */}
+          {selectedId && episodes.length > 0 && (
+            <div className={styles.bundleSection}>
+              <div className={styles.bundleSectionTitle}>SIGNAL COMBINATION ANALYTICS</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 12 }}>
+                {episodes.filter(e => e.demand_tier_at_breakout).length} of {episodes.length} episodes have demand scores.
+                Metrics: pump_multiple and pump_return_pct. Period: {selectedRun?.start_date} → {selectedRun?.end_date}.
+              </div>
+              <SignalStats episodes={episodes} />
             </div>
           )}
 
