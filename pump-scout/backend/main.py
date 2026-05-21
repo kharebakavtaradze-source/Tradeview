@@ -1961,11 +1961,12 @@ async def replay_export_candidates(run_id: int, format: str = "csv"):
     # CSV
     fieldnames = [
         "id", "scan_date", "symbol", "price", "tier", "total_score",
-        "wyckoff_state", "sector",
-        "new_pump_score", "new_pump_label", "new_pump_sequence_label",
-        "np_decision",
+        "sector",
+        "new_pump_score", "new_pump_label", "np_decision",
         "demand_composite_score", "demand_composite_tier",
         "ats_signal", "readiness_score", "readiness_tier", "flow_score",
+        "tz_t_signal", "tz_z_signal", "preup_token", "predn_token",
+        "line3", "line4", "line5",
     ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
@@ -2654,11 +2655,13 @@ async def pump_study_export(run_id: int, format: str = "json"):
             "pump_multiple", "pump_return_pct",
             "days_to_peak", "days_to_double", "max_drawdown_before_peak",
             "had_ribbon", "had_ignition",
-            "strongest_wyckoff_state", "max_volume_anomaly", "largest_gap_pct",
+            "max_volume_anomaly", "largest_gap_pct",
             "was_in_universe", "was_flagged_by_scanner",
             "sector", "industry",
             "demand_score_at_breakout", "demand_tier_at_breakout",
             "ats_at_breakout", "readiness_at_breakout", "readiness_tier_at_breakout",
+            "tz_t_signal_at_breakout", "tz_z_signal_at_breakout",
+            "preup_token_at_breakout", "line5_at_breakout",
         ]
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
