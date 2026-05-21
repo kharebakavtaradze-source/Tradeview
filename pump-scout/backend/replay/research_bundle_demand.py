@@ -11,6 +11,13 @@ logger = logging.getLogger(__name__)
 TIER_ORDER = ["PRIME_BUY", "HIGH_CONF_BUY", "BUY_WATCH", "SETUP_MONITOR", "SKIP"]
 ATS_ORDER  = ["ATS_PRIME", "ATS_SETUP", "ATS_WATCH", "ATS_NONE"]
 
+# TZ signal priority order (bullish T, then bearish Z, then no signal)
+TZ_SIGNAL_ORDER = [
+    "T4", "T6", "T1G", "T2G", "T1", "T2", "T9", "T10", "T3", "T11", "T5", "T12",
+    "Z4", "Z6", "Z1G", "Z2G", "Z1", "Z2", "Z9", "Z10", "Z3", "Z11", "Z5", "Z12", "Z7",
+    "NONE",
+]
+
 async def build_research_bundle(run_id: int, raw_pattern_run_id: Optional[int] = None) -> dict:
     """Build demand-engine research bundle for a replay run."""
     # imports
@@ -115,6 +122,78 @@ async def build_research_bundle(run_id: int, raw_pattern_run_id: Optional[int] =
     ]
     perf_by_np_label = [r for r in perf_by_np_label if r]
 
+    # ── TZ signal combinations ────────────────────────────────────────────────
+    # Performance by TZ t_signal (bullish)
+    by_tz_t = defaultdict(list)
+    for c in candidates:
+        sig = c.get("tz_t_signal") or "NONE"
+        by_tz_t[sig].append(c)
+
+    perf_by_tz_t = []
+    for sig in TZ_SIGNAL_ORDER:
+        if sig in by_tz_t:
+            row = _perf_row(sig, by_tz_t[sig])
+            if row:
+                perf_by_tz_t.append(row)
+    # Append any unlisted signals
+    for sig, items in sorted(by_tz_t.items(), key=lambda x: -len(x[1])):
+        if sig not in TZ_SIGNAL_ORDER and items:
+            row = _perf_row(sig, items)
+            if row:
+                perf_by_tz_t.append(row)
+
+    # Performance by PREUP token
+    by_preup = defaultdict(list)
+    for c in candidates:
+        tok = c.get("preup_token") or "NONE"
+        by_preup[tok].append(c)
+
+    perf_by_preup = [
+        _perf_row(tok, items)
+        for tok, items in sorted(by_preup.items(), key=lambda x: -len(x[1]))
+        if items
+    ]
+    perf_by_preup = [r for r in perf_by_preup if r]
+
+    # Performance by Line5 (VIX-Fix / PSAR / RSI2 composite)
+    by_line5 = defaultdict(list)
+    for c in candidates:
+        l5 = c.get("line5") or "NONE"
+        by_line5[l5].append(c)
+
+    perf_by_line5 = [
+        _perf_row(l5, items)
+        for l5, items in sorted(by_line5.items(), key=lambda x: -len(x[1]))
+        if items
+    ]
+    perf_by_line5 = [r for r in perf_by_line5 if r]
+
+    # TZ × Demand Tier cross-tab: top signal combos with outcome stats
+    combo_map = defaultdict(list)
+    for c in candidates:
+        t_sig = c.get("tz_t_signal") or "NONE"
+        tier  = c.get("demand_composite_tier") or "SKIP"
+        combo_map[f"{t_sig}×{tier}"].append(c)
+
+    tz_demand_combos = []
+    for combo, items in sorted(combo_map.items(), key=lambda x: -len(x[1])):
+        row = _perf_row(combo, items)
+        if row and row["count"] >= 3:
+            tz_demand_combos.append(row)
+
+    # TZ × ATS cross-tab
+    tz_ats_map = defaultdict(list)
+    for c in candidates:
+        t_sig = c.get("tz_t_signal") or "NONE"
+        ats   = c.get("ats_signal") or "ATS_NONE"
+        tz_ats_map[f"{t_sig}×{ats}"].append(c)
+
+    tz_ats_combos = []
+    for combo, items in sorted(tz_ats_map.items(), key=lambda x: -len(x[1])):
+        row = _perf_row(combo, items)
+        if row and row["count"] >= 3:
+            tz_ats_combos.append(row)
+
     # Outcome distribution
     label_dist = defaultdict(int)
     for o in outcomes:
@@ -171,6 +250,12 @@ async def build_research_bundle(run_id: int, raw_pattern_run_id: Optional[int] =
         "performance_by_ats_signal":   perf_by_ats,
         "performance_by_readiness_tier": perf_by_readiness,
         "performance_by_new_pump_label": perf_by_np_label,
+        # TZ combination analytics
+        "performance_by_tz_t_signal":  perf_by_tz_t,
+        "performance_by_preup_token":  perf_by_preup,
+        "performance_by_line5":        perf_by_line5,
+        "tz_demand_tier_combos":       tz_demand_combos[:30],
+        "tz_ats_combos":               tz_ats_combos[:20],
         "best_candidates":        best5,
         "worst_candidates":       worst5,
         "missed_movers":          missed_summary,
@@ -213,6 +298,11 @@ def render_research_bundle_markdown(bundle: dict) -> str:
     _table(bundle.get("performance_by_ats_signal"), "Performance by ATS Signal")
     _table(bundle.get("performance_by_readiness_tier"), "Performance by Readiness Tier")
     _table(bundle.get("performance_by_new_pump_label"), "Performance by NP Label")
+    _table(bundle.get("performance_by_tz_t_signal"), "Performance by TZ Signal (T/Z)")
+    _table(bundle.get("performance_by_preup_token"), "Performance by PREUP Token")
+    _table(bundle.get("performance_by_line5"), "Performance by Line5 (VIX/PSAR/RSI2)")
+    _table(bundle.get("tz_demand_tier_combos"), "TZ × Demand Tier Combinations")
+    _table(bundle.get("tz_ats_combos"), "TZ × ATS Signal Combinations")
 
     best = bundle.get("best_candidates") or []
     if best:

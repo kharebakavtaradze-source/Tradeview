@@ -3887,6 +3887,36 @@ async def build_raw_pattern_episode_features_demand(
                 "had_ats_prime_pre":  None,
             })
 
+            # ── TZ bar label at breakout ─────────────────────────────────────────
+            try:
+                from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+                if candles:
+                    _lbls = compute_combined_bar_labels(candles, last_n=1)
+                    if _lbls:
+                        _l = _lbls[0]
+                        patch.update({
+                            "tz_t_signal_at_breakout": _l.get("t_signal") or None,
+                            "tz_z_signal_at_breakout": _l.get("z_signal") or None,
+                            "preup_token_at_breakout": _l.get("preup")    or None,
+                            "predn_token_at_breakout": _l.get("predn")    or None,
+                            "line3_at_breakout":       _l.get("line3")    or None,
+                            "line4_at_breakout":       _l.get("line4")    or None,
+                            "line5_at_breakout":       _l.get("line5")    or None,
+                        })
+                    # PRE-window TZ counts: strong T signals + PREUP bars
+                    if len(candles) > 1:
+                        _pre_lbls = compute_combined_bar_labels(candles, last_n=min(20, len(candles) - 1))
+                        _pre_lbls = _pre_lbls[:-1]  # exclude the last (breakout) bar
+                        _strong_tz = sum(
+                            1 for b in _pre_lbls
+                            if b.get("t_signal") in ("T4", "T6", "T1G", "T2G")
+                        )
+                        _preup_cnt = sum(1 for b in _pre_lbls if b.get("preup"))
+                        patch["strong_tz_count_pre"] = _strong_tz
+                        patch["preup_count_pre"]      = _preup_cnt
+            except Exception:
+                pass
+
         except Exception as exc:
             patch.update({
                 "demand_compute_status": "ERROR",
