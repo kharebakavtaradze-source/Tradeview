@@ -842,6 +842,11 @@ _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
     ("ats_at_breakout",            "VARCHAR(20)"),
     ("readiness_at_breakout",      "FLOAT"),
     ("readiness_tier_at_breakout", "VARCHAR(10)"),
+    # TZ / bar-label signals at breakout
+    ("tz_t_signal_at_breakout",    "VARCHAR(10)"),
+    ("tz_z_signal_at_breakout",    "VARCHAR(10)"),
+    ("preup_token_at_breakout",    "VARCHAR(10)"),
+    ("line5_at_breakout",          "VARCHAR(30)"),
 ]
 
 _AI_JOURNAL_POSITION_MIGRATIONS: list[tuple[str, str]] = [
@@ -3480,11 +3485,15 @@ class PumpEpisode(Base):
     sector                   = Column(String(60), nullable=True)
     industry                 = Column(String(60), nullable=True)
     summary_json             = Column(Text,       nullable=True)
-    demand_score_at_breakout  = Column(Float,      nullable=True)
-    demand_tier_at_breakout   = Column(String(20), nullable=True)
-    ats_at_breakout           = Column(String(20), nullable=True)
-    readiness_at_breakout     = Column(Float,      nullable=True)
+    demand_score_at_breakout   = Column(Float,      nullable=True)
+    demand_tier_at_breakout    = Column(String(20), nullable=True)
+    ats_at_breakout            = Column(String(20), nullable=True)
+    readiness_at_breakout      = Column(Float,      nullable=True)
     readiness_tier_at_breakout = Column(String(10), nullable=True)
+    tz_t_signal_at_breakout    = Column(String(10), nullable=True)
+    tz_z_signal_at_breakout    = Column(String(10), nullable=True)
+    preup_token_at_breakout    = Column(String(10), nullable=True)
+    line5_at_breakout          = Column(String(30), nullable=True)
     created_at               = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -4670,11 +4679,15 @@ def _pump_episode_to_dict(r: PumpEpisode) -> dict:
         "sector":                   r.sector,
         "industry":                 r.industry,
         "summary":                  json.loads(r.summary_json or "{}"),
-        "demand_score_at_breakout":  r.demand_score_at_breakout,
-        "demand_tier_at_breakout":   r.demand_tier_at_breakout,
-        "ats_at_breakout":           r.ats_at_breakout,
-        "readiness_at_breakout":     r.readiness_at_breakout,
+        "demand_score_at_breakout":   r.demand_score_at_breakout,
+        "demand_tier_at_breakout":    r.demand_tier_at_breakout,
+        "ats_at_breakout":            r.ats_at_breakout,
+        "readiness_at_breakout":      r.readiness_at_breakout,
         "readiness_tier_at_breakout": r.readiness_tier_at_breakout,
+        "tz_t_signal_at_breakout":    r.tz_t_signal_at_breakout,
+        "tz_z_signal_at_breakout":    r.tz_z_signal_at_breakout,
+        "preup_token_at_breakout":    r.preup_token_at_breakout,
+        "line5_at_breakout":          r.line5_at_breakout,
         "created_at":               r.created_at.isoformat() if r.created_at else None,
     }
 

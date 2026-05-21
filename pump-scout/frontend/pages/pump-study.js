@@ -147,6 +147,61 @@ function NPDecisionBadge({ decision }) {
   );
 }
 
+// ── Demand Engine badges ──────────────────────────────────────────────────────
+
+const DEMAND_TIER_CFG = {
+  PRIME_BUY:    { short: 'PRIME',   color: '#86efac' },
+  HIGH_CONF_BUY:{ short: 'HIGH',    color: '#22d3ee' },
+  BUY_WATCH:    { short: 'WATCH',   color: '#60a5fa' },
+  SETUP_MONITOR:{ short: 'SETUP',   color: '#a8a29e' },
+  SKIP:         { short: 'SKIP',    color: '#6b7280' },
+};
+function DemandTierBadge({ tier }) {
+  if (!tier) return <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>—</span>;
+  const cfg = DEMAND_TIER_CFG[tier] || { short: tier, color: '#888' };
+  return (
+    <span style={{
+      color: cfg.color, fontWeight: 700, fontSize: 9, letterSpacing: '0.04em',
+      padding: '2px 6px', borderRadius: 'var(--r-pill)',
+      background: `${cfg.color}1a`, border: `1px solid ${cfg.color}44`,
+      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)',
+    }}>{cfg.short}</span>
+  );
+}
+
+const ATS_CFG = {
+  ATS_PRIME: { short: 'PRIME', color: '#86efac' },
+  ATS_SETUP: { short: 'SETUP', color: '#60a5fa' },
+  ATS_WATCH: { short: 'WATCH', color: '#a8a29e' },
+  ATS_NONE:  { short: 'NONE',  color: '#6b7280' },
+};
+function AtsBadge({ ats }) {
+  if (!ats) return <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>—</span>;
+  const cfg = ATS_CFG[ats] || { short: ats, color: '#888' };
+  return (
+    <span style={{
+      color: cfg.color, fontWeight: 700, fontSize: 9, letterSpacing: '0.04em',
+      padding: '2px 6px', borderRadius: 'var(--r-pill)',
+      background: `${cfg.color}1a`, border: `1px solid ${cfg.color}44`,
+      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)',
+    }}>{cfg.short}</span>
+  );
+}
+
+function TzSignalBadge({ signal }) {
+  if (!signal) return <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>—</span>;
+  const isBullish = signal.startsWith('T');
+  const color = isBullish ? '#86efac' : '#fb7185';
+  return (
+    <span style={{
+      color, fontWeight: 700, fontSize: 9, letterSpacing: '0.04em',
+      padding: '2px 5px', borderRadius: 'var(--r-pill)',
+      background: `${color}1a`, border: `1px solid ${color}44`,
+      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)',
+    }}>{signal}</span>
+  );
+}
+
 // ── Event type config ─────────────────────────────────────────────────────────
 
 const EVENT_CFG = {
@@ -248,6 +303,15 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
     { label: 'Max Tox PRE',   val: ep.max_toxicity_pre != null ? Number(ep.max_toxicity_pre).toFixed(0) : '—' },
   ];
 
+  // Demand Engine badges for detail panel
+  const demandTier  = ep.demand_tier_at_breakout;
+  const atsSignal   = ep.ats_at_breakout;
+  const readiness   = ep.readiness_tier_at_breakout;
+  const tzSignal    = ep.tz_t_signal_at_breakout || ep.tz_z_signal_at_breakout;
+  const preupToken  = ep.preup_token_at_breakout;
+  const line5Token  = ep.line5_at_breakout;
+  const hasDemand   = demandTier || atsSignal || tzSignal;
+
   // Phase counts
   const phaseCounts = { PRE: 0, PUMP: 0, POST: 0 };
   snaps.forEach(s => { if (phaseCounts[s.window_phase] != null) phaseCounts[s.window_phase]++; });
@@ -286,6 +350,41 @@ function EpisodeDetail({ runId, episodeId, onClose }) {
           </div>
         ))}
       </div>
+
+      {/* ── Demand Engine row ─────────────────────────────────────────────────── */}
+      {hasDemand && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '6px 0', alignItems: 'center' }}>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)', marginRight: 4 }}>Demand@breakout:</span>
+          <DemandTierBadge tier={demandTier} />
+          <AtsBadge ats={atsSignal} />
+          {readiness && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)' }}>
+              Readiness: {readiness}
+            </span>
+          )}
+          {ep.demand_score_at_breakout != null && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)' }}>
+              Score: {Number(ep.demand_score_at_breakout).toFixed(1)}
+            </span>
+          )}
+          {tzSignal && (
+            <>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 8 }}>TZ:</span>
+              <TzSignalBadge signal={tzSignal} />
+            </>
+          )}
+          {preupToken && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--cyan)' }}>
+              {preupToken}
+            </span>
+          )}
+          {line5Token && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)' }}>
+              Line5: {line5Token}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Phase bar */}
       <div className={styles.phaseBar}>
@@ -626,6 +725,10 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                 <th title="Trading days from start to peak">Days</th>
                 <th>Family</th>
                 <th title="Was it in scanner output on start date?">Caught</th>
+                <th title="Demand Engine composite tier at breakout">Demand</th>
+                <th title="ATS signal at breakout">ATS</th>
+                <th title="TZ bar label at breakout">TZ</th>
+                <th title="PREUP token at breakout">PREUP</th>
                 <th title="Largest gap up % in PRE+PUMP window">Max Gap</th>
                 <th title="Max volume vs 20-day average">Max Vol</th>
               </tr>
@@ -670,6 +773,12 @@ function EpisodesTable({ runId, episodes, loading, error, selectedEpId, onSelect
                             {caught ? 'CAUGHT' : 'MISSED'}
                           </span>
                       }
+                    </td>
+                    <td><DemandTierBadge tier={ep.demand_tier_at_breakout} /></td>
+                    <td><AtsBadge ats={ep.ats_at_breakout} /></td>
+                    <td><TzSignalBadge signal={ep.tz_t_signal_at_breakout || ep.tz_z_signal_at_breakout} /></td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: ep.preup_token_at_breakout ? 'var(--cyan)' : 'var(--text-muted)' }}>
+                      {ep.preup_token_at_breakout || '—'}
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
                       {ep.largest_gap_pct != null ? fmtPct(ep.largest_gap_pct) : '—'}
