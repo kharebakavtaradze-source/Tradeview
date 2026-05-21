@@ -85,7 +85,6 @@ from database import (
 )
 from scanner.massive_data import get_us_etf_symbols
 from scanner.sector_map import NON_STOCK_SECURITIES
-from scheduler import start_scheduler, stop_scheduler
 from alerts.telegram import get_status as telegram_status
 from alerts.telegram import send_scan_alert, send_test_alert
 from hype_monitor.monitor import (
@@ -104,7 +103,7 @@ from hype_monitor.divergence import detect_divergences
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init DB + start scheduler. Shutdown: stop scheduler."""
+    """Startup: init DB."""
     logger.info("Starting up Pump Scout backend...")
     await init_db()
     try:
@@ -117,9 +116,7 @@ async def lifespan(app: FastAPI):
         await _load_scan()
     except Exception as _exc:
         logger.warning(f"Demand scan restore failed (non-fatal): {_exc}")
-    start_scheduler()
     yield
-    stop_scheduler()
     logger.info("Pump Scout backend shut down.")
 
 
@@ -1524,26 +1521,6 @@ async def admin_universe_filter_check(symbols: str = "AAPL,SPY,TQQQ,GLD"):
     }
 
 
-@app.get("/api/admin/enrich-sectors")
-async def admin_enrich_sectors(background_tasks: BackgroundTasks):
-    """
-    Manually trigger the Massive sector/industry enrichment job.
-    Runs in background — rate limited to 1 call per 15s.
-    Returns immediately with count of symbols queued.
-    """
-    from database import get_symbols_needing_enrichment
-    missing = await get_symbols_needing_enrichment(limit=200)
-
-    async def _run():
-        from scheduler import enrich_sector_cache
-        await enrich_sector_cache()
-
-    background_tasks.add_task(_run)
-    return {
-        "status":  "started",
-        "queued":  len(missing),
-        "message": f"Enriching {len(missing)} symbols in background (1 per 15s)",
-    }
 
 
 _sector_refresh_status: dict = {
@@ -1655,41 +1632,6 @@ async def admin_refresh_sector_data_status():
     return dict(_sector_refresh_status)
 
 
-@app.get("/api/admin/run-universe-scan")
-async def admin_run_universe_scan(background_tasks: BackgroundTasks, date: str = None):
-    """
-    Manually trigger the Massive EOD universe scan.
-    Runs in background — fetches all US stocks and scores top 600.
-    Returns immediately; check /api/scan/universe/latest for results.
-    """
-    from scanner.massive_data import MASSIVE_API_KEY
-    if not MASSIVE_API_KEY:
-        return {"error": "MASSIVE_API_KEY not set — cannot run universe scan"}
-
-    async def _run():
-        from scanner.universe_scan import run_universe_scan
-        await run_universe_scan(target_date=date)
-
-    from scanner.massive_data import get_last_trading_day
-    resolved_date = date or get_last_trading_day(offset=0)
-
-    background_tasks.add_task(_run)
-    return {
-        "status":      "started",
-        "target_date": resolved_date,
-        "message":     f"Universe scan running in background for {resolved_date}. Check /api/scan/universe/latest for results.",
-    }
-
-
-@app.get("/api/admin/universe-scan/status")
-async def admin_universe_scan_status():
-    """
-    Live progress of the universe scan.
-    Poll every 5s while running=true.
-    Returns phase, candidates_done/total, FIRE/ARM counts, elapsed/ETA.
-    """
-    from scanner.universe_scan import get_progress
-    return get_progress()
 
 
 # ─── Candle Cache admin routes ─────────────────────────────────────────────────
