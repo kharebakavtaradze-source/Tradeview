@@ -746,6 +746,8 @@ _RAW_PATTERN_EP_MIGRATIONS = [
     ("line5_at_breakout",        "VARCHAR(30)"),
     ("strong_tz_count_pre",      "INTEGER"),
     ("preup_count_pre",          "INTEGER"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
 _REPLAY_OUTCOME_MIGRATIONS = [
@@ -811,6 +813,8 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("line3",        "VARCHAR(10)"),
     ("line4",        "VARCHAR(15)"),
     ("line5",        "VARCHAR(30)"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
 _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
@@ -825,6 +829,8 @@ _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
     ("tz_z_signal_at_breakout",    "VARCHAR(10)"),
     ("preup_token_at_breakout",    "VARCHAR(10)"),
     ("line5_at_breakout",          "VARCHAR(30)"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
 _AI_JOURNAL_POSITION_MIGRATIONS: list[tuple[str, str]] = [
@@ -2915,6 +2921,8 @@ class ReplaySignalCandidate(Base):
     line3                 = Column(String(10), nullable=True)  # body/wick class: XTB, MBB, SF, etc.
     line4                 = Column(String(15), nullable=True)  # gap/range: G2-V, N, etc.
     line5                 = Column(String(30), nullable=True)  # VIX-Fix/PSAR/RSI2: VX-PB-R2L
+    best_tz_t_signal_15bar = Column(String(10), nullable=True)
+    best_tz_z_signal_15bar = Column(String(10), nullable=True)
 
 
 class ReplayOutcome(Base):
@@ -3146,6 +3154,8 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 line3                   = c.get("line3") or None,
                 line4                   = c.get("line4") or None,
                 line5                   = c.get("line5") or None,
+                best_tz_t_signal_15bar = c.get("best_tz_t_signal_15bar") or None,
+                best_tz_z_signal_15bar = c.get("best_tz_z_signal_15bar") or None,
             )
             session.add(row)
         await session.commit()
@@ -3386,6 +3396,8 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "line3":                   r.line3,
         "line4":                   r.line4,
         "line5":                   r.line5,
+        "best_tz_t_signal_15bar": r.best_tz_t_signal_15bar,
+        "best_tz_z_signal_15bar": r.best_tz_z_signal_15bar,
     }
 
 
