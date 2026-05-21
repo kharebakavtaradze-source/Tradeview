@@ -20,14 +20,27 @@ export default function AdminPage() {
   const sectorRefreshPollRef = useRef(null);
 
   // ── Clean DB state ──────────────────────────────────────────────────────────
-  const [dbResults, setDbResults]       = useState({});
-  const [dbConfirm, setDbConfirm]       = useState({});
-  const [rawKeepN, setRawKeepN]         = useState('0');
-  const [rawDryRun, setRawDryRun]       = useState(true);
-  const [rawVacuum, setRawVacuum]       = useState(false);
-  const [delReplayId, setDelReplayId]   = useState('');
-  const [delPumpId, setDelPumpId]       = useState('');
-  const [delRawId, setDelRawId]         = useState('');
+  const [dbResults, setDbResults]             = useState({});
+  const [dbConfirm, setDbConfirm]             = useState({});
+  const [rawKeepN, setRawKeepN]               = useState('0');
+  const [rawDryRun, setRawDryRun]             = useState(true);
+  const [rawVacuum, setRawVacuum]             = useState(false);
+  const [delReplayId, setDelReplayId]         = useState('');
+  const [delPumpId, setDelPumpId]             = useState('');
+  const [delRawId, setDelRawId]               = useState('');
+  // cleanup-all
+  const [allKeepN, setAllKeepN]               = useState('3');
+  const [allCandleDays, setAllCandleDays]     = useState('200');
+  const [allDryRun, setAllDryRun]             = useState(true);
+  // candle cache
+  const [candleDays, setCandleDays]           = useState('200');
+  const [candleDryRun, setCandleDryRun]       = useState(true);
+  // replay bulk
+  const [replayKeepN, setReplayKeepN]         = useState('3');
+  const [replayBulkDryRun, setReplayBulkDryRun] = useState(true);
+  // pump study bulk
+  const [pumpKeepN, setPumpKeepN]             = useState('3');
+  const [pumpBulkDryRun, setPumpBulkDryRun]   = useState(true);
 
 
 
@@ -399,6 +412,102 @@ export default function AdminPage() {
           return (
             <div style={{ ...card, marginBottom: 24 }}>
               <p style={{ ...sectionLabel, marginBottom: 16 }}>Clean DB</p>
+
+              {/* 0a. Full DB Cleanup — all at once */}
+              <CleanRow
+                id="cleanupAll"
+                title="Full DB Cleanup — All at Once"
+                desc="Runs all cleanup ops in one call: delete old replay runs, raw-pattern runs, pump-study runs, prune candle cache, then VACUUM ANALYZE all major tables. Set dry_run=on first to preview."
+                onRun={() => {
+                  const n = parseInt(allKeepN, 10);
+                  const d = parseInt(allCandleDays, 10);
+                  const params = new URLSearchParams({
+                    keep_last_n: isNaN(n) ? 3 : n,
+                    keep_candle_days: isNaN(d) ? 200 : d,
+                    dry_run: allDryRun,
+                  });
+                  dbCall('cleanupAll', `${API_URL}/api/admin/cleanup-all?${params}`, 'POST');
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={allKeepN} onChange={e => setAllKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Candle days <input type="number" min="30" value={allCandleDays} onChange={e => setAllCandleDays(e.target.value)} style={{ ...inputStyle, width: 60 }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: allDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={allDryRun} onChange={e => setAllDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
+
+              {/* 0b. Candle Cache Prune */}
+              <CleanRow
+                id="candlePrune"
+                title="Candle Cache — Prune Old Bars"
+                desc="Delete candle_cache rows older than N days. Does not touch run data. Dry run shows count without deleting."
+                onRun={() => {
+                  const d = parseInt(candleDays, 10);
+                  const params = new URLSearchParams({
+                    keep_last_n: 9999,
+                    keep_candle_days: isNaN(d) ? 200 : d,
+                    dry_run: candleDryRun,
+                  });
+                  dbCall('candlePrune', `${API_URL}/api/admin/cleanup-all?${params}`, 'POST');
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep days <input type="number" min="30" value={candleDays} onChange={e => setCandleDays(e.target.value)} style={{ ...inputStyle, width: 60 }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: candleDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={candleDryRun} onChange={e => setCandleDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
+
+              {/* 0c. Replay bulk cleanup */}
+              <CleanRow
+                id="replayBulk"
+                title="Replay — Bulk Cleanup"
+                desc="Delete old complete replay runs (+ signal candidates, outcomes, missed movers). Keep the N most recent. Dry run first."
+                onRun={() => {
+                  const n = parseInt(replayKeepN, 10);
+                  dbCall('replayBulk', `${API_URL}/api/replay/cleanup`, 'POST', {
+                    keep_last_n: isNaN(n) ? 3 : n,
+                    dry_run: replayBulkDryRun,
+                  });
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={replayKeepN} onChange={e => setReplayKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: replayBulkDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={replayBulkDryRun} onChange={e => setReplayBulkDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
+
+              {/* 0d. Pump study bulk cleanup */}
+              <CleanRow
+                id="pumpBulk"
+                title="Pump Study — Bulk Cleanup"
+                desc="Delete old complete pump-study runs (episodes, snapshots, events, clusters, comparisons, AI summaries). Keep the N most recent. Dry run first."
+                onRun={() => {
+                  const n = parseInt(pumpKeepN, 10);
+                  dbCall('pumpBulk', `${API_URL}/api/replay/pump-study/cleanup`, 'POST', {
+                    keep_last_n: isNaN(n) ? 3 : n,
+                    dry_run: pumpBulkDryRun,
+                  });
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={pumpKeepN} onChange={e => setPumpKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: pumpBulkDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={pumpBulkDryRun} onChange={e => setPumpBulkDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
 
               {/* 1. Rotate old data */}
               <CleanRow
