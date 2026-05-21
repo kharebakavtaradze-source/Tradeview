@@ -2635,12 +2635,12 @@ async def pump_study_export(run_id: int, format: str = "json"):
     """
     Download a pump study export.
 
-    ?format=json      Full structured JSON bundle (run + episodes + clusters +
-                      comparison groups + timeline events).
-                      Note: daily snapshots are large; fetch them separately via
-                      /daily-snapshots if needed.
-    ?format=csv       Flat CSV of canonical episodes (one row per episode).
-    ?format=markdown  Deterministic markdown summary — no AI, no external calls.
+    ?format=json          Full structured JSON bundle (run + episodes + clusters +
+                          comparison groups + timeline events).
+    ?format=csv           Flat CSV of canonical episodes (one row per episode).
+    ?format=markdown      Deterministic markdown summary — no AI, no external calls.
+    ?format=snapshots_4x  Bar-by-bar signal data (T/Z/L/VIX/PSAR/RSI2) for
+                          4x+ episodes only. Suitable for per-bar analysis.
     """
     from fastapi.responses import Response
     from database import (
@@ -2650,6 +2650,7 @@ async def pump_study_export(run_id: int, format: str = "json"):
         get_pump_comparison_groups,
         get_pump_comparison_members,
         get_pump_study_timeline,
+        get_snapshots_for_episodes,
     )
 
     run = await get_pump_study_run(run_id)
@@ -2657,10 +2658,95 @@ async def pump_study_export(run_id: int, format: str = "json"):
         raise HTTPException(404, detail=f"Run {run_id} not found")
 
     fmt = format.lower()
-    if fmt not in ("json", "csv", "markdown"):
-        raise HTTPException(400, detail="format must be json, csv, or markdown")
+    if fmt not in ("json", "csv", "markdown", "snapshots_4x"):
+        raise HTTPException(400, detail="format must be json, csv, markdown, or snapshots_4x")
 
     episodes = await get_pump_episodes(run_id, limit=10000)
+
+    # ── snapshots_4x — per-bar bar labels for 4x+ episodes only ─────────────
+    if fmt == "snapshots_4x":
+        _min_multiple = 4.0
+        pumps_4x = [e for e in episodes if (e.get("pump_multiple") or 0) >= _min_multiple]
+        ep_ids   = [e["id"] for e in pumps_4x]
+        raw_snaps = await get_snapshots_for_episodes(ep_ids)
+
+        # Build episode lookup for context columns
+        ep_lookup = {e["id"]: e for e in pumps_4x}
+
+        # Flatten: extract key bar-label fields from snapshot_json
+        bar_labels = []
+        for s in raw_snaps:
+            snap     = s.get("snapshot") or {}
+            cf       = snap.get("custom_flags") or {}
+            ep       = ep_lookup.get(s["episode_id"], {})
+            bar_labels.append({
+                "episode_id":       s["episode_id"],
+                "symbol":           s["symbol"],
+                "pump_multiple":    ep.get("pump_multiple"),
+                "pump_type":        ep.get("pump_type"),
+                "pump_start_date":  ep.get("pump_start_date"),
+                "pump_peak_date":   ep.get("pump_peak_date"),
+                "date":             s["date"],
+                "phase":            s["window_phase"],
+                "rel_day":          s["relative_day_from_start"],
+                "rel_day_peak":     s["relative_day_from_peak"],
+                # OHLCV
+                "open":             s.get("open"),
+                "high":             s.get("high"),
+                "low":              s.get("low"),
+                "close":            s.get("close"),
+                "volume":           s.get("volume"),
+                "gap_pct":          s.get("gap_pct"),
+                "daily_return_pct": s.get("daily_return_pct"),
+                "cum_return_pct":   s.get("cum_return_pct"),
+                "vol_ratio":        s.get("volume_vs_avg20"),
+                "vol_zscore":       s.get("volume_zscore"),
+                "atr_pct":          s.get("atr_pct"),
+                "bb_width":         s.get("bb_width"),
+                "bb_squeeze":       s.get("bb_squeeze"),
+                "rsi":              s.get("rsi"),
+                "intraday_range_pct": s.get("intraday_range_pct"),
+                "close_position":   s.get("close_position"),
+                "wyckoff_state":    s.get("wyckoff_state"),
+                # Signal tokens from snapshot_json
+                "bkt":              snap.get("bar_bucket") or snap.get("bucket"),
+                "t_signal":         snap.get("tz_t_signal") or snap.get("t_signal"),
+                "z_signal":         snap.get("tz_z_signal") or snap.get("z_signal"),
+                "l_signal":         snap.get("tz_l_signal") or snap.get("l_signal"),
+                "preup":            snap.get("preup_token") or snap.get("preup"),
+                "predn":            snap.get("predn_token") or snap.get("predn"),
+                "suffix":           snap.get("suffix_label") or snap.get("suffix"),
+                "vix_token":        snap.get("vix_token"),
+                "psar_token":       snap.get("psar_token"),
+                "rsi2_token":       snap.get("rsi2_token"),
+                "line5":            snap.get("line5_token"),
+                # Custom flags (boolean signals)
+                "has_l34":          cf.get("has_l34"),
+                "has_l43":          cf.get("has_l43"),
+                "has_l22":          cf.get("has_l22"),
+                "has_np":           cf.get("has_np"),
+                "has_d":            cf.get("has_d"),
+                "has_wlnbb":        cf.get("has_wlnbb"),
+            })
+
+        bundle = {
+            "export_type":   "pump_study_bar_labels_4x",
+            "run_id":        run_id,
+            "min_multiple":  _min_multiple,
+            "episode_count": len(pumps_4x),
+            "bar_count":     len(bar_labels),
+            "episodes":      pumps_4x,
+            "bar_labels":    bar_labels,
+            "exported_at":   datetime.utcnow().isoformat() + "Z",
+        }
+        return Response(
+            content=json.dumps(bundle, indent=2, default=str),
+            media_type="application/json",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="pump_study_{run_id}_bar_labels_4x.json"'
+            },
+        )
 
     # ── CSV ───────────────────────────────────────────────────────────────────
     if fmt == "csv":
