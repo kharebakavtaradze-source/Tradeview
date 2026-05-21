@@ -1428,6 +1428,15 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
     Compute per-bar D/WLNBB/NP custom signal boolean flags for injection into
     feature_json.  Returns one flag-dict per snap (same length as snaps).
 
+    If custom_flags were already embedded into each snap's snapshot_json by
+    _build_snapshots (Phase 3C), returns them directly — zero recomputation.
+    """
+    if not snaps:
+        return []
+    # Fast path: flags already stored in snapshot_json during Phase 3C
+    if all(isinstance(s.get("snapshot"), dict) and "custom_flags" in s["snapshot"] for s in snaps):
+        return [s["snapshot"]["custom_flags"] for s in snaps]
+
     Flags computed:
       has_l34, has_l43, has_l22, has_l64  — WLNBB bucket signals
       has_fri34, has_fri64                — BLUE + L34/L64
@@ -5285,6 +5294,15 @@ async def run_pump_study(run_id: int, params: dict) -> None:
                 # Phase 3C: PRE/PUMP/POST indicator snapshots
                 snaps = _build_snapshots(ep_id, run_id, sym, ep_dict, sym_candles)
                 if snaps:
+                    # Embed per-bar custom flags into snapshot_json once at build time.
+                    # Raw-pattern-study runs will find them and skip recomputation.
+                    try:
+                        _cf = _compute_per_bar_custom_flags(snaps)
+                        for _s, _f in zip(snaps, _cf):
+                            if _f and isinstance(_s.get("snapshot"), dict):
+                                _s["snapshot"]["custom_flags"] = _f
+                    except Exception as _cf_err:
+                        logger.debug("[PSE] custom flag pre-embed failed: %s", _cf_err)
                     await save_pump_episode_snapshots(snaps)
                     total_snapshots += len(snaps)
 
@@ -5421,6 +5439,13 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             if sym_candles:
                 nw_snaps = _build_snapshots(nw_ep_id, run_id, sym, ep_dict_nw, sym_candles)
                 if nw_snaps:
+                    try:
+                        _cf_nw = _compute_per_bar_custom_flags(nw_snaps)
+                        for _s, _f in zip(nw_snaps, _cf_nw):
+                            if _f and isinstance(_s.get("snapshot"), dict):
+                                _s["snapshot"]["custom_flags"] = _f
+                    except Exception as _cf_err:
+                        logger.debug("[PSE] nw custom flag pre-embed failed: %s", _cf_err)
                     await save_pump_episode_snapshots(nw_snaps)
                     total_snapshots += len(nw_snaps)
                 if nw_snaps:
