@@ -1,6 +1,6 @@
 /**
- * Replay — Historical Backdated Scan Mode
- * Research-only page. Runs the scanner pipeline on past dates with
+ * Replay — Historical Backdated Scan Mode (Demand Engine)
+ * Research-only page. Runs the Demand Engine pipeline on past dates with
  * strict temporal isolation (no future leakage).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -150,7 +150,7 @@ function OutcomeLabel({ label }) {
   );
 }
 
-// ── Bundle Tab component ──────────────────────────────────────────────────────
+// ── Shared performance table used across bundle sections ─────────────────────
 
 function BucketTable({ data }) {
   if (!data || data.length === 0) return <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No data</div>;
@@ -186,397 +186,7 @@ function BucketTable({ data }) {
   );
 }
 
-function PatternReview({ review }) {
-  if (!review) return null;
-  const sections = [
-    { key: 'what_worked',          label: 'What Worked',       itemCls: styles.patternItemWorked },
-    { key: 'what_failed',          label: 'What Failed',       itemCls: styles.patternItemFailed },
-    { key: 'missed_patterns',      label: 'Missed Patterns',   itemCls: styles.patternItem },
-    { key: 'likely_strict_filters',label: 'Too Strict',        itemCls: styles.patternItemStrict },
-    { key: 'likely_noisy_filters', label: 'Too Noisy',         itemCls: styles.patternItemStrict },
-    { key: 'suggested_focus',      label: 'Suggested Focus',   itemCls: styles.patternItemFocus },
-  ];
-  const nonEmpty = sections.filter(s => (review[s.key] || []).length > 0);
-  if (!nonEmpty.length) return <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>Insufficient data for pattern analysis.</div>;
-  return (
-    <div className={styles.patternGrid}>
-      {nonEmpty.map(({ key, label, itemCls }) => (
-        <div key={key} className={styles.patternCard}>
-          <div className={styles.patternCardTitle}>{label}</div>
-          {(review[key] || []).map((item, i) => (
-            <div key={i} className={`${styles.patternItem} ${itemCls}`}>{item}</div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ExperimentCard({ exp, idx }) {
-  const confCls = {
-    HIGH:   styles.confHigh,
-    MEDIUM: styles.confMedium,
-    LOW:    styles.confLow,
-  }[exp.confidence] || styles.confLow;
-  return (
-    <div className={`${styles.experimentCard} ${confCls}`}>
-      <div className={styles.experimentTitle}>{idx}. {exp.title}</div>
-      <div className={styles.experimentMeta}>
-        <span className={styles.experimentType}>{exp.experiment_type}</span>
-        <span className={styles.experimentConf}>{exp.confidence}</span>
-      </div>
-      <div className={styles.experimentDesc}>{exp.description}</div>
-      {exp.evidence && <div className={styles.experimentEvidence}>Evidence: {exp.evidence}</div>}
-    </div>
-  );
-}
-
-// Compact decision summary derived from bundle data
-function DecisionSummary({ bundle }) {
-  if (!bundle) return null;
-
-  const npLabelRows  = bundle.performance_by_new_pump_label    || [];
-  const npSeqRows    = bundle.performance_by_new_pump_sequence || [];
-  const exps         = bundle.suggested_experiments            || [];
-  const fps          = bundle.false_positives                  || [];
-  const mm           = bundle.missed_movers                    || [];
-
-  const nonTrivial   = r => (r?.count ?? 0) >= 3 && r?.bucket && r.bucket !== 'NEW_PUMP_NONE';
-  const byReturn     = rows => [...rows].filter(nonTrivial)
-                                .sort((a, b) => (b.avg_return_5d ?? -999) - (a.avg_return_5d ?? -999));
-
-  const lblRanked    = byReturn(npLabelRows);
-  const seqRanked    = byReturn(npSeqRows);
-  const bestLabel    = lblRanked[0];
-  const worstLabel   = lblRanked[lblRanked.length - 1];
-  const bestSeq      = seqRanked[0];
-  const worstSeq     = seqRanked[seqRanked.length - 1];
-
-  const topExps      = exps.slice(0, 2);
-
-  const Block = ({ color, title, children }) => (
-    <div style={{
-      borderTop: `3px solid ${color}`,
-      padding: '10px 12px',
-      background: 'var(--bg-elev)',
-      borderRadius: 'var(--r-sm)',
-    }}>
-      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em',
-                    color, textTransform: 'uppercase', marginBottom: 6 }}>
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-
-  const Item = ({ label, value, sub }) => (
-    <div style={{ fontSize: 11, lineHeight: 1.45, marginBottom: 4 }}>
-      <span style={{ color: 'var(--text-muted)' }}>{label}: </span>
-      <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{value}</span>
-      {sub != null && (
-        <span style={{ color: 'var(--text-dim)', fontSize: 9, marginLeft: 6 }}>{sub}</span>
-      )}
-    </div>
-  );
-
-  const fmtReturn = r => {
-    if (r?.avg_return_5d == null) return '—';
-    const v = Number(r.avg_return_5d).toFixed(2);
-    return `${r.bucket} · ${v >= 0 ? '+' : ''}${v}% avg 5d`;
-  };
-
-  return (
-    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
-                    color: 'var(--accent)', textTransform: 'uppercase', marginBottom: 10 }}>
-        ◈ Decision Summary
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-        <Block color="var(--lime)" title="Works Better">
-          <Item label="Best label"    value={bestLabel ? fmtReturn(bestLabel) : '—'}
-                sub={bestLabel ? `n=${bestLabel.count}` : null} />
-          <Item label="Best sequence" value={bestSeq   ? fmtReturn(bestSeq)   : '—'}
-                sub={bestSeq   ? `n=${bestSeq.count}`   : null} />
-        </Block>
-        <Block color="var(--red)" title="Looks Weak">
-          <Item label="Weakest label"    value={worstLabel && worstLabel !== bestLabel ? fmtReturn(worstLabel) : '—'}
-                sub={worstLabel && worstLabel !== bestLabel ? `n=${worstLabel.count}` : null} />
-          <Item label="Weakest sequence" value={worstSeq   && worstSeq   !== bestSeq   ? fmtReturn(worstSeq)   : '—'}
-                sub={worstSeq   && worstSeq   !== bestSeq   ? `n=${worstSeq.count}`   : null} />
-          <Item label="False positives"  value={`${fps.length}`} sub={`missed movers ${mm.length}`} />
-        </Block>
-        <Block color="var(--cyan)" title="Try Next">
-          {topExps.length === 0 ? (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No suggestions — insufficient data.</div>
-          ) : topExps.map((e, i) => (
-            <div key={i} style={{ fontSize: 11, lineHeight: 1.35, marginBottom: 4 }}>
-              <span style={{ fontWeight: 700 }}>{i + 1}. </span>
-              <span>{e.title}</span>
-              <span style={{ color: 'var(--text-dim)', fontSize: 9, marginLeft: 4 }}>
-                [{e.experiment_type} · {e.confidence}]
-              </span>
-            </div>
-          ))}
-        </Block>
-      </div>
-    </div>
-  );
-}
-
-// ── D/WLNBB Combination Winrate Matrix ───────────────────────────────────────
-
-const DW_FAMILIES  = ['ALL','SAME_BAR_L34','SAME_BAR_L43','SAME_BAR_BEUP','L34_THEN_D','L43_THEN_D','D_THEN_BEUP','TRIPLE_D_L34_BEUP'];
-const DW_DSIGS     = ['ALL','D1','D3','D4','D6','D9','D11'];
-const DW_WLNBB     = ['ALL','L34','L43','BE_UP'];
-const DW_TIMINGS   = ['ALL','SAME_BAR','BASE_THEN_D_3B','D_THEN_BEUP_5B'];
-const DW_MINCOUNTS = [1,3,5,10];
-const DW_SORT_KEYS = ['count','win_rate_5d','avg_return_5d','avg_return_10d','false_positive_rate','avg_max_drawdown_pct'];
-
-const DW_HEATMAP_ROWS = ['D1','D3','D4','D6','D9','D11'];
-const DW_HEATMAP_COLS = [
-  {label:'L34 SAME', sig_d:null, sig_w:'L34',   timing:'SAME_BAR'},
-  {label:'L43 SAME', sig_d:null, sig_w:'L43',   timing:'SAME_BAR'},
-  {label:'BE SAME',  sig_d:null, sig_w:'BE_UP',  timing:'SAME_BAR'},
-  {label:'L34→D',    sig_d:null, sig_w:'L34',   timing:'BASE_THEN_D_3B'},
-  {label:'L43→D',    sig_d:null, sig_w:'L43',   timing:'BASE_THEN_D_3B'},
-  {label:'D→BE',     sig_d:null, sig_w:'BE_UP',  timing:'D_THEN_BEUP_5B'},
-];
-
-function dwRowColor(row) {
-  if (!row || row.count < 5) return '#2a2a2a';
-  const wr = row.win_rate_5d ?? 0;
-  const ar = row.avg_return_5d ?? 0;
-  if (wr >= 60 && ar > 0)  return 'rgba(76,175,80,0.18)';
-  if (wr < 40  || ar < 0)  return 'rgba(244,67,54,0.14)';
-  if (ar > 0.5 && row.count < 10) return 'rgba(255,193,7,0.14)';
-  return 'transparent';
-}
-
-function DWlnbbMatrix({ bundle }) {
-  const matrix  = bundle.d_wlnbb_combination_matrix  ?? [];
-  const summary = bundle.d_wlnbb_combination_summary  ?? {};
-
-  const [familyFilter,  setFamilyFilter]  = useState('ALL');
-  const [dFilter,       setDFilter]       = useState('ALL');
-  const [wFilter,       setWFilter]       = useState('ALL');
-  const [timingFilter,  setTimingFilter]  = useState('ALL');
-  const [minCount,      setMinCount]      = useState(1);
-  const [sortKey,       setSortKey]       = useState('count');
-  const [sortDir,       setSortDir]       = useState(-1);
-  const [viewMode,      setViewMode]      = useState('table');
-  const [expanded,      setExpanded]      = useState(false);
-
-  if (!matrix.length) return null;
-
-  function toggleSort(key) {
-    if (sortKey === key) setSortDir(d => -d);
-    else { setSortKey(key); setSortDir(-1); }
-  }
-
-  const filtered = matrix
-    .filter(r =>
-      (familyFilter === 'ALL' || r.family      === familyFilter) &&
-      (dFilter      === 'ALL' || r.signal_d    === dFilter)      &&
-      (wFilter      === 'ALL' || r.signal_wlnbb=== wFilter)      &&
-      (timingFilter === 'ALL' || r.timing      === timingFilter)  &&
-      r.count >= minCount
-    )
-    .sort((a,b) => {
-      const av = a[sortKey] ?? (sortDir > 0 ? Infinity : -Infinity);
-      const bv = b[sortKey] ?? (sortDir > 0 ? Infinity : -Infinity);
-      return sortDir * (bv - av);
-    });
-
-  // Heatmap lookup
-  function heatCell(dsig, col) {
-    return matrix.find(r =>
-      r.signal_d     === dsig &&
-      r.signal_wlnbb === col.sig_w &&
-      r.timing       === col.timing
-    );
-  }
-
-  const selClass = s => ({ background: s ? '#1e1e40' : '#13132a', border: `1px solid ${s ? '#5c6bc0' : '#242438'}`, borderRadius: 3, color: s ? '#fff' : '#666', cursor:'pointer', fontSize:10, fontFamily:'inherit', padding:'3px 8px' });
-
-  return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
-        <span style={{ fontSize:10, color:'#888', fontWeight:700, letterSpacing:'0.5px', textTransform:'uppercase' }}>View</span>
-        {['table','heatmap'].map(m => (
-          <button key={m} style={selClass(viewMode===m)} onClick={() => setViewMode(m)}>{m}</button>
-        ))}
-        <span style={{ fontSize:10, color:'#444', marginLeft:8 }}>Family:</span>
-        <select value={familyFilter} onChange={e => setFamilyFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
-          {DW_FAMILIES.map(f => <option key={f} value={f}>{f}</option>)}
-        </select>
-        <span style={{ fontSize:10, color:'#444' }}>D:</span>
-        <select value={dFilter} onChange={e => setDFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
-          {DW_DSIGS.map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
-        <span style={{ fontSize:10, color:'#444' }}>WLNBB:</span>
-        <select value={wFilter} onChange={e => setWFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
-          {DW_WLNBB.map(w => <option key={w} value={w}>{w}</option>)}
-        </select>
-        <span style={{ fontSize:10, color:'#444' }}>Timing:</span>
-        <select value={timingFilter} onChange={e => setTimingFilter(e.target.value)} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
-          {DW_TIMINGS.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <span style={{ fontSize:10, color:'#444' }}>Min n:</span>
-        <select value={minCount} onChange={e => setMinCount(Number(e.target.value))} style={{ background:'#13132a', border:'1px solid #242438', color:'#aaa', fontSize:10, borderRadius:3, padding:'2px 6px', fontFamily:'inherit' }}>
-          {DW_MINCOUNTS.map(n => <option key={n} value={n}>{n}</option>)}
-        </select>
-      </div>
-
-      {viewMode === 'heatmap' ? (
-        <div style={{ overflowX:'auto' }}>
-          <table style={{ borderCollapse:'collapse', fontSize:11, whiteSpace:'nowrap' }}>
-            <thead>
-              <tr>
-                <th style={{ padding:'6px 10px', color:'#555', textAlign:'left', borderBottom:'1px solid #242438' }}>D \ WLNBB</th>
-                {DW_HEATMAP_COLS.map(col => (
-                  <th key={col.label} style={{ padding:'6px 10px', color:'#777', borderBottom:'1px solid #242438', textAlign:'center', fontSize:10 }}>{col.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {DW_HEATMAP_ROWS.map(dsig => (
-                <tr key={dsig}>
-                  <td style={{ padding:'6px 10px', color:'#bbb', fontWeight:700 }}>{dsig}</td>
-                  {DW_HEATMAP_COLS.map(col => {
-                    const cell = heatCell(dsig, col);
-                    const bg   = dwRowColor(cell);
-                    return (
-                      <td key={col.label} style={{ padding:'6px 8px', background:bg, textAlign:'center', border:'1px solid #1a1a2e', minWidth:72 }}>
-                        {cell ? (
-                          <>
-                            <div style={{ fontSize:12, fontWeight:700, color: (cell.win_rate_5d ?? 0) >= 55 ? '#81c784' : (cell.win_rate_5d ?? 0) < 40 ? '#e57373' : '#ccc' }}>
-                              {fmt(cell.win_rate_5d)}%
-                            </div>
-                            <div style={{ fontSize:9, color:'#555' }}>n={cell.count}</div>
-                          </>
-                        ) : <span style={{ color:'#333' }}>—</span>}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div style={{ overflowX:'auto', border:'1px solid #242438', borderRadius:6 }}>
-          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11, whiteSpace:'nowrap' }}>
-            <thead>
-              <tr>
-                {[
-                  ['combination','Combination'],
-                  ['family','Family'],
-                  ['signal_d','D'],
-                  ['signal_wlnbb','WLNBB'],
-                  ['timing','Timing'],
-                  ['count','n'],
-                  ['win_rate_1d','WR1d%'],
-                  ['win_rate_3d','WR3d%'],
-                  ['win_rate_5d','WR5d%'],
-                  ['win_rate_10d','WR10d%'],
-                  ['avg_return_1d','Avg1d%'],
-                  ['avg_return_3d','Avg3d%'],
-                  ['avg_return_5d','Avg5d%'],
-                  ['avg_return_10d','Avg10d%'],
-                  ['median_return_5d','Med5d%'],
-                  ['avg_max_gain_pct','MaxGain%'],
-                  ['avg_max_drawdown_pct','MaxDD%'],
-                  ['alpha_vs_spy_5d','α5d'],
-                  ['alpha_vs_spy_10d','α10d'],
-                  ['false_positive_count','FP#'],
-                  ['false_positive_rate','FP%'],
-                  ['failed_breakout_count','FB#'],
-                  ['no_follow_through_count','NFT#'],
-                ].map(([key, label]) => {
-                  const sortable = DW_SORT_KEYS.includes(key);
-                  return (
-                    <th key={key}
-                      onClick={sortable ? () => toggleSort(key) : undefined}
-                      style={{ padding:'7px 10px', background:'#10101e', color: sortKey===key ? '#9fa8da' : '#666', textAlign: ['combination','family','signal_d','signal_wlnbb','timing'].includes(key) ? 'left' : 'right', borderBottom:'1px solid #242438', cursor: sortable ? 'pointer' : 'default', fontWeight:600, userSelect:'none', fontSize:10 }}>
-                      {label}{sortable && sortKey===key ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((row, i) => {
-                const bg = dwRowColor(row);
-                return (
-                  <tr key={row.combination} style={{ background: i%2===0 ? bg : bg, borderBottom:'1px solid #18182c', cursor: expanded===row.combination ? 'default' : 'pointer' }}
-                    onClick={() => setExpanded(expanded===row.combination ? null : row.combination)}>
-                    <td style={{ padding:'7px 10px', fontWeight:700, color:'#fff' }}>{row.combination}</td>
-                    <td style={{ padding:'7px 10px', color:'#888', fontSize:10 }}>{row.family}</td>
-                    <td style={{ padding:'7px 10px', color:'#aaa' }}>{row.signal_d}</td>
-                    <td style={{ padding:'7px 10px', color:'#aaa' }}>{row.signal_wlnbb}</td>
-                    <td style={{ padding:'7px 10px', color:'#666', fontSize:10 }}>{row.timing}</td>
-                    <td style={{ padding:'7px 10px', textAlign:'right', color: row.count < 5 ? '#666' : '#ccc', fontWeight: row.count >= 10 ? 700 : 500 }}>{row.count}</td>
-                    {[
-                      ['win_rate_1d',  v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
-                      ['win_rate_3d',  v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
-                      ['win_rate_5d',  v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
-                      ['win_rate_10d', v => `${fmt(v)}%`, v => v >= 55 ? '#81c784' : v < 40 ? '#e57373' : '#ccc'],
-                      ['avg_return_1d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
-                      ['avg_return_3d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
-                      ['avg_return_5d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
-                      ['avg_return_10d', v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
-                      ['median_return_5d', v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
-                      ['avg_max_gain_pct',     v => `${fmt(v)}%`, () => '#9fa8da'],
-                      ['avg_max_drawdown_pct', v => `${fmt(v)}%`, v => v < -3 ? '#e57373' : '#ccc'],
-                      ['alpha_vs_spy_5d',  v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
-                      ['alpha_vs_spy_10d', v => `${fmt(v)}%`, v => v > 0 ? '#81c784' : '#e57373'],
-                      ['false_positive_count', v => v, () => '#ccc'],
-                      ['false_positive_rate',  v => `${fmt(v)}%`, v => v > 30 ? '#e57373' : v < 15 ? '#81c784' : '#ccc'],
-                      ['failed_breakout_count',      v => v, () => '#ccc'],
-                      ['no_follow_through_count',    v => v, () => '#ccc'],
-                    ].map(([key, display, color]) => {
-                      const v = row[key];
-                      return (
-                        <td key={key} style={{ padding:'7px 10px', textAlign:'right', color: v != null ? color(v) : '#333', fontWeight:500 }}>
-                          {v != null ? display(v) : '—'}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {filtered.length === 0 && <div style={{ padding:'20px', color:'#555', textAlign:'center', fontSize:11 }}>No combinations match the current filters.</div>}
-        </div>
-      )}
-
-      {/* Summary block */}
-      {summary.best_by_5d_return?.length > 0 && (
-        <div style={{ display:'flex', gap:20, flexWrap:'wrap', marginTop:14 }}>
-          {[
-            ['Best Avg5d Return (n≥3)',  summary.best_by_5d_return,  r => `${fmt(r.avg_return_5d)}%`,  '#81c784'],
-            ['Best WinRate5d (n≥3)',     summary.best_by_win_rate_5d, r => `${fmt(r.win_rate_5d)}%`,   '#9fa8da'],
-            ['Worst Avg5d Return (n≥3)', summary.worst_by_5d_return, r => `${fmt(r.avg_return_5d)}%`, '#e57373'],
-          ].map(([title, rows, valFn, col]) => (
-            <div key={title} style={{ background:'#13132a', border:'1px solid #1e1e38', borderRadius:6, padding:'10px 14px', minWidth:180, flex:'1 1 180px' }}>
-              <div style={{ fontSize:9, color:'#555', textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:8, fontWeight:700 }}>{title}</div>
-              {rows.map((r, i) => (
-                <div key={r.combination} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:11, marginBottom:3 }}>
-                  <span style={{ color:'#bbb', fontWeight:600 }}>{i+1}. {r.combination}</span>
-                  <span style={{ color:col, fontWeight:700 }}>{valFn(r)}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-      {summary.min_sample_threshold_note && (
-        <div style={{ fontSize:9, color:'#444', marginTop:8 }}>{summary.min_sample_threshold_note}</div>
-      )}
-    </div>
-  );
-}
+// ── Research Bundle tab — demand engine focused ──────────────────────────────
 
 function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
   const [copied, setCopied] = useState(false);
@@ -592,14 +202,6 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
     } catch (_) {}
   }
 
-  function downloadJSON() {
-    window.open(`${apiUrl}/api/replay/${runId}/research-bundle/download?format=json`);
-  }
-
-  function downloadMarkdown() {
-    window.open(`${apiUrl}/api/replay/${runId}/research-bundle/download?format=markdown`);
-  }
-
   if (loading) return <div className={styles.statusMsg}>Building research bundle…</div>;
   if (!bundle) return (
     <div className={styles.emptyMsg}>
@@ -612,12 +214,11 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
     </div>
   );
 
-  const s    = bundle.summary || {};
-  const pr   = bundle.pattern_review || {};
-  const exps = bundle.suggested_experiments || [];
-  const fps  = bundle.false_positives || [];
-  const mm   = bundle.missed_movers || [];
-  const lc   = s.outcome_label_counts || {};
+  const ov = bundle.overall || {};
+  const mm = bundle.missed_movers || [];
+  const best = bundle.best_candidates || [];
+  const worst = bundle.worst_candidates || [];
+  const lc = ov.outcome_label_dist || {};
 
   return (
     <div className={styles.bundleWrap}>
@@ -627,236 +228,183 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
         <button className={`${styles.exportBtn} ${styles.exportBtnPrimary}`} onClick={copyMarkdown}>
           {copied ? '✓ Copied' : 'Copy Markdown'}
         </button>
-        <button className={styles.exportBtn} onClick={downloadJSON}>Download JSON</button>
-        <button className={styles.exportBtn} onClick={downloadMarkdown}>Download .md</button>
+        <button className={styles.exportBtn} onClick={() => window.open(`${apiUrl}/api/replay/${runId}/research-bundle/download?format=json`)}>
+          Download JSON
+        </button>
+        <button className={styles.exportBtn} onClick={() => window.open(`${apiUrl}/api/replay/${runId}/research-bundle/download?format=markdown`)}>
+          Download .md
+        </button>
         <button className={styles.exportBtn} onClick={onReload}>Rebuild</button>
       </div>
 
-      {/* Summary KPIs */}
+      {/* KPI strip */}
       <div className={styles.bundleSection}>
-        <div className={styles.bundleSectionTitle}>Replay Overview</div>
+        <div className={styles.bundleSectionTitle}>Overview</div>
         <div className={styles.summaryGrid}>
           <div className={styles.summaryKPI}>
-            <div className={styles.kpiValue}>{s.total_candidates ?? 0}</div>
+            <div className={styles.kpiValue}>{ov.total_candidates ?? 0}</div>
             <div className={styles.kpiLabel}>Candidates</div>
           </div>
           <div className={styles.summaryKPI}>
-            <div className={styles.kpiValue}>{s.total_outcomes_5d ?? 0}</div>
-            <div className={styles.kpiLabel}>5d Outcomes</div>
+            <div className={styles.kpiValue}>{ov.total_outcomes ?? 0}</div>
+            <div className={styles.kpiLabel}>Outcomes</div>
           </div>
           <div className={styles.summaryKPI}>
-            <div className={styles.kpiValue}>{s.total_missed_movers ?? 0}</div>
+            <div className={styles.kpiValue}>{ov.missed_movers ?? 0}</div>
             <div className={styles.kpiLabel}>Missed Movers</div>
           </div>
-          {s.avg_return_5d != null && (
+          {ov.avg_return_5d != null && (
             <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
-              <div className={`${styles.kpiValue} ${s.avg_return_5d >= 0 ? styles.returnPositive : styles.returnNegative}`}>
-                {s.avg_return_5d >= 0 ? '+' : ''}{fmt(s.avg_return_5d)}%
+              <div className={`${styles.kpiValue} ${ov.avg_return_5d >= 0 ? styles.returnPositive : styles.returnNegative}`}>
+                {ov.avg_return_5d >= 0 ? '+' : ''}{fmt(ov.avg_return_5d)}%
               </div>
               <div className={styles.kpiLabel}>Avg 5d Return</div>
             </div>
           )}
-          {s.win_rate_5d != null && (
+          {ov.win_rate_5d != null && (
             <div className={styles.summaryKPI}>
-              <div className={styles.kpiValue}>{fmt(s.win_rate_5d)}%</div>
+              <div className={styles.kpiValue}>{fmt(ov.win_rate_5d)}%</div>
               <div className={styles.kpiLabel}>Win Rate 5d</div>
-            </div>
-          )}
-          {s.avg_alpha_vs_spy_5d != null && (
-            <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
-              <div className={`${styles.kpiValue} ${s.avg_alpha_vs_spy_5d >= 0 ? styles.returnPositive : styles.returnNegative}`}>
-                {s.avg_alpha_vs_spy_5d >= 0 ? '+' : ''}{fmt(s.avg_alpha_vs_spy_5d)}%
-              </div>
-              <div className={styles.kpiLabel}>α vs SPY 5d</div>
             </div>
           )}
         </div>
 
         {/* Outcome label pills */}
-        {s.total_outcomes_5d > 0 && (
+        {Object.keys(lc).length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-            {[
-              ['SUCCESSFUL_BREAKOUT', lc.SUCCESSFUL_BREAKOUT, 'var(--lime)'],
-              ['EARLY_WINNER',        lc.EARLY_WINNER,        'var(--cyan)'],
-              ['NO_FOLLOW_THROUGH',   lc.NO_FOLLOW_THROUGH,   'var(--text-muted)'],
-              ['LATE_SIGNAL',         lc.LATE_SIGNAL,         'var(--amber)'],
-              ['FAILED_BREAKOUT',     lc.FAILED_BREAKOUT,     'var(--red)'],
-              ['FALSE_POSITIVE',      lc.FALSE_POSITIVE,      '#ff4466'],
-            ].filter(([, v]) => v > 0).map(([label, count, color]) => (
-              <span key={label} style={{
-                fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
-                padding: '2px 8px', borderRadius: 'var(--r-pill)',
-                background: `${color}18`, border: `1px solid ${color}44`, color,
-              }}>
-                {label.replace('_', ' ')}: {count}
-              </span>
-            ))}
+            {Object.entries(lc).filter(([, v]) => v > 0).map(([label, count]) => {
+              const color = OUTCOME_COLORS[label] || 'var(--text-muted)';
+              return (
+                <span key={label} style={{
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+                  padding: '2px 8px', borderRadius: 'var(--r-pill)',
+                  background: `${color}18`, border: `1px solid ${color}44`, color,
+                }}>
+                  {label.replace(/_/g, ' ')}: {count}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* Decision Summary — what works, what looks weak, next experiments */}
-      <DecisionSummary bundle={bundle} />
-
-      {/* Performance by Tier */}
+      {/* Performance by Demand Tier */}
       <div className={styles.bundleSection}>
-        <div className={styles.bundleSectionTitle}>Performance by Tier</div>
-        <BucketTable data={bundle.performance_by_tier} />
-      </div>
-
-      {/* Performance by Signal Combo */}
-      <div className={styles.bundleSection}>
-        <div className={styles.bundleSectionTitle}>Performance by Signal Combination</div>
-        <BucketTable data={bundle.performance_by_source} />
-      </div>
-
-      {/* ── New Pump Engine ─────────────────────────────────────────────────── */}
-      <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
-        <div className={styles.bundleSectionTitle} style={{ color: '#ff8800' }}>
-          ◈ New Pump Engine — Performance by Label
+        <div className={styles.bundleSectionTitle} style={{ color: '#34d399' }}>
+          ◈ Performance by Demand Tier
         </div>
-        <BucketTable data={bundle.performance_by_new_pump_label} />
+        <BucketTable data={bundle.performance_by_demand_tier} />
       </div>
 
+      {/* Performance by ATS Signal */}
       <div className={styles.bundleSection}>
-        <div className={styles.bundleSectionTitle} style={{ color: '#ff8800' }}>
-          ◈ New Pump Engine — Performance by Sequence
+        <div className={styles.bundleSectionTitle} style={{ color: '#60a5fa' }}>
+          ◈ Performance by ATS Signal
         </div>
-        <BucketTable data={bundle.performance_by_new_pump_sequence} />
+        <BucketTable data={bundle.performance_by_ats_signal} />
       </div>
 
-      {/* Triple D + L34 + BE_UP */}
-      {(bundle.performance_by_d_l34_beup_same?.length ?? 0) > 0 && (
-        <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
-          <div className={styles.bundleSectionTitle} style={{ color: '#9c6bde' }}>
-            ⬡ Triple D + L34 + BE_UP
+      {/* Performance by Readiness Tier */}
+      {(bundle.performance_by_readiness_tier?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#a78bfa' }}>
+            ◈ Performance by Readiness Tier
           </div>
-          <div style={{ fontSize: 9, color: '#555', marginBottom: 8 }}>
-            Research only — same-bar D + L34 + BE_UP confluence. Does not affect scoring or routing.
-          </div>
-          <BucketTable data={bundle.performance_by_d_l34_beup_same} />
-          {(bundle.performance_by_triple_inside_decision?.length ?? 0) > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 6 }}>
-                Triple × Decision
-              </div>
-              <BucketTable data={bundle.performance_by_triple_inside_decision} />
-            </div>
-          )}
-          {(bundle.performance_by_triple_inside_structure_phase?.length ?? 0) > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 6 }}>
-                Triple × Structure Phase
-              </div>
-              <BucketTable data={bundle.performance_by_triple_inside_structure_phase} />
-            </div>
-          )}
+          <BucketTable data={bundle.performance_by_readiness_tier} />
         </div>
       )}
 
-      {/* False Positives */}
-      <div className={styles.bundleSection}>
-        <div className={styles.bundleSectionTitle}>Top False Positives / Failures</div>
-        {fps.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No significant false positives in this run.</div>
-        ) : (
-          <table className={styles.fpTable}>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Date</th>
-                <th>Tier</th>
-                <th>Score</th>
-                <th>3d Ret</th>
-                <th>5d Ret</th>
-                <th>Max DD</th>
-                <th>Label</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fps.slice(0, 15).map((fp, i) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{fp.symbol}</td>
-                  <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>{fp.scan_date || '—'}</td>
-                  <td><TierBadge tier={fp.tier} /></td>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>{fp.total_score != null ? fmt(fp.total_score, 1) : '—'}</td>
-                  <td>{pctCell(fp.return_3d)}</td>
-                  <td>{pctCell(fp.return_5d)}</td>
-                  <td>{pctCell(fp.max_drawdown_pct)}</td>
-                  <td>{fp.outcome_label ? <OutcomeLabel label={fp.outcome_label} /> : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {/* Performance by NP Label */}
+      {(bundle.performance_by_new_pump_label?.length ?? 0) > 0 && (
+        <div className={styles.bundleSection} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+          <div className={styles.bundleSectionTitle} style={{ color: '#ff8800' }}>
+            ◈ New Pump Engine — Performance by Label
+          </div>
+          <BucketTable data={bundle.performance_by_new_pump_label} />
+        </div>
+      )}
+
+      {/* Best/Worst candidates */}
+      {(best.length > 0 || worst.length > 0) && (
+        <div className={styles.bundleSection}>
+          <div className={styles.bundleSectionTitle}>Top Performers &amp; Failures</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {best.length > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: 'var(--lime)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Best 5d</div>
+                <table className={styles.fpTable}>
+                  <thead>
+                    <tr><th>Symbol</th><th>Date</th><th>5d Ret</th><th>Demand</th><th>ATS</th></tr>
+                  </thead>
+                  <tbody>
+                    {best.map((c, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{c.symbol}</td>
+                        <td style={{ color: 'var(--text-muted)', fontSize: 9 }}>{c.scan_date || '—'}</td>
+                        <td>{pctCell(c.return_5d)}</td>
+                        <td><DemandTierBadge tier={c.demand_tier} /></td>
+                        <td><AtsBadge sig={c.ats_signal} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {worst.length > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: 'var(--red)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Worst 5d</div>
+                <table className={styles.fpTable}>
+                  <thead>
+                    <tr><th>Symbol</th><th>Date</th><th>5d Ret</th><th>Demand</th><th>ATS</th></tr>
+                  </thead>
+                  <tbody>
+                    {worst.map((c, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{c.symbol}</td>
+                        <td style={{ color: 'var(--text-muted)', fontSize: 9 }}>{c.scan_date || '—'}</td>
+                        <td>{pctCell(c.return_5d)}</td>
+                        <td><DemandTierBadge tier={c.demand_tier} /></td>
+                        <td><AtsBadge sig={c.ats_signal} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Missed Movers */}
       <div className={styles.bundleSection}>
         <div className={styles.bundleSectionTitle}>Top Missed Movers</div>
         {mm.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No significant missed movers in this run.</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No missed movers in this run.</div>
         ) : (
           <table className={styles.fpTable}>
             <thead>
               <tr>
                 <th>Symbol</th>
                 <th>Date</th>
-                <th>Price</th>
-                <th>3d Ret</th>
                 <th>5d Ret</th>
                 <th>10d Ret</th>
                 <th>Why Missed</th>
-                <th>Pre-filtered</th>
               </tr>
             </thead>
             <tbody>
-              {mm.slice(0, 15).map((m, i) => (
+              {mm.map((m, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{m.symbol}</td>
-                  <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>{m.scan_date || '—'}</td>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>{m.price_on_date != null ? `$${fmt(m.price_on_date, 2)}` : '—'}</td>
-                  <td>{pctCell(m.future_return_3d)}</td>
-                  <td>{pctCell(m.future_return_5d)}</td>
-                  <td>{pctCell(m.future_return_10d)}</td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: 9 }}>{m.scan_date || '—'}</td>
+                  <td>{pctCell(m.return_5d)}</td>
+                  <td>{pctCell(m.return_10d)}</td>
                   <td><span className={styles.whyMissed}>{m.why_missed || '—'}</span></td>
-                  <td style={{ color: m.was_filtered_pre_score ? 'var(--amber)' : 'var(--text-muted)', fontSize: 10 }}>
-                    {m.was_filtered_pre_score ? 'Yes' : '—'}
-                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
-
-      {/* Pattern Review */}
-      <div className={styles.bundleSection}>
-        <div className={styles.bundleSectionTitle}>Pattern Review</div>
-        <PatternReview review={pr} />
-      </div>
-
-      {/* Suggested Experiments */}
-      <div className={styles.bundleSection}>
-        <div className={styles.bundleSectionTitle}>Suggested Experiments</div>
-        <div className={styles.researchWarning}>⚠ Proposals only — not auto-applied</div>
-        {exps.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>No experiments suggested — run may have insufficient data.</div>
-        ) : (
-          <div className={styles.experimentsGrid}>
-            {exps.map((exp, i) => <ExperimentCard key={i} exp={exp} idx={i + 1} />)}
-          </div>
-        )}
-      </div>
-
-      {/* D/WLNBB Combination Winrate Matrix */}
-      {(bundle.d_wlnbb_combination_matrix?.length ?? 0) > 0 && (
-        <div className={styles.bundleSection}>
-          <div className={styles.bundleSectionTitle}>D / WLNBB Combination Winrate Matrix</div>
-          <div className={styles.researchWarning}>⚠ Research only — does not affect scoring, routing, or D formulas</div>
-          <DWlnbbMatrix bundle={bundle} />
-        </div>
-      )}
     </div>
   );
 }
@@ -865,7 +413,7 @@ function BundleTab({ bundle, loading, runId, onReload, apiUrl }) {
 
 export default function ReplayPage() {
   // ── Form state ──────────────────────────────────────────────────────────────
-  const [mode, setMode]               = useState('single_day');  // single_day | date_range
+  const [mode, setMode]               = useState('single_day');
   const [singleDate, setSingleDate]   = useState('');
   const [startDate, setStartDate]     = useState('');
   const [endDate, setEndDate]         = useState('');
@@ -878,8 +426,8 @@ export default function ReplayPage() {
 
   // ── History + detail ────────────────────────────────────────────────────────
   const [history, setHistory]         = useState([]);
-  const [activeRun, setActiveRun]     = useState(null);   // run object
-  const [tab, setTab]                 = useState('candidates'); // candidates | outcomes | missed | summary | bundle
+  const [activeRun, setActiveRun]     = useState(null);
+  const [tab, setTab]                 = useState('candidates');
 
   const [candidates, setCandidates]   = useState([]);
   const [outcomes, setOutcomes]       = useState([]);
@@ -891,12 +439,8 @@ export default function ReplayPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [error, setError]             = useState('');
 
-  // ── Recalculate state ────────────────────────────────────────────────────────
-  const [recalculating,  setRecalculating]  = useState(false);
-  const [recalcStatus,   setRecalcStatus]   = useState(null);   // null | {ok, updated, total, error}
-
   // ── Delete state ────────────────────────────────────────────────────────────
-  const [deleteTarget,   setDeleteTarget]   = useState(null);   // run object to confirm
+  const [deleteTarget,   setDeleteTarget]   = useState(null);
   const [deleting,       setDeleting]       = useState(false);
   const [deleteError,    setDeleteError]    = useState('');
 
@@ -906,7 +450,7 @@ export default function ReplayPage() {
   const [readyF,         setReadyF]         = useState('');
 
   // ── Bar labels panel ─────────────────────────────────────────────────────────
-  const [selectedCand,   setSelectedCand]   = useState(null);   // candidate with .symbol
+  const [selectedCand,   setSelectedCand]   = useState(null);
 
   // ── Polling ─────────────────────────────────────────────────────────────────
 
@@ -927,11 +471,8 @@ export default function ReplayPage() {
         setProgress(p);
         if (!p.running) {
           stopPolling();
-          // Refresh history + reload active run detail
           loadHistory();
-          if (p.run_id) {
-            loadRunDetail(p.run_id);
-          }
+          if (p.run_id) loadRunDetail(p.run_id);
         }
       } catch (_) {}
     }, POLL_MS);
@@ -961,7 +502,6 @@ export default function ReplayPage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || `HTTP ${res.status}`);
       }
-      // Clear selection if deleted run was active
       if (activeRun?.id === deleteTarget.id) {
         setActiveRun(null);
         setCandidates([]);
@@ -1018,10 +558,18 @@ export default function ReplayPage() {
     } catch (_) {}
   }
 
+  async function loadBundle(runId) {
+    setBundleLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/${runId}/research-bundle`);
+      if (r.ok) setBundle(await r.json());
+    } catch (_) {}
+    setBundleLoading(false);
+  }
+
   // Initial load
   useEffect(() => {
     loadHistory();
-    // Check if a replay is already running
     fetch(`${API_URL}/api/replay/status`)
       .then(r => r.ok ? r.json() : null)
       .then(p => {
@@ -1033,16 +581,7 @@ export default function ReplayPage() {
       .catch(() => {});
   }, []);
 
-  async function loadBundle(runId) {
-    setBundleLoading(true);
-    try {
-      const r = await fetch(`${API_URL}/api/replay/${runId}/research-bundle`);
-      if (r.ok) setBundle(await r.json());
-    } catch (_) {}
-    setBundleLoading(false);
-  }
-
-  // Load outcomes/missed/bundle lazily on tab change
+  // Lazy tab loads
   useEffect(() => {
     if (!activeRun) return;
     if (tab === 'outcomes' && outcomes.length === 0) loadOutcomes(activeRun.id);
@@ -1073,11 +612,9 @@ export default function ReplayPage() {
         setError(data.detail || 'Failed to start replay.');
         return;
       }
-      // Immediately start polling
       const pollStatus = await fetch(`${API_URL}/api/replay/status`);
       if (pollStatus.ok) setProgress(await pollStatus.json());
       startPolling();
-      // Refresh history
       setTimeout(loadHistory, 500);
     } catch (e) {
       setError(String(e));
@@ -1093,37 +630,8 @@ export default function ReplayPage() {
     setMissed([]);
     setSummary(null);
     setBundle(null);
-    setRecalcStatus(null);
     setTab('candidates');
     loadRunDetail(run.id);
-  }
-
-  async function handleRecalculate() {
-    if (!activeRun || recalculating) return;
-    setRecalculating(true);
-    setRecalcStatus(null);
-    try {
-      const r = await fetch(
-        `${API_URL}/api/replay/${activeRun.id}/recalculate-scanner-v2`,
-        { method: 'POST' },
-      );
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
-      setRecalcStatus({
-        ok:      true,
-        updated: data.updated_candidate_count,
-        total:   data.candidate_count_total,
-        bundle:  data.research_bundle_rebuilt,
-      });
-      // Reload candidates list and research bundle with new data
-      loadRunDetail(activeRun.id);
-      setBundle(null);
-      loadBundle(activeRun.id);
-    } catch (e) {
-      setRecalcStatus({ ok: false, error: String(e) });
-    } finally {
-      setRecalculating(false);
-    }
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────────
@@ -1138,10 +646,10 @@ export default function ReplayPage() {
       <div className={styles.page}>
         <div className={styles.header}>
           <div className={styles.advisory}>⏪ HISTORICAL REPLAY — RESEARCH ONLY</div>
-          <h1 className={styles.title}>Backdated Scan Replay</h1>
+          <h1 className={styles.title}>Backdated Scan Replay — Demand Engine</h1>
           <p className={styles.subtitle}>
-            Run the scanner pipeline on past dates with strict temporal isolation.
-            No future data is used during the scan.
+            Run the Demand Engine pipeline on past dates with strict temporal isolation.
+            Candidates are scored by Demand Composite Tier, ATS Signal, and Readiness.
           </p>
         </div>
 
@@ -1177,7 +685,7 @@ export default function ReplayPage() {
                   onChange={e => setSingleDate(e.target.value)}
                   max={new Date(Date.now() - 86400000).toISOString().slice(0, 10)}
                 />
-                <div className={styles.formHint}>The scanner will only see data up to this date.</div>
+                <div className={styles.formHint}>Only data up to this date is used.</div>
               </div>
             ) : (
               <>
@@ -1219,7 +727,6 @@ export default function ReplayPage() {
               </select>
               <div className={styles.formHint}>
                 Approx uses grouped-daily snapshot for the date.
-                Strict mode requires a historical ticker reference (not yet available — falls back to approx).
               </div>
             </div>
 
@@ -1265,14 +772,12 @@ export default function ReplayPage() {
                   <span className={styles.progressValue}>{progress.outcomes_computed ?? 0}</span>
                 </div>
                 {progress.mode === 'date_range' && progress.days_total > 0 && (
-                  <>
-                    <div className={styles.progressTrack}>
-                      <div
-                        className={styles.progressFill}
-                        style={{ width: `${Math.round((progress.days_completed / progress.days_total) * 100)}%` }}
-                      />
-                    </div>
-                  </>
+                  <div className={styles.progressTrack}>
+                    <div
+                      className={styles.progressFill}
+                      style={{ width: `${Math.round((progress.days_completed / progress.days_total) * 100)}%` }}
+                    />
+                  </div>
                 )}
                 {progress.error && (
                   <div style={{ color: 'var(--red)', fontSize: 10, marginTop: 6 }}>
@@ -1353,39 +858,10 @@ export default function ReplayPage() {
             {/* Detail panel */}
             {activeRun && (
               <div>
-                <div className={styles.sectionTitle} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <span>
-                    Run #{activeRun.id} — {activeRun.mode === 'single_day'
-                      ? activeRun.as_of_date
-                      : `${activeRun.start_date} → ${activeRun.end_date}`}
-                  </span>
-                  <button
-                    onClick={handleRecalculate}
-                    disabled={recalculating || isRunning}
-                    title="Re-run priority scoring + Scanner v2 routing on stored candidates using current engine code, then rebuild research bundle"
-                    style={{
-                      padding: '4px 12px', fontSize: 10, fontWeight: 700,
-                      background: recalculating ? '#1a1a1a' : '#1a2a1a',
-                      color: recalculating ? '#666' : '#4caf50',
-                      border: `1px solid ${recalculating ? '#333' : '#4caf5055'}`,
-                      borderRadius: 4, cursor: recalculating ? 'default' : 'pointer',
-                      letterSpacing: '0.05em', whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {recalculating ? '⟳ Recalculating…' : '⟳ Recalculate Analytics'}
-                  </button>
-                  {recalcStatus && (
-                    recalcStatus.ok ? (
-                      <span style={{ fontSize: 10, color: '#4caf50' }}>
-                        ✓ Updated {recalcStatus.updated}/{recalcStatus.total} candidates
-                        {recalcStatus.bundle ? ' · bundle rebuilt' : ''}
-                      </span>
-                    ) : (
-                      <span style={{ fontSize: 10, color: '#f44336' }}>
-                        ✗ {recalcStatus.error}
-                      </span>
-                    )
-                  )}
+                <div className={styles.sectionTitle}>
+                  Run #{activeRun.id} — {activeRun.mode === 'single_day'
+                    ? activeRun.as_of_date
+                    : `${activeRun.start_date} → ${activeRun.end_date}`}
                 </div>
 
                 {/* Tabs */}
@@ -1418,11 +894,11 @@ export default function ReplayPage() {
                       {/* Demand filter controls */}
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8, padding: '6px 0' }}>
                         {(() => {
-                          const selectStyle = { background: '#13132a', border: '1px solid #242438', color: '#aaa', fontSize: 10, borderRadius: 3, padding: '3px 8px', fontFamily: 'inherit' };
+                          const ss = { background: '#13132a', border: '1px solid #242438', color: '#aaa', fontSize: 10, borderRadius: 3, padding: '3px 8px', fontFamily: 'inherit' };
                           return (
                             <>
-                              <span style={{ fontSize: 10, color: '#666', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>Demand</span>
-                              <select value={demandTierF} onChange={e => setDemandTierF(e.target.value)} style={selectStyle}>
+                              <span style={{ fontSize: 10, color: '#666', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>Filter</span>
+                              <select value={demandTierF} onChange={e => setDemandTierF(e.target.value)} style={ss}>
                                 <option value="">All tiers</option>
                                 <option value="PRIME_BUY">PRIME BUY</option>
                                 <option value="HIGH_CONF_BUY">HIGH CONF</option>
@@ -1430,14 +906,14 @@ export default function ReplayPage() {
                                 <option value="SETUP_MONITOR">MONITOR</option>
                                 <option value="SKIP">SKIP</option>
                               </select>
-                              <select value={atsF} onChange={e => setAtsF(e.target.value)} style={selectStyle}>
+                              <select value={atsF} onChange={e => setAtsF(e.target.value)} style={ss}>
                                 <option value="">All ATS</option>
                                 <option value="ATS_PRIME">ATS PRIME</option>
                                 <option value="ATS_SETUP">ATS SETUP</option>
                                 <option value="ATS_WATCH">ATS WATCH</option>
                                 <option value="ATS_NONE">ATS NONE</option>
                               </select>
-                              <select value={readyF} onChange={e => setReadyF(e.target.value)} style={selectStyle}>
+                              <select value={readyF} onChange={e => setReadyF(e.target.value)} style={ss}>
                                 <option value="">All readiness</option>
                                 <option value="HOT">HOT</option>
                                 <option value="WARM">WARM</option>
@@ -1454,14 +930,12 @@ export default function ReplayPage() {
                               )}
                               <span style={{ flex: 1 }} />
                               <button
-                                onClick={() => window.open(`${apiUrl}/api/replay/${runId}/export?format=csv`)}
+                                onClick={() => window.open(`${API_URL}/api/replay/${activeRun.id}/export?format=csv`)}
                                 style={{ fontSize: 10, color: '#22c55e', background: 'transparent', border: '1px solid #22c55e44', borderRadius: 3, padding: '2px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
-                                title="Download all candidates as CSV"
                               >↓ CSV</button>
                               <button
-                                onClick={() => window.open(`${apiUrl}/api/replay/${runId}/export?format=json`)}
+                                onClick={() => window.open(`${API_URL}/api/replay/${activeRun.id}/export?format=json`)}
                                 style={{ fontSize: 10, color: '#aaa', background: 'transparent', border: '1px solid #333', borderRadius: 3, padding: '2px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
-                                title="Download all candidates as JSON"
                               >↓ JSON</button>
                             </>
                           );
@@ -1473,13 +947,13 @@ export default function ReplayPage() {
                             <th>Symbol</th>
                             <th>Date</th>
                             <th>Price</th>
-                            <th>Tier</th>
-                            <th>Score</th>
+                            <th>Demand</th>
+                            <th>ATS</th>
+                            <th>Ready</th>
+                            <th>D Score</th>
                             <th>NP Score</th>
                             <th>NP Label</th>
                             <th>NP Sequence</th>
-                            <th>Demand</th>
-                            <th>ATS</th>
                             <th>Wyckoff</th>
                             <th>Sector</th>
                           </tr>
@@ -1504,14 +978,24 @@ export default function ReplayPage() {
                               <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
                                 {c.symbol}
                               </td>
-                              <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                              <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
                                 {c.scan_date}
                               </td>
                               <td style={{ fontFamily: 'var(--font-mono)' }}>
                                 {c.price != null ? `$${fmt(c.price, 2)}` : '—'}
                               </td>
-                              <td><TierBadge tier={c.tier} /></td>
-                              <td style={{ fontFamily: 'var(--font-mono)' }}>{c.total_score ?? '—'}</td>
+                              <td style={{ fontSize: 9 }}>
+                                <DemandTierBadge tier={c.demand_composite_tier} />
+                              </td>
+                              <td style={{ fontSize: 9 }}>
+                                <AtsBadge sig={c.ats_signal} />
+                              </td>
+                              <td style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                                {c.readiness_tier || '—'}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
+                                {c.demand_composite_score != null ? Number(c.demand_composite_score).toFixed(1) : '—'}
+                              </td>
                               <td style={{ fontFamily: 'var(--font-mono)', color: npScoreColor(c.new_pump_score) }}>
                                 {c.new_pump_score != null ? Number(c.new_pump_score).toFixed(1) : '—'}
                               </td>
@@ -1520,17 +1004,6 @@ export default function ReplayPage() {
                               </td>
                               <td style={{ fontSize: 9, color: 'var(--text-muted)', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {c.new_pump_sequence_label || '—'}
-                              </td>
-                              <td style={{ fontSize: 9 }}>
-                                <DemandTierBadge tier={c.demand_composite_tier} />
-                                {c.demand_composite_score != null && (
-                                  <span style={{ color: 'var(--text-muted)', fontSize: 8, marginLeft: 3, fontFamily: 'var(--font-mono)' }}>
-                                    {Number(c.demand_composite_score).toFixed(1)}
-                                  </span>
-                                )}
-                              </td>
-                              <td style={{ fontSize: 9 }}>
-                                <AtsBadge sig={c.ats_signal} />
                               </td>
                               <td style={{ fontSize: 9, color: 'var(--text-muted)' }}>
                                 {c.wyckoff_state || '—'}
@@ -1545,11 +1018,8 @@ export default function ReplayPage() {
                       {selectedCand && (
                         <div style={{ marginTop: 12 }}>
                           <div style={{
-                            fontSize: 10,
-                            color: 'var(--text-muted)',
-                            marginBottom: 6,
-                            letterSpacing: '0.06em',
-                            textTransform: 'uppercase',
+                            fontSize: 10, color: 'var(--text-muted)', marginBottom: 6,
+                            letterSpacing: '0.06em', textTransform: 'uppercase',
                           }}>
                             Bar Labels — {selectedCand.symbol}
                           </div>
@@ -1664,7 +1134,6 @@ export default function ReplayPage() {
                     <div className={styles.emptyMsg}>No summary available yet.</div>
                   ) : (
                     <>
-                      {/* KPI grid — keys match API: total_candidates, total_outcomes, missed_movers, avg_returns */}
                       <div className={styles.summaryGrid}>
                         <div className={styles.summaryKPI}>
                           <div className={styles.kpiValue}>{summary.total_candidates ?? 0}</div>
@@ -1686,14 +1155,6 @@ export default function ReplayPage() {
                             <div className={styles.kpiLabel}>Avg 5d Return</div>
                           </div>
                         )}
-                        {summary.avg_returns?.['1d'] != null && (
-                          <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
-                            <div className={`${styles.kpiValue} ${summary.avg_returns['1d'] >= 0 ? styles.returnPositive : styles.returnNegative}`}>
-                              {summary.avg_returns['1d'] >= 0 ? '+' : ''}{fmt(summary.avg_returns['1d'])}%
-                            </div>
-                            <div className={styles.kpiLabel}>Avg 1d Return</div>
-                          </div>
-                        )}
                         {summary.avg_returns?.['10d'] != null && (
                           <div className={`${styles.summaryKPI} ${styles.returnKPI}`}>
                             <div className={`${styles.kpiValue} ${summary.avg_returns['10d'] >= 0 ? styles.returnPositive : styles.returnNegative}`}>
@@ -1704,7 +1165,6 @@ export default function ReplayPage() {
                         )}
                       </div>
 
-                      {/* Outcome distribution — API key: outcome_labels */}
                       {summary.outcome_labels && Object.keys(summary.outcome_labels).length > 0 && (
                         <div className={styles.outcomeSection}>
                           <div className={styles.sectionTitle} style={{ marginBottom: 10 }}>
@@ -1715,9 +1175,7 @@ export default function ReplayPage() {
                               <div className={styles.outcomeBlockTitle}>Label Counts</div>
                               {Object.entries(summary.outcome_labels).map(([label, count]) => (
                                 <div key={label} className={styles.outcomeRow}>
-                                  <span className={styles.outcomeLabel}>
-                                    <OutcomeLabel label={label} />
-                                  </span>
+                                  <span className={styles.outcomeLabel}><OutcomeLabel label={label} /></span>
                                   <span className={styles.outcomeCount}>{count}</span>
                                 </div>
                               ))}
@@ -1740,23 +1198,24 @@ export default function ReplayPage() {
                         </div>
                       )}
 
-                      {/* Tier distribution */}
-                      {summary.tier_distribution && Object.keys(summary.tier_distribution).length > 0 && (
+                      {summary.demand_tier_distribution && Object.keys(summary.demand_tier_distribution).length > 0 && (
                         <div className={styles.outcomeSection} style={{ marginTop: 12 }}>
                           <div className={styles.sectionTitle} style={{ marginBottom: 10 }}>
-                            Tier Breakdown
+                            Demand Tier Breakdown
                           </div>
                           <div className={styles.outcomeGrid}>
                             <div className={styles.outcomeBlock}>
-                              <div className={styles.outcomeBlockTitle}>Candidate Tiers</div>
-                              {Object.entries(summary.tier_distribution).map(([tier, count]) => (
-                                <div key={tier} className={styles.outcomeRow}>
-                                  <span className={styles.outcomeLabel}>
-                                    <TierBadge tier={tier} />
-                                  </span>
-                                  <span className={styles.outcomeCount}>{count}</span>
-                                </div>
-                              ))}
+                              <div className={styles.outcomeBlockTitle}>Demand Tiers</div>
+                              {['PRIME_BUY','HIGH_CONF_BUY','BUY_WATCH','SETUP_MONITOR','SKIP'].map(tier => {
+                                const count = summary.demand_tier_distribution[tier];
+                                if (!count) return null;
+                                return (
+                                  <div key={tier} className={styles.outcomeRow}>
+                                    <span className={styles.outcomeLabel}><DemandTierBadge tier={tier} /></span>
+                                    <span className={styles.outcomeCount}>{count}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         </div>
@@ -1786,7 +1245,7 @@ export default function ReplayPage() {
             <div className={styles.modalTitle}>Permanently Delete Run #{deleteTarget.id}?</div>
             <div className={styles.modalBody}>
               This will remove the run and <strong>all linked DB rows</strong>:
-              candidates, outcomes, missed movers, and any AI summaries.
+              candidates, outcomes, and missed movers.
               <br /><br />
               <strong>This cannot be undone.</strong>
             </div>

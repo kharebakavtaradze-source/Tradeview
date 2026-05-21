@@ -2822,8 +2822,6 @@ class ReplaySignalCandidate(Base):
     tier                  = Column(String(10), nullable=True)
     total_score           = Column(Float,      nullable=True)
     wyckoff_state         = Column(String(20), nullable=True)
-    ignition_signal       = Column(Boolean,    default=False)   # legacy — no longer written
-    ribbon_signal         = Column(Boolean,    default=False)   # legacy — no longer written
     sector                = Column(String(60), nullable=True)
     new_pump_score        = Column(Float,      nullable=True)
     new_pump_label        = Column(String(30), nullable=True)
@@ -2849,17 +2847,6 @@ class ReplaySignalCandidate(Base):
     np_expansion_timing_risk       = Column(String(10), nullable=True)  # LOW|MEDIUM|HIGH
     np_decision                    = Column(String(20), nullable=True)  # BUY_CANDIDATE/WATCH/IMPULSE_RISK/AVOID
     np_decision_reason             = Column(String(200), nullable=True) # human-readable
-    # ── Scanner v2 / priority enrichment (added Task 9) ──────────────────────
-    # Computed by enrich_np_candidates + build_v2_row in replay_engine.
-    # Columns are queryable; full JSON of flags/reason/contexts lives in snapshot.
-    priority_score        = Column(Float,      nullable=True)            # 0–100
-    priority_label        = Column(String(20), nullable=True)            # PRIORITY_HIGH/MEDIUM/LOW/RISKY
-    scanner_v2_decision   = Column(String(25), nullable=True)            # BUY_CANDIDATE_HIGH/NORMAL/WATCH_HIGH/MED/LOW/AVOID_*
-    scanner_v2_score      = Column(Float,      nullable=True)            # 0–100
-    np_structure_phase    = Column(String(30), nullable=True)            # CONFIRMED_STRUCTURE/EARLY_STRUCTURE/TRUE_NONE
-    np_structure_score    = Column(Float,      nullable=True)            # 0–100 from new_pump_engine
-    d_confluence_family   = Column(String(20), nullable=True)            # D6/D4/D3/SECONDARY/NONE — from scanner_v2
-    d_confluence_timing   = Column(String(20), nullable=True)            # SAME_BAR/LAGGED/NONE — from scanner_v2
     demand_composite_score  = Column(Float,      nullable=True)
     demand_composite_tier   = Column(String(20), nullable=True)
     ats_signal              = Column(String(20), nullable=True)
@@ -2870,7 +2857,6 @@ class ReplaySignalCandidate(Base):
     flow_risks_json         = Column(Text,       nullable=True)   # JSON list
     demand_breakdown_json   = Column(Text,       nullable=True)   # JSON dict
     demand_risk_flags_json  = Column(Text,       nullable=True)   # JSON list
-    scanner_v2_rank       = Column(Integer,    nullable=True)            # rank within scan batch
     candidate_snapshot_json = Column(Text,     nullable=True)   # full indicators + scoring
     created_at            = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -3086,14 +3072,6 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 np_expansion_timing_risk       = c.get("np_expansion_timing_risk"),
                 np_decision                    = c.get("np_decision"),
                 np_decision_reason             = (c.get("np_decision_reason") or "")[:200] if c.get("np_decision_reason") else None,
-                priority_score                 = c.get("priority_score"),
-                priority_label                 = c.get("priority_label"),
-                scanner_v2_decision            = c.get("scanner_v2_decision"),
-                scanner_v2_score               = c.get("scanner_v2_score"),
-                np_structure_phase             = c.get("np_structure_phase"),
-                np_structure_score             = c.get("np_structure_score"),
-                d_confluence_family            = c.get("d_confluence_family"),
-                d_confluence_timing            = c.get("d_confluence_timing"),
                 demand_composite_score  = c.get("demand_composite_score"),
                 demand_composite_tier   = c.get("demand_composite_tier"),
                 ats_signal              = c.get("ats_signal"),
@@ -3104,7 +3082,6 @@ async def save_replay_candidates(run_id: int, scan_date: str, candidates: list[d
                 flow_risks_json         = json.dumps(c.get("flow_risks") or []),
                 demand_breakdown_json   = json.dumps(c.get("demand_score_breakdown") or {}),
                 demand_risk_flags_json  = json.dumps(c.get("demand_risk_flags") or []),
-                scanner_v2_rank                = c.get("scanner_v2_rank"),
                 candidate_snapshot_json = json.dumps(c.get("snapshot") or {}),
             )
             session.add(row)
@@ -3134,67 +3111,13 @@ async def update_replay_candidate_decision(candidate_id: int,
         return True
 
 
-async def update_replay_candidate_v2(candidate_id: int, fields: dict) -> bool:
-    """
-    Patch priority + Scanner v2 fields on an existing replay candidate row,
-    and merge non-column extras (priority_flags/reason, scanner_v2_flags/reason,
-    sector_context, macro_context, news_hype_context, sympathy_context,
-    decision_flags, subsector) into the snapshot JSON blob so the research
-    bundle's _cget snapshot path can read them.
-
-    Used by the recalc_service to backfill Scanner v2 fields on existing
-    replay rows without a full rescan.  Returns True if the row was found.
-    """
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(ReplaySignalCandidate).where(ReplaySignalCandidate.id == candidate_id)
-        )
-        row = result.scalar_one_or_none()
-        if not row:
-            return False
-
-        # Direct columns
-        if "priority_score" in fields:       row.priority_score      = fields["priority_score"]
-        if "priority_label" in fields:       row.priority_label      = fields["priority_label"]
-        if "scanner_v2_decision" in fields:  row.scanner_v2_decision = fields["scanner_v2_decision"]
-        if "scanner_v2_score" in fields:     row.scanner_v2_score    = fields["scanner_v2_score"]
-        if "np_structure_phase" in fields:   row.np_structure_phase  = fields["np_structure_phase"]
-        if "np_structure_score" in fields:   row.np_structure_score  = fields["np_structure_score"]
-        if "d_confluence_family" in fields:  row.d_confluence_family = fields["d_confluence_family"]
-        if "d_confluence_timing" in fields:  row.d_confluence_timing = fields["d_confluence_timing"]
-        if "scanner_v2_rank" in fields:      row.scanner_v2_rank     = fields["scanner_v2_rank"]
-
-        # Snapshot-blob extras
-        try:
-            snap = json.loads(row.candidate_snapshot_json or "{}")
-        except Exception:
-            snap = {}
-        for k in ("priority_flags", "priority_reason",
-                  "scanner_v2_flags", "scanner_v2_reason",
-                  "sector_context", "macro_context",
-                  "news_hype_context", "sympathy_context",
-                  "legacy_context", "decision_flags", "subsector",
-                  "d_confluence_family", "d_confluence_timing", "window_explanation",
-                  "structure_score_bucket", "suggested_action", "scanner_v2_rank",
-                  "priority_score", "priority_label",
-                  "scanner_v2_decision", "scanner_v2_score"):
-            if k in fields and isinstance(
-                fields[k], (int, float, str, bool, type(None), list, dict)
-            ):
-                snap[k] = fields[k]
-        row.candidate_snapshot_json = json.dumps(snap)
-
-        await session.commit()
-        return True
-
-
 async def get_replay_candidates(run_id: int, limit: int = 500) -> list[dict]:
     """Return all candidates for a replay run."""
     async with get_session_factory()() as session:
         result = await session.execute(
             select(ReplaySignalCandidate)
             .where(ReplaySignalCandidate.replay_run_id == run_id)
-            .order_by(ReplaySignalCandidate.total_score.desc())
+            .order_by(ReplaySignalCandidate.demand_composite_score.desc().nullslast())
             .limit(limit)
         )
         return [_replay_candidate_to_dict(r) for r in result.scalars().all()]
@@ -3381,15 +3304,6 @@ def _replay_candidate_to_dict(r: ReplaySignalCandidate) -> dict:
         "np_expansion_timing_risk":       r.np_expansion_timing_risk,
         "np_decision":                    r.np_decision,
         "np_decision_reason":             r.np_decision_reason,
-        "priority_score":                 r.priority_score,
-        "priority_label":                 r.priority_label,
-        "scanner_v2_decision":            r.scanner_v2_decision,
-        "scanner_v2_score":               r.scanner_v2_score,
-        "np_structure_phase":             r.np_structure_phase,
-        "np_structure_score":             r.np_structure_score,
-        "d_confluence_family":            r.d_confluence_family,
-        "d_confluence_timing":            r.d_confluence_timing,
-        "scanner_v2_rank":                r.scanner_v2_rank,
         "demand_composite_score":  r.demand_composite_score,
         "demand_composite_tier":   r.demand_composite_tier,
         "ats_signal":              r.ats_signal,
