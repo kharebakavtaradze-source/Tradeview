@@ -450,11 +450,21 @@ def _diagnose_why_missed(
     o = bar.get("open") or 0
     c = bar.get("close") or 0
     if o > 0:
-        ratio = c / o
+        ratio       = c / o
+        h           = bar.get("high") or c
+        l_v         = bar.get("low")  or c
+        bar_range   = h - l_v
+        close_pos   = (c - l_v) / bar_range if bar_range > 0 else 0.5   # 0=bottom, 1=top
+        intra_spike = (h / o - 1.0) if o > 0 else 0.0                   # peak intraday % above open
+
         if ratio >= 1.25:
-            return "NSS_PARABOLIC"       # already running ≥25% on scan day — engine one cycle late
+            return "NSS_PARABOLIC"         # already running ≥25% on scan day — engine one cycle late
         if ratio <= 0.93:
-            return "NSS_SPRING_REVERSAL" # bearish bar (Wyckoff spring) — L34 bull-candle gate misses it
+            return "NSS_SPRING_REVERSAL"   # bearish bar (Wyckoff spring) — L34 bull-candle gate misses it
         if abs(c - o) / o < 0.015:
-            return "NSS_QUIET_BASE"      # near-flat, extreme compression — nothing fires
-    return "NSS_BREAKOUT_ORPHAN"         # moderate bar, no L34/G4/B2 condition met
+            return "NSS_QUIET_BASE"        # near-flat compression — nothing in engine fires
+        if intra_spike >= 0.08 and close_pos < 0.40:
+            return "NSS_INTRADAY_FADE"     # ran intraday ≥8% but closed weak — missed the intraday window
+        if close_pos < 0.30:
+            return "NSS_CLOSED_WEAK"       # closed in bottom 30% of bar — intraday distribution, no setup
+    return "NSS_BREAKOUT_ORPHAN"           # moderate bar, in universe, no L34/G4/B2 structure formed
