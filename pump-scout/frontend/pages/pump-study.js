@@ -948,7 +948,7 @@ function RunLaunchForm({ onLaunch, launching, launchError }) {
   const [startDate,      setStartDate]      = useState(iso2yr);
   const [endDate,        setEndDate]        = useState(isoYday);
   const [windowDays,     setWindowDays]     = useState(14);
-  const [minMultiple,    setMinMultiple]    = useState(4.0);
+  const [minMultiple,    setMinMultiple]    = useState(2.0);
   const [universeLimit,  setUniverseLimit]  = useState(0);
 
   function handleSubmit(e) {
@@ -989,6 +989,7 @@ function RunLaunchForm({ onLaunch, launching, launchError }) {
           <label className={styles.formLabel}>Min Multiple</label>
           <select className={styles.formSelect} value={minMultiple}
             onChange={e => setMinMultiple(e.target.value)}>
+            <option value={2.0}>2×</option>
             <option value={3.0}>3×</option>
             <option value={4.0}>4×</option>
             <option value={5.0}>5×</option>

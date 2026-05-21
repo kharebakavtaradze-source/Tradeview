@@ -362,6 +362,15 @@ def _compute_readiness(
         # Still in Bollinger squeeze (L bucket)
         if last.get("bucket") == "L":
             conf_score += 1; confluence_signals.append("WLNBB_L")
+        # VIX-Fix exhaustion: present in 82% of real 4x+ pumps at breakout.
+        # VX+PS (VIX-Fix spike + PSAR flip) = +1; add R2L (RSI2 oversold) = +1 more.
+        _vx  = last.get("vix_token")  == "VX"
+        _ps  = last.get("psar_token") in ("PS", "PB")
+        _r2l = last.get("rsi2_token") == "R2L"
+        if _vx and _ps:
+            conf_score += 1; confluence_signals.append("VX_PS_EXHAUSTION")
+        if _vx and _ps and _r2l:
+            conf_score += 1; confluence_signals.append("VX_PS_R2L_SETUP")
 
     # ── Combine ───────────────────────────────────────────────────────────────
     total = cat_score + brk_score + flt_score + frsh_score + rs_score + conf_score

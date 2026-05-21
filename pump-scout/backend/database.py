@@ -1071,6 +1071,26 @@ async def _run_migrations(conn):
             except Exception as e:
                 logger.warning(f"Drop raw_pattern_episode_features.{col} failed (non-fatal): {e}")
 
+        # Widen columns that were too narrow in earlier migrations
+        _WIDEN = [
+            # raw_pattern_episode_features: sector/industry can exceed original limits;
+            # ats_conditions_* may exist as VARCHAR(50) from older deploys — widen to TEXT.
+            ("raw_pattern_episode_features", "sector",   "VARCHAR(100)"),
+            ("raw_pattern_episode_features", "industry", "VARCHAR(200)"),
+            ("raw_pattern_episode_features", "ats_conditions_met_at_breakout",     "TEXT"),
+            ("raw_pattern_episode_features", "ats_conditions_missing_at_breakout", "TEXT"),
+            ("raw_pattern_episode_features", "demand_reasons_at_breakout",         "TEXT"),
+            ("raw_pattern_episode_features", "demand_risk_flags_at_breakout",      "TEXT"),
+            ("raw_pattern_episode_features", "demand_missing_inputs",              "TEXT"),
+        ]
+        for tbl, col, newtype in _WIDEN:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE {tbl} ALTER COLUMN {col} TYPE {newtype} USING {col}::{newtype}"
+                ))
+            except Exception as e:
+                logger.debug(f"Widen {tbl}.{col} skipped (non-fatal): {e}")
+
         # Drop removed AI advisory tables (idempotent)
         for tbl in ("ai_signal_analysis", "ai_review_reports", "ai_insights"):
             try:
