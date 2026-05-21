@@ -1354,7 +1354,7 @@ function GlobalSummary({ run, comparisons, episodes, loading, error }) {
 
 // ── Run detail header ─────────────────────────────────────────────────────────
 
-function RunDetailHeader({ run }) {
+function RunDetailHeader({ run, onScoreDemand, scoringDemand, scoreDemandMsg }) {
   if (!run) return null;
 
   const isRunning = ['running', 'detecting', 'enriching'].includes(run.status);
@@ -1405,6 +1405,18 @@ function RunDetailHeader({ run }) {
           style={{ color: 'var(--cyan, #22d3ee)' }}>
           ↓ MD
         </button>
+        <button className={styles.exportBtn}
+          onClick={onScoreDemand}
+          disabled={scoringDemand || isRunning}
+          title="Re-run demand + TZ scoring for all episodes (requires a linked raw pattern study run)"
+          style={{ color: 'var(--amber, #f59e0b)', opacity: (scoringDemand || isRunning) ? 0.5 : 1 }}>
+          {scoringDemand ? '⏳ Scoring…' : '⚡ Score Demand'}
+        </button>
+        {scoreDemandMsg && (
+          <span style={{ fontSize: 10, color: scoreDemandMsg.startsWith('Error') ? '#f87171' : '#86efac' }}>
+            {scoreDemandMsg}
+          </span>
+        )}
       </div>
 
       {/* KPI grid */}
@@ -1447,6 +1459,10 @@ export default function PumpStudyPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);   // run id to confirm
   const [deleting,     setDeleting]     = useState(false);
   const [deleteError,  setDeleteError]  = useState('');
+
+  // Score demand state
+  const [scoringDemand,  setScoringDemand]  = useState(false);
+  const [scoreDemandMsg, setScoreDemandMsg] = useState('');
 
   // Episodes state
   const [episodes,    setEpisodes]    = useState([]);
@@ -1724,7 +1740,27 @@ export default function PumpStudyPage() {
               {runLoading && !selectedRun && (
                 <div className={styles.statusMsg}>Loading run #{selectedId}…</div>
               )}
-              {selectedRun && <RunDetailHeader run={selectedRun} />}
+              {selectedRun && (
+                <RunDetailHeader
+                  run={selectedRun}
+                  scoringDemand={scoringDemand}
+                  scoreDemandMsg={scoreDemandMsg}
+                  onScoreDemand={async () => {
+                    setScoringDemand(true);
+                    setScoreDemandMsg('');
+                    try {
+                      const res = await fetch(`${API_URL}/api/replay/pump-study/${selectedRun.id}/score-demand`, { method: 'POST' });
+                      const data = await res.json();
+                      if (!res.ok) throw new Error(data.detail || 'Failed');
+                      setScoreDemandMsg('Scoring started — refresh episodes in a minute');
+                    } catch (e) {
+                      setScoreDemandMsg(`Error: ${e.message}`);
+                    } finally {
+                      setScoringDemand(false);
+                    }
+                  }}
+                />
+              )}
             </div>
           )}
 

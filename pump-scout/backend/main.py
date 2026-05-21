@@ -2845,6 +2845,33 @@ async def replay_cleanup(body: CleanupRequest = CleanupRequest()):
     return result
 
 
+@app.post("/api/replay/pump-study/{run_id}/score-demand")
+async def pump_study_score_demand(run_id: int, background_tasks: BackgroundTasks):
+    """
+    Re-run demand + TZ scoring for all episodes in a pump study run.
+    Finds the associated raw-pattern run to get PRE bar feature_json,
+    then writes results directly to pump_episodes.
+    """
+    from database import get_raw_pattern_runs
+    from replay.pump_study_engine import build_raw_pattern_episode_features_demand
+
+    raw_runs = await get_raw_pattern_runs(pump_study_run_id=run_id, limit=1)
+    if not raw_runs:
+        raise HTTPException(404, detail="No raw-pattern-study run found for this pump study. Run a raw pattern study first.")
+
+    raw_run_id = raw_runs[0]["id"]
+
+    async def _run():
+        try:
+            n = await build_raw_pattern_episode_features_demand(raw_run_id, run_id)
+            logger.info(f"[ScoreDemand] pump_study={run_id} raw={raw_run_id} patched={n}")
+        except Exception as exc:
+            logger.exception(f"[ScoreDemand] failed pump_study={run_id}: {exc}")
+
+    background_tasks.add_task(_run)
+    return {"ok": True, "pump_study_run_id": run_id, "raw_run_id": raw_run_id, "status": "scoring_started"}
+
+
 @app.post("/api/admin/cleanup-all")
 async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, dry_run: bool = True):
     """
