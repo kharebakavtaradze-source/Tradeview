@@ -3759,6 +3759,7 @@ async def build_raw_pattern_episode_features_demand(
         get_raw_pattern_daily_features,
         get_run_snapshots,
         update_raw_pattern_episode_features,
+        update_pump_episode_enrichment,
     )
 
     episodes = await get_pump_episodes(pump_study_run_id, limit=10_000)
@@ -3959,6 +3960,22 @@ async def build_raw_pattern_episode_features_demand(
 
         if any(v is not None for v in patch.values()):
             await update_raw_pattern_episode_features(raw_run_id, episode_id, patch)
+            # Write key demand + TZ fields back to pump_episodes so pump study frontend
+            # can display them without joining to raw_pattern_episode_features
+            pump_ep_patch = {}
+            for fld in (
+                "demand_score_at_breakout", "demand_tier_at_breakout",
+                "ats_at_breakout", "readiness_at_breakout", "readiness_tier_at_breakout",
+                "tz_t_signal_at_breakout", "tz_z_signal_at_breakout",
+                "preup_token_at_breakout", "line5_at_breakout",
+            ):
+                if fld in patch and patch[fld] is not None:
+                    pump_ep_patch[fld] = patch[fld]
+            if pump_ep_patch:
+                try:
+                    await update_pump_episode_enrichment(episode_id, pump_ep_patch)
+                except Exception as _pe:
+                    logger.debug(f"[RawDemand] pump_ep write-back failed ep={episode_id}: {_pe}")
             patched += 1
 
     logger.info(f"[RawDemand] Demand episode features patched: {patched}/{len(episodes)}")
