@@ -3608,6 +3608,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             build_raw_pattern_episode_features_structure,
             build_raw_pattern_episode_features_ema,
             build_raw_pattern_episode_features_new_pump,
+            build_raw_pattern_episode_features_demand,
             build_raw_pattern_episode_features_structural_v2,
             build_raw_pattern_episode_features_splits,
             build_raw_pattern_comparisons,
@@ -3622,6 +3623,7 @@ async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks)
             await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_ema(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_new_pump(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_demand(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_structural_v2(raw_run_id, pump_study_run_id)
             await build_raw_pattern_episode_features_splits(raw_run_id, pump_study_run_id)
             await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
