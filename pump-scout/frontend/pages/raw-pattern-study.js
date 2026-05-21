@@ -3547,7 +3547,7 @@ function CustomSignalsTab({ results }) {
           <strong>Custom Signals not yet mined.</strong>{' '}
           Run pattern discovery with{' '}
           <code style={{ margin: '0 4px' }}>mode=custom</code> or{' '}
-          <code style={{ margin: '0 4px' }}>mode=all (V1A–V1E)</code>{' '}
+          <code style={{ margin: '0 4px' }}>mode=all</code>{' '}
           to populate L43, L34, D4_BEUP and other WLNBB signal patterns.
         </div>
       </div>
@@ -4369,8 +4369,7 @@ function L345SignalsTab({ patterns, runId }) {
             ))}
           </div>
           <div style={{ padding: '4px 12px 10px', fontSize: 10, color: 'var(--text-muted)' }}>
-            Rebuild the study run to store L3/4/5 fields, then re-run Pattern Discovery
-            in &quot;All Research Layers&quot; mode to mine these combinations.
+            Re-run Pattern Discovery (V1B or Both mode) on a study run to mine these combinations.
           </div>
         </div>
       )}
