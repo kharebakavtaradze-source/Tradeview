@@ -182,25 +182,44 @@ def _compute_candle_metrics(candles: list[dict], avg_vol_20d: float) -> dict:
     vol_ratio  = (vol_today / avg_vol_20d) if avg_vol_20d > 0 else 1.0
     dollar_vol = price * vol_today
 
+    # ── Largest gap (open vs prev close) in last 5 bars ──────────────────────
+    gap_pcts: list[float] = []
+    for i in range(max(1, len(candles) - 5), len(candles)):
+        o  = candles[i].get("open")  or candles[i].get("o")  or 0.0
+        pc = candles[i-1].get("close") or candles[i-1].get("c") or 0.0
+        if pc > 0 and o > 0:
+            gap_pcts.append((o - pc) / pc * 100.0)
+    max_gap_pct_5d = max(gap_pcts) if gap_pcts else 0.0
+
+    # ── Max volume ratio in last 5 bars ──────────────────────────────────────
+    vol_ratios_5d = [
+        (b.get("volume") or b.get("v") or 0) / avg_vol_20d
+        for b in bars[-5:]
+        if avg_vol_20d > 0
+    ]
+    max_vol_ratio_5d = max(vol_ratios_5d) if vol_ratios_5d else vol_ratio
+
     return {
-        "price":            price,
-        "atr14":            atr14,
-        "atr_pct":          atr_pct,
-        "atr_contracting":  atr_contracting,
-        "dryup_streak":     dryup_streak,
-        "ema50":            ema50,
-        "ema_dist_pct":     ema_dist_pct,
-        "near_ema50":       near_ema50,
-        "not_pumped":       not_pumped,
-        "max_gain_10d":     max_gain_10d,
-        "tight_range":      tight_range,
-        "range_pct_5d":     range_pct_5d,
-        "has_demand_close": has_demand_close,
-        "vol_ratio":        vol_ratio,
-        "dollar_vol":       dollar_vol,
-        "price_bucket":     _price_bucket(price),
-        "atr_bucket":       _atr_bucket(atr_pct),
-        "dv_bucket":        _dv_bucket(dollar_vol),
+        "price":             price,
+        "atr14":             atr14,
+        "atr_pct":           atr_pct,
+        "atr_contracting":   atr_contracting,
+        "dryup_streak":      dryup_streak,
+        "ema50":             ema50,
+        "ema_dist_pct":      ema_dist_pct,
+        "near_ema50":        near_ema50,
+        "not_pumped":        not_pumped,
+        "max_gain_10d":      max_gain_10d,
+        "tight_range":       tight_range,
+        "range_pct_5d":      range_pct_5d,
+        "has_demand_close":  has_demand_close,
+        "vol_ratio":         vol_ratio,
+        "dollar_vol":        dollar_vol,
+        "max_gap_pct_5d":    max_gap_pct_5d,
+        "max_vol_ratio_5d":  max_vol_ratio_5d,
+        "price_bucket":      _price_bucket(price),
+        "atr_bucket":        _atr_bucket(atr_pct),
+        "dv_bucket":         _dv_bucket(dollar_vol),
     }
 
 
@@ -362,15 +381,30 @@ def _compute_readiness(
         # Still in Bollinger squeeze (L bucket)
         if last.get("bucket") == "L":
             conf_score += 1; confluence_signals.append("WLNBB_L")
-        # VIX-Fix exhaustion: present in 82% of real 4x+ pumps at breakout.
-        # VX+PS (VIX-Fix spike + PSAR flip) = +1; add R2L (RSI2 oversold) = +1 more.
+        # VX-PS-R2X: RSI2 overbought at breakout has 3.27x lift in 4x+ pumps (R92).
+        # VX alone appears in 92% of all episodes -- not discriminating by itself.
+        # VX-PS-R2L has 0.50x lift (negative) -- dropping it.
         _vx  = last.get("vix_token")  == "VX"
         _ps  = last.get("psar_token") in ("PS", "PB")
-        _r2l = last.get("rsi2_token") == "R2L"
-        if _vx and _ps:
-            conf_score += 1; confluence_signals.append("VX_PS_EXHAUSTION")
-        if _vx and _ps and _r2l:
-            conf_score += 1; confluence_signals.append("VX_PS_R2L_SETUP")
+        _r2x = last.get("rsi2_token") == "R2X"
+        if _vx and _ps and _r2x:
+            conf_score += 2; confluence_signals.append("VX_PS_R2X_BREAKOUT")
+
+        # Gap ≥ 100% in last 5 bars: 6.18x lift (47% of 4x+ vs 8% of 2-4x, R92).
+        # Gap ≥ 50%: 2.97x lift (65% of 4x+ vs 22% of 2-4x, R92).
+        _max_gap = m.get("max_gap_pct_5d", 0.0)
+        if _max_gap >= 100.0:
+            conf_score += 3; confluence_signals.append("GAP_GTE_100PCT")
+        elif _max_gap >= 50.0:
+            conf_score += 1; confluence_signals.append("GAP_GTE_50PCT")
+
+        # Volume anomaly ≥ 100x: 2.42x lift (70% of 4x+ vs 29% of 2-4x, R92).
+        # ≥ 500x: 2.95x lift (37% of 4x+ vs 13% of 2-4x, R92).
+        _max_va = m.get("max_vol_ratio_5d", 0.0)
+        if _max_va >= 500.0:
+            conf_score += 2; confluence_signals.append("VOL_ANOMALY_500X")
+        elif _max_va >= 100.0:
+            conf_score += 1; confluence_signals.append("VOL_ANOMALY_100X")
 
     # ── Combine ───────────────────────────────────────────────────────────────
     total = cat_score + brk_score + flt_score + frsh_score + rs_score + conf_score
