@@ -2176,9 +2176,6 @@ function PatternDiscoveryPanel({ runId }) {
               <option value="both">Both (V1A + V1B)</option>
               <option value="episode_aggregate">Episode Aggregate only (V1A, fast)</option>
               <option value="bar_sequence">Bar Sequence only (V1B)</option>
-              <option value="flow">Flow Only (V1C — OHLCV proxy)</option>
-              <option value="combined">Combined Price+Flow (V1B+V1C)</option>
-              <option value="all">All Research Layers (V1A–V1E)</option>
             </select>
           </div>
 
@@ -2192,7 +2189,7 @@ function PatternDiscoveryPanel({ runId }) {
                     type="checkbox"
                     checked={windows.includes(w)}
                     onChange={() => toggleWindow(w)}
-                    disabled={isRunning || launching || mode === 'episode_aggregate' || mode === 'flow'}
+                    disabled={isRunning || launching || mode === 'episode_aggregate'}
                   />
                   {WINDOW_LABELS[w]}
                 </label>

@@ -15,7 +15,6 @@ function PumpMark({ size = 20 }) {
 
 const NAV_LINKS = [
   { href: '/',                  label: 'Dashboard' },
-  { href: '/scanner-v2',        label: 'Scanner v2' },
   { href: '/sectors',           label: 'Sectors' },
   { href: '/journal',           label: 'Journal' },
   { href: '/macro-events',      label: 'Macro' },
