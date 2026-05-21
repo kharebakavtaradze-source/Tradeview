@@ -1430,31 +1430,28 @@ def _compute_per_bar_custom_flags(snaps: list[dict]) -> list[dict]:
 
     If custom_flags were already embedded into each snap's snapshot_json by
     _build_snapshots (Phase 3C), returns them directly — zero recomputation.
+
+    Flags computed:
+      has_l34, has_l43, has_l22, has_l64  -- WLNBB bucket signals
+      has_fri34, has_fri64                -- BLUE + L34/L64
+      has_d3_beup, has_d4_beup, has_d6_beup -- Manual-D x BE-Up same-bar (core)
+      has_d1_beup, has_d9_beup, has_d11_beup -- Manual-D x BE-Up same-bar (secondary)
+      has_d4_l34, has_d3_l34              -- Manual-D x L34 same-bar (core)
+      has_d1_l34, has_d9_l34, has_d11_l34 -- Manual-D x L34 same-bar (secondary)
+      has_d1_l43, has_d9_l43, has_d11_l43 -- Manual-D x L43 same-bar (secondary)
+      has_vbo                             -- be_up_wlnbb AND bucket in (B, VB)
+      has_lvbo                            -- break_up_wlnbb AND bucket == N
+      has_ld                              -- quiet day, close upper-half, lower wick >=20%
+      has_wc_gap_ld                       -- two-bar: prev weak-close -> gap-up + lower-wick reclaim
+      has_l34_np_ld                       -- L34 + NP setup state + lower-wick reclaim same bar
+      np_is_setup                         -- NP-engine L34 or FRI34 on this bar
+      np_is_trigger                       -- NP-engine G4 on this bar
     """
     if not snaps:
         return []
     # Fast path: flags already stored in snapshot_json during Phase 3C
     if all(isinstance(s.get("snapshot"), dict) and "custom_flags" in s["snapshot"] for s in snaps):
         return [s["snapshot"]["custom_flags"] for s in snaps]
-
-    Flags computed:
-      has_l34, has_l43, has_l22, has_l64  — WLNBB bucket signals
-      has_fri34, has_fri64                — BLUE + L34/L64
-      has_d3_beup, has_d4_beup, has_d6_beup — Manual-D × BE-Up same-bar (core)
-      has_d1_beup, has_d9_beup, has_d11_beup — Manual-D × BE-Up same-bar (secondary)
-      has_d4_l34, has_d3_l34              — Manual-D × L34 same-bar (core)
-      has_d1_l34, has_d9_l34, has_d11_l34 — Manual-D × L34 same-bar (secondary)
-      has_d1_l43, has_d9_l43, has_d11_l43 — Manual-D × L43 same-bar (secondary)
-      has_vbo                             — be_up_wlnbb AND bucket in (B, VB)
-      has_lvbo                            — break_up_wlnbb AND bucket == N
-      has_ld                              — quiet day, close upper-half, lower wick ≥20%
-      has_wc_gap_ld                       — two-bar: prev weak-close → gap-up + lower-wick reclaim
-      has_l34_np_ld                       — L34 + NP setup state + lower-wick reclaim same bar
-      np_is_setup                         — NP-engine L34 or FRI34 on this bar
-      np_is_trigger                       — NP-engine G4 on this bar
-    """
-    if not snaps:
-        return []
 
     candles = [
         {
