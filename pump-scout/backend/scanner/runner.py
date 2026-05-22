@@ -53,18 +53,7 @@ async def get_scan_symbols() -> tuple[list[str], dict]:
     except Exception as e:
         logger.warning(f"get_scan_symbols: recent candidates lookup failed: {e}")
 
-    # SOURCE 2: Open journal positions — always track what we're holding
-    source_journal = 0
-    try:
-        from database import get_open_journal_entries
-        open_positions = await get_open_journal_entries()
-        journal_syms = [p["symbol"] for p in open_positions if p.get("symbol")]
-        symbols.update(journal_syms)
-        source_journal = len(journal_syms)
-    except Exception as e:
-        logger.warning(f"get_scan_symbols: journal lookup failed: {e}")
-
-    # SOURCE 3: Regime ETFs (needed for market regime calculation)
+    # SOURCE 2: Regime ETFs (needed for market regime calculation)
     symbols.update(REGIME_ETFS)
 
     # FALLBACK: If no EOD candidates yet (first run / cold start),
@@ -82,7 +71,6 @@ async def get_scan_symbols() -> tuple[list[str], dict]:
     total = len(symbols)
     source_counts = {
         "eod_candidates": source_eod_candidates,
-        "journal":         source_journal,
         "regime_etfs":     len(REGIME_ETFS),
         "screener_fallback": source_screener,
         "total":           total,
@@ -91,7 +79,6 @@ async def get_scan_symbols() -> tuple[list[str], dict]:
 
     print("Intraday scan symbols:")
     print(f"  EOD candidates:    {source_eod_candidates}")
-    print(f"  Journal positions: {source_journal}")
     print(f"  Regime ETFs:       {len(REGIME_ETFS)}")
     if source_screener:
         print(f"  Screener fallback: {source_screener}")
@@ -410,26 +397,6 @@ async def run_scan() -> dict:
             logger.info(f"Saved {saved_hist} demand_ticker_history rows")
     except Exception as e:
         logger.warning(f"save_demand_ticker_history failed (non-fatal): {e}")
-
-    # Update pattern streaks (ARM+ multi-day accumulation tracking)
-    try:
-        from scanner.pattern_streaks import update_pattern_streaks
-        await update_pattern_streaks(final)
-    except Exception as e:
-        logger.warning(f"update_pattern_streaks failed (non-fatal): {e}")
-
-    # Enrich results with earnings data (one Finnhub API call for full calendar)
-    try:
-        from data.finnhub_provider import get_earnings_calendar
-        earnings_cal = await get_earnings_calendar(days_ahead=14)
-        if earnings_cal:
-            for r in final:
-                info = earnings_cal.get(r["symbol"], {"has_earnings": False})
-                r["earnings"] = info
-                r["earnings_risk"] = info.get("risk", "NONE") if info.get("has_earnings") else "NONE"
-            logger.info(f"Earnings enrichment complete — {len(earnings_cal)} symbols in calendar")
-    except Exception as e:
-        logger.warning(f"Earnings enrichment failed (non-fatal): {e}")
 
     return {
         "results":            final,
