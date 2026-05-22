@@ -200,3 +200,115 @@ async def fetch_incremental(
                 pass
 
     return bars[-target_days:]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Range-based cache for Analytics Studio (Pump Study, Replay, Pattern).
+#
+# Live scanner uses fetch_incremental() with a 200-day DB cache that prunes
+# older bars. The studios need wider historical ranges (months/years) and
+# benefit from dedup within a single run/process, where the same symbol gets
+# fetched many times for overlapping date ranges (e.g. demand scoring per
+# episode). This in-process cache stores the widest range ever fetched for
+# each symbol and serves slices from memory.
+#
+# Bounded LRU eviction keeps memory predictable across long-running processes.
+# ──────────────────────────────────────────────────────────────────────────────
+
+from collections import OrderedDict
+from threading import RLock
+
+_RANGE_CACHE_MAX = 3000   # symbols held at once
+_range_cache: "OrderedDict[str, dict]" = OrderedDict()
+_range_lock = RLock()
+_range_hits = 0
+_range_misses = 0
+
+
+def _slice_range(bars: list[dict], from_date: str, to_date: str) -> list[dict]:
+    return [b for b in bars if from_date <= b.get("date", "") <= to_date]
+
+
+def _touch(symbol: str) -> Optional[dict]:
+    """LRU access; returns the cached entry or None."""
+    with _range_lock:
+        entry = _range_cache.get(symbol)
+        if entry is not None:
+            _range_cache.move_to_end(symbol)
+        return entry
+
+
+def _store(symbol: str, bars: list[dict], from_date: str, to_date: str) -> None:
+    with _range_lock:
+        existing = _range_cache.get(symbol)
+        if existing is None:
+            _range_cache[symbol] = {
+                "bars":       bars,
+                "from_date":  from_date,
+                "to_date":    to_date,
+            }
+        else:
+            by_date = {b["date"]: b for b in existing["bars"]}
+            for b in bars:
+                by_date[b["date"]] = b
+            merged = sorted(by_date.values(), key=lambda x: x["date"])
+            existing["bars"]      = merged
+            existing["from_date"] = min(existing["from_date"], from_date)
+            existing["to_date"]   = max(existing["to_date"],   to_date)
+            _range_cache.move_to_end(symbol)
+
+        while len(_range_cache) > _RANGE_CACHE_MAX:
+            _range_cache.popitem(last=False)
+
+
+async def fetch_candles_range_cached(
+    symbol:    str,
+    from_date: str,
+    to_date:   str,
+    fetch_fn,
+) -> list[dict]:
+    """
+    Shared OHLCV range fetch with process-level cache.
+
+    - On cache hit (requested range fully covered): zero API calls.
+    - On partial coverage: fetches only the missing edge; merges into cache.
+    - On miss: full fetch via fetch_fn(symbol, from_date, to_date).
+
+    fetch_fn is the original direct-API fetcher (kept as a parameter so this
+    module doesn't pull in Massive deps directly and is unit-testable).
+    """
+    global _range_hits, _range_misses
+
+    sym = symbol.upper()
+    entry = _touch(sym)
+
+    if entry and entry["from_date"] <= from_date and entry["to_date"] >= to_date:
+        _range_hits += 1
+        return _slice_range(entry["bars"], from_date, to_date)
+
+    if entry:
+        fetch_from = min(from_date, entry["from_date"])
+        fetch_to   = max(to_date,   entry["to_date"])
+    else:
+        fetch_from, fetch_to = from_date, to_date
+
+    bars = await fetch_fn(sym, fetch_from, fetch_to)
+    _range_misses += 1
+
+    if bars:
+        _store(sym, bars, fetch_from, fetch_to)
+
+    return _slice_range(bars, from_date, to_date)
+
+
+def get_range_cache_stats() -> dict:
+    """Hit/miss counters and current cache size (for /api/admin/cache-stats)."""
+    with _range_lock:
+        total = _range_hits + _range_misses
+        return {
+            "symbols_cached": len(_range_cache),
+            "max_symbols":    _RANGE_CACHE_MAX,
+            "hits":           _range_hits,
+            "misses":         _range_misses,
+            "hit_rate":       round(_range_hits / total, 3) if total else None,
+        }

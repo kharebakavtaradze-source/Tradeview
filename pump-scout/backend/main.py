@@ -1585,11 +1585,13 @@ async def candle_cache_status():
             )
         )
         row = result.one()
+    from scanner.candle_store import get_range_cache_stats
     return {
         "cached_symbols": row.symbols,
         "total_bars":     row.total_bars,
         "latest_date":    row.latest_date,
         "oldest_date":    row.oldest_date,
+        "range_cache":    get_range_cache_stats(),
     }
 
 
@@ -2990,12 +2992,22 @@ async def replay_cleanup(body: CleanupRequest = CleanupRequest()):
 @app.post("/api/replay/pump-study/{run_id}/score-demand")
 async def pump_study_score_demand(run_id: int, background_tasks: BackgroundTasks):
     """
-    Re-run demand + TZ scoring for all episodes in a pump study run.
-    Finds the associated raw-pattern run to get PRE bar feature_json,
-    then writes results directly to pump_episodes.
+    Re-score a pump-study run with the CURRENT scoring_config without
+    re-fetching candles. Reads existing snapshots, re-runs demand scoring,
+    rebuilds comparisons, and stamps the run with the new config version.
+
+    Saves hours: a full pump study is 3–5h, this re-score finishes in minutes.
     """
-    from database import get_raw_pattern_runs
-    from replay.pump_study_engine import build_raw_pattern_episode_features_demand
+    from database import (
+        get_raw_pattern_runs,
+        update_pump_study_run,
+        update_raw_pattern_run,
+    )
+    from replay.pump_study_engine import (
+        build_raw_pattern_episode_features_demand,
+        build_raw_pattern_comparisons,
+    )
+    from scanner.scoring_config import VERSION as _CFG_VER
 
     raw_runs = await get_raw_pattern_runs(pump_study_run_id=run_id, limit=1)
     if not raw_runs:
@@ -3006,12 +3018,26 @@ async def pump_study_score_demand(run_id: int, background_tasks: BackgroundTasks
     async def _run():
         try:
             n = await build_raw_pattern_episode_features_demand(raw_run_id, run_id)
-            logger.info(f"[ScoreDemand] pump_study={run_id} raw={raw_run_id} patched={n}")
+            logger.info(f"[ReScore] pump_study={run_id} raw={raw_run_id} demand_patched={n}")
+
+            comp_n = await build_raw_pattern_comparisons(raw_run_id, run_id)
+            logger.info(f"[ReScore] pump_study={run_id} raw={raw_run_id} comparisons_rebuilt={comp_n}")
+
+            await update_pump_study_run(run_id, {"scoring_config_version": _CFG_VER})
+            await update_raw_pattern_run(raw_run_id, {"scoring_config_version": _CFG_VER})
+            logger.info(f"[ReScore] pump_study={run_id} stamped with config {_CFG_VER}")
         except Exception as exc:
-            logger.exception(f"[ScoreDemand] failed pump_study={run_id}: {exc}")
+            logger.exception(f"[ReScore] failed pump_study={run_id}: {exc}")
 
     background_tasks.add_task(_run)
-    return {"ok": True, "pump_study_run_id": run_id, "raw_run_id": raw_run_id, "status": "scoring_started"}
+    return {
+        "ok":                 True,
+        "pump_study_run_id":  run_id,
+        "raw_run_id":         raw_run_id,
+        "target_config_version": _CFG_VER,
+        "status":             "rescoring_started",
+        "message":            "Re-scoring with current scoring_config. Poll the run-detail endpoint to see updated version.",
+    }
 
 
 @app.post("/api/admin/cleanup-all")
@@ -3494,6 +3520,292 @@ async def get_scoring_config():
     """Return the current scoring configuration (signal weights + thresholds)."""
     from scanner.scoring_config import as_dict
     return {"ok": True, "config": as_dict()}
+
+
+# ── Live-history analytics ────────────────────────────────────────────────────
+# Query demand_ticker_history by bar-label signals (TZ, PREUP, line3/4/5,
+# wyckoff). Powers "show me all P55 + T1G in the last 30 days" and
+# co-occurrence / lift-style summaries.
+
+_HISTORY_FILTER_COLUMNS = {
+    "tz_t_signal", "tz_z_signal",
+    "best_tz_t_signal_15bar", "best_tz_z_signal_15bar",
+    "preup_token", "predn_token",
+    "line3", "line4", "line5",
+    "l_digits", "wyckoff_state",
+    "demand_composite_tier", "ats_signal", "readiness_tier",
+    "scoring_config_version",
+}
+
+
+@app.get("/api/analytics/live-history/filter")
+async def analytics_live_history_filter(
+    days:          int           = 30,
+    limit:         int           = 500,
+    symbol:        Optional[str] = None,
+    tz_t:          Optional[str] = None,
+    tz_z:          Optional[str] = None,
+    best_tz_t_15:  Optional[str] = None,
+    best_tz_z_15:  Optional[str] = None,
+    preup:         Optional[str] = None,
+    predn:         Optional[str] = None,
+    line3:         Optional[str] = None,
+    line4:         Optional[str] = None,
+    line5:         Optional[str] = None,
+    l_digits:      Optional[str] = None,
+    wyckoff:       Optional[str] = None,
+    tier:          Optional[str] = None,
+    ats:           Optional[str] = None,
+    min_score:     float         = 0.0,
+    config_version: Optional[str] = None,
+):
+    """
+    Filter demand_ticker_history rows by any subset of bar-label signals.
+
+    Use comma-separated values for OR within a field, e.g.
+    ?tz_t=T1,T1G,T4&preup=P55&days=14
+    """
+    from database import get_engine
+    from sqlalchemy import text as _text
+
+    def _csv(v: Optional[str]) -> list[str]:
+        return [p.strip() for p in (v or "").split(",") if p.strip()]
+
+    where: list[str] = ["scanned_at > datetime('now', :since)"]
+    params: dict = {"since": f"-{int(days)} days"}
+
+    def add_in(field: str, values: list[str]):
+        if not values:
+            return
+        placeholders = ",".join(f":{field}_{i}" for i in range(len(values)))
+        where.append(f"{field} IN ({placeholders})")
+        for i, v in enumerate(values):
+            params[f"{field}_{i}"] = v
+
+    if symbol:
+        where.append("symbol = :symbol")
+        params["symbol"] = symbol.upper()
+    add_in("tz_t_signal",            _csv(tz_t))
+    add_in("tz_z_signal",            _csv(tz_z))
+    add_in("best_tz_t_signal_15bar", _csv(best_tz_t_15))
+    add_in("best_tz_z_signal_15bar", _csv(best_tz_z_15))
+    add_in("preup_token",            _csv(preup))
+    add_in("predn_token",            _csv(predn))
+    add_in("line3",                  _csv(line3))
+    add_in("line4",                  _csv(line4))
+    add_in("line5",                  _csv(line5))
+    add_in("l_digits",               _csv(l_digits))
+    add_in("wyckoff_state",          _csv(wyckoff))
+    add_in("demand_composite_tier",  _csv(tier))
+    add_in("ats_signal",             _csv(ats))
+    add_in("scoring_config_version", _csv(config_version))
+
+    if min_score > 0:
+        where.append("demand_composite_score >= :min_score")
+        params["min_score"] = min_score
+
+    # Postgres uses different interval syntax; rewrite the WHERE clause.
+    is_pg = "postgres" in str(get_engine().url)
+    if is_pg:
+        where[0] = "scanned_at > NOW() - INTERVAL :since_pg"
+        params.pop("since", None)
+        params["since_pg"] = f"{int(days)} days"
+
+    sql = (
+        "SELECT scanned_at, symbol, demand_composite_score, demand_composite_tier, "
+        "ats_signal, readiness_tier, combined_score, "
+        "tz_t_signal, tz_z_signal, best_tz_t_signal_15bar, best_tz_z_signal_15bar, "
+        "preup_token, predn_token, line3, line4, line5, l_digits, wyckoff_state, "
+        "scoring_config_version "
+        "FROM demand_ticker_history "
+        f"WHERE {' AND '.join(where)} "
+        "ORDER BY scanned_at DESC "
+        "LIMIT :limit"
+    )
+    params["limit"] = min(int(limit), 5000)
+
+    async with get_engine().connect() as conn:
+        result = await conn.execute(_text(sql), params)
+        rows = [dict(r._mapping) for r in result.fetchall()]
+        for r in rows:
+            if hasattr(r.get("scanned_at"), "isoformat"):
+                r["scanned_at"] = r["scanned_at"].isoformat()
+
+    return {"ok": True, "count": len(rows), "days": days, "rows": rows}
+
+
+@app.get("/api/analytics/live-history/cooccurrence")
+async def analytics_live_history_cooccurrence(
+    group_by: str = "tz_t_signal,preup_token",
+    days:     int = 30,
+    min_count: int = 3,
+    config_version: Optional[str] = None,
+):
+    """
+    Group demand_ticker_history rows by any subset of bar-label fields and
+    return counts, average score, and tier distribution per combination.
+
+    group_by: comma-separated column list (e.g. "tz_t_signal,preup_token,line5")
+    Only whitelisted columns allowed — see _HISTORY_FILTER_COLUMNS.
+
+    Use min_count to suppress one-off combos. Sorted by count desc.
+    """
+    from database import get_engine
+    from sqlalchemy import text as _text
+
+    cols = [c.strip() for c in group_by.split(",") if c.strip()]
+    bad  = [c for c in cols if c not in _HISTORY_FILTER_COLUMNS]
+    if bad:
+        raise HTTPException(400, detail=f"Unknown group_by columns: {bad}")
+    if not cols:
+        raise HTTPException(400, detail="group_by is required")
+
+    is_pg = "postgres" in str(get_engine().url)
+    where = []
+    params: dict = {}
+    if is_pg:
+        where.append("scanned_at > NOW() - INTERVAL :since_pg")
+        params["since_pg"] = f"{int(days)} days"
+    else:
+        where.append("scanned_at > datetime('now', :since)")
+        params["since"] = f"-{int(days)} days"
+    if config_version:
+        where.append("scoring_config_version = :cv")
+        params["cv"] = config_version
+
+    # NULL → empty string so groupings don't collapse mixed-presence combos.
+    col_expr_list = ", ".join(f"COALESCE({c}, '') AS {c}" for c in cols)
+    group_expr    = ", ".join(cols)
+
+    sql = (
+        f"SELECT {col_expr_list}, "
+        "COUNT(*) AS n, "
+        "AVG(demand_composite_score) AS avg_score, "
+        "AVG(combined_score)         AS avg_combined, "
+        "SUM(CASE WHEN demand_composite_tier='PRIME_BUY'      THEN 1 ELSE 0 END) AS n_prime, "
+        "SUM(CASE WHEN demand_composite_tier='HIGH_CONF_BUY'  THEN 1 ELSE 0 END) AS n_high, "
+        "SUM(CASE WHEN demand_composite_tier='BUY_WATCH'      THEN 1 ELSE 0 END) AS n_watch, "
+        "SUM(CASE WHEN demand_composite_tier='SETUP_MONITOR'  THEN 1 ELSE 0 END) AS n_setup "
+        "FROM demand_ticker_history "
+        f"WHERE {' AND '.join(where)} "
+        f"GROUP BY {group_expr} "
+        f"HAVING COUNT(*) >= :min_count "
+        "ORDER BY n DESC "
+        "LIMIT 500"
+    )
+    params["min_count"] = max(1, int(min_count))
+
+    async with get_engine().connect() as conn:
+        result = await conn.execute(_text(sql), params)
+        rows = [dict(r._mapping) for r in result.fetchall()]
+
+    return {
+        "ok":       True,
+        "group_by": cols,
+        "days":     days,
+        "config_version": config_version,
+        "count":    len(rows),
+        "rows":     rows,
+    }
+
+
+# ── Backfill: hydrate old demand_ticker_history rows ─────────────────────────
+
+@app.post("/api/admin/backfill-demand-history")
+async def admin_backfill_demand_history(
+    background_tasks: BackgroundTasks,
+    limit: int = 500,
+    dry_run: bool = True,
+):
+    """
+    Re-score historical demand_ticker_history rows that pre-date the
+    bar-label-snapshot persistence (commit a378052). Walks rows where
+    tz_t_signal IS NULL AND scoring_config_version IS NULL, looks up
+    candles from candle_cache, re-runs score_demand_composite, and UPDATEs
+    the row in place. Old rows stay with their original demand score but
+    gain the bar-label snapshot for analytics.
+
+    limit:    max rows to process this call (default 500, raise for big jobs)
+    dry_run:  if true, just counts how many rows would be updated
+    """
+    from database import (
+        get_engine,
+        get_candle_cache,
+    )
+    from sqlalchemy import text as _text
+    from scanner.demand_composite_scanner import score_demand_composite
+    from scanner.scoring_config import VERSION as _CFG_VER
+
+    async with get_engine().connect() as conn:
+        result = await conn.execute(_text(
+            "SELECT id, symbol, scanned_at "
+            "FROM   demand_ticker_history "
+            "WHERE  tz_t_signal IS NULL AND scoring_config_version IS NULL "
+            "ORDER BY scanned_at DESC "
+            "LIMIT :limit"
+        ), {"limit": int(limit)})
+        candidates = [dict(r._mapping) for r in result.fetchall()]
+
+    if dry_run or not candidates:
+        return {
+            "ok":          True,
+            "dry_run":     dry_run,
+            "candidates":  len(candidates),
+            "message":     "Pass dry_run=false to execute." if dry_run else "Nothing to backfill.",
+        }
+
+    async def _run():
+        from database import get_session_factory, DemandTickerHistory
+        from sqlalchemy import select as _sel
+
+        updated = 0
+        skipped = 0
+        for row in candidates:
+            sym = row["symbol"]
+            try:
+                candles = await get_candle_cache(sym)
+                if not candles or len(candles) < 10:
+                    skipped += 1
+                    continue
+                # candle_cache uses o/h/l/c/v keys — scorer accepts that shape
+                stub_result = {"symbol": sym, "price": candles[-1].get("c"),
+                               "avg_volume": sum(c.get("v", 0) for c in candles[-20:]) / 20}
+                scored = score_demand_composite(stub_result, candles)
+                snap   = scored.get("bar_label_snapshot") or {}
+                async with get_session_factory()() as session:
+                    db_row = (await session.execute(
+                        _sel(DemandTickerHistory).where(DemandTickerHistory.id == row["id"])
+                    )).scalar_one_or_none()
+                    if not db_row:
+                        skipped += 1
+                        continue
+                    db_row.tz_t_signal            = snap.get("tz_t_signal")
+                    db_row.tz_z_signal            = snap.get("tz_z_signal")
+                    db_row.best_tz_t_signal_15bar = snap.get("best_tz_t_signal_15bar")
+                    db_row.best_tz_z_signal_15bar = snap.get("best_tz_z_signal_15bar")
+                    db_row.preup_token            = snap.get("preup_token")
+                    db_row.predn_token            = snap.get("predn_token")
+                    db_row.line3                  = snap.get("line3")
+                    db_row.line4                  = snap.get("line4")
+                    db_row.line5                  = snap.get("line5")
+                    db_row.l_digits               = snap.get("l_digits")
+                    db_row.scoring_config_version = f"{_CFG_VER}-backfill"
+                    await session.commit()
+                updated += 1
+            except Exception as exc:
+                logger.debug(f"[Backfill] {sym} id={row.get('id')} failed: {exc}")
+                skipped += 1
+        logger.info(f"[Backfill] demand_ticker_history updated={updated} skipped={skipped}")
+
+    background_tasks.add_task(_run)
+
+    return {
+        "ok":          True,
+        "dry_run":     False,
+        "candidates":  len(candidates),
+        "status":      "backfill_started",
+        "message":     f"Backfilling up to {len(candidates)} rows in background. Re-call to process the next batch.",
+    }
 
 
 def _parse_signals(ep: dict) -> list:

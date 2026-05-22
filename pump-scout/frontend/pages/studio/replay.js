@@ -133,7 +133,6 @@ function StatCard({ label, value, accent }) {
 export default function ReplayStudio() {
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
-  const [universeLimit, setUniverseLimit] = useState('0');
 
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState(null);
@@ -240,7 +239,6 @@ export default function ReplayStudio() {
         body: JSON.stringify({
           start_date: startDate,
           end_date: endDate,
-          universe_limit: parseInt(universeLimit) || 0,
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -290,10 +288,6 @@ export default function ReplayStudio() {
               <div>
                 <Label>End Date</Label>
                 <Input type="date" value={endDate} onChange={setEndDate} />
-              </div>
-              <div>
-                <Label>Universe Limit (0 = all)</Label>
-                <Input type="number" value={universeLimit} onChange={setUniverseLimit} step="1" min="0" placeholder="0" />
               </div>
             </div>
 
@@ -348,7 +342,10 @@ export default function ReplayStudio() {
                         <div style={{ fontSize: 11, color: 'var(--ink-dim)', marginBottom: 6 }}>
                           {run.start_date || '?'} → {run.end_date || '?'}
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>
+                            {run.scoring_config_version ? `cfg ${run.scoring_config_version}` : ''}
+                          </span>
                           <button
                             onClick={() => handleViewRun(run)}
                             style={{

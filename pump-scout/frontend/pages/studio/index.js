@@ -228,6 +228,15 @@ export default function StudioIndex() {
                     <span style={{ color: 'var(--ink-dim)' }}>
                       {run.created_at ? new Date(run.created_at).toLocaleDateString() : ''}
                     </span>
+                    {run.scoring_config_version && (
+                      <span style={{
+                        fontSize: 10, fontFamily: 'var(--f-mono)',
+                        color: 'var(--pump-lime)', background: 'var(--pump-lime-soft)',
+                        padding: '1px 6px', borderRadius: 3,
+                      }}>
+                        cfg {run.scoring_config_version}
+                      </span>
+                    )}
                     {run.status && <StatusBadge status={run.status} />}
                   </div>
                 ))
