@@ -1585,11 +1585,13 @@ async def candle_cache_status():
             )
         )
         row = result.one()
+    from scanner.candle_store import get_range_cache_stats
     return {
         "cached_symbols": row.symbols,
         "total_bars":     row.total_bars,
         "latest_date":    row.latest_date,
         "oldest_date":    row.oldest_date,
+        "range_cache":    get_range_cache_stats(),
     }
 
 
@@ -2990,12 +2992,22 @@ async def replay_cleanup(body: CleanupRequest = CleanupRequest()):
 @app.post("/api/replay/pump-study/{run_id}/score-demand")
 async def pump_study_score_demand(run_id: int, background_tasks: BackgroundTasks):
     """
-    Re-run demand + TZ scoring for all episodes in a pump study run.
-    Finds the associated raw-pattern run to get PRE bar feature_json,
-    then writes results directly to pump_episodes.
+    Re-score a pump-study run with the CURRENT scoring_config without
+    re-fetching candles. Reads existing snapshots, re-runs demand scoring,
+    rebuilds comparisons, and stamps the run with the new config version.
+
+    Saves hours: a full pump study is 3–5h, this re-score finishes in minutes.
     """
-    from database import get_raw_pattern_runs
-    from replay.pump_study_engine import build_raw_pattern_episode_features_demand
+    from database import (
+        get_raw_pattern_runs,
+        update_pump_study_run,
+        update_raw_pattern_run,
+    )
+    from replay.pump_study_engine import (
+        build_raw_pattern_episode_features_demand,
+        build_raw_pattern_comparisons,
+    )
+    from scanner.scoring_config import VERSION as _CFG_VER
 
     raw_runs = await get_raw_pattern_runs(pump_study_run_id=run_id, limit=1)
     if not raw_runs:
@@ -3006,12 +3018,26 @@ async def pump_study_score_demand(run_id: int, background_tasks: BackgroundTasks
     async def _run():
         try:
             n = await build_raw_pattern_episode_features_demand(raw_run_id, run_id)
-            logger.info(f"[ScoreDemand] pump_study={run_id} raw={raw_run_id} patched={n}")
+            logger.info(f"[ReScore] pump_study={run_id} raw={raw_run_id} demand_patched={n}")
+
+            comp_n = await build_raw_pattern_comparisons(raw_run_id, run_id)
+            logger.info(f"[ReScore] pump_study={run_id} raw={raw_run_id} comparisons_rebuilt={comp_n}")
+
+            await update_pump_study_run(run_id, {"scoring_config_version": _CFG_VER})
+            await update_raw_pattern_run(raw_run_id, {"scoring_config_version": _CFG_VER})
+            logger.info(f"[ReScore] pump_study={run_id} stamped with config {_CFG_VER}")
         except Exception as exc:
-            logger.exception(f"[ScoreDemand] failed pump_study={run_id}: {exc}")
+            logger.exception(f"[ReScore] failed pump_study={run_id}: {exc}")
 
     background_tasks.add_task(_run)
-    return {"ok": True, "pump_study_run_id": run_id, "raw_run_id": raw_run_id, "status": "scoring_started"}
+    return {
+        "ok":                 True,
+        "pump_study_run_id":  run_id,
+        "raw_run_id":         raw_run_id,
+        "target_config_version": _CFG_VER,
+        "status":             "rescoring_started",
+        "message":            "Re-scoring with current scoring_config. Poll the run-detail endpoint to see updated version.",
+    }
 
 
 @app.post("/api/admin/cleanup-all")

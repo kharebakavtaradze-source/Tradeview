@@ -817,6 +817,14 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
+_RUN_LINEAGE_MIGRATIONS: list[tuple[str, str, str]] = [
+    # (table, column, type) — scoring_config.VERSION captured at run creation
+    ("replay_runs",        "scoring_config_version", "VARCHAR(20)"),
+    ("pump_study_runs",    "scoring_config_version", "VARCHAR(20)"),
+    ("raw_pattern_runs",   "scoring_config_version", "VARCHAR(20)"),
+]
+
+
 _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
     # Demand composite enrichment (Option B)
     ("demand_score_at_breakout",   "FLOAT"),
@@ -946,6 +954,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE discovered_patterns ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for table, col, coltype in _RUN_LINEAGE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -1031,6 +1044,15 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration pump_episodes.{col} failed (non-fatal): {e}")
+
+        # scoring_config.VERSION lineage on replay/pump-study/raw-pattern runs
+        for table, col, coltype in _RUN_LINEAGE_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration {table}.{col} failed (non-fatal): {e}")
 
         for col, coltype in _AI_JOURNAL_POSITION_MIGRATIONS:
             try:
@@ -2886,6 +2908,7 @@ class ReplayRun(Base):
     mode                = Column(String(20),  default="single_day")   # single_day | date_range
     status              = Column(String(20),  default="running")       # running | completed | failed | cancelled
     universe_mode       = Column(String(10),  default="approx")        # strict | approx
+    scoring_config_version = Column(String(20), nullable=True)         # scanner.scoring_config.VERSION at create time
     as_of_date          = Column(String(10),  nullable=True)           # YYYY-MM-DD  (single_day)
     start_date          = Column(String(10),  nullable=True)           # range start
     end_date            = Column(String(10),  nullable=True)           # range end
@@ -3031,11 +3054,20 @@ class ReplayMissedMover(Base):
 
 async def create_replay_run(data: dict) -> int:
     """Insert a new replay run row. Returns the new run id."""
+    cfg_version = data.get("scoring_config_version")
+    if cfg_version is None:
+        try:
+            from scanner.scoring_config import VERSION as _CFG_VER
+            cfg_version = _CFG_VER
+        except Exception:
+            cfg_version = None
+
     async with get_session_factory()() as session:
         row = ReplayRun(
             mode                = data.get("mode", "single_day"),
             status              = data.get("status", "running"),
             universe_mode       = data.get("universe_mode", "approx"),
+            scoring_config_version = cfg_version,
             as_of_date          = data.get("as_of_date"),
             start_date          = data.get("start_date"),
             end_date            = data.get("end_date"),
@@ -3368,6 +3400,7 @@ def _replay_run_to_dict(r: ReplayRun) -> dict:
         "mode":                 r.mode,
         "status":               r.status,
         "universe_mode":        r.universe_mode,
+        "scoring_config_version": getattr(r, "scoring_config_version", None),
         "as_of_date":           r.as_of_date,
         "start_date":           r.start_date,
         "end_date":             r.end_date,
@@ -3471,8 +3504,9 @@ class PumpStudyRun(Base):
     start_date          = Column(String(10), nullable=False)
     end_date            = Column(String(10), nullable=False)
     window_days         = Column(Integer,  default=14)     # look-ahead trading-day window
-    min_multiple        = Column(Float,    default=4.0)    # e.g. 4.0 = 4x
+    min_multiple        = Column(Float,    default=1.2)    # default 1.2 = 20% pump; was 4.0 historically
     universe_limit      = Column(Integer,  default=0)      # 0 = no limit
+    scoring_config_version = Column(String(20), nullable=True)  # scanner.scoring_config.VERSION at create time
     # Granular counts updated as the run progresses
     symbols_scanned     = Column(Integer,  default=0)
     raw_detection_count = Column(Integer,  default=0)
@@ -3751,6 +3785,7 @@ class RawPatternRun(Base):
     id                    = Column(Integer,    primary_key=True)
     pump_study_run_id     = Column(Integer,    nullable=True, index=True)  # FK → pump_study_runs.id (nullable for standalone)
     status                = Column(String(20), default="pending")
+    scoring_config_version = Column(String(20), nullable=True)  # scanner.scoring_config.VERSION at create time
     start_date            = Column(String(10), nullable=True)
     end_date              = Column(String(10), nullable=True)
     # Progress counters
@@ -4181,14 +4216,23 @@ class DiscoveredPattern(Base):
 # ── Pump Study CRUD ───────────────────────────────────────────────────────────
 
 async def create_pump_study_run(data: dict) -> int:
+    cfg_version = data.get("scoring_config_version")
+    if cfg_version is None:
+        try:
+            from scanner.scoring_config import VERSION as _CFG_VER
+            cfg_version = _CFG_VER
+        except Exception:
+            cfg_version = None
+
     async with get_session_factory()() as session:
         row = PumpStudyRun(
             status         = "pending",
             start_date     = data["start_date"],
             end_date       = data["end_date"],
             window_days    = data.get("window_days",    14),
-            min_multiple   = data.get("min_multiple",   4.0),
+            min_multiple   = data.get("min_multiple",   1.2),
             universe_limit = data.get("universe_limit", 0),
+            scoring_config_version = cfg_version,
             notes          = data.get("notes"),
         )
         session.add(row)
@@ -4706,6 +4750,7 @@ def _pump_study_run_to_dict(r: PumpStudyRun) -> dict:
         "window_days":          r.window_days,
         "min_multiple":         r.min_multiple,
         "universe_limit":       r.universe_limit,
+        "scoring_config_version": getattr(r, "scoring_config_version", None),
         "symbols_scanned":      r.symbols_scanned,
         "raw_detection_count":  r.raw_detection_count,
         "cluster_count":        r.cluster_count,
@@ -4871,6 +4916,7 @@ def _raw_pattern_run_to_dict(row: RawPatternRun) -> dict:
         "id":                    row.id,
         "pump_study_run_id":     row.pump_study_run_id,
         "status":                row.status,
+        "scoring_config_version": getattr(row, "scoring_config_version", None),
         "start_date":            row.start_date,
         "end_date":              row.end_date,
         "raw_daily_count":       row.raw_daily_count,
@@ -4889,12 +4935,21 @@ async def create_raw_pattern_run(
     start_date: str | None = None,
     end_date: str | None = None,
     notes: str | None = None,
+    scoring_config_version: str | None = None,
 ) -> int:
     """Create a new raw-pattern discovery run. Returns run id."""
+    if scoring_config_version is None:
+        try:
+            from scanner.scoring_config import VERSION as _CFG_VER
+            scoring_config_version = _CFG_VER
+        except Exception:
+            scoring_config_version = None
+
     async with get_session_factory()() as session:
         row = RawPatternRun(
             pump_study_run_id = pump_study_run_id,
             status            = "pending",
+            scoring_config_version = scoring_config_version,
             start_date        = start_date,
             end_date          = end_date,
             notes             = notes,

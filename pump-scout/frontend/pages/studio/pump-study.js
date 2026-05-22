@@ -186,6 +186,7 @@ export default function PumpStudyStudio() {
 
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [loadingLift, setLoadingLift] = useState(false);
+  const [reScoring, setReScoring] = useState(false);
 
   const pollRef = useRef(null);
 
@@ -288,6 +289,44 @@ export default function PumpStudyStudio() {
     loadRunData(runId);
   };
 
+  const handleReScore = async () => {
+    if (!activeRun) return;
+    const runId = activeRun.run_id || activeRun.id;
+    setReScoring(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}/score-demand`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      // Poll the run-detail until scoring_config_version flips to the target version.
+      const target = data.target_config_version;
+      const start  = Date.now();
+      const tick = async () => {
+        if (Date.now() - start > 10 * 60 * 1000) { setReScoring(false); return; }
+        try {
+          const rr = await fetch(`${API_URL}/api/replay/pump-study/${runId}`);
+          if (rr.ok) {
+            const body = await rr.json();
+            const run  = body.run || body;
+            if (run.scoring_config_version === target) {
+              setActiveRun(run);
+              setPastRuns(prev => prev.map(x =>
+                (x.run_id || x.id) === runId ? run : x
+              ));
+              loadRunData(runId);
+              setReScoring(false);
+              return;
+            }
+          }
+        } catch {}
+        setTimeout(tick, 3000);
+      };
+      tick();
+    } catch (e) {
+      setRunError(e.message);
+      setReScoring(false);
+    }
+  };
+
   const signalScore = (name) => {
     if (!scoringConfig || !scoringConfig.signals) return null;
     const s = scoringConfig.signals[name];
@@ -388,6 +427,7 @@ export default function PumpStudyStudio() {
                           <span style={{ fontSize: 11, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>
                             {run.episode_count != null ? `${run.episode_count} episodes` : ''}
                             {run.min_multiple ? ` · ×${run.min_multiple}` : ''}
+                            {run.scoring_config_version ? ` · cfg ${run.scoring_config_version}` : ''}
                           </span>
                           <button
                             onClick={() => handleViewRun(run)}
@@ -450,7 +490,34 @@ export default function PumpStudyStudio() {
                     <div style={{ fontSize: 12, color: 'var(--ink)' }}>{activeRun.episode_count}</div>
                   </div>
                 )}
-                <div style={{ marginLeft: 'auto' }}>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Config</div>
+                  <div style={{ fontSize: 12, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)' }}>
+                    {activeRun.scoring_config_version || '—'}
+                    {scoringConfig && scoringConfig.version && activeRun.scoring_config_version &&
+                     scoringConfig.version !== activeRun.scoring_config_version && (
+                      <span style={{ color: '#ffa940', marginLeft: 6 }} title={`Current config is ${scoringConfig.version}`}>
+                        (stale)
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button
+                    onClick={handleReScore}
+                    disabled={reScoring || !activeRun || activeRun.status === 'running'}
+                    title="Re-run demand scoring on existing snapshots with the current scoring_config. No candle re-fetch."
+                    style={{
+                      background: reScoring ? 'var(--bg-2)' : 'var(--bg-1)',
+                      border: '1px solid var(--stroke-soft)',
+                      borderRadius: 6, padding: '5px 11px',
+                      cursor: reScoring ? 'not-allowed' : 'pointer',
+                      fontSize: 11, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)',
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                    }}
+                  >
+                    {reScoring ? <><Spinner /> Re-scoring…</> : '↻ Re-score'}
+                  </button>
                   <StatusBadge status={activeRun.status} />
                 </div>
               </div>

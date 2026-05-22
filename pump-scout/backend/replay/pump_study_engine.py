@@ -83,16 +83,17 @@ def get_pump_study_progress() -> dict:
 
 # ── Candle fetch helper ───────────────────────────────────────────────────────
 
-async def _fetch_candles_range(
+async def _fetch_candles_range_uncached(
     symbol: str,
     from_date: str,
     to_date: str,
 ) -> list[dict]:
     """
-    Fetch all daily OHLCV bars for one symbol between from_date and to_date.
+    Raw Massive API call for one symbol between from_date and to_date.
     No as_of_date cap — intentional for historical research.
     Returns list of {date, open, high, low, close, volume} sorted oldest→newest.
     Returns [] on any error.
+    Wrapped by _fetch_candles_range() which adds a shared in-process cache.
     """
     try:
         from scanner.massive_data import MASSIVE_API_KEY, MASSIVE_BASE
@@ -144,8 +145,24 @@ async def _fetch_candles_range(
         return candles
 
     except Exception as exc:
-        logger.debug(f"_fetch_candles_range({symbol}, {from_date}→{to_date}): {exc}")
+        logger.debug(f"_fetch_candles_range_uncached({symbol}, {from_date}→{to_date}): {exc}")
         return []
+
+
+async def _fetch_candles_range(
+    symbol: str,
+    from_date: str,
+    to_date: str,
+) -> list[dict]:
+    """
+    Cached wrapper. Studio engines hit the same symbol+range many times during
+    a single run (universe sample, snapshot build, demand backfill). The
+    in-process LRU cache eliminates repeat Massive calls.
+    """
+    from scanner.candle_store import fetch_candles_range_cached
+    return await fetch_candles_range_cached(
+        symbol, from_date, to_date, _fetch_candles_range_uncached
+    )
 
 
 # ── Date helper ───────────────────────────────────────────────────────────────
