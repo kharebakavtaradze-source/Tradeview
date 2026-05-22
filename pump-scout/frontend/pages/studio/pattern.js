@@ -59,20 +59,26 @@ function ClusterCard({ cluster, expanded, onToggle }) {
             {cluster.symbol || cluster.cluster_id || `Cluster ${cluster.id || ''}`}
           </div>
           <div style={{ fontSize: 11, color: 'var(--ink-dim)' }}>
-            {cluster.date_range || (cluster.start_date && cluster.end_date ? `${cluster.start_date} → ${cluster.end_date}` : '')}
+            {cluster.canonical_start_date && cluster.canonical_peak_date
+              ? `${cluster.canonical_start_date} → ${cluster.canonical_peak_date}`
+              : (cluster.cluster_start_date && cluster.cluster_end_date
+                  ? `${cluster.cluster_start_date} → ${cluster.cluster_end_date}`
+                  : '')}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-          {cluster.cluster_size != null && (
+          {(cluster.raw_detection_count != null || (cluster.raw_detections && cluster.raw_detections.length)) && (
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Size</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>{cluster.cluster_size}</div>
+              <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Detections</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>
+                {cluster.raw_detection_count ?? cluster.raw_detections.length}
+              </div>
             </div>
           )}
-          {cluster.avg_multiple != null && (
+          {cluster.canonical_episode_id != null && (
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Avg ×</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)' }}>×{parseFloat(cluster.avg_multiple).toFixed(2)}</div>
+              <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Episode</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)' }}>#{cluster.canonical_episode_id}</div>
             </div>
           )}
         </div>
@@ -85,28 +91,39 @@ function ClusterCard({ cluster, expanded, onToggle }) {
         </svg>
       </button>
 
-      {expanded && cluster.episodes && cluster.episodes.length > 0 && (
+      {expanded && cluster.raw_detections && cluster.raw_detections.length > 0 && (
         <div style={{ borderTop: '1px solid var(--stroke-soft)', padding: '12px 16px' }}>
           <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
-            Episodes in Cluster
+            Raw Detections ({cluster.raw_detections.length})
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
-                {['Symbol', 'Multiple', 'Date', 'Type'].map(h => (
+                {['Start', 'Peak', 'Multiple', 'Window', 'Canonical'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '4px 10px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 400 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {cluster.episodes.map((ep, i) => (
+              {cluster.raw_detections.map((d, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
-                  <td style={{ padding: '6px 10px', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{ep.symbol || '—'}</td>
-                  <td style={{ padding: '6px 10px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>
-                    {ep.multiple != null ? `×${parseFloat(ep.multiple).toFixed(2)}` : '—'}
+                  <td style={{ padding: '6px 10px', color: 'var(--ink)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
+                    {d.window_start_date || d.start_date || '—'}
                   </td>
-                  <td style={{ padding: '6px 10px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>{ep.start_date || ep.date || '—'}</td>
-                  <td style={{ padding: '6px 10px', color: 'var(--ink-dim)' }}>{ep.pump_type || ep.type || '—'}</td>
+                  <td style={{ padding: '6px 10px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
+                    {d.window_peak_date || d.peak_date || '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>
+                    {(d.pump_multiple ?? d.multiple) != null
+                      ? `×${parseFloat(d.pump_multiple ?? d.multiple).toFixed(2)}`
+                      : '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
+                    {(d.window_days ?? d.pump_window_days) != null ? `${d.window_days ?? d.pump_window_days}d` : '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px', fontFamily: 'var(--f-mono)', fontSize: 11, color: d.is_canonical ? '#00c864' : 'var(--ink-faint)' }}>
+                    {d.is_canonical ? '✓' : ''}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -114,9 +131,12 @@ function ClusterCard({ cluster, expanded, onToggle }) {
         </div>
       )}
 
-      {expanded && (!cluster.episodes || cluster.episodes.length === 0) && (
+      {expanded && (!cluster.raw_detections || cluster.raw_detections.length === 0) && (
         <div style={{ borderTop: '1px solid var(--stroke-soft)', padding: '12px 16px', fontSize: 12, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>
-          No episode detail available for this cluster.
+          No raw detections recorded for this cluster.
+          {cluster.canonical_episode_id != null && (
+            <span style={{ marginLeft: 6 }}>Canonical episode: #{cluster.canonical_episode_id}</span>
+          )}
         </div>
       )}
     </div>
@@ -446,28 +466,40 @@ export default function PatternStudio() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                         <thead>
                           <tr style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
-                            {['Group Name', 'Count', 'Avg ×', 'Pump Type'].map(h => (
+                            {['Group Name', 'Count', 'Mean ×', 'Median ×', 'P90 ×', 'Days→Peak (median)'].map(h => (
                               <th key={h} style={{ textAlign: 'left', padding: '6px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 400 }}>{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
-                          {comparisons.map((g, i) => (
-                            <tr key={i} style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
-                              <td style={{ padding: '8px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)', fontWeight: 500 }}>
-                                {g.group_name || g.name || g.label || `Group ${i + 1}`}
-                              </td>
-                              <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
-                                {g.count ?? g.size ?? '—'}
-                              </td>
-                              <td style={{ padding: '8px 12px', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>
-                                {g.avg_multiple != null ? `×${parseFloat(g.avg_multiple).toFixed(2)}` : '—'}
-                              </td>
-                              <td style={{ padding: '8px 12px', color: 'var(--ink-dim)' }}>
-                                {g.pump_type || g.type || '—'}
-                              </td>
-                            </tr>
-                          ))}
+                          {comparisons.map((g, i) => {
+                            const stats = g.stats || {};
+                            const mult = stats.pump_multiple || {};
+                            const dtp  = stats.days_to_peak  || {};
+                            const fmtMult = (v) => v != null ? `×${parseFloat(v).toFixed(2)}` : '—';
+                            return (
+                              <tr key={i} style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
+                                <td style={{ padding: '8px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)', fontWeight: 500 }}>
+                                  {g.group_name || g.name || g.label || `Group ${i + 1}`}
+                                </td>
+                                <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
+                                  {g.member_count ?? g.count ?? g.size ?? '—'}
+                                </td>
+                                <td style={{ padding: '8px 12px', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>
+                                  {fmtMult(mult.mean)}
+                                </td>
+                                <td style={{ padding: '8px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>
+                                  {fmtMult(mult.median)}
+                                </td>
+                                <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
+                                  {fmtMult(mult.p90)}
+                                </td>
+                                <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
+                                  {dtp.median != null ? `${dtp.median}d` : '—'}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
