@@ -222,15 +222,11 @@ function LeftSidebar() {
     { href: '/',                  icon: 'home',     label: 'Dashboard' },
     { href: '/scanner-v2',        icon: 'search',   label: 'Scanner' },
     { href: '/sectors',           icon: 'layers',   label: 'Sectors' },
-    { href: '/journal',           icon: 'folder',   label: 'Journal' },
-    { href: '/macro-events',      icon: 'globe',    label: 'Macro' },
     { href: '/replay',            icon: 'swap',     label: 'Replay' },
     null,
     { href: '/pump-study',        icon: 'bolt',     label: 'Pump Study' },
     { href: '/raw-pattern-study', icon: 'candle',   label: 'Raw Patterns' },
     { href: '/ai-journal',        icon: 'spark',    label: 'AI Journal' },
-    null,
-    { href: '/design-system',     icon: 'grid',     label: 'Design System' },
   ];
   return (
     <aside style={{

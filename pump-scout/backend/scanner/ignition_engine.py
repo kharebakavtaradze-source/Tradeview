@@ -443,18 +443,13 @@ async def run_ignition_engine(
         get_sectors_batch, find_sector_leaders, calc_sympathy_score,
     )
     from scanner.sector_performance import fetch_sector_performance
-    from database                   import get_macro_events_active
     from hype_monitor.monitor       import get_latest_hype_results
 
-    # ── Phase 1: Gather global context (all parallel) ─────────────────────────
-    gathered = await asyncio.gather(
-        fetch_sector_performance(),
-        get_macro_events_active(),
-        return_exceptions=True,
-    )
-    sector_perf, macro_events = gathered
-    sector_perf  = sector_perf  if not isinstance(sector_perf,  Exception) else {}
-    macro_events = macro_events if not isinstance(macro_events, Exception) else []
+    # ── Phase 1: Gather global context ────────────────────────────────────────
+    try:
+        sector_perf = await fetch_sector_performance()
+    except Exception:
+        sector_perf = {}
 
     # Hype results are in-memory (no I/O) — call synchronously
     try:
@@ -469,14 +464,8 @@ async def run_ignition_engine(
         if h.get("ticker")
     }
 
-    # Aggregate macro events into a single active-bias snapshot
+    # Macro-bias layer removed with Trump News deletion.
     macro_bias: dict | None = None
-    if macro_events:
-        try:
-            from news.trump_news import compute_active_bias
-            macro_bias = compute_active_bias(macro_events)
-        except Exception as e:
-            logger.warning(f"compute_active_bias: {e}")
 
     # ── Phase 2: Merge + tag candidates ──────────────────────────────────────
     main_tagged   = [_tag_main(r)   for r in main_results]
