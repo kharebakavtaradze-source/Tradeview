@@ -2670,69 +2670,104 @@ async def pump_study_export(
 
     # ── snapshots_4x — per-bar bar labels filtered by min_multiple ───────────
     if fmt == "snapshots_4x":
+        from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+
         _min_multiple = max(1.0, min_multiple)
-        pumps_4x = [e for e in episodes if (e.get("pump_multiple") or 0) >= _min_multiple]
-        ep_ids   = [e["id"] for e in pumps_4x]
+        pumps_4x  = [e for e in episodes if (e.get("pump_multiple") or 0) >= _min_multiple]
+        ep_ids    = [e["id"] for e in pumps_4x]
         raw_snaps = await get_snapshots_for_episodes(ep_ids)
 
-        # Build episode lookup for context columns
         ep_lookup = {e["id"]: e for e in pumps_4x}
 
-        # Flatten: extract key bar-label fields from snapshot_json
-        bar_labels = []
+        # Group snapshots by episode, sorted by date, to run bar label engine
+        from collections import defaultdict as _dd
+        snaps_by_ep: dict = _dd(list)
         for s in raw_snaps:
-            snap     = s.get("snapshot") or {}
-            cf       = snap.get("custom_flags") or {}
-            ep       = ep_lookup.get(s["episode_id"], {})
-            bar_labels.append({
-                "episode_id":       s["episode_id"],
-                "symbol":           s["symbol"],
-                "pump_multiple":    ep.get("pump_multiple"),
-                "pump_type":        ep.get("pump_type"),
-                "pump_start_date":  ep.get("pump_start_date"),
-                "pump_peak_date":   ep.get("pump_peak_date"),
-                "date":             s["date"],
-                "phase":            s["window_phase"],
-                "rel_day":          s["relative_day_from_start"],
-                "rel_day_peak":     s["relative_day_from_peak"],
-                # OHLCV
-                "open":             s.get("open"),
-                "high":             s.get("high"),
-                "low":              s.get("low"),
-                "close":            s.get("close"),
-                "volume":           s.get("volume"),
-                "gap_pct":          s.get("gap_pct"),
-                "daily_return_pct": s.get("daily_return_pct"),
-                "cum_return_pct":   s.get("cum_return_pct"),
-                "vol_ratio":        s.get("volume_vs_avg20"),
-                "vol_zscore":       s.get("volume_zscore"),
-                "atr_pct":          s.get("atr_pct"),
-                "bb_width":         s.get("bb_width"),
-                "bb_squeeze":       s.get("bb_squeeze"),
-                "rsi":              s.get("rsi"),
-                "intraday_range_pct": s.get("intraday_range_pct"),
-                "close_position":   s.get("close_position"),
-                "wyckoff_state":    s.get("wyckoff_state"),
-                # Signal tokens from snapshot_json
-                "bkt":              snap.get("bar_bucket") or snap.get("bucket"),
-                "t_signal":         snap.get("tz_t_signal") or snap.get("t_signal"),
-                "z_signal":         snap.get("tz_z_signal") or snap.get("z_signal"),
-                "l_signal":         snap.get("tz_l_signal") or snap.get("l_signal"),
-                "preup":            snap.get("preup_token") or snap.get("preup"),
-                "predn":            snap.get("predn_token") or snap.get("predn"),
-                "suffix":           snap.get("suffix_label") or snap.get("suffix"),
-                "vix_token":        snap.get("vix_token"),
-                "psar_token":       snap.get("psar_token"),
-                "rsi2_token":       snap.get("rsi2_token"),
-                "line5":            snap.get("line5_token"),
-                # Custom flags (boolean signals)
-                "has_l34":          cf.get("has_l34"),
-                "has_l43":          cf.get("has_l43"),
-                "has_l22":          cf.get("has_l22"),
-                "has_np":           cf.get("has_np"),
-                "has_d":            cf.get("has_d"),
-                "has_wlnbb":        cf.get("has_wlnbb"),
-            })
+            snaps_by_ep[s["episode_id"]].append(s)
+        for ep_id in snaps_by_ep:
+            snaps_by_ep[ep_id].sort(key=lambda s: s["date"])
+
+        bar_labels = []
+        for ep_id, snaps in snaps_by_ep.items():
+            ep = ep_lookup.get(ep_id, {})
+
+            # Build candle list for bar label engine (needs open/high/low/close/volume)
+            candles = [
+                {"open": s["open"], "high": s["high"], "low": s["low"],
+                 "close": s["close"], "volume": s["volume"], "date": s["date"]}
+                for s in snaps
+                if s.get("open") and s.get("close")
+            ]
+
+            # Compute bar labels for all bars (engine needs preceding context)
+            try:
+                computed_labels = compute_combined_bar_labels(candles, last_n=len(candles))
+                # Index by date for fast lookup
+                lbl_by_date = {lbl["date"]: lbl for lbl in computed_labels if lbl.get("date")}
+            except Exception:
+                lbl_by_date = {}
+
+            for s in snaps:
+                snap = s.get("snapshot") or {}
+                cf   = snap.get("custom_flags") or {}
+                lbl  = lbl_by_date.get(s["date"]) or {}
+
+                bar_labels.append({
+                    "episode_id":       ep_id,
+                    "symbol":           s["symbol"],
+                    "pump_multiple":    ep.get("pump_multiple"),
+                    "pump_type":        ep.get("pump_type"),
+                    "pump_start_date":  ep.get("pump_start_date"),
+                    "pump_peak_date":   ep.get("pump_peak_date"),
+                    "date":             s["date"],
+                    "phase":            s["window_phase"],
+                    "rel_day":          s["relative_day_from_start"],
+                    "rel_day_peak":     s["relative_day_from_peak"],
+                    # OHLCV
+                    "open":             s.get("open"),
+                    "high":             s.get("high"),
+                    "low":              s.get("low"),
+                    "close":            s.get("close"),
+                    "volume":           s.get("volume"),
+                    "gap_pct":          s.get("gap_pct"),
+                    "daily_return_pct": s.get("daily_return_pct"),
+                    "cum_return_pct":   s.get("cum_return_pct"),
+                    "vol_ratio":        s.get("volume_vs_avg20"),
+                    "vol_zscore":       s.get("volume_zscore"),
+                    "atr_pct":          s.get("atr_pct"),
+                    "bb_width":         s.get("bb_width"),
+                    "bb_squeeze":       s.get("bb_squeeze"),
+                    "rsi":              s.get("rsi"),
+                    "intraday_range_pct": s.get("intraday_range_pct"),
+                    "close_position":   s.get("close_position"),
+                    "wyckoff_state":    s.get("wyckoff_state"),
+                    # Bar label signals — computed from OHLCV via bar label engine
+                    "bkt":              lbl.get("bucket"),
+                    "t_signal":         lbl.get("t_signal"),
+                    "z_signal":         lbl.get("z_signal"),
+                    "l_signal":         lbl.get("l_digits"),
+                    "preup":            lbl.get("preup"),
+                    "predn":            lbl.get("predn"),
+                    "body_class":       lbl.get("body_class"),
+                    "wick_class":       lbl.get("wick_class"),
+                    "gap_class":        lbl.get("gap_class"),
+                    "range_class":      lbl.get("range_class"),
+                    "line3":            lbl.get("line3"),
+                    "line4":            lbl.get("line4"),
+                    "vix_token":        lbl.get("vix_token") or cf.get("vix_token") or None,
+                    "psar_token":       lbl.get("psar_token") or cf.get("psar_token") or None,
+                    "rsi2_token":       lbl.get("rsi2_token") or cf.get("rsi2_token") or None,
+                    "line5":            lbl.get("line5"),
+                    # Custom flags (booleans from feature_json)
+                    "has_l34":          cf.get("has_l34"),
+                    "has_l43":          cf.get("has_l43"),
+                    "has_l22":          cf.get("has_l22"),
+                    "has_np":           cf.get("has_np"),
+                    "has_d":            cf.get("has_d"),
+                    "has_wlnbb":        cf.get("has_wlnbb"),
+                })
+
+        bar_labels.sort(key=lambda b: (b["episode_id"], b["date"]))
 
         bundle = {
             "export_type":   "pump_study_bar_labels_4x",
