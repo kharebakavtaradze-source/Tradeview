@@ -3895,6 +3895,67 @@ async def analytics_live_history_cooccurrence(
     }
 
 
+# ── Live history maintenance ─────────────────────────────────────────────────
+
+@app.delete("/api/analytics/live-history")
+async def analytics_live_history_delete(
+    symbol: Optional[str] = None,
+    older_than_days: Optional[int] = None,
+    config_version: Optional[str] = None,
+    confirm: bool = False,
+):
+    """
+    Delete demand_ticker_history rows. ALL FILTERS ARE OPTIONAL but at
+    least one MUST be supplied; pass confirm=true to execute.
+
+    symbol:           limit to one ticker
+    older_than_days:  delete only rows scanned_at < (now - N days)
+    config_version:   limit to one scoring_config.VERSION
+
+    With no filters and confirm=true, all rows are deleted (full wipe).
+    A preview (would_delete count) is returned when confirm=false.
+    """
+    from database import get_engine
+    from sqlalchemy import text as _text
+
+    where: list[str] = []
+    params: dict = {}
+    if symbol:
+        where.append("symbol = :symbol")
+        params["symbol"] = symbol.upper()
+    if older_than_days is not None:
+        is_pg = "postgres" in str(get_engine().url)
+        if is_pg:
+            where.append("scanned_at < NOW() - INTERVAL :older_pg")
+            params["older_pg"] = f"{int(older_than_days)} days"
+        else:
+            where.append("scanned_at < datetime('now', :older)")
+            params["older"] = f"-{int(older_than_days)} days"
+    if config_version:
+        where.append("scoring_config_version = :cv")
+        params["cv"] = config_version
+
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    async with get_engine().connect() as conn:
+        count = (await conn.execute(_text(
+            f"SELECT COUNT(*) FROM demand_ticker_history{where_sql}"
+        ), params)).scalar() or 0
+
+        if not confirm:
+            return {
+                "ok":            True,
+                "would_delete":  count,
+                "confirm":       False,
+                "message":       "Pass confirm=true to execute the delete.",
+            }
+
+        await conn.execute(_text(f"DELETE FROM demand_ticker_history{where_sql}"), params)
+        await conn.commit()
+
+    return {"ok": True, "deleted": count, "confirm": True}
+
+
 # ── Backfill: hydrate old demand_ticker_history rows ─────────────────────────
 
 @app.post("/api/admin/backfill-demand-history")

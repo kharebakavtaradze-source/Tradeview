@@ -250,6 +250,28 @@ export default function ReplayStudio() {
     }
   };
 
+  const handleDeleteRun = async (run) => {
+    const runId = run.run_id || run.id;
+    const ok = typeof window !== 'undefined' && window.confirm(
+      `Delete replay run ${runId}?\n\nThis removes the run, all candidates, outcomes, and missed-mover rows. Cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      const r = await fetch(`${API_URL}/api/replay/${runId}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setPastRuns(prev => prev.filter(x => (x.run_id || x.id) !== runId));
+      if (activeRun && (activeRun.run_id || activeRun.id) === runId) {
+        setActiveRun(null);
+        setSummary(null);
+        setCandidates(null);
+        setOutcomes(null);
+        setMissed(null);
+      }
+    } catch (e) {
+      setRunError(`Delete failed: ${e.message}`);
+    }
+  };
+
   const handleViewRun = async (run) => {
     const runId = run.run_id || run.id;
     try {
@@ -346,16 +368,29 @@ export default function ReplayStudio() {
                           <span style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>
                             {run.scoring_config_version ? `cfg ${run.scoring_config_version}` : ''}
                           </span>
-                          <button
-                            onClick={() => handleViewRun(run)}
-                            style={{
-                              background: 'var(--bg-2)', border: '1px solid var(--stroke-soft)',
-                              borderRadius: 5, padding: '3px 10px', cursor: 'pointer',
-                              fontSize: 11, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)',
-                            }}
-                          >
-                            View
-                          </button>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              onClick={() => handleViewRun(run)}
+                              style={{
+                                background: 'var(--bg-2)', border: '1px solid var(--stroke-soft)',
+                                borderRadius: 5, padding: '3px 10px', cursor: 'pointer',
+                                fontSize: 11, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)',
+                              }}
+                            >
+                              View
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteRun(run); }}
+                              title="Delete this run and all its candidates / outcomes"
+                              style={{
+                                background: 'transparent', border: '1px solid var(--stroke-soft)',
+                                borderRadius: 5, padding: '3px 8px', cursor: 'pointer',
+                                fontSize: 11, color: '#ff6b6b', fontFamily: 'var(--f-mono)',
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
