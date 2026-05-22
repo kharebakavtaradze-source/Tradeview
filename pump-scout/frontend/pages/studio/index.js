@@ -253,11 +253,175 @@ export default function StudioIndex() {
           </div>
         )}
 
+        {/* System status */}
+        <SystemStatusPanel />
+
         {/* Maintenance */}
         <MaintenancePanel />
 
       </div>
     </PumpLayout>
+  );
+}
+
+function StatusDot({ ok }) {
+  return (
+    <span style={{
+      display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+      background: ok ? '#00e676' : '#ff6b6b',
+    }} />
+  );
+}
+
+function SystemStatusPanel() {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanMsg, setScanMsg] = useState(null);
+
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API_URL}/api/admin/status`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData(await r.json());
+    } catch (e) {
+      setData({ ok: false, error: e.message });
+    }
+    setBusy(false);
+  };
+
+  const triggerScan = async (mode) => {
+    setScanBusy(true); setScanMsg(null);
+    try {
+      const r = await fetch(`${API_URL}/api/demand-scanner/run?scan_mode=${mode}`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setScanMsg(d.message || d.status || 'started');
+      setTimeout(refresh, 4000);
+    } catch (e) {
+      setScanMsg(`Error: ${e.message}`);
+    }
+    setScanBusy(false);
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const checks = data?.checks || {};
+
+  return (
+    <div style={{ marginTop: 40, paddingTop: 24, borderTop: '1px solid var(--stroke-soft)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+          System Status
+        </span>
+        {data && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <StatusDot ok={data.ok} />
+            <span style={{ fontSize: 11, fontFamily: 'var(--f-mono)', color: data.ok ? '#00e676' : '#ff6b6b' }}>
+              {data.ok ? 'All checks pass' : 'Some checks failing'}
+            </span>
+          </span>
+        )}
+        <button
+          onClick={refresh}
+          disabled={busy}
+          style={{
+            marginLeft: 'auto', padding: '4px 10px', borderRadius: 6,
+            border: '1px solid var(--stroke-soft)', background: 'var(--bg-2)',
+            color: 'var(--ink-dim)', fontSize: 11, fontFamily: 'var(--f-mono)',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {busy ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
+      <div style={{
+        background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)',
+        borderRadius: 10, padding: 16,
+      }}>
+        {!data ? (
+          <span style={{ fontSize: 12, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>Loading…</span>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginBottom: 16 }}>
+              {Object.entries(checks).map(([name, c]) => (
+                <div key={name} style={{
+                  padding: '10px 12px', background: 'var(--bg-2)',
+                  borderRadius: 8, border: `1px solid ${c.ok ? 'var(--stroke-soft)' : 'rgba(255,107,107,0.4)'}`,
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                }}>
+                  <StatusDot ok={c.ok} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11, color: 'var(--ink)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                      {name.replace(/_/g, ' ')}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', lineHeight: 1.4, wordBreak: 'break-word' }}>
+                      {c.detail}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Trigger Scan controls */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+              paddingTop: 12, borderTop: '1px solid var(--stroke-soft)',
+            }}>
+              <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Trigger Scan
+              </span>
+              <button
+                onClick={() => triggerScan('full')}
+                disabled={scanBusy}
+                title="Full universe fetch + candle fetch + analyze. ~2-5 minutes."
+                style={{
+                  padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pump-lime)',
+                  background: 'var(--pump-lime-soft)', color: 'var(--pump-lime)',
+                  fontSize: 11, fontFamily: 'var(--f-mono)', fontWeight: 600,
+                  cursor: scanBusy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {scanBusy ? 'Triggering…' : '▶ Full Scan'}
+              </button>
+              <button
+                onClick={() => triggerScan('incremental')}
+                disabled={scanBusy}
+                title="Re-analyze only tickers with a new bar since last scan. ~30s."
+                style={{
+                  padding: '5px 12px', borderRadius: 6, border: '1px solid var(--stroke-soft)',
+                  background: 'var(--bg-2)', color: 'var(--ink)',
+                  fontSize: 11, fontFamily: 'var(--f-mono)',
+                  cursor: scanBusy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Incremental
+              </button>
+              <button
+                onClick={() => triggerScan('recalculate')}
+                disabled={scanBusy}
+                title="Reload from DB cache and re-run signals — no API calls."
+                style={{
+                  padding: '5px 12px', borderRadius: 6, border: '1px solid var(--stroke-soft)',
+                  background: 'var(--bg-2)', color: 'var(--ink)',
+                  fontSize: 11, fontFamily: 'var(--f-mono)',
+                  cursor: scanBusy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Recalc
+              </button>
+              {scanMsg && (
+                <span style={{ fontSize: 11, color: scanMsg.startsWith('Error') ? '#ff4444' : 'var(--pump-lime)', fontFamily: 'var(--f-mono)', marginLeft: 'auto' }}>
+                  {scanMsg}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
