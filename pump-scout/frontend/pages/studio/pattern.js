@@ -128,9 +128,11 @@ export default function PatternStudio() {
   const [selectedRunId, setSelectedRunId] = useState('');
   const [clusters, setClusters] = useState(null);
   const [comparisons, setComparisons] = useState(null);
+  const [liveCombos, setLiveCombos] = useState(null);
+  const [loadingLive, setLoadingLive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [expandedCluster, setExpandedCluster] = useState(null);
-  const [activeView, setActiveView] = useState('clusters'); // 'clusters' | 'comparisons'
+  const [activeView, setActiveView] = useState('clusters'); // 'clusters' | 'comparisons' | 'live-xref'
 
   useEffect(() => {
     fetch(`${API_URL}/api/replay/pump-study/runs`)
@@ -172,6 +174,45 @@ export default function PatternStudio() {
   }, [selectedRunId, loadPatterns]);
 
   const selectedRun = pumpRuns.find(r => (r.run_id || r.id) === selectedRunId);
+
+  // Load Live cross-ref on demand: cooccurrence over the same date range as
+  // the selected pump-study run. Lets the user compare "what combos appeared
+  // in Live during the period" vs "what combos preceded confirmed pumps."
+  const loadLiveCombos = useCallback(async () => {
+    if (!selectedRun || !selectedRun.start_date || !selectedRun.end_date) {
+      setLiveCombos([]);
+      return;
+    }
+    setLoadingLive(true);
+    try {
+      const start = new Date(selectedRun.start_date);
+      const end   = new Date(selectedRun.end_date);
+      const days  = Math.max(1, Math.ceil((Date.now() - start.getTime()) / 86400000));
+      const qs = new URLSearchParams({
+        group_by: 'tz_t_signal,preup_token,line5',
+        days:     String(days),
+        min_count: '3',
+      });
+      if (selectedRun.scoring_config_version) {
+        qs.set('config_version', selectedRun.scoring_config_version);
+      }
+      const r = await fetch(`${API_URL}/api/analytics/live-history/cooccurrence?${qs}`);
+      const data = r.ok ? await r.json() : {};
+      setLiveCombos(Array.isArray(data.rows) ? data.rows : []);
+    } catch {
+      setLiveCombos([]);
+    }
+    setLoadingLive(false);
+  }, [selectedRun]);
+
+  useEffect(() => {
+    if (activeView === 'live-xref' && liveCombos === null) {
+      loadLiveCombos();
+    }
+  }, [activeView, liveCombos, loadLiveCombos]);
+
+  // Reset Live combos when run changes so we re-fetch on next tab visit.
+  useEffect(() => { setLiveCombos(null); }, [selectedRunId]);
 
   return (
     <PumpLayout title="Pattern Study" subtitle="Studio">
@@ -339,7 +380,11 @@ export default function PatternStudio() {
                   </div>
                 )}
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: 0 }}>
-                  {['clusters', 'comparisons'].map(v => (
+                  {[
+                    { v: 'clusters',    label: 'Clusters'    },
+                    { v: 'comparisons', label: 'Comparisons' },
+                    { v: 'live-xref',   label: 'Live X-Ref'  },
+                  ].map(({ v, label }, i, arr) => (
                     <button
                       key={v}
                       onClick={() => setActiveView(v)}
@@ -349,11 +394,15 @@ export default function PatternStudio() {
                         border: `1px solid ${activeView === v ? 'var(--pump-lime)' : 'var(--stroke-soft)'}`,
                         padding: '5px 12px', cursor: 'pointer',
                         fontSize: 12, fontFamily: 'var(--f-mono)',
-                        borderRadius: v === 'clusters' ? '6px 0 0 6px' : '0 6px 6px 0',
+                        borderRadius:
+                          i === 0           ? '6px 0 0 6px' :
+                          i === arr.length - 1 ? '0 6px 6px 0' :
+                          '0',
+                        marginLeft: i === 0 ? 0 : -1,
                         transition: 'all 0.15s',
                       }}
                     >
-                      {v === 'clusters' ? 'Clusters' : 'Comparisons'}
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -421,6 +470,71 @@ export default function PatternStudio() {
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                  )
+                )}
+
+                {activeView === 'live-xref' && (
+                  loadingLive || liveCombos === null ? (
+                    <div style={{ color: 'var(--ink-dim)', fontSize: 13, fontFamily: 'var(--f-mono)' }}>
+                      <Spinner /> Querying Live history for this run's period…
+                    </div>
+                  ) : liveCombos.length === 0 ? (
+                    <div style={{ color: 'var(--ink-dim)', fontSize: 13, fontFamily: 'var(--f-mono)', padding: '24px 0', textAlign: 'center' }}>
+                      No Live combos for this period.
+                      <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-faint)' }}>
+                        Rows are only persisted from production scans after commit a378052. Run /api/admin/backfill-demand-history to hydrate older history.
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+                        Live Combos — (T, PREUP, Line5) for {selectedRun?.start_date} → {selectedRun?.end_date}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)', marginBottom: 14 }}>
+                        Same date window as this pump-study run. Compare against the run's pump episodes to see which combos preceded confirmed pumps vs which were just noise.
+                        {selectedRun?.scoring_config_version && (
+                          <> · Filtered to scoring_config <span style={{ color: 'var(--pump-lime)' }}>{selectedRun.scoring_config_version}</span>.</>
+                        )}
+                      </div>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
+                            {['T', 'PREUP', 'Line5', 'Count', 'Avg Score', 'Tier Mix'].map(h => (
+                              <th key={h} style={{ textAlign: 'left', padding: '6px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 400 }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {liveCombos.slice(0, 50).map((r, i) => {
+                            const total = (r.n_prime||0)+(r.n_high||0)+(r.n_watch||0)+(r.n_setup||0);
+                            return (
+                              <tr key={i} style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
+                                <td style={{ padding: '7px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>{r.tz_t_signal || '—'}</td>
+                                <td style={{ padding: '7px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>{r.preup_token || '—'}</td>
+                                <td style={{ padding: '7px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>{r.line5 || '—'}</td>
+                                <td style={{ padding: '7px 12px', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 700 }}>{r.n}</td>
+                                <td style={{ padding: '7px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
+                                  {r.avg_score != null ? parseFloat(r.avg_score).toFixed(2) : '—'}
+                                </td>
+                                <td style={{ padding: '6px 12px' }}>
+                                  {total > 0 ? (
+                                    <div style={{ display: 'flex', width: 140, height: 10, borderRadius: 3, overflow: 'hidden', background: 'var(--bg-2)' }}>
+                                      {(r.n_prime || 0) > 0 && <div title={`${r.n_prime} PRIME`} style={{ flex: r.n_prime, background: '#00e676' }} />}
+                                      {(r.n_high  || 0) > 0 && <div title={`${r.n_high} HIGH`}   style={{ flex: r.n_high,  background: '#76ff03' }} />}
+                                      {(r.n_watch || 0) > 0 && <div title={`${r.n_watch} WATCH`} style={{ flex: r.n_watch, background: '#ffeb3b' }} />}
+                                      {(r.n_setup || 0) > 0 && <div title={`${r.n_setup} SETUP`} style={{ flex: r.n_setup, background: '#ffa940' }} />}
+                                    </div>
+                                  ) : <span style={{ color: 'var(--ink-faint)', fontSize: 11 }}>—</span>}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      <div style={{ marginTop: 14, fontSize: 11, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>
+                        Open the <a href="/studio/signals" style={{ color: 'var(--pump-lime)' }}>Signals Explorer</a> to query any field combination.
+                      </div>
                     </div>
                   )
                 )}

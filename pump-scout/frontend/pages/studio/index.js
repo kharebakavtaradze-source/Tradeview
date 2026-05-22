@@ -101,6 +101,7 @@ function StudioCard({ title, description, href, recentRun, icon }) {
 const PUMP_ICON = <><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>;
 const REPLAY_ICON = <><circle cx="12" cy="12" r="10" stroke="currentColor" fill="none" /><polyline points="10 8 16 12 10 16 10 8" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>;
 const PATTERN_ICON = <><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>;
+const SIGNALS_ICON = <><rect x="3" y="13" width="4" height="8" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><rect x="10" y="8" width="4" height="13" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /><rect x="17" y="3" width="4" height="18" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>;
 
 export default function StudioIndex() {
   const [pumpRuns, setPumpRuns] = useState([]);
@@ -199,6 +200,13 @@ export default function StudioIndex() {
             href="/studio/pattern"
             recentRun={null}
             icon={PATTERN_ICON}
+          />
+          <StudioCard
+            title="Signals Explorer"
+            description="Query Live history by TZ / PREUP / Line3-5 / Wyckoff. Find which combinations appear most often and how they distribute across tiers."
+            href="/studio/signals"
+            recentRun={null}
+            icon={SIGNALS_ICON}
           />
         </div>
 
