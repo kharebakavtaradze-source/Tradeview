@@ -94,6 +94,9 @@ export default function SignalsExplorer() {
   const [withLift, setWithLift]   = useState(false);
   const [liftDays, setLiftDays]   = useState(14);
   const [liftTarget, setLiftTarget] = useState(1.5);
+  const [significantOnly, setSignificantOnly] = useState(false);
+  const [baseline, setBaseline]   = useState(null);
+  const [baselineB, setBaselineB] = useState(null);
 
   // Version comparison
   const [compareMode, setCompareMode] = useState(false);
@@ -134,7 +137,10 @@ export default function SignalsExplorer() {
     const r = await fetch(`${API_URL}/api/analytics/live-history/cooccurrence?${buildQs(cfgVer)}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
-    return Array.isArray(data.rows) ? data.rows : [];
+    return {
+      rows:     Array.isArray(data.rows) ? data.rows : [],
+      baseline: data.baseline || null,
+    };
   }, [buildQs]);
 
   const runQuery = useCallback(async () => {
@@ -152,11 +158,13 @@ export default function SignalsExplorer() {
           fetchCoocc(configA || null),
           fetchCoocc(configB || null),
         ]);
-        setRowsA(a); setRowsB(b);
+        setRowsA(a.rows); setRowsB(b.rows);
+        setBaseline(a.baseline); setBaselineB(b.baseline);
         setRows(null);
       } else {
         const r = await fetchCoocc(configVer || null);
-        setRows(r);
+        setRows(r.rows);
+        setBaseline(r.baseline); setBaselineB(null);
         setRowsA(null); setRowsB(null);
       }
     } catch (e) {
@@ -187,14 +195,19 @@ export default function SignalsExplorer() {
 
   const sortedRows = useMemo(() => {
     if (!rows) return null;
-    const out = [...rows];
+    let out = [...rows];
+    if (significantOnly && withLift) {
+      out = out.filter(r => r.significant);
+    }
     out.sort((a, b) => {
-      const av = a[sortKey] ?? 0;
-      const bv = b[sortKey] ?? 0;
+      const av = a[sortKey] ?? (sortKey === 'p_value' ? 1 : 0);
+      const bv = b[sortKey] ?? (sortKey === 'p_value' ? 1 : 0);
+      // For p_value, ascending (low p = best) when sortDesc is true is awkward.
+      // The toggleSort caller flips desc; keep arithmetic plain.
       return sortDesc ? bv - av : av - bv;
     });
     return out;
-  }, [rows, sortKey, sortDesc]);
+  }, [rows, sortKey, sortDesc, significantOnly, withLift]);
 
   // Merge rowsA/rowsB by combo key for side-by-side display.
   const mergedCompareRows = useMemo(() => {
@@ -346,6 +359,7 @@ export default function SignalsExplorer() {
                 <input type="number" min="1.0" step="0.1" value={liftTarget}
                   onChange={e => setLiftTarget(parseFloat(e.target.value) || 1.5)}
                   style={{ ...inputStyle, width: 60 }} /> <span style={{ fontSize: 11, color: 'var(--ink-faint)' }}>×</span>
+                <Chip label={significantOnly ? '✓ Sig only' : 'Sig only'} active={significantOnly} onClick={() => setSignificantOnly(v => !v)} />
               </>
             )}
           </div>
@@ -416,6 +430,41 @@ export default function SignalsExplorer() {
           </div>
         )}
 
+        {/* Baseline panel — only when lift is on */}
+        {withLift && (baseline || baselineB) && (
+          <div style={{
+            background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 14,
+            display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+            fontSize: 12, fontFamily: 'var(--f-mono)',
+          }}>
+            <span style={{ color: 'var(--ink-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>
+              Baseline (any combo)
+            </span>
+            {baseline && (
+              <span style={{ color: 'var(--ink)' }}>
+                {compareMode && <span style={{ color: 'var(--ink-faint)', marginRight: 4 }}>A:</span>}
+                {baseline.n_target}/{baseline.n} scans pumped ≥{liftTarget}× within {liftDays}d
+                <span style={{ color: 'var(--pump-lime)', marginLeft: 6 }}>
+                  ({((baseline.hit_rate || 0) * 100).toFixed(2)}%)
+                </span>
+              </span>
+            )}
+            {compareMode && baselineB && (
+              <span style={{ color: 'var(--ink)' }}>
+                <span style={{ color: 'var(--ink-faint)', marginRight: 4 }}>B:</span>
+                {baselineB.n_target}/{baselineB.n}
+                <span style={{ color: 'var(--pump-lime)', marginLeft: 6 }}>
+                  ({((baselineB.hit_rate || 0) * 100).toFixed(2)}%)
+                </span>
+              </span>
+            )}
+            <span style={{ color: 'var(--ink-faint)', fontSize: 11, marginLeft: 'auto' }}>
+              Lift &amp; p-value compare each combo against this baseline (one-sided binomial test).
+            </span>
+          </div>
+        )}
+
         {/* Single mode table */}
         {!compareMode && sortedRows && sortedRows.length > 0 && (
           <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, overflow: 'auto' }}>
@@ -432,6 +481,8 @@ export default function SignalsExplorer() {
                   {withLift && (
                     <>
                       <SortTh active={sortKey === 'hit_rate'}          desc={sortDesc} onClick={() => toggleSort('hit_rate')}>Hit %</SortTh>
+                      <SortTh active={sortKey === 'lift_vs_baseline'}  desc={sortDesc} onClick={() => toggleSort('lift_vs_baseline')}>Lift</SortTh>
+                      <SortTh active={sortKey === 'p_value'}           desc={!sortDesc} onClick={() => toggleSort('p_value')}>p</SortTh>
                       <SortTh active={sortKey === 'avg_pump_multiple'} desc={sortDesc} onClick={() => toggleSort('avg_pump_multiple')}>Avg ×</SortTh>
                       <Th>Pumped</Th>
                     </>
@@ -459,6 +510,12 @@ export default function SignalsExplorer() {
                         <>
                           <td style={{ ...cellMono, color: r.hit_rate >= 0.3 ? '#00e676' : r.hit_rate >= 0.1 ? '#ffeb3b' : 'var(--ink-dim)', fontWeight: 600 }}>
                             {r.hit_rate != null ? `${(r.hit_rate * 100).toFixed(1)}%` : '—'}
+                          </td>
+                          <td style={{ ...cellMono, color: liftColor(r.lift_vs_baseline), fontWeight: 700 }}>
+                            {r.lift_vs_baseline != null ? `${parseFloat(r.lift_vs_baseline).toFixed(2)}×` : '—'}
+                          </td>
+                          <td style={{ ...cellMono, color: pColor(r.p_value, r.significant), fontWeight: 600 }} title={r.significant ? 'p < 0.05 and lift > 1.0 — edge is statistically significant' : 'Not significant at α=0.05'}>
+                            {r.p_value != null ? formatP(r.p_value) : '—'}
                           </td>
                           <td style={{ ...cellMono, color: r.avg_pump_multiple >= 2 ? '#00e676' : 'var(--ink-dim)', fontWeight: 600 }}>
                             {r.avg_pump_multiple != null ? `×${parseFloat(r.avg_pump_multiple).toFixed(2)}` : '—'}
@@ -660,6 +717,30 @@ function TierBar({ n_prime, n_high, n_watch, n_setup, total }) {
     </div>
   );
 }
+
+function liftColor(lift) {
+  if (lift == null) return 'var(--ink-dim)';
+  if (lift >= 2.0) return '#00e676';
+  if (lift >= 1.3) return '#76ff03';
+  if (lift >= 1.0) return '#ffeb3b';
+  if (lift >= 0.7) return '#ffa940';
+  return '#ff6b6b';
+}
+
+function pColor(p, significant) {
+  if (p == null) return 'var(--ink-dim)';
+  if (significant)   return '#00e676';
+  if (p < 0.10)      return '#ffeb3b';
+  return 'var(--ink-dim)';
+}
+
+function formatP(p) {
+  if (p == null) return '—';
+  if (p < 0.001) return '<0.001';
+  if (p < 0.01)  return p.toFixed(3);
+  return p.toFixed(3);
+}
+
 
 // Maps a group_by column name to its filter query param name on /filter.
 function _filterParam(col) {

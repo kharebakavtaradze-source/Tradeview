@@ -3538,6 +3538,53 @@ _HISTORY_FILTER_COLUMNS = {
 }
 
 
+def _binom_test_one_sided_greater(k: int, n: int, p: float) -> float:
+    """
+    P(X >= k) under Binomial(n, p). One-sided test: "is the observed
+    success count significantly greater than what null hypothesis p
+    would predict?" Returns a p-value in [0, 1].
+
+    Pure stdlib (math.lgamma). Switches to a normal approximation for
+    large n to avoid summing thousands of PMF terms.
+    """
+    import math
+
+    if n <= 0 or k <= 0:
+        return 1.0
+    if k > n:
+        return 0.0
+    p = max(min(p, 1.0), 0.0)
+    if p <= 0.0:
+        return 0.0 if k > 0 else 1.0
+    if p >= 1.0:
+        return 1.0 if k <= n else 0.0
+
+    # Normal approximation when n is large and np, n(1-p) both >= 10.
+    if n >= 200 and n * p >= 10 and n * (1 - p) >= 10:
+        mean = n * p
+        sd   = math.sqrt(n * p * (1 - p))
+        # Continuity correction: P(X >= k) ≈ P(Z >= (k - 0.5 - mean)/sd)
+        z = (k - 0.5 - mean) / sd
+        # 1 - Phi(z) via erfc
+        return 0.5 * math.erfc(z / math.sqrt(2.0))
+
+    # Exact: sum PMF from k to n.
+    log_p   = math.log(p)
+    log_1mp = math.log(1.0 - p)
+    log_nfact = math.lgamma(n + 1)
+    acc = 0.0
+    for i in range(k, n + 1):
+        log_pmf = (log_nfact
+                   - math.lgamma(i + 1)
+                   - math.lgamma(n - i + 1)
+                   + i * log_p
+                   + (n - i) * log_1mp)
+        acc += math.exp(log_pmf)
+        if acc >= 1.0:
+            return 1.0
+    return acc
+
+
 @app.get("/api/analytics/live-history/filter")
 async def analytics_live_history_filter(
     days:          int           = 30,
@@ -3756,11 +3803,79 @@ async def analytics_live_history_cooccurrence(
         result = await conn.execute(_text(sql), params)
         rows = [dict(r._mapping) for r in result.fetchall()]
 
-    # Derived hit_rate for client convenience
+    # Derived hit_rate + significance test (one-sided binomial, H0: p = baseline)
     if with_pump_lift:
+        # Baseline: across ALL rows in the window, what fraction hit the
+        # target multiple? Same date filter, no group-by. Skip the
+        # config_version filter when comparing across versions; honour
+        # it otherwise so single-version analyses stay self-consistent.
+        if is_pg:
+            baseline_sql = (
+                "SELECT COUNT(*) AS n, "
+                "SUM(CASE WHEN (SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                "                WHERE ep.symbol = h.symbol "
+                "                  AND ep.pump_start_date::date >= h.scanned_at::date "
+                "                  AND ep.pump_start_date::date <= "
+                "                      (h.scanned_at::date + (:lift_days || ' days')::interval)::date "
+                ") >= :lift_target THEN 1 ELSE 0 END) AS n_target "
+                "FROM demand_ticker_history h "
+                "WHERE h.scanned_at > NOW() - INTERVAL :since_pg "
+                + (" AND h.scoring_config_version = :cv" if config_version else "")
+            )
+        else:
+            baseline_sql = (
+                "SELECT COUNT(*) AS n, "
+                "SUM(CASE WHEN (SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                "                WHERE ep.symbol = h.symbol "
+                "                  AND ep.pump_start_date >= date(h.scanned_at) "
+                "                  AND ep.pump_start_date <= date(h.scanned_at, :lift_days_offset) "
+                ") >= :lift_target THEN 1 ELSE 0 END) AS n_target "
+                "FROM demand_ticker_history h "
+                "WHERE h.scanned_at > datetime('now', :since) "
+                + (" AND h.scoring_config_version = :cv" if config_version else "")
+            )
+        baseline_params = {
+            "lift_target": params["lift_target"],
+        }
+        if is_pg:
+            baseline_params["since_pg"]  = params["since_pg"]
+            baseline_params["lift_days"] = params["lift_days"]
+        else:
+            baseline_params["since"]            = params["since"]
+            baseline_params["lift_days_offset"] = params["lift_days_offset"]
+        if config_version:
+            baseline_params["cv"] = config_version
+
+        async with get_engine().connect() as conn:
+            b_row = (await conn.execute(_text(baseline_sql), baseline_params)).fetchone()
+        b_n        = (b_row[0] if b_row else 0) or 0
+        b_target   = (b_row[1] if b_row else 0) or 0
+        baseline_p = (b_target / b_n) if b_n else 0.0
+
         for r in rows:
             n = r.get("n") or 0
-            r["hit_rate"] = (r.get("n_pump_target") or 0) / n if n else None
+            r["hit_rate"]   = (r.get("n_pump_target") or 0) / n if n else None
+            # Lift = combo's hit rate divided by baseline. 1.0 = no edge,
+            # 2.0 = twice as likely to pump, 0.5 = half.
+            if n and baseline_p > 0:
+                r["lift_vs_baseline"] = round(r["hit_rate"] / baseline_p, 3)
+            else:
+                r["lift_vs_baseline"] = None
+            # One-sided binomial: P(observed n_pump_target or more under baseline_p).
+            # Low p_value = combo lifts pumps more than chance would predict.
+            r["p_value"] = round(
+                _binom_test_one_sided_greater(
+                    int(r.get("n_pump_target") or 0),
+                    int(n),
+                    baseline_p,
+                ),
+                6,
+            ) if n and baseline_p > 0 else None
+            r["significant"] = (
+                r["p_value"] is not None
+                and r["p_value"] < 0.05
+                and (r["lift_vs_baseline"] or 0) > 1.0
+            )
 
     return {
         "ok":              True,
@@ -3770,6 +3885,11 @@ async def analytics_live_history_cooccurrence(
         "with_pump_lift":  with_pump_lift,
         "lift_window_days":  lift_window_days  if with_pump_lift else None,
         "lift_min_multiple": lift_min_multiple if with_pump_lift else None,
+        "baseline": ({
+            "n":          b_n,
+            "n_target":   b_target,
+            "hit_rate":   round(baseline_p, 6),
+        } if with_pump_lift else None),
         "count":           len(rows),
         "rows":            rows,
     }
