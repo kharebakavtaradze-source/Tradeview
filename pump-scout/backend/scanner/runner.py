@@ -391,6 +391,26 @@ async def run_scan() -> dict:
     except Exception as e:
         logger.warning(f"save_scan_candidates failed (non-fatal): {e}")
 
+    # Save full demand snapshot to demand_ticker_history (analytics layer).
+    # Applies demand_composite scoring on the in-memory candle map and stores
+    # the bar-label snapshot (tz/preup/line5/wyckoff) + scoring_config version
+    # so Live history is queryable on the same fields as Pump Study.
+    try:
+        from database import save_demand_ticker_history
+        from scanner.demand_composite_scanner import apply_demand_composite
+
+        candle_map = {
+            r["symbol"]: r.get("candles", [])
+            for r in final
+            if r.get("symbol") and r.get("candles")
+        }
+        scored = apply_demand_composite(final, candle_map=candle_map)
+        saved_hist = await save_demand_ticker_history(scored)
+        if saved_hist:
+            logger.info(f"Saved {saved_hist} demand_ticker_history rows")
+    except Exception as e:
+        logger.warning(f"save_demand_ticker_history failed (non-fatal): {e}")
+
     # Update pattern streaks (ARM+ multi-day accumulation tracking)
     try:
         from scanner.pattern_streaks import update_pattern_streaks

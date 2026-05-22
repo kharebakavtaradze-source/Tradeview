@@ -557,6 +557,22 @@ class DemandTickerHistory(Base):
     dryup_streak          = Column(Integer, nullable=True)
     vol_ratio             = Column(Float,   nullable=True)
     confluence_signals    = Column(String(120), nullable=True)   # comma-separated list
+    # ── Bar-label snapshot (260521_TZ_F_WLNBB_CMB) ────────────────────────────
+    # Persisted so analytics can query Live history by TZ/PREUP/Line5 — the
+    # same fields Pump Study / Pattern Study use for lift / pattern discovery.
+    tz_t_signal           = Column(String(10), nullable=True)
+    tz_z_signal           = Column(String(10), nullable=True)
+    best_tz_t_signal_15bar= Column(String(10), nullable=True)
+    best_tz_z_signal_15bar= Column(String(10), nullable=True)
+    preup_token           = Column(String(10), nullable=True)
+    predn_token           = Column(String(10), nullable=True)
+    line3                 = Column(String(10), nullable=True)
+    line4                 = Column(String(15), nullable=True)
+    line5                 = Column(String(30), nullable=True)
+    l_digits              = Column(String(10), nullable=True)   # e.g. "L34"
+    wyckoff_state         = Column(String(30), nullable=True)
+    # Run lineage — which scoring_config.VERSION computed these scores
+    scoring_config_version= Column(String(20), nullable=True)
 
 
 class CandleCache(Base):
@@ -817,6 +833,31 @@ _REPLAY_SIGNAL_CANDIDATE_MIGRATIONS = [
     ("best_tz_z_signal_15bar", "VARCHAR(10)"),
 ]
 
+_RUN_LINEAGE_MIGRATIONS: list[tuple[str, str, str]] = [
+    # (table, column, type) — scoring_config.VERSION captured at run creation
+    ("replay_runs",        "scoring_config_version", "VARCHAR(20)"),
+    ("pump_study_runs",    "scoring_config_version", "VARCHAR(20)"),
+    ("raw_pattern_runs",   "scoring_config_version", "VARCHAR(20)"),
+]
+
+
+_DEMAND_TICKER_HISTORY_MIGRATIONS: list[tuple[str, str]] = [
+    # Bar-label snapshot for Live history (analytics parity with Pump Study)
+    ("tz_t_signal",            "VARCHAR(10)"),
+    ("tz_z_signal",            "VARCHAR(10)"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
+    ("preup_token",            "VARCHAR(10)"),
+    ("predn_token",            "VARCHAR(10)"),
+    ("line3",                  "VARCHAR(10)"),
+    ("line4",                  "VARCHAR(15)"),
+    ("line5",                  "VARCHAR(30)"),
+    ("l_digits",               "VARCHAR(10)"),
+    ("wyckoff_state",          "VARCHAR(30)"),
+    ("scoring_config_version", "VARCHAR(20)"),
+]
+
+
 _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
     # Demand composite enrichment (Option B)
     ("demand_score_at_breakout",   "FLOAT"),
@@ -946,6 +987,16 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE discovered_patterns ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for table, col, coltype in _RUN_LINEAGE_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
+        for col, coltype in _DEMAND_TICKER_HISTORY_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE demand_ticker_history ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -1031,6 +1082,24 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration pump_episodes.{col} failed (non-fatal): {e}")
+
+        # scoring_config.VERSION lineage on replay/pump-study/raw-pattern runs
+        for table, col, coltype in _RUN_LINEAGE_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration {table}.{col} failed (non-fatal): {e}")
+
+        # Bar-label snapshot columns on demand_ticker_history (Live analytics parity)
+        for col, coltype in _DEMAND_TICKER_HISTORY_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE demand_ticker_history ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration demand_ticker_history.{col} failed (non-fatal): {e}")
 
         for col, coltype in _AI_JOURNAL_POSITION_MIGRATIONS:
             try:
@@ -1233,6 +1302,10 @@ async def save_demand_ticker_history(results: list[dict], scanned_at=None) -> in
     ts = scanned_at or _dt.utcnow()
     if not results:
         return 0
+    try:
+        from scanner.scoring_config import VERSION as _CFG_VER
+    except Exception:
+        _CFG_VER = None
     saved = 0
     async with get_session_factory()() as session:
         for r in results:
@@ -1240,6 +1313,10 @@ async def save_demand_ticker_history(results: list[dict], scanned_at=None) -> in
             tier = r.get("demand_composite_tier", "SKIP")
             if not sym or tier == "SKIP":
                 continue
+            # bar_label_snapshot holds last-bar features from compute_combined_bar_labels.
+            # Fall back to flat keys for callers that pre-flatten.
+            snap  = r.get("bar_label_snapshot") or {}
+            regime = r.get("regime") or {}
             row = DemandTickerHistory(
                 scanned_at             = ts,
                 symbol                 = sym,
@@ -1252,6 +1329,18 @@ async def save_demand_ticker_history(results: list[dict], scanned_at=None) -> in
                 dryup_streak           = r.get("dc_dryup_streak"),
                 vol_ratio              = r.get("dc_vol_ratio"),
                 confluence_signals     = ",".join(r.get("confluence_signals") or []),
+                tz_t_signal            = snap.get("tz_t_signal")            or r.get("tz_t_signal"),
+                tz_z_signal            = snap.get("tz_z_signal")            or r.get("tz_z_signal"),
+                best_tz_t_signal_15bar = snap.get("best_tz_t_signal_15bar") or r.get("best_tz_t_signal_15bar"),
+                best_tz_z_signal_15bar = snap.get("best_tz_z_signal_15bar") or r.get("best_tz_z_signal_15bar"),
+                preup_token            = snap.get("preup_token")            or r.get("preup_token"),
+                predn_token            = snap.get("predn_token")            or r.get("predn_token"),
+                line3                  = snap.get("line3")                  or r.get("line3"),
+                line4                  = snap.get("line4")                  or r.get("line4"),
+                line5                  = snap.get("line5")                  or r.get("line5"),
+                l_digits               = snap.get("l_digits")               or r.get("l_digits"),
+                wyckoff_state          = regime.get("state") or r.get("wyckoff_state") or r.get("wyckoff"),
+                scoring_config_version = r.get("scoring_config_version") or _CFG_VER,
             )
             session.add(row)
             saved += 1
@@ -1294,6 +1383,19 @@ async def get_demand_ticker_history(symbol: str, limit: int = 30) -> list[dict]:
             "dryup_streak":           r.dryup_streak,
             "vol_ratio":              r.vol_ratio,
             "confluence_signals":     [s for s in (r.confluence_signals or "").split(",") if s],
+            # Bar-label snapshot
+            "tz_t_signal":            getattr(r, "tz_t_signal", None),
+            "tz_z_signal":            getattr(r, "tz_z_signal", None),
+            "best_tz_t_signal_15bar": getattr(r, "best_tz_t_signal_15bar", None),
+            "best_tz_z_signal_15bar": getattr(r, "best_tz_z_signal_15bar", None),
+            "preup_token":            getattr(r, "preup_token", None),
+            "predn_token":            getattr(r, "predn_token", None),
+            "line3":                  getattr(r, "line3", None),
+            "line4":                  getattr(r, "line4", None),
+            "line5":                  getattr(r, "line5", None),
+            "l_digits":               getattr(r, "l_digits", None),
+            "wyckoff_state":          getattr(r, "wyckoff_state", None),
+            "scoring_config_version": getattr(r, "scoring_config_version", None),
         }
         for r in rows
     ]
@@ -2886,6 +2988,7 @@ class ReplayRun(Base):
     mode                = Column(String(20),  default="single_day")   # single_day | date_range
     status              = Column(String(20),  default="running")       # running | completed | failed | cancelled
     universe_mode       = Column(String(10),  default="approx")        # strict | approx
+    scoring_config_version = Column(String(20), nullable=True)         # scanner.scoring_config.VERSION at create time
     as_of_date          = Column(String(10),  nullable=True)           # YYYY-MM-DD  (single_day)
     start_date          = Column(String(10),  nullable=True)           # range start
     end_date            = Column(String(10),  nullable=True)           # range end
@@ -3031,11 +3134,20 @@ class ReplayMissedMover(Base):
 
 async def create_replay_run(data: dict) -> int:
     """Insert a new replay run row. Returns the new run id."""
+    cfg_version = data.get("scoring_config_version")
+    if cfg_version is None:
+        try:
+            from scanner.scoring_config import VERSION as _CFG_VER
+            cfg_version = _CFG_VER
+        except Exception:
+            cfg_version = None
+
     async with get_session_factory()() as session:
         row = ReplayRun(
             mode                = data.get("mode", "single_day"),
             status              = data.get("status", "running"),
             universe_mode       = data.get("universe_mode", "approx"),
+            scoring_config_version = cfg_version,
             as_of_date          = data.get("as_of_date"),
             start_date          = data.get("start_date"),
             end_date            = data.get("end_date"),
@@ -3368,6 +3480,7 @@ def _replay_run_to_dict(r: ReplayRun) -> dict:
         "mode":                 r.mode,
         "status":               r.status,
         "universe_mode":        r.universe_mode,
+        "scoring_config_version": getattr(r, "scoring_config_version", None),
         "as_of_date":           r.as_of_date,
         "start_date":           r.start_date,
         "end_date":             r.end_date,
@@ -3471,8 +3584,9 @@ class PumpStudyRun(Base):
     start_date          = Column(String(10), nullable=False)
     end_date            = Column(String(10), nullable=False)
     window_days         = Column(Integer,  default=14)     # look-ahead trading-day window
-    min_multiple        = Column(Float,    default=4.0)    # e.g. 4.0 = 4x
+    min_multiple        = Column(Float,    default=1.2)    # default 1.2 = 20% pump; was 4.0 historically
     universe_limit      = Column(Integer,  default=0)      # 0 = no limit
+    scoring_config_version = Column(String(20), nullable=True)  # scanner.scoring_config.VERSION at create time
     # Granular counts updated as the run progresses
     symbols_scanned     = Column(Integer,  default=0)
     raw_detection_count = Column(Integer,  default=0)
@@ -3751,6 +3865,7 @@ class RawPatternRun(Base):
     id                    = Column(Integer,    primary_key=True)
     pump_study_run_id     = Column(Integer,    nullable=True, index=True)  # FK → pump_study_runs.id (nullable for standalone)
     status                = Column(String(20), default="pending")
+    scoring_config_version = Column(String(20), nullable=True)  # scanner.scoring_config.VERSION at create time
     start_date            = Column(String(10), nullable=True)
     end_date              = Column(String(10), nullable=True)
     # Progress counters
@@ -4181,14 +4296,23 @@ class DiscoveredPattern(Base):
 # ── Pump Study CRUD ───────────────────────────────────────────────────────────
 
 async def create_pump_study_run(data: dict) -> int:
+    cfg_version = data.get("scoring_config_version")
+    if cfg_version is None:
+        try:
+            from scanner.scoring_config import VERSION as _CFG_VER
+            cfg_version = _CFG_VER
+        except Exception:
+            cfg_version = None
+
     async with get_session_factory()() as session:
         row = PumpStudyRun(
             status         = "pending",
             start_date     = data["start_date"],
             end_date       = data["end_date"],
             window_days    = data.get("window_days",    14),
-            min_multiple   = data.get("min_multiple",   4.0),
+            min_multiple   = data.get("min_multiple",   1.2),
             universe_limit = data.get("universe_limit", 0),
+            scoring_config_version = cfg_version,
             notes          = data.get("notes"),
         )
         session.add(row)
@@ -4706,6 +4830,7 @@ def _pump_study_run_to_dict(r: PumpStudyRun) -> dict:
         "window_days":          r.window_days,
         "min_multiple":         r.min_multiple,
         "universe_limit":       r.universe_limit,
+        "scoring_config_version": getattr(r, "scoring_config_version", None),
         "symbols_scanned":      r.symbols_scanned,
         "raw_detection_count":  r.raw_detection_count,
         "cluster_count":        r.cluster_count,
@@ -4871,6 +4996,7 @@ def _raw_pattern_run_to_dict(row: RawPatternRun) -> dict:
         "id":                    row.id,
         "pump_study_run_id":     row.pump_study_run_id,
         "status":                row.status,
+        "scoring_config_version": getattr(row, "scoring_config_version", None),
         "start_date":            row.start_date,
         "end_date":              row.end_date,
         "raw_daily_count":       row.raw_daily_count,
@@ -4889,12 +5015,21 @@ async def create_raw_pattern_run(
     start_date: str | None = None,
     end_date: str | None = None,
     notes: str | None = None,
+    scoring_config_version: str | None = None,
 ) -> int:
     """Create a new raw-pattern discovery run. Returns run id."""
+    if scoring_config_version is None:
+        try:
+            from scanner.scoring_config import VERSION as _CFG_VER
+            scoring_config_version = _CFG_VER
+        except Exception:
+            scoring_config_version = None
+
     async with get_session_factory()() as session:
         row = RawPatternRun(
             pump_study_run_id = pump_study_run_id,
             status            = "pending",
+            scoring_config_version = scoring_config_version,
             start_date        = start_date,
             end_date          = end_date,
             notes             = notes,
