@@ -3417,6 +3417,78 @@ async def admin_db_wipe_all(
     return {"ok": True, **result}
 
 
+@app.post("/api/admin/db/rebuild")
+async def admin_db_rebuild(background_tasks: BackgroundTasks, sync_universe: bool = True):
+    """
+    Bring an empty database back to a usable state.
+
+    Steps:
+      1. init_db()              — idempotent CREATE TABLE for every model + run any
+                                   pending column migrations.
+      2. drop_legacy_tables()   — drop ribbon_candidates if it survived the wipe.
+      3. sync_universe_cache()  — (background) pull fresh ticker reference data
+                                   from Massive so sector/SIC lookups work.
+      4. detect_market_regime() — (background) populate the market_regime table.
+
+    Single-row tables (journal_settings, ai_journal_state) self-seed on first
+    read, so they need no explicit kick. Scan results / pump studies / replays
+    are driven by their own user-triggered endpoints.
+
+    Returns immediately; poll /api/admin/refresh-sector-data/status for the
+    universe sync, /api/market-regime for the regime row.
+    """
+    from database import init_db, drop_legacy_tables
+
+    steps: dict = {}
+
+    try:
+        await init_db()
+        steps["init_db"] = "ok"
+    except Exception as exc:
+        steps["init_db"] = f"error: {exc}"
+        raise HTTPException(500, detail=f"init_db failed: {exc}")
+
+    try:
+        steps["drop_legacy"] = await drop_legacy_tables()
+    except Exception as exc:
+        steps["drop_legacy"] = f"error: {exc}"
+
+    async def _sync_universe():
+        try:
+            from scanner.massive_reference import sync_universe_cache
+            count = await sync_universe_cache(save_to_db=True)
+            logger.info(f"[REBUILD] universe_cache synced: {count} rows")
+        except Exception as exc:
+            logger.exception(f"[REBUILD] sync_universe_cache failed: {exc}")
+
+    async def _refresh_regime():
+        try:
+            from scanner.market_regime import detect_market_regime
+            await detect_market_regime()
+            logger.info("[REBUILD] market_regime refreshed")
+        except Exception as exc:
+            logger.exception(f"[REBUILD] detect_market_regime failed: {exc}")
+
+    if sync_universe:
+        background_tasks.add_task(_sync_universe)
+        steps["universe_cache"] = "started (background)"
+    else:
+        steps["universe_cache"] = "skipped"
+
+    background_tasks.add_task(_refresh_regime)
+    steps["market_regime"] = "started (background)"
+
+    return {
+        "ok":    True,
+        "steps": steps,
+        "next":  [
+            "Trigger a demand scan: POST /api/demand-scanner/run",
+            "Start a pump study:    POST /api/replay/pump-study/run",
+            "Refresh sectors:       POST /api/admin/refresh-sector-data",
+        ],
+    }
+
+
 async def _build_research_context_text(run_id: int) -> str:
     """
     Build a compact, AI-prompt-ready research context string from a completed
