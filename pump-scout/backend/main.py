@@ -190,10 +190,19 @@ async def admin_status():
         "starting up",
         "shutting down",
         "the database system is starting",
+        "the database system is not yet accepting connections",
+        "not yet accepting connections",
+        "consistent recovery state has not been yet reached",
+        "consistent recovery state",
+        "cannotconnectnow",
         "connection refused",
         "could not connect to server",
         "server closed the connection",
         "ssl connection has been closed",
+        "ssl connection has been closed unexpectedly",
+        "connection was closed in the middle of operation",
+        "connection is closed",
+        "terminating connection due to administrator command",
     )
 
     def _classify(err_str: str) -> bool:
@@ -2560,6 +2569,16 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
                 await build_raw_pattern_comparisons(raw_run_id, run_id)
                 await _upd(raw_run_id, {"status": "complete", "finished_at": datetime.utcnow()})
                 logger.info(f"[PUMP_STUDY] auto-build: raw_pattern_study run={raw_run_id} complete")
+                # Backfill demand_*_at_breakout on the pump_episodes rows so the
+                # Pump Study Studio "Episodes" table renders demand columns.
+                try:
+                    res = await backfill_pump_episode_demand_scores()
+                    logger.info(
+                        f"[PUMP_STUDY] auto-build demand backfill: "
+                        f"updated={res.get('updated', 0)} skipped={res.get('skipped', 0)}"
+                    )
+                except Exception as exc:
+                    logger.exception(f"[PUMP_STUDY] auto-build demand backfill failed: {exc}")
             except Exception as exc:
                 await _upd(raw_run_id, {
                     "status": "error", "error_message": str(exc)[:500],
@@ -4304,76 +4323,145 @@ def _parse_signals(ep: dict) -> list:
     return sigs or []
 
 
+_SIGNAL_BOOL_COLS = [
+    "had_d_confluence_pre",
+    "had_core_d_beup_pre", "had_core_d_l34_pre",
+    "had_d6_beup_pre", "had_d4_beup_pre", "had_d3_beup_pre",
+    "had_l34_then_d4_3b_pre", "had_d4_then_beup_5b_pre", "had_d3_beup_toxic_pre",
+    "had_prime_buy_pre", "had_ats_prime_pre",
+    "had_valid_recent_setup", "had_valid_recent_trigger",
+    "had_valid_recent_confirm", "had_valid_full_sequence",
+    "had_breakout_retest", "had_spring_test_lps", "had_accumulation_like",
+    "had_compression",
+    "had_np_buy_candidate_pre", "had_np_watch_pre",
+    "had_late_confirm_sequence_pre", "had_expansion_risk_flag_pre",
+    "had_confirmed_structure_pre", "had_triggered_structure_pre",
+    "had_early_structure_pre", "had_setup_phase_pre",
+    "had_accumulation_ready_pre", "had_expansion_start_pre",
+    "had_overheated_expansion_pre",
+    "had_bull_stack_pre",
+    "demand_prime_at_breakout", "demand_high_at_breakout",
+    "demand_watch_or_better_at_breakout",
+    "ats_prime_at_breakout", "ats_setup_or_better_at_breakout",
+    "split_capped_demand_at_breakout", "illiquidity_capped_demand_at_breakout",
+    "has_split_near_episode", "has_reverse_split_near_episode",
+]
+
+_SIGNAL_CATEGORICAL_COLS = [
+    "demand_tier_at_breakout",
+    "ats_at_breakout",
+    "tz_t_signal_at_breakout",
+    "tz_z_signal_at_breakout",
+    "preup_token_at_breakout",
+    "line5_at_breakout",
+    "strongest_wyckoff_state",
+    "dominant_d_confluence_type_pre",
+    "best_new_pump_sequence_type",
+]
+
+
+def _episode_signals(ep: dict) -> list[str]:
+    """Derive a list of active signal flags from a raw_pattern_episode_features row."""
+    sigs: list[str] = []
+    for col in _SIGNAL_BOOL_COLS:
+        if ep.get(col):
+            sigs.append(col)
+    for col in _SIGNAL_CATEGORICAL_COLS:
+        v = ep.get(col)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s or s.upper() in ("NONE", "NULL", "UNKNOWN"):
+            continue
+        sigs.append(f"{col}={s}")
+    return sigs
+
+
 @app.get("/api/replay/pump-study/{run_id}/signal-lift")
 async def pump_study_signal_lift(run_id: int, baseline_max_multiple: float = 2.0):
     """
     Compute signal lift table for a pump study run.
 
+    Reads from the chained raw_pattern_episode_features run (which has
+    boolean / tier columns for every active signal at breakout).
     Compares target group (episodes >= run's min_multiple) vs
     baseline group (episodes < baseline_max_multiple).
     Returns lift per signal, sorted by lift desc.
     """
-    from database import get_pump_study_run, get_pump_episodes
+    from database import (
+        get_pump_study_run,
+        get_raw_pattern_runs,
+        get_raw_pattern_episode_features,
+    )
 
     run = await get_pump_study_run(run_id)
     if not run:
         raise HTTPException(404, detail=f"Run {run_id} not found")
 
-    all_episodes = await get_pump_episodes(run_id, limit=5000)
+    raw_runs = await get_raw_pattern_runs(pump_study_run_id=run_id, limit=1)
+    raw_run = raw_runs[0] if raw_runs else None
+    raw_run_id = (raw_run or {}).get("id")
+
+    if not raw_run_id:
+        return {
+            "ok":           True,
+            "run_id":       run_id,
+            "raw_run_id":   None,
+            "n_target":     0,
+            "n_baseline":   0,
+            "signal_lift":  [],
+            "note":         "No raw-pattern-study run found for this pump study. "
+                            "Run /api/replay/raw-pattern-study/run to build features.",
+        }
+
+    episodes = await get_raw_pattern_episode_features(raw_run_id, limit=5000)
 
     params = run.get("params") or {}
     min_mult = float(params.get("min_multiple", 1.2))
 
-    target   = [e for e in all_episodes if (e.get("pump_multiple") or 0) >= min_mult]
-    baseline = [e for e in all_episodes if (e.get("pump_multiple") or 0) <  baseline_max_multiple]
+    target   = [e for e in episodes if (e.get("pump_multiple") or 0) >= min_mult]
+    baseline = [e for e in episodes if (e.get("pump_multiple") or 0) <  baseline_max_multiple]
 
-    n_target   = len(target)   or 1
-    n_baseline = len(baseline) or 1
+    n_target   = len(target)
+    n_baseline = len(baseline)
+    d_target   = n_target   or 1
+    d_baseline = n_baseline or 1
 
-    # Collect all unique signal names across both groups
+    target_sigs   = [_episode_signals(e) for e in target]
+    baseline_sigs = [_episode_signals(e) for e in baseline]
+
     all_signals: set[str] = set()
-    for ep in all_episodes:
-        sigs = ep.get("confluence_signals") or ep.get("demand_signals") or []
-        if isinstance(sigs, str):
-            import json as _j
-            try:
-                sigs = _j.loads(sigs)
-            except Exception:
-                sigs = []
-        all_signals.update(sigs)
+    for s in target_sigs:   all_signals.update(s)
+    for s in baseline_sigs: all_signals.update(s)
 
     rows = []
-    for sig in sorted(all_signals):
-        t_count = sum(
-            1 for e in target
-            if sig in _parse_signals(e)
-        )
-        b_count = sum(
-            1 for e in baseline
-            if sig in _parse_signals(e)
-        )
-        t_rate = t_count / n_target
-        b_rate = b_count / n_baseline
-        lift   = round(t_rate / b_rate, 2) if b_rate > 0 else None
+    for sig in all_signals:
+        t_count = sum(1 for s in target_sigs   if sig in s)
+        b_count = sum(1 for s in baseline_sigs if sig in s)
+        t_rate  = t_count / d_target
+        b_rate  = b_count / d_baseline
+        lift    = round(t_rate / b_rate, 2) if b_rate > 0 else None
         rows.append({
             "signal":         sig,
+            "count":          t_count,
             "target_count":   t_count,
-            "target_rate":    round(t_rate, 4),
             "baseline_count": b_count,
+            "target_rate":    round(t_rate, 4),
             "baseline_rate":  round(b_rate, 4),
             "lift":           lift,
         })
 
-    rows.sort(key=lambda r: (r["lift"] or 0), reverse=True)
+    rows.sort(key=lambda r: ((r["lift"] or 0), r["target_count"]), reverse=True)
 
     return {
-        "ok":             True,
-        "run_id":         run_id,
-        "n_target":       n_target,
-        "n_baseline":     n_baseline,
-        "min_multiple":   min_mult,
-        "baseline_max":   baseline_max_multiple,
-        "signal_lift":    rows,
+        "ok":           True,
+        "run_id":       run_id,
+        "raw_run_id":   raw_run_id,
+        "n_target":     n_target,
+        "n_baseline":   n_baseline,
+        "min_multiple": min_mult,
+        "baseline_max": baseline_max_multiple,
+        "signal_lift":  rows,
     }
 
 
@@ -4558,6 +4646,52 @@ async def raw_pattern_study_daily_features(
         run_id, episode_id=episode_id, phase=phase, limit=limit
     )
     return {"ok": True, "run_id": run_id, "count": len(rows), "rows": rows}
+
+
+# ── 5b. Clusters (proxy to the underlying pump-study) ─────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/clusters")
+async def raw_pattern_study_clusters(run_id: int):
+    """
+    Cluster view for a raw-pattern-study run.
+
+    Clusters are a pump-study concept (raw detections collapsed into canonical
+    episodes), so this endpoint resolves the parent pump_study_run_id and
+    returns the same shape as /api/replay/pump-study/{id}/clusters.
+    """
+    from database import (
+        get_raw_pattern_run,
+        get_pump_clusters,
+        get_pump_episode_detections,
+    )
+
+    raw_run = await get_raw_pattern_run(run_id)
+    if not raw_run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    pump_run_id = raw_run.get("pump_study_run_id")
+    if not pump_run_id:
+        raise HTTPException(400, detail=f"Raw pattern run {run_id} has no pump_study_run_id")
+
+    clusters = await get_pump_clusters(pump_run_id)
+    raw_dets = await get_pump_episode_detections(pump_run_id)
+
+    det_by_cluster: dict[str, list] = {}
+    for d in raw_dets:
+        cid = d.get("cluster_id")
+        if cid:
+            det_by_cluster.setdefault(cid, []).append(d)
+    for cl in clusters:
+        cl["raw_detections"] = det_by_cluster.get(cl["cluster_id"], [])
+
+    return {
+        "ok":             True,
+        "run_id":         run_id,
+        "pump_study_run_id": pump_run_id,
+        "clusters":       clusters,
+        "cluster_count":  len(clusters),
+        "raw_det_count":  len(raw_dets),
+    }
 
 
 # ── 6. Comparisons ────────────────────────────────────────────────────────────

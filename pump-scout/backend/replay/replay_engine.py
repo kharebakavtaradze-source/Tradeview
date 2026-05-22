@@ -584,7 +584,7 @@ async def _scan_one_date(as_of_date: str) -> list[dict]:
             return None
 
     # Process in batches with a semaphore to stay polite to the Massive API
-    sem = asyncio.Semaphore(20)
+    sem = asyncio.Semaphore(40)
 
     async def _bounded(sym, eod):
         async with sem:
