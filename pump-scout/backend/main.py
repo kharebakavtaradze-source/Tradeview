@@ -2,6 +2,7 @@
 Pump Scout — FastAPI backend
 Endpoints for scan results, ticker detail, manual scan trigger, and health.
 """
+import asyncio
 import csv
 import io
 import json
@@ -101,11 +102,70 @@ from hype_monitor.divergence import detect_divergences
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
 
+_STARTUP_TRANSIENT_HINTS = (
+    "recovery mode",
+    "starting up",
+    "the database system is starting",
+    "not yet accepting connections",
+    "consistent recovery state",
+    "cannotconnectnow",
+    "connection refused",
+    "could not connect to server",
+    "server closed the connection",
+    "ssl connection has been closed",
+)
+
+
+def _is_startup_transient(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(h in msg for h in _STARTUP_TRANSIENT_HINTS) or \
+           exc.__class__.__name__ == "CannotConnectNowError"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init DB."""
+    """Startup: init DB with bounded retries for Postgres replicas still in recovery."""
     logger.info("Starting up Pump Scout backend...")
-    await init_db()
+
+    # Retry init_db with exponential backoff (~2 minutes total) so that a
+    # standby Postgres still replaying WAL doesn't crash-loop the container.
+    # Non-transient failures (bad schema, auth) still raise immediately.
+    delays = [2, 4, 8, 16, 30, 30, 30]  # seconds — ~2 min budget
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate([0] + delays, start=1):
+        if delay:
+            logger.warning(
+                f"init_db transient failure (attempt {attempt - 1}/{len(delays)}); "
+                f"retrying in {delay}s: {last_exc}"
+            )
+            await asyncio.sleep(delay)
+        try:
+            await init_db()
+            if attempt > 1:
+                logger.info(f"init_db succeeded on attempt {attempt}")
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if not _is_startup_transient(exc):
+                logger.error(f"init_db failed with non-transient error: {exc}")
+                raise
+    if last_exc is not None:
+        # Out of retries but error is transient. Continue startup so the
+        # status endpoint can render the situation; subsequent DB-touching
+        # requests will still fail until Postgres finishes recovery.
+        logger.error(
+            f"init_db still failing after retries; starting app anyway so "
+            f"/api/admin/status can report state. Last error: {last_exc}"
+        )
+
+    try:
+        from database import drop_legacy_tables
+        dropped = await drop_legacy_tables()
+        if dropped:
+            logger.info(f"Legacy tables: {dropped}")
+    except Exception as _exc:
+        logger.warning(f"drop_legacy_tables failed (non-fatal): {_exc}")
     try:
         from scanner.massive_reference import load_from_db as _load_universe
         await _load_universe()
@@ -3353,6 +3413,133 @@ async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, d
 
     results["dry_run"] = dry_run
     return results
+
+
+_WIPE_CONFIRM_TOKEN = "YES_NUKE_EVERYTHING"
+
+
+@app.post("/api/admin/db/wipe-all")
+async def admin_db_wipe_all(
+    confirm: str = "",
+    vacuum: bool = True,
+    keep: str = "",
+):
+    """
+    DESTRUCTIVE: TRUNCATE every table in the SQLAlchemy schema and reset
+    identity columns. Requires ?confirm=YES_NUKE_EVERYTHING.
+
+    Optional:
+      ?keep=tbl1,tbl2  — comma-separated tables to skip (e.g. "watchlist,journal").
+      ?vacuum=false    — skip VACUUM ANALYZE after truncate.
+
+    Returns the list of truncated tables, skipped tables, and any errors.
+    """
+    if confirm != _WIPE_CONFIRM_TOKEN:
+        raise HTTPException(
+            400,
+            detail=(
+                f"Refusing to wipe. Pass ?confirm={_WIPE_CONFIRM_TOKEN} to proceed. "
+                "Every table in the schema will be truncated."
+            ),
+        )
+
+    from database import wipe_database, vacuum_analyze_all
+
+    skip = tuple(t.strip() for t in keep.split(",") if t.strip())
+    logger.warning(
+        f"[ADMIN] DB wipe-all initiated by API. skip={skip} vacuum={vacuum}"
+    )
+
+    result = await wipe_database(skip=skip)
+    logger.warning(
+        f"[ADMIN] DB wipe-all complete: "
+        f"truncated={len(result.get('truncated', []))} "
+        f"skipped={len(result.get('skipped', []))} "
+        f"errors={len(result.get('errors', {}))}"
+    )
+
+    if vacuum:
+        try:
+            v = await vacuum_analyze_all()
+            result["vacuum"] = {"ran": True, "tables": len(v)}
+        except Exception as exc:
+            result["vacuum"] = {"ran": False, "error": str(exc)}
+    else:
+        result["vacuum"] = {"ran": False}
+
+    return {"ok": True, **result}
+
+
+@app.post("/api/admin/db/rebuild")
+async def admin_db_rebuild(background_tasks: BackgroundTasks, sync_universe: bool = True):
+    """
+    Bring an empty database back to a usable state.
+
+    Steps:
+      1. init_db()              — idempotent CREATE TABLE for every model + run any
+                                   pending column migrations.
+      2. drop_legacy_tables()   — drop ribbon_candidates if it survived the wipe.
+      3. sync_universe_cache()  — (background) pull fresh ticker reference data
+                                   from Massive so sector/SIC lookups work.
+      4. detect_market_regime() — (background) populate the market_regime table.
+
+    Single-row tables (journal_settings, ai_journal_state) self-seed on first
+    read, so they need no explicit kick. Scan results / pump studies / replays
+    are driven by their own user-triggered endpoints.
+
+    Returns immediately; poll /api/admin/refresh-sector-data/status for the
+    universe sync, /api/market-regime for the regime row.
+    """
+    from database import init_db, drop_legacy_tables
+
+    steps: dict = {}
+
+    try:
+        await init_db()
+        steps["init_db"] = "ok"
+    except Exception as exc:
+        steps["init_db"] = f"error: {exc}"
+        raise HTTPException(500, detail=f"init_db failed: {exc}")
+
+    try:
+        steps["drop_legacy"] = await drop_legacy_tables()
+    except Exception as exc:
+        steps["drop_legacy"] = f"error: {exc}"
+
+    async def _sync_universe():
+        try:
+            from scanner.massive_reference import sync_universe_cache
+            count = await sync_universe_cache(save_to_db=True)
+            logger.info(f"[REBUILD] universe_cache synced: {count} rows")
+        except Exception as exc:
+            logger.exception(f"[REBUILD] sync_universe_cache failed: {exc}")
+
+    async def _refresh_regime():
+        try:
+            from scanner.market_regime import detect_market_regime
+            await detect_market_regime()
+            logger.info("[REBUILD] market_regime refreshed")
+        except Exception as exc:
+            logger.exception(f"[REBUILD] detect_market_regime failed: {exc}")
+
+    if sync_universe:
+        background_tasks.add_task(_sync_universe)
+        steps["universe_cache"] = "started (background)"
+    else:
+        steps["universe_cache"] = "skipped"
+
+    background_tasks.add_task(_refresh_regime)
+    steps["market_regime"] = "started (background)"
+
+    return {
+        "ok":    True,
+        "steps": steps,
+        "next":  [
+            "Trigger a demand scan: POST /api/demand-scanner/run",
+            "Start a pump study:    POST /api/replay/pump-study/run",
+            "Refresh sectors:       POST /api/admin/refresh-sector-data",
+        ],
+    }
 
 
 async def _build_research_context_text(run_id: int) -> str:
