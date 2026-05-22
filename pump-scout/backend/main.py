@@ -2,6 +2,7 @@
 Pump Scout — FastAPI backend
 Endpoints for scan results, ticker detail, manual scan trigger, and health.
 """
+import asyncio
 import csv
 import io
 import json
@@ -101,11 +102,63 @@ from hype_monitor.divergence import detect_divergences
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
 
+_STARTUP_TRANSIENT_HINTS = (
+    "recovery mode",
+    "starting up",
+    "the database system is starting",
+    "not yet accepting connections",
+    "consistent recovery state",
+    "cannotconnectnow",
+    "connection refused",
+    "could not connect to server",
+    "server closed the connection",
+    "ssl connection has been closed",
+)
+
+
+def _is_startup_transient(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(h in msg for h in _STARTUP_TRANSIENT_HINTS) or \
+           exc.__class__.__name__ == "CannotConnectNowError"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init DB."""
+    """Startup: init DB with bounded retries for Postgres replicas still in recovery."""
     logger.info("Starting up Pump Scout backend...")
-    await init_db()
+
+    # Retry init_db with exponential backoff (~2 minutes total) so that a
+    # standby Postgres still replaying WAL doesn't crash-loop the container.
+    # Non-transient failures (bad schema, auth) still raise immediately.
+    delays = [2, 4, 8, 16, 30, 30, 30]  # seconds — ~2 min budget
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate([0] + delays, start=1):
+        if delay:
+            logger.warning(
+                f"init_db transient failure (attempt {attempt - 1}/{len(delays)}); "
+                f"retrying in {delay}s: {last_exc}"
+            )
+            await asyncio.sleep(delay)
+        try:
+            await init_db()
+            if attempt > 1:
+                logger.info(f"init_db succeeded on attempt {attempt}")
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if not _is_startup_transient(exc):
+                logger.error(f"init_db failed with non-transient error: {exc}")
+                raise
+    if last_exc is not None:
+        # Out of retries but error is transient. Continue startup so the
+        # status endpoint can render the situation; subsequent DB-touching
+        # requests will still fail until Postgres finishes recovery.
+        logger.error(
+            f"init_db still failing after retries; starting app anyway so "
+            f"/api/admin/status can report state. Last error: {last_exc}"
+        )
+
     try:
         from database import drop_legacy_tables
         dropped = await drop_legacy_tables()
