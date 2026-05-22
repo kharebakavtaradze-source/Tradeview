@@ -814,6 +814,33 @@ def score_demand_composite(
     # ── Readiness layer (6 gap-fills; bar_labels pre-computed above) ──────────
     readiness = _compute_readiness(m, result, candles, bar_labels=bar_labels)
 
+    # ── Bar-label snapshot (last bar + best T/Z over last 15 bars) ───────────
+    # Persisted in demand_ticker_history so Live history can be queried by
+    # TZ / PREUP / Line5 — same fields Pump Study uses for pattern discovery.
+    bar_label_snapshot: dict = {}
+    if bar_labels:
+        last_lb = bar_labels[-1] or {}
+        recent  = bar_labels[-15:] if len(bar_labels) >= 1 else bar_labels
+        best_t = next((lb.get("t_signal") for lb in reversed(recent) if lb.get("t_signal")), None)
+        best_z = next((lb.get("z_signal") for lb in reversed(recent) if lb.get("z_signal")), None)
+        bar_label_snapshot = {
+            "tz_t_signal":            last_lb.get("t_signal") or None,
+            "tz_z_signal":            last_lb.get("z_signal") or None,
+            "best_tz_t_signal_15bar": best_t,
+            "best_tz_z_signal_15bar": best_z,
+            "preup_token":            last_lb.get("preup")    or None,
+            "predn_token":            last_lb.get("predn")    or None,
+            "line3":                  last_lb.get("line3")    or None,
+            "line4":                  last_lb.get("line4")    or None,
+            "line5":                  last_lb.get("line5")    or None,
+            "l_digits":               last_lb.get("l_digits") or None,
+        }
+
+    try:
+        from scanner.scoring_config import VERSION as _CFG_VER
+    except Exception:
+        _CFG_VER = None
+
     return {
         "demand_composite_score":   final,
         "demand_composite_tier":    tier,
@@ -824,6 +851,9 @@ def score_demand_composite(
         "demand_score_breakdown":   breakdown,
         "demand_buy_reasons":       reasons,
         "demand_risk_flags":        risks,
+        # Bar-label snapshot + config lineage (260521_TZ_F_WLNBB_CMB)
+        "bar_label_snapshot":       bar_label_snapshot,
+        "scoring_config_version":   _CFG_VER,
         # Candle-level metrics pass-through for frontend
         "dc_dryup_streak":          m.get("dryup_streak", 0),
         "dc_atr_contracting":       m.get("atr_contracting", False),

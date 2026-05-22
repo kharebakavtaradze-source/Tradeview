@@ -557,6 +557,22 @@ class DemandTickerHistory(Base):
     dryup_streak          = Column(Integer, nullable=True)
     vol_ratio             = Column(Float,   nullable=True)
     confluence_signals    = Column(String(120), nullable=True)   # comma-separated list
+    # ── Bar-label snapshot (260521_TZ_F_WLNBB_CMB) ────────────────────────────
+    # Persisted so analytics can query Live history by TZ/PREUP/Line5 — the
+    # same fields Pump Study / Pattern Study use for lift / pattern discovery.
+    tz_t_signal           = Column(String(10), nullable=True)
+    tz_z_signal           = Column(String(10), nullable=True)
+    best_tz_t_signal_15bar= Column(String(10), nullable=True)
+    best_tz_z_signal_15bar= Column(String(10), nullable=True)
+    preup_token           = Column(String(10), nullable=True)
+    predn_token           = Column(String(10), nullable=True)
+    line3                 = Column(String(10), nullable=True)
+    line4                 = Column(String(15), nullable=True)
+    line5                 = Column(String(30), nullable=True)
+    l_digits              = Column(String(10), nullable=True)   # e.g. "L34"
+    wyckoff_state         = Column(String(30), nullable=True)
+    # Run lineage — which scoring_config.VERSION computed these scores
+    scoring_config_version= Column(String(20), nullable=True)
 
 
 class CandleCache(Base):
@@ -825,6 +841,23 @@ _RUN_LINEAGE_MIGRATIONS: list[tuple[str, str, str]] = [
 ]
 
 
+_DEMAND_TICKER_HISTORY_MIGRATIONS: list[tuple[str, str]] = [
+    # Bar-label snapshot for Live history (analytics parity with Pump Study)
+    ("tz_t_signal",            "VARCHAR(10)"),
+    ("tz_z_signal",            "VARCHAR(10)"),
+    ("best_tz_t_signal_15bar", "VARCHAR(10)"),
+    ("best_tz_z_signal_15bar", "VARCHAR(10)"),
+    ("preup_token",            "VARCHAR(10)"),
+    ("predn_token",            "VARCHAR(10)"),
+    ("line3",                  "VARCHAR(10)"),
+    ("line4",                  "VARCHAR(15)"),
+    ("line5",                  "VARCHAR(30)"),
+    ("l_digits",               "VARCHAR(10)"),
+    ("wyckoff_state",          "VARCHAR(30)"),
+    ("scoring_config_version", "VARCHAR(20)"),
+]
+
+
 _PUMP_EPISODE_MIGRATIONS: list[tuple[str, str]] = [
     # Demand composite enrichment (Option B)
     ("demand_score_at_breakout",   "FLOAT"),
@@ -959,6 +992,11 @@ async def _run_migrations(conn):
                 await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+        for col, coltype in _DEMAND_TICKER_HISTORY_MIGRATIONS:
+            try:
+                await conn.execute(text(f"ALTER TABLE demand_ticker_history ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
     else:
         for col, coltype in _JOURNAL_MIGRATIONS:
             try:
@@ -1053,6 +1091,15 @@ async def _run_migrations(conn):
                 ))
             except Exception as e:
                 logger.warning(f"Migration {table}.{col} failed (non-fatal): {e}")
+
+        # Bar-label snapshot columns on demand_ticker_history (Live analytics parity)
+        for col, coltype in _DEMAND_TICKER_HISTORY_MIGRATIONS:
+            try:
+                await conn.execute(text(
+                    f"ALTER TABLE demand_ticker_history ADD COLUMN IF NOT EXISTS {col} {coltype}"
+                ))
+            except Exception as e:
+                logger.warning(f"Migration demand_ticker_history.{col} failed (non-fatal): {e}")
 
         for col, coltype in _AI_JOURNAL_POSITION_MIGRATIONS:
             try:
@@ -1255,6 +1302,10 @@ async def save_demand_ticker_history(results: list[dict], scanned_at=None) -> in
     ts = scanned_at or _dt.utcnow()
     if not results:
         return 0
+    try:
+        from scanner.scoring_config import VERSION as _CFG_VER
+    except Exception:
+        _CFG_VER = None
     saved = 0
     async with get_session_factory()() as session:
         for r in results:
@@ -1262,6 +1313,10 @@ async def save_demand_ticker_history(results: list[dict], scanned_at=None) -> in
             tier = r.get("demand_composite_tier", "SKIP")
             if not sym or tier == "SKIP":
                 continue
+            # bar_label_snapshot holds last-bar features from compute_combined_bar_labels.
+            # Fall back to flat keys for callers that pre-flatten.
+            snap  = r.get("bar_label_snapshot") or {}
+            regime = r.get("regime") or {}
             row = DemandTickerHistory(
                 scanned_at             = ts,
                 symbol                 = sym,
@@ -1274,6 +1329,18 @@ async def save_demand_ticker_history(results: list[dict], scanned_at=None) -> in
                 dryup_streak           = r.get("dc_dryup_streak"),
                 vol_ratio              = r.get("dc_vol_ratio"),
                 confluence_signals     = ",".join(r.get("confluence_signals") or []),
+                tz_t_signal            = snap.get("tz_t_signal")            or r.get("tz_t_signal"),
+                tz_z_signal            = snap.get("tz_z_signal")            or r.get("tz_z_signal"),
+                best_tz_t_signal_15bar = snap.get("best_tz_t_signal_15bar") or r.get("best_tz_t_signal_15bar"),
+                best_tz_z_signal_15bar = snap.get("best_tz_z_signal_15bar") or r.get("best_tz_z_signal_15bar"),
+                preup_token            = snap.get("preup_token")            or r.get("preup_token"),
+                predn_token            = snap.get("predn_token")            or r.get("predn_token"),
+                line3                  = snap.get("line3")                  or r.get("line3"),
+                line4                  = snap.get("line4")                  or r.get("line4"),
+                line5                  = snap.get("line5")                  or r.get("line5"),
+                l_digits               = snap.get("l_digits")               or r.get("l_digits"),
+                wyckoff_state          = regime.get("state") or r.get("wyckoff_state") or r.get("wyckoff"),
+                scoring_config_version = r.get("scoring_config_version") or _CFG_VER,
             )
             session.add(row)
             saved += 1
@@ -1316,6 +1383,19 @@ async def get_demand_ticker_history(symbol: str, limit: int = 30) -> list[dict]:
             "dryup_streak":           r.dryup_streak,
             "vol_ratio":              r.vol_ratio,
             "confluence_signals":     [s for s in (r.confluence_signals or "").split(",") if s],
+            # Bar-label snapshot
+            "tz_t_signal":            getattr(r, "tz_t_signal", None),
+            "tz_z_signal":            getattr(r, "tz_z_signal", None),
+            "best_tz_t_signal_15bar": getattr(r, "best_tz_t_signal_15bar", None),
+            "best_tz_z_signal_15bar": getattr(r, "best_tz_z_signal_15bar", None),
+            "preup_token":            getattr(r, "preup_token", None),
+            "predn_token":            getattr(r, "predn_token", None),
+            "line3":                  getattr(r, "line3", None),
+            "line4":                  getattr(r, "line4", None),
+            "line5":                  getattr(r, "line5", None),
+            "l_digits":               getattr(r, "l_digits", None),
+            "wyckoff_state":          getattr(r, "wyckoff_state", None),
+            "scoring_config_version": getattr(r, "scoring_config_version", None),
         }
         for r in rows
     ]
