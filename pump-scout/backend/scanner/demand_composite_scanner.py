@@ -36,6 +36,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from scanner.scoring_config import get_score, THRESHOLDS as _SC_THRESHOLDS
+
 logger = logging.getLogger(__name__)
 
 # ── Tier thresholds ──────────────────────────────────────────────────────────
@@ -375,25 +377,25 @@ def _compute_readiness(
         _preup_now = last.get("preup") or ""
         _preup_rec = prev.get("preup") or prev2.get("preup") or ""
         if _preup_now == "P55":
-            conf_score += 2; confluence_signals.append("PREUP_P55")
+            conf_score += get_score("PREUP_P55"); confluence_signals.append("PREUP_P55")
         elif _preup_now == "P89":
-            conf_score -= 1; confluence_signals.append("PREUP_P89_LATE")
+            conf_score += get_score("PREUP_P89_LATE"); confluence_signals.append("PREUP_P89_LATE")
         elif _preup_now:
-            conf_score += 1; confluence_signals.append("PREUP_NOW")
+            conf_score += get_score("PREUP_NOW"); confluence_signals.append("PREUP_NOW")
         elif _preup_rec:
-            conf_score += 1; confluence_signals.append("PREUP_RECENT")
+            conf_score += get_score("PREUP_RECENT"); confluence_signals.append("PREUP_RECENT")
         # T1/T2 demand bar in last 3 bars
         if any(lb.get("t_signal") in ("T1", "T2") for lb in (last, prev, prev2)):
-            conf_score += 1; confluence_signals.append("T1T2_BAR")
+            conf_score += get_score("T1T2_BAR"); confluence_signals.append("T1T2_BAR")
         # T10/T11 bearish distribution bars: T10=-1.97 alpha, T11=-1.41 alpha (R42).
         _t_last = last.get("t_signal") or ""
         if _t_last in ("T10", "T11"):
-            conf_score -= 2; confluence_signals.append(f"BEARISH_TZ_{_t_last}")
+            conf_score += get_score(f"BEARISH_TZ_{_t_last}"); confluence_signals.append(f"BEARISH_TZ_{_t_last}")
         elif any(lb.get("t_signal") in ("T10", "T11") for lb in (prev, prev2)):
-            conf_score -= 1; confluence_signals.append("BEARISH_TZ_RECENT")
+            conf_score += get_score("BEARISH_TZ_RECENT"); confluence_signals.append("BEARISH_TZ_RECENT")
         # Still in Bollinger squeeze (L bucket)
         if last.get("bucket") == "L":
-            conf_score += 1; confluence_signals.append("WLNBB_L")
+            conf_score += get_score("WLNBB_L"); confluence_signals.append("WLNBB_L")
         # VX-PS-R2X: RSI2 overbought at breakout has 3.27x lift in 4x+ pumps (R92).
         # VX alone appears in 92% of all episodes -- not discriminating by itself.
         # VX-PS-R2L has 0.50x lift (negative) -- dropping it.
@@ -402,26 +404,26 @@ def _compute_readiness(
         _r2x = last.get("rsi2_token") == "R2X"
         _r2l = last.get("rsi2_token") == "R2L"
         if _vx and _ps and _r2x:
-            conf_score += 2; confluence_signals.append("VX_PS_R2X_BREAKOUT")
+            conf_score += get_score("VX_PS_R2X_BREAKOUT"); confluence_signals.append("VX_PS_R2X_BREAKOUT")
         # PS-R2L (no VX required): +1.03 alpha, n=174 in R42 scanner replay.
         elif _ps and _r2l and not _vx:
-            conf_score += 1; confluence_signals.append("PS_R2L_SETUP")
+            conf_score += get_score("PS_R2L_SETUP"); confluence_signals.append("PS_R2L_SETUP")
 
         # Gap ≥ 100% in last 5 bars: 6.18x lift (47% of 4x+ vs 8% of 2-4x, R92).
         # Gap ≥ 50%: 2.97x lift (65% of 4x+ vs 22% of 2-4x, R92).
         _max_gap = m.get("max_gap_pct_5d", 0.0)
-        if _max_gap >= 100.0:
-            conf_score += 3; confluence_signals.append("GAP_GTE_100PCT")
-        elif _max_gap >= 50.0:
-            conf_score += 1; confluence_signals.append("GAP_GTE_50PCT")
+        if _max_gap >= _SC_THRESHOLDS["gap_100_pct"]:
+            conf_score += get_score("GAP_GTE_100PCT"); confluence_signals.append("GAP_GTE_100PCT")
+        elif _max_gap >= _SC_THRESHOLDS["gap_50_pct"]:
+            conf_score += get_score("GAP_GTE_50PCT"); confluence_signals.append("GAP_GTE_50PCT")
 
         # Volume anomaly ≥ 100x: 2.42x lift (70% of 4x+ vs 29% of 2-4x, R92).
         # ≥ 500x: 2.95x lift (37% of 4x+ vs 13% of 2-4x, R92).
         _max_va = m.get("max_vol_ratio_5d", 0.0)
-        if _max_va >= 500.0:
-            conf_score += 2; confluence_signals.append("VOL_ANOMALY_500X")
-        elif _max_va >= 100.0:
-            conf_score += 1; confluence_signals.append("VOL_ANOMALY_100X")
+        if _max_va >= _SC_THRESHOLDS["vol_500x"]:
+            conf_score += get_score("VOL_ANOMALY_500X"); confluence_signals.append("VOL_ANOMALY_500X")
+        elif _max_va >= _SC_THRESHOLDS["vol_100x"]:
+            conf_score += get_score("VOL_ANOMALY_100X"); confluence_signals.append("VOL_ANOMALY_100X")
 
     # ── Combine ───────────────────────────────────────────────────────────────
     total = cat_score + brk_score + flt_score + frsh_score + rs_score + conf_score
@@ -687,7 +689,7 @@ def score_demand_composite(
     elif "WATCH_LOW" in v2 or npl == "NEW_PUMP_FIRE":
         base = 1.5; reasons.append("v2_watch_or_fire")
     elif npl == "NEW_PUMP_STRONG":
-        base = -2.0; risks.append("np_strong_extended")
+        base = float(get_score("NEW_PUMP_STRONG")); risks.append("np_strong_extended")
     elif npl == "NEW_PUMP_SETUP" or dec == "WATCH":
         base = 1.0; reasons.append("np_setup")
 

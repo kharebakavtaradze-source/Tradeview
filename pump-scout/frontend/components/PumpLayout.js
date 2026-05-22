@@ -39,7 +39,8 @@ const NAV_ITEMS = [
   { href: '/macro-events',      icon: 'globe',  label: 'Macro' },
   { href: '/ai-journal',        icon: 'spark',  label: 'AI Journal' },
   null,
-  { href: '/design-system',     icon: 'grid',   label: 'Design System' },
+  { href: '/studio',            icon: 'grid',   label: 'Studio' },
+  { href: '/design-system',     icon: 'candle', label: 'Design System' },
 ];
 
 function Sidebar() {
