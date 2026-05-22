@@ -3486,6 +3486,101 @@ async def pump_study_ai_summary(run_id: int, raw_pattern_run_id: Optional[int] =
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Unified Analytics Platform — scoring config + signal lift
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/analytics/scoring-config")
+async def get_scoring_config():
+    """Return the current scoring configuration (signal weights + thresholds)."""
+    from scanner.scoring_config import as_dict
+    return {"ok": True, "config": as_dict()}
+
+
+def _parse_signals(ep: dict) -> list:
+    import json as _j
+    sigs = ep.get("confluence_signals") or ep.get("demand_signals") or []
+    if isinstance(sigs, str):
+        try:
+            sigs = _j.loads(sigs)
+        except Exception:
+            sigs = []
+    return sigs or []
+
+
+@app.get("/api/replay/pump-study/{run_id}/signal-lift")
+async def pump_study_signal_lift(run_id: int, baseline_max_multiple: float = 2.0):
+    """
+    Compute signal lift table for a pump study run.
+
+    Compares target group (episodes >= run's min_multiple) vs
+    baseline group (episodes < baseline_max_multiple).
+    Returns lift per signal, sorted by lift desc.
+    """
+    from database import get_pump_study_run, get_pump_episodes
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    all_episodes = await get_pump_episodes(run_id, limit=5000)
+
+    params = run.get("params") or {}
+    min_mult = float(params.get("min_multiple", 1.2))
+
+    target   = [e for e in all_episodes if (e.get("pump_multiple") or 0) >= min_mult]
+    baseline = [e for e in all_episodes if (e.get("pump_multiple") or 0) <  baseline_max_multiple]
+
+    n_target   = len(target)   or 1
+    n_baseline = len(baseline) or 1
+
+    # Collect all unique signal names across both groups
+    all_signals: set[str] = set()
+    for ep in all_episodes:
+        sigs = ep.get("confluence_signals") or ep.get("demand_signals") or []
+        if isinstance(sigs, str):
+            import json as _j
+            try:
+                sigs = _j.loads(sigs)
+            except Exception:
+                sigs = []
+        all_signals.update(sigs)
+
+    rows = []
+    for sig in sorted(all_signals):
+        t_count = sum(
+            1 for e in target
+            if sig in _parse_signals(e)
+        )
+        b_count = sum(
+            1 for e in baseline
+            if sig in _parse_signals(e)
+        )
+        t_rate = t_count / n_target
+        b_rate = b_count / n_baseline
+        lift   = round(t_rate / b_rate, 2) if b_rate > 0 else None
+        rows.append({
+            "signal":         sig,
+            "target_count":   t_count,
+            "target_rate":    round(t_rate, 4),
+            "baseline_count": b_count,
+            "baseline_rate":  round(b_rate, 4),
+            "lift":           lift,
+        })
+
+    rows.sort(key=lambda r: (r["lift"] or 0), reverse=True)
+
+    return {
+        "ok":             True,
+        "run_id":         run_id,
+        "n_target":       n_target,
+        "n_baseline":     n_baseline,
+        "min_multiple":   min_mult,
+        "baseline_max":   baseline_max_multiple,
+        "signal_lift":    rows,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Raw Pattern Study endpoints
 # ══════════════════════════════════════════════════════════════════════════════
 

@@ -19,6 +19,7 @@ const NAV_LINKS = [
   { href: '/journal',           label: 'Journal' },
   { href: '/macro-events',      label: 'Macro' },
   { href: '/ai-journal',        label: 'AI Journal' },
+  { href: '/studio',            label: 'Studio' },
   { href: '/admin',             label: 'Admin' },
   { href: '/design-system',     label: 'Design System' },
 ];

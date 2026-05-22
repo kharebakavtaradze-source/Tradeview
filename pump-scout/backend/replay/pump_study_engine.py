@@ -5150,7 +5150,7 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         start_date   = params["start_date"]
         end_date     = params["end_date"]
         window_days  = int(params.get("window_days",   14))
-        min_multiple = float(params.get("min_multiple", 4.0))
+        min_multiple = float(params.get("min_multiple", 1.2))
         univ_limit   = int(params.get("universe_limit", 0))
 
         # Candle fetch range:
