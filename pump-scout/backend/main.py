@@ -2315,7 +2315,7 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
         "start_date":     start_date,
         "end_date":       end_date,
         "window_days":    int(body.get("window_days",    14)),
-        "min_multiple":   float(body.get("min_multiple", 4.0)),
+        "min_multiple":   float(body.get("min_multiple", 1.2)),
         "universe_limit": int(body.get("universe_limit", 0)),
     }
 
@@ -2634,7 +2634,7 @@ async def pump_study_comparisons(run_id: int):
 async def pump_study_export(
     run_id: int,
     format: str = "json",
-    min_multiple: float = 4.0,
+    min_multiple: float = 1.2,
 ):
     """
     Download a pump study export.
@@ -2644,8 +2644,8 @@ async def pump_study_export(
     ?format=csv           Flat CSV of canonical episodes (one row per episode).
     ?format=markdown      Deterministic markdown summary — no AI, no external calls.
     ?format=snapshots_4x  Bar-by-bar signal data (T/Z/L/VIX/PSAR/RSI2) for
-                          episodes >= min_multiple (default 4.0). Use
-                          ?min_multiple=2 to include all 2x+ episodes.
+                          episodes >= min_multiple (default 1.2 = 20%). Use
+                          ?min_multiple=4 to include only 4x+ episodes.
     """
     from fastapi.responses import Response
     from database import (
