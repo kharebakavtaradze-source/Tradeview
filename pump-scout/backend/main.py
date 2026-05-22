@@ -170,6 +170,139 @@ async def health():
     }
 
 
+@app.get("/api/admin/status")
+async def admin_status():
+    """
+    Pre-flight health check for the analytics stack. Returns one nested
+    object per subsystem with an `ok` boolean and a human-readable
+    `detail` line. The Studio Hub renders this as a green/red checklist.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    from sqlalchemy import text as _text
+    from database import get_engine
+
+    out: dict = {"ok": True, "checks": {}}
+    checks = out["checks"]
+
+    # 1. Database connection + scoring_config import
+    try:
+        async with get_engine().connect() as conn:
+            await conn.execute(_text("SELECT 1"))
+        checks["database"] = {"ok": True, "detail": "Connected."}
+    except Exception as e:
+        checks["database"] = {"ok": False, "detail": f"Connection failed: {e}"}
+        out["ok"] = False
+
+    try:
+        from scanner.scoring_config import VERSION, SIGNALS
+        checks["scoring_config"] = {
+            "ok":      True,
+            "version": VERSION,
+            "signals": len(SIGNALS),
+            "detail":  f"Loaded v={VERSION} with {len(SIGNALS)} signals.",
+        }
+    except Exception as e:
+        checks["scoring_config"] = {"ok": False, "detail": f"Import failed: {e}"}
+        out["ok"] = False
+
+    # 2. Migrations: column-existence smoke test on demand_ticker_history.
+    #    If the bar-label snapshot columns are missing, the deployed
+    #    backend is behind on a378052.
+    try:
+        async with get_engine().connect() as conn:
+            try:
+                await conn.execute(_text(
+                    "SELECT tz_t_signal, scoring_config_version FROM demand_ticker_history LIMIT 1"
+                ))
+                checks["migrations"] = {"ok": True, "detail": "All expected columns present."}
+            except Exception as col_err:
+                checks["migrations"] = {
+                    "ok":     False,
+                    "detail": f"Schema missing columns: {col_err}. Restart backend to run pending ALTERs.",
+                }
+                out["ok"] = False
+    except Exception:
+        # Already reported in database check.
+        pass
+
+    # 3. Live history accumulation
+    try:
+        async with get_engine().connect() as conn:
+            row = (await conn.execute(_text(
+                "SELECT COUNT(*) AS n, MAX(scanned_at) AS latest FROM demand_ticker_history"
+            ))).fetchone()
+            n = (row[0] if row else 0) or 0
+            latest = row[1] if row else None
+            age_minutes = None
+            if latest:
+                latest_dt = latest if isinstance(latest, _dt) else _dt.fromisoformat(str(latest))
+                age_minutes = round((_dt.utcnow() - latest_dt).total_seconds() / 60)
+        # Health: any rows at all? Fresh enough?
+        if n == 0:
+            checks["live_history"] = {
+                "ok": False, "rows": 0,
+                "detail": "Empty. Trigger a scan or wait for scheduler — Signals Explorer / Live X-Ref need data here.",
+            }
+        else:
+            stale = age_minutes is not None and age_minutes > 8 * 60
+            checks["live_history"] = {
+                "ok": not stale, "rows": n,
+                "latest": latest.isoformat() if hasattr(latest, "isoformat") else str(latest),
+                "age_minutes": age_minutes,
+                "detail": (
+                    f"{n} rows; latest {age_minutes}m ago."
+                    + (" Stale (>8h) — scheduler may be down." if stale else "")
+                ),
+            }
+    except Exception as e:
+        checks["live_history"] = {"ok": False, "detail": f"Query failed: {e}"}
+
+    # 4. Run inventory: pump-study / raw-pattern / replay counts by status
+    async def _count_by_status(table: str) -> dict:
+        try:
+            async with get_engine().connect() as conn:
+                rs = await conn.execute(_text(
+                    f"SELECT status, COUNT(*) FROM {table} GROUP BY status"
+                ))
+                return {r[0]: r[1] for r in rs.fetchall()}
+        except Exception as e:
+            return {"_error": str(e)}
+
+    pump_counts    = await _count_by_status("pump_study_runs")
+    raw_counts     = await _count_by_status("raw_pattern_runs")
+    replay_counts  = await _count_by_status("replay_runs")
+
+    checks["pump_studies"] = {
+        "ok":       "_error" not in pump_counts,
+        "counts":   pump_counts,
+        "detail":   ", ".join(f"{k}={v}" for k, v in pump_counts.items()) or "none",
+    }
+    checks["raw_pattern_studies"] = {
+        "ok":       "_error" not in raw_counts,
+        "counts":   raw_counts,
+        "detail":   ", ".join(f"{k}={v}" for k, v in raw_counts.items()) or "none",
+    }
+    checks["replays"] = {
+        "ok":       "_error" not in replay_counts,
+        "counts":   replay_counts,
+        "detail":   ", ".join(f"{k}={v}" for k, v in replay_counts.items()) or "none",
+    }
+
+    # 5. Candle cache (range cache + DB cache)
+    try:
+        from scanner.candle_store import get_range_cache_stats
+        rstats = get_range_cache_stats()
+        checks["candle_cache"] = {
+            "ok":            True,
+            "range_cache":   rstats,
+            "detail":        f"in-process: {rstats.get('symbols_cached', 0)} symbols, hit_rate={rstats.get('hit_rate')}",
+        }
+    except Exception as e:
+        checks["candle_cache"] = {"ok": False, "detail": f"Cache stats failed: {e}"}
+
+    return out
+
+
 async def _fetch_live_price_v8(symbol: str, client) -> dict | None:
     """
     Fetch real-time price using Yahoo Finance v8/finance/chart (same API used by scanner).
@@ -2320,6 +2453,10 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
         "min_multiple":   float(body.get("min_multiple", 1.2)),
         "universe_limit": int(body.get("universe_limit", 0)),
     }
+    # Auto-build raw-pattern features after the pump-study completes so
+    # Re-score / Pattern Study tabs are usable without a second click.
+    # Pass auto_build_features=false in the request body to disable.
+    auto_build_features = bool(body.get("auto_build_features", True))
 
     run_id = await create_pump_study_run(params)
 
@@ -2332,6 +2469,69 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
                 f"[PUMP_STUDY] run_id={run_id} background task failed: {exc}",
                 exc_info=True,
             )
+            return
+
+        if not auto_build_features:
+            return
+
+        # Chain raw-pattern-study so demand fields land on pump_episodes
+        # automatically. Best-effort: any failure here is logged but does
+        # not roll back the pump-study run.
+        try:
+            from database import (
+                create_raw_pattern_run,
+                update_raw_pattern_run as _upd,
+                get_pump_study_run,
+            )
+            from replay.pump_study_engine import (
+                build_raw_pattern_daily_features,
+                build_raw_pattern_episode_features_timing,
+                build_raw_pattern_episode_features_candle,
+                build_raw_pattern_episode_features_volume_compression,
+                build_raw_pattern_episode_features_structure,
+                build_raw_pattern_episode_features_ema,
+                build_raw_pattern_episode_features_new_pump,
+                build_raw_pattern_episode_features_demand,
+                build_raw_pattern_episode_features_structural_v2,
+                build_raw_pattern_episode_features_splits,
+                build_raw_pattern_comparisons,
+            )
+
+            ps_run = await get_pump_study_run(run_id)
+            if not ps_run or ps_run.get("status") != "complete":
+                logger.warning(f"[PUMP_STUDY] auto-build skipped: pump_study {run_id} not complete")
+                return
+
+            raw_run_id = await create_raw_pattern_run(
+                pump_study_run_id=run_id,
+                start_date=ps_run.get("start_date"),
+                end_date=ps_run.get("end_date"),
+                notes="auto-built after pump_study completion",
+            )
+            logger.info(f"[PUMP_STUDY] auto-build: raw_pattern_study run={raw_run_id} started")
+            try:
+                await _upd(raw_run_id, {"status": "running", "started_at": datetime.utcnow()})
+                await build_raw_pattern_daily_features(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_timing(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_candle(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_volume_compression(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_structure(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_ema(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_new_pump(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_demand(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_structural_v2(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_splits(raw_run_id, run_id)
+                await build_raw_pattern_comparisons(raw_run_id, run_id)
+                await _upd(raw_run_id, {"status": "complete", "finished_at": datetime.utcnow()})
+                logger.info(f"[PUMP_STUDY] auto-build: raw_pattern_study run={raw_run_id} complete")
+            except Exception as exc:
+                await _upd(raw_run_id, {
+                    "status": "error", "error_message": str(exc)[:500],
+                    "finished_at": datetime.utcnow(),
+                })
+                logger.exception(f"[PUMP_STUDY] auto-build raw_pattern_study run={raw_run_id} failed: {exc}")
+        except Exception as exc:
+            logger.exception(f"[PUMP_STUDY] auto-build setup failed for run={run_id}: {exc}")
 
     background_tasks.add_task(_run_bg)
 
@@ -2340,9 +2540,11 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
         "run_id":  run_id,
         "status":  "running",
         "params":  params,
+        "auto_build_features": auto_build_features,
         "message": (
             f"Pump study launched (run_id={run_id}). "
             f"Poll GET /api/replay/pump-study/{run_id} for live progress."
+            + (" Raw-pattern features will auto-build on completion." if auto_build_features else "")
         ),
     }
 

@@ -170,6 +170,7 @@ export default function PumpStudyStudio() {
   const [endDate, setEndDate] = useState(defaultEnd);
   const [minMultiple, setMinMultiple] = useState('1.2');
   const [windowDays, setWindowDays] = useState('14');
+  const [autoBuildFeatures, setAutoBuildFeatures] = useState(true);
 
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState(null);
@@ -271,6 +272,7 @@ export default function PumpStudyStudio() {
           end_date: endDate,
           min_multiple: parseFloat(minMultiple) || 1.2,
           window_days: parseInt(windowDays) || 14,
+          auto_build_features: autoBuildFeatures,
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -468,6 +470,19 @@ export default function PumpStudyStudio() {
                 <Label>Window Days</Label>
                 <Input type="number" value={windowDays} onChange={setWindowDays} step="1" min="1" />
               </div>
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)',
+                cursor: 'pointer', userSelect: 'none', marginTop: 4,
+              }} title="After the pump study completes, automatically build raw-pattern features (daily + episode features + demand backfill + comparisons). Required for Re-score and Live X-Ref to work.">
+                <input
+                  type="checkbox"
+                  checked={autoBuildFeatures}
+                  onChange={(e) => setAutoBuildFeatures(e.target.checked)}
+                  style={{ accentColor: 'var(--pump-lime)', cursor: 'pointer' }}
+                />
+                Auto-build features after run
+              </label>
             </div>
 
             <button
