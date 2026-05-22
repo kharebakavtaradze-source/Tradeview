@@ -3580,6 +3580,166 @@ async def pump_study_signal_lift(run_id: int, baseline_max_multiple: float = 2.0
     }
 
 
+def _snap_bar_tag(snap: dict) -> str:
+    """Build a compact bar tag from a stored pump episode snapshot."""
+    tags = []
+
+    # Volume anomaly
+    vol_ratio = snap.get("volume_vs_avg20") or 0
+    if   vol_ratio >= 500: tags.append("VOL500X")
+    elif vol_ratio >= 100: tags.append("VOL100X")
+    elif vol_ratio >= 10:  tags.append("VOL10X")
+
+    # Gap
+    gap = snap.get("gap_pct") or 0
+    if   gap >= 100: tags.append("GAP3")
+    elif gap >= 50:  tags.append("GAP2")
+    elif gap >= 10:  tags.append("GAP1")
+    elif gap <= -10: tags.append("GAP_DN")
+
+    # Ribbon class
+    rc = snap.get("ribbon_class") or ""
+    if rc: tags.append(f"RIB_{rc}")
+
+    # Wyckoff state
+    ws = snap.get("wyckoff_state") or ""
+    if ws: tags.append(f"WY_{ws}")
+
+    # Body/wick from OHLCV
+    o = snap.get("open")  or snap.get("o")  or 0
+    h = snap.get("high")  or snap.get("h")  or 0
+    l = snap.get("low")   or snap.get("l")  or 0
+    c = snap.get("close") or snap.get("c")  or 0
+    if o > 0 and h > l:
+        body  = abs(c - o)
+        rng   = h - l
+        is_bull = c >= o
+        tags.append("BULL" if is_bull else "BEAR")
+        ratio = body / rng if rng > 0 else 0
+        if   ratio >= 0.8: tags.append("MARUBOZU")
+        elif ratio >= 0.5: tags.append("FULL_BODY")
+        elif ratio <= 0.2: tags.append("DOJI")
+
+    return "+".join(tags) if tags else "NORM"
+
+
+@app.post("/api/replay/pump-study/{run_id}/mine-patterns")
+async def pump_study_mine_patterns(run_id: int, body: dict = {}):
+    """
+    Mine bar sequence patterns from PRE-phase snapshots of a pump study run.
+
+    Body params:
+        window_bars  int  (default 5)  how many PRE bars before pump start to include
+        min_freq     int  (default 3)  minimum episodes a pattern must appear in
+    """
+    import json as _json
+    from collections import defaultdict
+    from database import get_pump_study_run, get_pump_episodes, get_run_snapshots
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    window_bars = max(1, min(20, int(body.get("window_bars", 5))))
+    min_freq    = max(1, int(body.get("min_freq", 3)))
+
+    episodes = await get_pump_episodes(run_id, limit=2000)
+    if not episodes:
+        return {"ok": True, "run_id": run_id, "patterns": [], "n_episodes": 0}
+
+    # Fetch all PRE snapshots for this run in one query
+    all_snaps = await get_run_snapshots(run_id, phase="PRE", limit=50000)
+
+    # Group snapshots by episode_id, sorted by date
+    snap_by_ep: dict = defaultdict(list)
+    for s in all_snaps:
+        snap_by_ep[s["episode_id"]].append(s)
+    for k in snap_by_ep:
+        snap_by_ep[k].sort(key=lambda x: x.get("date") or "")
+
+    # Build per-episode sequences (last window_bars PRE bars)
+    ep_sequences: list[dict] = []
+    for ep in episodes:
+        eid = ep.get("episode_id") or ep.get("id")
+        snaps = snap_by_ep.get(eid, [])[-window_bars:]
+        if not snaps:
+            continue
+        seq = [_snap_bar_tag(s) for s in snaps]
+        ep_sequences.append({
+            "episode_id": eid,
+            "symbol":     ep.get("symbol", ""),
+            "multiple":   ep.get("pump_multiple") or ep.get("multiple") or 0,
+            "sequence":   seq,
+        })
+
+    n_eps = len(ep_sequences)
+    if n_eps == 0:
+        return {"ok": True, "run_id": run_id, "patterns": [], "n_episodes": 0}
+
+    # Mine single-bar patterns at each window position
+    pos_counts: dict = defaultdict(lambda: defaultdict(int))
+    for ep in ep_sequences:
+        for pos, tag in enumerate(ep["sequence"]):
+            pos_counts[pos][tag] += 1
+
+    # Mine multi-bar (2-bar) consecutive patterns
+    pair_counts: dict = defaultdict(int)
+    for ep in ep_sequences:
+        seq = ep["sequence"]
+        for i in range(len(seq) - 1):
+            pair = f"{seq[i]} → {seq[i+1]}"
+            pair_counts[pair] += 1
+
+    # Build pattern rows
+    patterns = []
+
+    # Single-bar patterns
+    for pos in sorted(pos_counts.keys()):
+        label = f"bar-{pos - window_bars}" if pos < window_bars else f"bar+{pos - window_bars + 1}"
+        for tag, count in pos_counts[pos].items():
+            if count < min_freq:
+                continue
+            rate = count / n_eps
+            patterns.append({
+                "type":      "single_bar",
+                "pattern":   tag,
+                "position":  pos,
+                "pos_label": label,
+                "support":   count,
+                "rate":      round(rate, 4),
+                "pct":       round(rate * 100, 1),
+            })
+
+    # 2-bar patterns
+    for pair, count in pair_counts.items():
+        if count < min_freq:
+            continue
+        rate = count / n_eps
+        patterns.append({
+            "type":      "sequence",
+            "pattern":   pair,
+            "position":  None,
+            "pos_label": "2-bar",
+            "support":   count,
+            "rate":      round(rate, 4),
+            "pct":       round(rate * 100, 1),
+        })
+
+    # Sort by support desc
+    patterns.sort(key=lambda p: p["support"], reverse=True)
+
+    # Also return per-episode sequences for the sequence viewer
+    return {
+        "ok":          True,
+        "run_id":      run_id,
+        "n_episodes":  n_eps,
+        "window_bars": window_bars,
+        "min_freq":    min_freq,
+        "patterns":    patterns,
+        "sequences":   ep_sequences[:100],  # first 100 for viewer
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Raw Pattern Study endpoints
 # ══════════════════════════════════════════════════════════════════════════════

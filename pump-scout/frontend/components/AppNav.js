@@ -21,7 +21,6 @@ const NAV_LINKS = [
   { href: '/ai-journal',        label: 'AI Journal' },
   { href: '/studio',            label: 'Studio' },
   { href: '/admin',             label: 'Admin' },
-  { href: '/design-system',     label: 'Design System' },
 ];
 
 export default function AppNav() {

@@ -40,7 +40,6 @@ const NAV_ITEMS = [
   { href: '/ai-journal',        icon: 'spark',  label: 'AI Journal' },
   null,
   { href: '/studio',            icon: 'grid',   label: 'Studio' },
-  { href: '/design-system',     icon: 'candle', label: 'Design System' },
 ];
 
 function Sidebar() {

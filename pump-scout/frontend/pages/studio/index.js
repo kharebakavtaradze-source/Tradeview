@@ -1,33 +1,27 @@
 /**
- * Studio Hub — Analytics Studio landing page
- * Shows the three studios as cards with recent run info and config version banner.
+ * Analytics Hub — Studio landing page
+ * Shows all three studios as cards, config version, and scoring signals table.
  */
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import PumpLayout from '../../components/PumpLayout';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-function StatusBadge({ status }) {
-  const colors = {
-    done:     { bg: 'rgba(0,200,100,0.15)',  color: 'var(--pos)' },
-    running:  { bg: 'rgba(200,255,0,0.12)',  color: 'var(--pump-lime)' },
-    error:    { bg: 'rgba(255,68,68,0.15)',  color: 'var(--neg)' },
-    complete: { bg: 'rgba(0,200,100,0.15)',  color: 'var(--pos)' },
-  };
-  const s = colors[status] || { bg: 'var(--bg-2)', color: 'var(--ink-dim)' };
+const fmtDate = d => d ? new Date(d).toISOString().slice(0, 10) : '—';
+
+function StatusBadge({ s }) {
+  const map = { done: '#00c864', complete: '#00c864', running: '#c8ff00', error: '#ff4444', failed: '#ff4444' };
+  const c = map[(s || '').toLowerCase()] || '#666';
   return (
     <span style={{
-      fontSize: 10, fontFamily: 'var(--f-mono)', textTransform: 'uppercase',
-      letterSpacing: '0.08em', padding: '2px 7px', borderRadius: 4,
-      background: s.bg, color: s.color,
-    }}>
-      {status || 'unknown'}
-    </span>
+      fontFamily: 'var(--f-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em',
+      padding: '2px 8px', borderRadius: 3, background: `${c}22`, color: c, border: `1px solid ${c}44`,
+    }}>{s || '—'}</span>
   );
 }
 
-function StudioCard({ title, description, href, recentRun, icon }) {
+function StudioCard({ icon, title, description, href, recentRun }) {
   const [hover, setHover] = useState(false);
   return (
     <Link href={href} style={{ textDecoration: 'none' }}>
@@ -36,205 +30,194 @@ function StudioCard({ title, description, href, recentRun, icon }) {
         onMouseLeave={() => setHover(false)}
         style={{
           background: hover ? 'var(--bg-2)' : 'var(--bg-1)',
-          border: `1px solid ${hover ? 'var(--stroke)' : 'var(--stroke-soft)'}`,
-          borderRadius: 14,
-          padding: '24px 22px 20px',
+          border: `1px solid ${hover ? 'var(--pump-lime)' : 'var(--stroke-soft)'}`,
+          borderRadius: 12, padding: '22px 20px 18px',
           display: 'flex', flexDirection: 'column', gap: 12,
-          cursor: 'pointer', transition: 'background 0.15s, border-color 0.15s',
-          minHeight: 200,
+          cursor: 'pointer', transition: 'all 0.15s', minHeight: 200,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{
-            width: 40, height: 40, borderRadius: 10,
-            background: 'var(--pump-lime-soft)', display: 'flex',
-            alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>
-            <svg width={20} height={20} viewBox="0 0 24 24" fill="none" style={{ color: 'var(--pump-lime)' }}>
-              {icon}
-            </svg>
-          </div>
+            width: 36, height: 36, borderRadius: 8, background: 'rgba(200,255,0,0.10)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 18, color: 'var(--pump-lime)',
+          }}>{icon}</div>
           <div style={{
             fontSize: 10, fontFamily: 'var(--f-mono)', color: 'var(--pump-lime)',
-            background: 'var(--pump-lime-soft)', padding: '3px 8px', borderRadius: 4,
-            letterSpacing: '0.06em', textTransform: 'uppercase',
-          }}>
-            Studio
-          </div>
+            background: 'rgba(200,255,0,0.08)', padding: '2px 7px', borderRadius: 4,
+            letterSpacing: '0.07em', textTransform: 'uppercase', border: '1px solid rgba(200,255,0,0.18)',
+          }}>Studio</div>
         </div>
-
         <div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--ink)', marginBottom: 6 }}>{title}</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-dim)', lineHeight: 1.55 }}>{description}</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)', marginBottom: 5 }}>{title}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-dim)', lineHeight: 1.6 }}>{description}</div>
         </div>
-
-        <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--stroke-soft)' }}>
+        <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--stroke-soft)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           {recentRun ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <>
               <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
-                Last: {recentRun.created_at ? new Date(recentRun.created_at).toLocaleDateString() : 'N/A'}
+                Last: {fmtDate(recentRun.created_at)}
               </span>
-              {recentRun.status && <StatusBadge status={recentRun.status} />}
-            </div>
+              {recentRun.status && <StatusBadge s={recentRun.status} />}
+            </>
           ) : (
-            <span style={{ fontSize: 11, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>
-              No runs yet — click to get started
-            </span>
+            <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>No runs yet</span>
           )}
-        </div>
-
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          fontSize: 12, fontWeight: 500, color: hover ? 'var(--pump-lime)' : 'var(--ink-dim)',
-          transition: 'color 0.15s',
-        }}>
-          New Run
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
-          </svg>
+          <span style={{ fontSize: 12, color: hover ? 'var(--pump-lime)' : 'var(--ink-dim)', fontFamily: 'var(--f-mono)', transition: 'color 0.15s' }}>Open →</span>
         </div>
       </div>
     </Link>
   );
 }
 
-const PUMP_ICON = <><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>;
-const REPLAY_ICON = <><circle cx="12" cy="12" r="10" stroke="currentColor" fill="none" /><polyline points="10 8 16 12 10 16 10 8" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>;
-const PATTERN_ICON = <><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke="currentColor" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>;
-
 export default function StudioIndex() {
-  const [pumpRuns, setPumpRuns] = useState([]);
-  const [replayRuns, setReplayRuns] = useState([]);
   const [config, setConfig] = useState(null);
-  const [configError, setConfigError] = useState(null);
+  const [configErr, setConfigErr] = useState(null);
+  const [pumpRun, setPumpRun] = useState(null);
+  const [replayRun, setReplayRun] = useState(null);
+  const [showSignals, setShowSignals] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/replay/pump-study/runs?limit=3`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setPumpRuns(Array.isArray(data) ? data : []))
-      .catch(() => setPumpRuns([]));
+    fetch(`${API}/api/analytics/scoring-config`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(setConfig)
+      .catch(() => setConfigErr('Could not load scoring config'));
 
-    fetch(`${API_URL}/api/replay/history?limit=3`)
+    fetch(`${API}/api/replay/pump-study/runs?limit=1`)
       .then(r => r.ok ? r.json() : [])
-      .then(data => setReplayRuns(Array.isArray(data) ? data : []))
-      .catch(() => setReplayRuns([]));
+      .then(d => setPumpRun(Array.isArray(d) ? d[0] || null : null))
+      .catch(() => {});
 
-    fetch(`${API_URL}/api/analytics/scoring-config`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => setConfig(data))
-      .catch(() => setConfigError('Could not load scoring config'));
+    fetch(`${API}/api/replay/history?limit=1`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setReplayRun(Array.isArray(d) ? d[0] || null : null))
+      .catch(() => {});
   }, []);
 
-  const signalCount = config
-    ? (config.signals ? Object.keys(config.signals).length : (config.signal_count || '—'))
-    : '—';
+  const version = config ? (config.version || config.config_version || '—') : (configErr ? 'unavailable' : '…');
+  const signals = config && config.signals ? Object.entries(config.signals) : [];
 
   return (
-    <PumpLayout title="Analytics" subtitle="Studio">
-      <div style={{ padding: '24px 28px', maxWidth: 1100, margin: '0 auto' }}>
+    <PumpLayout title="Analytics" subtitle="Platform">
+      <div style={{ padding: '28px 32px', maxWidth: 1080, margin: '0 auto' }}>
 
-        {/* Config Version Banner */}
+        {/* Top banner */}
         <div style={{
           background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)',
           borderRadius: 10, padding: '12px 18px', marginBottom: 28,
-          display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap',
         }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: configErr ? '#ff4444' : 'var(--pump-lime)', flexShrink: 0 }} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>Analytics Platform</span>
           <div style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: configError ? 'var(--neg)' : 'var(--pump-lime)', flexShrink: 0,
-          }} />
-          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
-              <span style={{ color: 'var(--ink-faint)', marginRight: 6 }}>CONFIG VERSION</span>
-              <span style={{ color: 'var(--ink)' }}>
-                {configError ? 'unavailable' : (config ? (config.version || config.config_version || '—') : 'loading…')}
-              </span>
-            </span>
-            <span style={{ fontSize: 12, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
-              <span style={{ color: 'var(--ink-faint)', marginRight: 6 }}>SIGNALS</span>
-              <span style={{ color: 'var(--pump-lime)' }}>{config ? signalCount : '…'}</span>
-            </span>
+            fontSize: 11, fontFamily: 'var(--f-mono)', color: 'var(--pump-lime)',
+            background: 'rgba(200,255,0,0.08)', border: '1px solid rgba(200,255,0,0.2)',
+            padding: '3px 10px', borderRadius: 4, letterSpacing: '0.06em',
+          }}>
+            CONFIG v{version}
           </div>
-          {configError && (
-            <span style={{ fontSize: 11, color: 'var(--neg)', marginLeft: 'auto' }}>{configError}</span>
+          {signals.length > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
+              {signals.length} signals
+            </span>
           )}
+          {configErr && <span style={{ fontSize: 11, color: '#ff4444', marginLeft: 'auto' }}>{configErr}</span>}
         </div>
 
-        {/* Page header */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+        {/* Studio cards grid */}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
             Research Workbench
           </div>
-          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: 'var(--ink)' }}>
-            Choose a Studio
-          </h2>
-          <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--ink-dim)' }}>
-            Run backtests, analyze signal performance, and discover patterns in pump episodes.
-          </p>
+          <h2 style={{ margin: '0 0 20px', fontSize: 20, fontWeight: 600, color: 'var(--ink)' }}>Choose a Studio</h2>
         </div>
-
-        {/* 3-column card grid */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-          gap: 16,
-        }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 36 }}>
           <StudioCard
+            icon="⚡"
             title="Pump Study Studio"
-            description="Detect pump episodes, analyze signal lift, compare signal performance across time windows."
+            description="Detect pump episodes, measure signal lift, analyze gain distributions"
             href="/studio/pump-study"
-            recentRun={pumpRuns[0] || null}
-            icon={PUMP_ICON}
+            recentRun={pumpRun}
           />
           <StudioCard
+            icon="↔"
             title="Replay Studio"
-            description="Run historical scanner simulations, measure alpha per score tier, validate signal changes."
+            description="Simulate scanner on historical data, measure alpha per score tier"
             href="/studio/replay"
-            recentRun={replayRuns[0] || null}
-            icon={REPLAY_ICON}
+            recentRun={replayRun}
           />
           <StudioCard
+            icon="▮"
             title="Pattern Study"
-            description="Mine bar label sequences that precede confirmed pumps. Discover what patterns look like before breakouts."
+            description="Mine bar label sequences that precede confirmed pump episodes"
             href="/studio/pattern"
             recentRun={null}
-            icon={PATTERN_ICON}
           />
         </div>
 
-        {/* Recent activity */}
-        {(pumpRuns.length > 0 || replayRuns.length > 0) && (
-          <div style={{ marginTop: 36 }}>
-            <div style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 14 }}>
-              Recent Activity
+        {/* Scoring Config expandable */}
+        <div style={{ border: '1px solid var(--stroke-soft)', borderRadius: 10, overflow: 'hidden' }}>
+          <button
+            onClick={() => setShowSignals(v => !v)}
+            style={{
+              width: '100%', background: 'var(--bg-1)', border: 'none',
+              padding: '13px 18px', cursor: 'pointer', textAlign: 'left',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              color: 'var(--ink)', fontSize: 13, fontFamily: 'var(--f-mono)', fontWeight: 600,
+            }}
+          >
+            <span>Scoring Config <span style={{ color: 'var(--ink-dim)', fontWeight: 400, fontSize: 11 }}>(v{version})</span></span>
+            <span style={{ color: 'var(--ink-dim)', fontSize: 11 }}>{showSignals ? '▲ collapse' : '▼ expand'}</span>
+          </button>
+
+          {showSignals && (
+            <div style={{ padding: '16px 18px', borderTop: '1px solid var(--stroke-soft)', background: 'var(--bg-0)' }}>
+              {signals.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
+                  {config ? 'No signals data available.' : 'Loading…'}
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
+                      {['Signal', 'Group', 'Score', 'Enabled'].map(h => (
+                        <th key={h} style={{
+                          textAlign: 'left', padding: '5px 12px',
+                          fontSize: 10, fontFamily: 'var(--f-mono)', color: 'var(--ink-dim)',
+                          textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 400,
+                        }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {signals.map(([name, val], i) => {
+                      const score = typeof val === 'object' ? (val.score ?? val.weight ?? 0) : (val ?? 0);
+                      const group = typeof val === 'object' ? (val.group || val.category || '—') : '—';
+                      const enabled = typeof val === 'object' ? val.enabled : true;
+                      const isPos = score > 0;
+                      const isNeg = score < 0;
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
+                          <td style={{ padding: '7px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>{name}</td>
+                          <td style={{ padding: '7px 12px', color: 'var(--ink-dim)', fontSize: 11 }}>{group}</td>
+                          <td style={{ padding: '7px 12px', fontFamily: 'var(--f-mono)', fontWeight: 600, color: isPos ? '#00c864' : isNeg ? '#ff4444' : 'var(--ink-dim)' }}>
+                            {score > 0 ? `+${score}` : score}
+                          </td>
+                          <td style={{ padding: '7px 12px' }}>
+                            {enabled === false
+                              ? <span style={{ fontSize: 10, color: '#ff4444', fontFamily: 'var(--f-mono)' }}>off</span>
+                              : <span style={{ fontSize: 10, color: '#00c864', fontFamily: 'var(--f-mono)' }}>on</span>
+                            }
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {[...pumpRuns.map(r => ({ ...r, _type: 'Pump Study' })), ...replayRuns.map(r => ({ ...r, _type: 'Replay' }))]
-                .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-                .slice(0, 6)
-                .map((run, i) => (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '10px 14px', background: 'var(--bg-1)',
-                    border: '1px solid var(--stroke-soft)', borderRadius: 8,
-                    fontSize: 12,
-                  }}>
-                    <span style={{ color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', width: 88, flexShrink: 0 }}>
-                      {run._type}
-                    </span>
-                    <span style={{ color: 'var(--ink)', flex: 1, fontFamily: 'var(--f-mono)', fontSize: 11 }}>
-                      {run.run_id || run.id || '—'}
-                    </span>
-                    <span style={{ color: 'var(--ink-dim)' }}>
-                      {run.created_at ? new Date(run.created_at).toLocaleDateString() : ''}
-                    </span>
-                    {run.status && <StatusBadge status={run.status} />}
-                  </div>
-                ))
-              }
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </PumpLayout>
   );
