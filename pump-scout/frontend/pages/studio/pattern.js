@@ -146,6 +146,7 @@ function ClusterCard({ cluster, expanded, onToggle }) {
 export default function PatternStudio() {
   const [pumpRuns, setPumpRuns] = useState([]);
   const [selectedRunId, setSelectedRunId] = useState('');
+  const [rawRunId, setRawRunId] = useState(null);
   const [clusters, setClusters] = useState(null);
   const [comparisons, setComparisons] = useState(null);
   const [liveCombos, setLiveCombos] = useState(null);
@@ -172,14 +173,34 @@ export default function PatternStudio() {
     setLoading(true);
     setClusters(null);
     setComparisons(null);
+    setRawRunId(null);
     setExpandedCluster(null);
 
+    // Resolve raw-pattern-study run for this pump-study run (if any).
+    let resolvedRawId = null;
     try {
-      const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}/clusters`);
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/runs?pump_study_run_id=${runId}&limit=1`);
+      const data = r.ok ? await r.json() : {};
+      const runs = data.runs || [];
+      if (runs.length > 0) resolvedRawId = runs[0].id || runs[0].run_id;
+    } catch {}
+    setRawRunId(resolvedRawId);
+
+    // Clusters: prefer raw-pattern-study endpoint (same shape); fall back to
+    // pump-study clusters when no raw-pattern run exists yet.
+    try {
+      const url = resolvedRawId
+        ? `${API_URL}/api/replay/raw-pattern-study/${resolvedRawId}/clusters`
+        : `${API_URL}/api/replay/pump-study/${runId}/clusters`;
+      const r = await fetch(url);
       const data = r.ok ? await r.json() : [];
       setClusters(Array.isArray(data) ? data : (data.clusters || []));
     } catch { setClusters([]); }
 
+    // Comparisons: this table renders pump-study's group-level stats shape
+    // (mean/median/p90 pump_multiple per group). Raw-pattern comparisons are
+    // per-feature stats with a different shape — exposed on /raw-pattern-study
+    // for that view.
     try {
       const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}/comparisons`);
       const data = r.ok ? await r.json() : [];
@@ -302,6 +323,20 @@ export default function PatternStudio() {
                     </div>
                   ))}
                 </div>
+                {rawRunId && (
+                  <a
+                    href={`/raw-pattern-study?run_id=${rawRunId}`}
+                    style={{
+                      display: 'block', marginTop: 12, padding: '7px 10px',
+                      textAlign: 'center', textDecoration: 'none',
+                      fontSize: 11, fontFamily: 'var(--f-mono)',
+                      color: 'var(--pump-lime)',
+                      border: '1px solid var(--pump-lime)', borderRadius: 6,
+                    }}
+                  >
+                    Raw Pattern Run #{rawRunId} →
+                  </a>
+                )}
               </div>
             )}
 
