@@ -192,13 +192,13 @@ export default function PumpStudyStudio() {
   // Load past runs on mount
   useEffect(() => {
     fetch(`${API_URL}/api/replay/pump-study/runs`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setPastRuns(Array.isArray(data) ? data : []))
+      .then(r => r.ok ? r.json() : {})
+      .then(data => setPastRuns(Array.isArray(data) ? data : (data.runs || [])))
       .catch(() => setPastRuns([]));
 
     fetch(`${API_URL}/api/analytics/scoring-config`)
       .then(r => r.ok ? r.json() : null)
-      .then(data => setScoringConfig(data))
+      .then(data => setScoringConfig(data ? (data.config || data) : null))
       .catch(() => {});
   }, []);
 
@@ -209,17 +209,18 @@ export default function PumpStudyStudio() {
       try {
         const r = await fetch(`${API_URL}/api/replay/pump-study/${pollRunId}`);
         if (!r.ok) return;
-        const data = await r.json();
-        if (data.status !== 'running') {
+        const body = await r.json();
+        const run = body.run || body;
+        if (run.status !== 'running') {
           clearInterval(pollRef.current);
           setPollRunId(null);
           setRunning(false);
-          setActiveRun(data);
+          setActiveRun(run);
           setPastRuns(prev => {
-            const filtered = prev.filter(x => (x.run_id || x.id) !== (data.run_id || data.id));
-            return [data, ...filtered];
+            const filtered = prev.filter(x => (x.run_id || x.id) !== (run.run_id || run.id));
+            return [run, ...filtered];
           });
-          loadRunData(data.run_id || data.id);
+          loadRunData(run.run_id || run.id);
         }
       } catch {}
     }, 3000);
@@ -242,7 +243,7 @@ export default function PumpStudyStudio() {
     try {
       const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}/signal-lift`);
       const data = r.ok ? await r.json() : [];
-      const arr = Array.isArray(data) ? data : (data.signals || data.lift || []);
+      const arr = Array.isArray(data) ? data : (data.signal_lift || data.signals || data.lift || []);
       setSignalLift([...arr].sort((a, b) => (b.lift || 0) - (a.lift || 0)));
     } catch { setSignalLift([]); }
     setLoadingLift(false);
@@ -279,8 +280,8 @@ export default function PumpStudyStudio() {
     const runId = run.run_id || run.id;
     try {
       const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}`);
-      const data = r.ok ? await r.json() : run;
-      setActiveRun(data);
+      const body = r.ok ? await r.json() : null;
+      setActiveRun(body ? (body.run || body) : run);
     } catch { setActiveRun(run); }
     setActiveTab('episodes');
     setExpandedEpisode(null);
@@ -290,7 +291,8 @@ export default function PumpStudyStudio() {
   const signalScore = (name) => {
     if (!scoringConfig || !scoringConfig.signals) return null;
     const s = scoringConfig.signals[name];
-    return s != null ? s : null;
+    if (s == null) return null;
+    return typeof s === 'object' ? s.score : s;
   };
 
   return (

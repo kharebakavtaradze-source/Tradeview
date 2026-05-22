@@ -137,7 +137,7 @@ export default function ReplayStudio() {
 
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState(null);
-  const [pollRunId, setPollRunId] = useState(null);
+  const sawRunningRef = useRef(false);
 
   const [activeRun, setActiveRun] = useState(null);
   const [summary, setSummary] = useState(null);
@@ -152,35 +152,45 @@ export default function ReplayStudio() {
 
   const pollRef = useRef(null);
 
-  useEffect(() => {
+  const loadHistory = useCallback(() => {
     fetch(`${API_URL}/api/replay/history`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setPastRuns(Array.isArray(data) ? data : []))
+      .then(r => r.ok ? r.json() : {})
+      .then(data => setPastRuns(Array.isArray(data) ? data : (data.runs || [])))
       .catch(() => setPastRuns([]));
   }, []);
 
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  // Replay POST returns no run_id; poll the global progress endpoint until idle,
+  // then pick up the run_id it exposes and load that run's details.
   useEffect(() => {
-    if (!pollRunId) return;
+    if (!running) return;
     pollRef.current = setInterval(async () => {
       try {
-        const r = await fetch(`${API_URL}/api/replay/${pollRunId}`);
+        const r = await fetch(`${API_URL}/api/replay/status`);
         if (!r.ok) return;
-        const data = await r.json();
-        if (data.status !== 'running') {
-          clearInterval(pollRef.current);
-          setPollRunId(null);
-          setRunning(false);
-          setActiveRun(data);
-          setPastRuns(prev => {
-            const filtered = prev.filter(x => (x.run_id || x.id) !== (data.run_id || data.id));
-            return [data, ...filtered];
-          });
-          loadRunDetails(data.run_id || data.id);
+        const prog = await r.json();
+        if (prog.running) {
+          sawRunningRef.current = true;
+          return;
+        }
+        // Avoid terminating on the startup race before the engine flips to running.
+        if (!sawRunningRef.current && !prog.run_id) return;
+        clearInterval(pollRef.current);
+        setRunning(false);
+        loadHistory();
+        const finishedId = prog.run_id;
+        if (finishedId) {
+          try {
+            const rr = await fetch(`${API_URL}/api/replay/${finishedId}`);
+            if (rr.ok) setActiveRun(await rr.json());
+          } catch {}
+          loadRunDetails(finishedId);
         }
       } catch {}
     }, 3000);
     return () => clearInterval(pollRef.current);
-  }, [pollRunId]);
+  }, [running, loadHistory]);
 
   const loadRunDetails = useCallback(async (runId) => {
     setSummary(null);
@@ -209,7 +219,7 @@ export default function ReplayStudio() {
     try {
       const r = await fetch(`${API_URL}/api/replay/${runId}/missed`);
       const data = r.ok ? await r.json() : [];
-      setMissed(Array.isArray(data) ? data : (data.missed || []));
+      setMissed(Array.isArray(data) ? data : (data.missed_movers || data.missed || []));
     } catch { setMissed([]); }
 
     setLoadingTab(false);
@@ -234,8 +244,8 @@ export default function ReplayStudio() {
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      setPollRunId(data.run_id || data.id);
+      await r.json();
+      sawRunningRef.current = false;
     } catch (e) {
       setRunError(e.message);
       setRunning(false);

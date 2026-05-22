@@ -110,18 +110,18 @@ export default function StudioIndex() {
 
   useEffect(() => {
     fetch(`${API_URL}/api/replay/pump-study/runs?limit=3`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setPumpRuns(Array.isArray(data) ? data : []))
+      .then(r => r.ok ? r.json() : {})
+      .then(data => setPumpRuns(Array.isArray(data) ? data : (data.runs || [])))
       .catch(() => setPumpRuns([]));
 
     fetch(`${API_URL}/api/replay/history?limit=3`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setReplayRuns(Array.isArray(data) ? data : []))
+      .then(r => r.ok ? r.json() : {})
+      .then(data => setReplayRuns(Array.isArray(data) ? data : (data.runs || [])))
       .catch(() => setReplayRuns([]));
 
     fetch(`${API_URL}/api/analytics/scoring-config`)
       .then(r => r.ok ? r.json() : null)
-      .then(data => setConfig(data))
+      .then(data => setConfig(data ? (data.config || data) : null))
       .catch(() => setConfigError('Could not load scoring config'));
   }, []);
 
