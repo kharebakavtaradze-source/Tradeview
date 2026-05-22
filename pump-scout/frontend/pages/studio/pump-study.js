@@ -315,7 +315,15 @@ export default function PumpStudyStudio() {
     setReScoring(true);
     try {
       const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}/score-demand`, { method: 'POST' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        // Surface the FastAPI {detail} field if present — e.g. "No raw-pattern-study run found".
+        let detail = `HTTP ${r.status}`;
+        try {
+          const errBody = await r.json();
+          if (errBody?.detail) detail = errBody.detail;
+        } catch {}
+        throw new Error(detail);
+      }
       const data = await r.json();
       // Poll the run-detail until scoring_config_version flips to the target version.
       const target = data.target_config_version;
@@ -599,19 +607,28 @@ export default function PumpStudyStudio() {
                               >
                                 <td style={{ padding: '8px 12px', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{ep.symbol || '—'}</td>
                                 <td style={{ padding: '8px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>
-                                  {ep.multiple != null ? `×${parseFloat(ep.multiple).toFixed(2)}` : ep.gain_multiple != null ? `×${parseFloat(ep.gain_multiple).toFixed(2)}` : '—'}
+                                  {(() => {
+                                    const m = ep.pump_multiple ?? ep.multiple ?? ep.gain_multiple;
+                                    return m != null ? `×${parseFloat(m).toFixed(2)}` : '—';
+                                  })()}
                                 </td>
                                 <td style={{ padding: '8px 12px', color: 'var(--ink-dim)' }}>{ep.pump_type || ep.type || '—'}</td>
-                                <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>{ep.start_date || ep.date || '—'}</td>
+                                <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>{ep.pump_start_date || ep.start_date || ep.date || '—'}</td>
                                 <td style={{ padding: '8px 12px' }}>
-                                  {ep.caught != null ? (
-                                    <span style={{ color: ep.caught ? '#00c864' : '#ff4444', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
-                                      {ep.caught ? 'Yes' : 'No'}
-                                    </span>
-                                  ) : '—'}
+                                  {(() => {
+                                    const caught = ep.was_flagged_by_scanner ?? ep.caught;
+                                    return caught != null ? (
+                                      <span style={{ color: caught ? '#00c864' : '#ff4444', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
+                                        {caught ? 'Yes' : 'No'}
+                                      </span>
+                                    ) : '—';
+                                  })()}
                                 </td>
                                 <td style={{ padding: '8px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>
-                                  {ep.score != null ? ep.score : '—'}
+                                  {(() => {
+                                    const s = ep.demand_score_at_breakout ?? ep.score;
+                                    return s != null ? parseFloat(s).toFixed(1) : '—';
+                                  })()}
                                 </td>
                               </tr>,
                               expanded && (
@@ -620,10 +637,13 @@ export default function PumpStudyStudio() {
                                     <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 12 }}>
                                       {[
                                         ['Pump Type', ep.pump_type || ep.type || '—'],
-                                        ['Duration (days)', ep.duration_days || '—'],
+                                        ['Window (days)', ep.pump_window_days ?? ep.duration_days ?? '—'],
                                         ['Peak Price', ep.peak_price != null ? `$${parseFloat(ep.peak_price).toFixed(2)}` : '—'],
                                         ['Start Price', ep.start_price != null ? `$${parseFloat(ep.start_price).toFixed(2)}` : '—'],
-                                        ['End Date', ep.end_date || '—'],
+                                        ['Peak Date', ep.pump_peak_date || ep.end_date || '—'],
+                                        ['Demand Tier', ep.demand_tier_at_breakout || '—'],
+                                        ['ATS', ep.ats_at_breakout || '—'],
+                                        ['Wyckoff (strongest)', ep.strongest_wyckoff_state || '—'],
                                       ].map(([k, v]) => (
                                         <div key={k}>
                                           <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>{k}</div>
