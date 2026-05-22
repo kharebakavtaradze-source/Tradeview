@@ -163,7 +163,7 @@ async def compute_outcomes_for_run(
         return None
 
     all_outcomes: list[dict] = []
-    sem = asyncio.Semaphore(6)
+    sem = asyncio.Semaphore(16)
 
     async def _process_candidate(cand: dict):
         async with sem:
@@ -338,7 +338,7 @@ async def detect_missed_movers(
     ]
 
     missed_movers: list[dict] = []
-    sem = asyncio.Semaphore(6)
+    sem = asyncio.Semaphore(16)
     checked = 0
 
     async def _check(sym: str):
