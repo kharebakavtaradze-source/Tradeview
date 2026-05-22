@@ -14,8 +14,6 @@ from hype_monitor.velocity import calc_velocity
 from hype_monitor.hype_score import calc_hype_score
 from hype_monitor.divergence import detect_divergences
 from hype_monitor.ai_analyst import analyze as ai_analyze
-from hype_monitor.alerter import send_hype_alerts, send_hype_summary
-from alerts.telegram import is_configured as telegram_configured
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +58,7 @@ async def _process_ticker(
                     ticker, hype_score, velocity, divergences, ticker_data, news_detail
                 )
 
-            # Send Telegram alerts for this ticker's divergences
-            alerted = []
-            if divergences and telegram_configured():
-                alerted = await send_hype_alerts(
-                    ticker, hype_score, velocity, divergences, ticker_data, ai_result
-                )
+            alerted: list = []
 
             return {
                 "ticker": ticker,
@@ -137,10 +130,6 @@ async def run_hype_monitor() -> list[dict[str, Any]]:
             })
     # Keep last 200 history entries
     _alert_history = _alert_history[-200:]
-
-    # Send summary for HOT/VIRAL tickers
-    if telegram_configured():
-        await send_hype_summary(results)
 
     _latest_results = results
     _last_run_at = datetime.now(timezone.utc)

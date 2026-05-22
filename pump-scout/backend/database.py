@@ -93,63 +93,6 @@ class Scan(Base):
     scan_type     = Column(String(30), nullable=True, index=True)  # 'massive_eod' | 'yahoo_intraday'
 
 
-class Watchlist(Base):
-    __tablename__ = "watchlist"
-
-    id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
-    added_at = Column(DateTime, default=datetime.utcnow)
-    notes = Column(Text, nullable=True)
-
-
-class Journal(Base):
-    __tablename__ = "journal"
-
-    id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, index=True)
-    added_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    entry_price = Column(Float, nullable=False)
-    entry_date = Column(String(20), nullable=False)
-    exit_price = Column(Float, nullable=True)
-    exit_date = Column(String(20), nullable=True)
-    direction = Column(String(10), default="LONG")
-    tier = Column(String(20), nullable=True)
-    score = Column(Float, nullable=True)
-    notes = Column(Text, nullable=True)
-    outcome = Column(String(20), default="open")   # win / loss / open / skip
-    gain_pct = Column(Float, nullable=True)        # auto-calculated on save
-    indicators_snapshot = Column(Text, nullable=True)  # JSON
-    ai_analysis = Column(Text, nullable=True)
-    tags = Column(Text, nullable=True)             # JSON array
-    # ── Extended fields (v10+) ─────────────────────────────────────────────
-    entry_wyckoff = Column(String(30), nullable=True)
-    entry_cmf_pctl = Column(Float, nullable=True)
-    entry_vol_ratio = Column(Float, nullable=True)
-    entry_hype = Column(Integer, default=0)
-    catalyst = Column(String(50), nullable=True)
-    stop_loss = Column(Float, nullable=True)
-    target_price = Column(Float, nullable=True)
-    current_price = Column(Float, nullable=True)
-    current_pct = Column(Float, nullable=True)
-    days_held = Column(Integer, default=0)
-    max_gain_pct = Column(Float, default=0)
-    max_loss_pct = Column(Float, default=0)
-    status = Column(String(10), default="OPEN")    # OPEN / CLOSED / STOPPED
-    exit_reason = Column(String(20), nullable=True)  # TARGET_HIT / STOP_HIT / MANUAL
-    final_pnl_pct = Column(Float, nullable=True)
-    # ── Alpha / SPY tracking (v13+) ───────────────────────────────────────────
-    spy_return_pct = Column(Float, nullable=True)   # SPY cumulative % during hold
-    alpha_pct = Column(Float, nullable=True)         # final_pnl_pct - spy_return_pct
-    max_gain_day = Column(Integer, nullable=True)    # day number of max gain
-    missed_exit_pct = Column(Float, nullable=True)   # max_gain_pct - final_pnl_pct
-    last_updated = Column(DateTime, nullable=True)
-    # ── New Pump source tracking (v14+) ──────────────────────────────────────
-    source      = Column(String(20), nullable=True)  # "scanner" | "new_pump"
-    signal_date = Column(String(10), nullable=True)  # YYYY-MM-DD of signal bar
-    np_sequence = Column(String(40), nullable=True)  # e.g. "FULL_FRI34_G4_B2"
-
-
 class ScanCandidate(Base):
     """Control group — every FIRE/ARM ticker from each scan."""
     __tablename__ = "scan_candidates"
@@ -179,32 +122,6 @@ class ScanCandidate(Base):
     original_score = Column(Float, nullable=True)
     original_tier = Column(String(10), nullable=True)
     downgrade_reason = Column(String(30), nullable=True)
-
-
-class PositionSnapshot(Base):
-    """Daily end-of-day snapshot for each open journal entry."""
-    __tablename__ = "position_snapshots"
-
-    id = Column(Integer, primary_key=True, index=True)
-    journal_id = Column(Integer, nullable=False, index=True)
-    snapshot_date = Column(Date, nullable=False)
-    day_number = Column(Integer, nullable=False)
-    price = Column(Float, nullable=True)
-    pct_from_entry = Column(Float, nullable=True)
-    cmf_pctl = Column(Float, nullable=True)
-    vol_ratio = Column(Float, nullable=True)
-    hype = Column(Integer, nullable=True)
-    wyckoff = Column(String(30), nullable=True)
-    spy_daily_pct = Column(Float, nullable=True)
-
-
-class JournalSettings(Base):
-    """Per-user journal configuration (single-row table)."""
-    __tablename__ = "journal_settings"
-
-    id              = Column(Integer, primary_key=True, index=True)
-    starting_balance = Column(Float, default=2000.0, nullable=False)
-    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class AIJournalPosition(Base):
@@ -353,16 +270,6 @@ class SectorCache(Base):
     fetched_at       = Column(DateTime, default=datetime.utcnow)
 
 
-class EodLog(Base):
-    """End-of-day markdown log — one per trading day."""
-    __tablename__ = "eod_logs"
-
-    id = Column(Integer, primary_key=True, index=True)
-    log_date = Column(String(10), unique=True, nullable=False, index=True)  # YYYY-MM-DD
-    content = Column(Text, nullable=False)
-    generated_at = Column(DateTime, default=datetime.utcnow)
-
-
 class MarketRegime(Base):
     """Daily market regime snapshot (RISK_ON / RISK_OFF / FEAR / ROTATION / NEUTRAL)."""
     __tablename__ = "market_regime"
@@ -400,56 +307,6 @@ class SectorStrength(Base):
     leader_score = Column(Float, nullable=True)
     momentum_pct = Column(Float, nullable=True)
     tickers_json = Column(Text, nullable=True)           # JSON list
-
-
-class PatternStreak(Base):
-    """Multi-day pattern streaks — tracks consecutive scan appearances for ARM+ tickers."""
-    __tablename__ = "pattern_streaks"
-
-    id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
-    streak_start = Column(Date, nullable=False)
-    streak_days = Column(Integer, default=1)
-    avg_score = Column(Float, default=0)
-    avg_cmf_pctl = Column(Float, default=0)
-    avg_vol_ratio = Column(Float, default=0)
-    avg_hype = Column(Integer, default=0)
-    tier = Column(String(20), nullable=True)
-    wyckoff = Column(String(30), nullable=True)
-    last_seen = Column(Date, nullable=False)
-    alerted = Column(Integer, default=0)   # bitmask: bit0=day3 sent, bit1=day5 sent
-
-
-class MacroEventBias(Base):
-    """
-    Trump News Event Bias Layer — Version Alpha.
-    Read-only contextual intelligence. Never affects scores/tiers/rankings.
-    One row per unique event_id (SHA1 of title+date). Idempotent upsert.
-    """
-    __tablename__ = "macro_event_bias"
-
-    id               = Column(Integer, primary_key=True, index=True)
-    event_id         = Column(String(12), unique=True, nullable=False, index=True)  # SHA1[:12]
-    title            = Column(Text, nullable=False)
-    source_url       = Column(Text, nullable=True)
-    published_at     = Column(DateTime, nullable=False, index=True)
-    fetched_at       = Column(DateTime, default=datetime.utcnow)
-    relevance_score  = Column(Integer, nullable=False)       # 0–100
-    event_classes    = Column(Text, nullable=True)           # JSON list
-    primary_class    = Column(String(40), nullable=False, index=True)
-    market_bias      = Column(String(20), nullable=False)    # BULLISH/BEARISH/RISK_OFF/MIXED/NEUTRAL
-    time_horizon     = Column(String(10), nullable=True)     # SHORT/MEDIUM/LONG
-    confidence       = Column(Integer, nullable=True)        # 0–100
-    surprise_level   = Column(Integer, nullable=True)        # 0–100
-    volatility_bias  = Column(String(10), nullable=True)     # LOW/MEDIUM/HIGH/VERY_HIGH
-    oil_bias         = Column(String(10), nullable=True)     # BULLISH/BEARISH/NEUTRAL
-    rates_bias       = Column(String(10), nullable=True)     # BULLISH/BEARISH/NEUTRAL
-    dollar_bias      = Column(String(10), nullable=True)     # BULLISH/BEARISH/NEUTRAL
-    bullish_sectors  = Column(Text, nullable=True)           # JSON list
-    bearish_sectors  = Column(Text, nullable=True)           # JSON list
-    bullish_industries = Column(Text, nullable=True)         # JSON list
-    bearish_industries = Column(Text, nullable=True)         # JSON list
-    is_active        = Column(Boolean, default=True)         # still within time_horizon
 
 
 class UniverseCache(Base):
@@ -848,37 +705,6 @@ _DISCOVERED_PATTERN_MIGRATIONS: list[tuple[str, str]] = [
 ]
 
 
-_JOURNAL_MIGRATIONS = [
-    ("direction",       "VARCHAR(10) DEFAULT 'LONG'"),
-    ("updated_at",      "TIMESTAMP"),
-    ("entry_wyckoff",   "VARCHAR(30)"),
-    ("entry_cmf_pctl",  "FLOAT"),
-    ("entry_vol_ratio", "FLOAT"),
-    ("entry_hype",      "INTEGER DEFAULT 0"),
-    ("catalyst",        "VARCHAR(50)"),
-    ("stop_loss",       "FLOAT"),
-    ("target_price",    "FLOAT"),
-    ("current_price",   "FLOAT"),
-    ("current_pct",     "FLOAT"),
-    ("days_held",       "INTEGER DEFAULT 0"),
-    ("max_gain_pct",    "FLOAT DEFAULT 0"),
-    ("max_loss_pct",    "FLOAT DEFAULT 0"),
-    ("status",          "VARCHAR(10) DEFAULT 'OPEN'"),
-    ("exit_reason",     "VARCHAR(20)"),
-    ("final_pnl_pct",   "FLOAT"),
-    # v13+ alpha tracking
-    ("spy_return_pct",  "FLOAT"),
-    ("alpha_pct",       "FLOAT"),
-    ("max_gain_day",    "INTEGER"),
-    ("missed_exit_pct", "FLOAT"),
-    ("last_updated",    "TIMESTAMP"),
-    # v14+ new pump tracking
-    ("source",      "VARCHAR(20)"),
-    ("signal_date", "VARCHAR(10)"),
-    ("np_sequence", "VARCHAR(40)"),
-]
-
-
 async def _run_migrations(conn):
     """
     Safe ALTER TABLE statements for columns added after initial deployment.
@@ -886,11 +712,6 @@ async def _run_migrations(conn):
     PostgreSQL and SQLite handled separately.
     """
     if _IS_SQLITE:
-        for col, coltype in _JOURNAL_MIGRATIONS:
-            try:
-                await conn.execute(text(f"ALTER TABLE journal ADD COLUMN {col} {coltype}"))
-            except Exception:
-                pass
         for col, coltype in _SCAN_CANDIDATE_MIGRATIONS:
             try:
                 await conn.execute(text(f"ALTER TABLE scan_candidates ADD COLUMN {col} {coltype}"))
@@ -956,13 +777,6 @@ async def _run_migrations(conn):
             except Exception:
                 pass
     else:
-        for col, coltype in _JOURNAL_MIGRATIONS:
-            try:
-                await conn.execute(text(
-                    f"ALTER TABLE journal ADD COLUMN IF NOT EXISTS {col} {coltype}"
-                ))
-            except Exception as e:
-                logger.warning(f"Migration journal.{col} failed (non-fatal): {e}")
         for col, coltype in _SCAN_CANDIDATE_MIGRATIONS:
             try:
                 await conn.execute(text(
@@ -1443,7 +1257,6 @@ async def prune_candle_cache(keep_days: int = 200, dry_run: bool = True) -> dict
         return {"dry_run": False, "cutoff": cutoff, "rows_to_delete": to_delete, "deleted": del_result.rowcount}
 
 
-
     """Return recent history rows for all symbols that appeared in last scan (for timeline view)."""
     async with get_session_factory()() as session:
         # Get distinct symbols that have appeared recently
@@ -1460,41 +1273,6 @@ async def prune_candle_cache(keep_days: int = 200, dry_run: bool = True) -> dict
         rows = await get_demand_ticker_history(sym, limit=limit_per_sym)
         all_rows.extend(rows)
     return all_rows
-
-
-async def get_watchlist() -> List[dict]:
-    """Return all watchlist entries."""
-    async with get_session_factory()() as session:
-        result = await session.execute(select(Watchlist).order_by(Watchlist.added_at.desc()))
-        items = result.scalars().all()
-    return [
-        {"id": w.id, "symbol": w.symbol, "added_at": w.added_at.isoformat(), "notes": w.notes}
-        for w in items
-    ]
-
-
-async def add_to_watchlist(symbol: str, notes: Optional[str] = None) -> dict:
-    """Add a ticker to the watchlist."""
-    async with get_session_factory()() as session:
-        item = Watchlist(symbol=symbol.upper(), notes=notes)
-        session.add(item)
-        await session.commit()
-        await session.refresh(item)
-    return {"id": item.id, "symbol": item.symbol, "added_at": item.added_at.isoformat()}
-
-
-async def remove_from_watchlist(symbol: str) -> bool:
-    """Remove a ticker from the watchlist. Returns True if removed."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(Watchlist).where(Watchlist.symbol == symbol.upper())
-        )
-        item = result.scalar_one_or_none()
-        if not item:
-            return False
-        await session.delete(item)
-        await session.commit()
-    return True
 
 
 # ─── Sector Cache ─────────────────────────────────────────────────────────────
@@ -1606,53 +1384,6 @@ async def save_sector_to_db(
 
 # ─── Journal ─────────────────────────────────────────────────────────────────
 
-def _journal_to_dict(j: Journal) -> dict:
-    return {
-        "id": j.id,
-        "symbol": j.symbol,
-        "added_at": j.added_at.isoformat() if j.added_at else None,
-        "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-        "entry_price": j.entry_price,
-        "entry_date": j.entry_date,
-        "exit_price": j.exit_price,
-        "exit_date": j.exit_date,
-        "direction": j.direction or "LONG",
-        "tier": j.tier,
-        "score": j.score,
-        "notes": j.notes,
-        "outcome": j.outcome,
-        "gain_pct": j.gain_pct,
-        "indicators_snapshot": json.loads(j.indicators_snapshot) if j.indicators_snapshot else None,
-        "ai_analysis": j.ai_analysis,
-        "tags": json.loads(j.tags) if j.tags else [],
-        # Extended v10+ fields
-        "entry_wyckoff": j.entry_wyckoff,
-        "entry_cmf_pctl": j.entry_cmf_pctl,
-        "entry_vol_ratio": j.entry_vol_ratio,
-        "entry_hype": j.entry_hype or 0,
-        "catalyst": j.catalyst,
-        "stop_loss": j.stop_loss,
-        "target_price": j.target_price,
-        "current_price": j.current_price,
-        "current_pct": j.current_pct,
-        "days_held": j.days_held or 0,
-        "max_gain_pct": j.max_gain_pct or 0,
-        "max_loss_pct": j.max_loss_pct or 0,
-        "status": j.status or "OPEN",
-        "exit_reason": j.exit_reason,
-        "final_pnl_pct": j.final_pnl_pct,
-        # v13+ alpha tracking
-        "spy_return_pct": j.spy_return_pct,
-        "alpha_pct": j.alpha_pct,
-        "max_gain_day": j.max_gain_day,
-        "missed_exit_pct": j.missed_exit_pct,
-        "last_updated": j.last_updated.isoformat() if j.last_updated else None,
-        # v14+ new pump tracking
-        "source":      j.source,
-        "signal_date": j.signal_date,
-        "np_sequence": j.np_sequence,
-    }
-
 
 def _calc_gain_pct(entry_price, exit_price, direction="LONG") -> Optional[float]:
     if entry_price and exit_price and entry_price > 0:
@@ -1661,239 +1392,6 @@ def _calc_gain_pct(entry_price, exit_price, direction="LONG") -> Optional[float]
             pct = -pct
         return round(pct, 2)
     return None
-
-
-async def get_journal() -> List[dict]:
-    async with get_session_factory()() as session:
-        result = await session.execute(select(Journal).order_by(Journal.added_at.desc()))
-        items = result.scalars().all()
-    return [_journal_to_dict(j) for j in items]
-
-
-async def get_journal_entry(entry_id: int) -> Optional[dict]:
-    async with get_session_factory()() as session:
-        result = await session.execute(select(Journal).where(Journal.id == entry_id))
-        entry = result.scalar_one_or_none()
-    return _journal_to_dict(entry) if entry else None
-
-
-async def add_journal_entry(data: dict) -> dict:
-    direction = data.get("direction", "LONG").upper()
-    gain = _calc_gain_pct(data.get("entry_price"), data.get("exit_price"), direction)
-    async with get_session_factory()() as session:
-        entry = Journal(
-            symbol=data["symbol"].upper(),
-            entry_price=data["entry_price"],
-            entry_date=data.get("entry_date", datetime.utcnow().strftime("%Y-%m-%d")),
-            exit_price=data.get("exit_price"),
-            exit_date=data.get("exit_date"),
-            direction=direction,
-            tier=data.get("tier"),
-            score=data.get("score"),
-            notes=data.get("notes"),
-            outcome=data.get("outcome", "open"),
-            gain_pct=gain,
-            indicators_snapshot=json.dumps(data["indicators_snapshot"]) if data.get("indicators_snapshot") else None,
-            ai_analysis=data.get("ai_analysis"),
-            tags=json.dumps(data.get("tags", [])),
-            updated_at=datetime.utcnow(),
-            # Extended v10+ fields
-            entry_wyckoff=data.get("entry_wyckoff"),
-            entry_cmf_pctl=data.get("entry_cmf_pctl"),
-            entry_vol_ratio=data.get("entry_vol_ratio"),
-            entry_hype=data.get("entry_hype", 0),
-            catalyst=data.get("catalyst"),
-            stop_loss=data.get("stop_loss"),
-            target_price=data.get("target_price"),
-            status="OPEN",
-            source=data.get("source"),
-            signal_date=data.get("signal_date"),
-            np_sequence=data.get("np_sequence"),
-        )
-        session.add(entry)
-        await session.commit()
-        await session.refresh(entry)
-    return _journal_to_dict(entry)
-
-
-async def update_journal_entry(entry_id: int, data: dict) -> Optional[dict]:
-    async with get_session_factory()() as session:
-        result = await session.execute(select(Journal).where(Journal.id == entry_id))
-        entry = result.scalar_one_or_none()
-        if not entry:
-            return None
-        updatable = (
-            "exit_price", "exit_date", "notes", "outcome", "tier", "score",
-            "ai_analysis", "direction", "stop_loss", "target_price", "catalyst",
-            "current_price", "current_pct", "days_held", "max_gain_pct", "max_loss_pct",
-            "status", "exit_reason", "final_pnl_pct",
-            "spy_return_pct", "alpha_pct", "max_gain_day", "missed_exit_pct", "last_updated",
-        )
-        for field in updatable:
-            if field in data:
-                setattr(entry, field, data[field])
-        if "tags" in data:
-            entry.tags = json.dumps(data["tags"])
-        direction = getattr(entry, "direction", "LONG") or "LONG"
-        entry.gain_pct = _calc_gain_pct(entry.entry_price, entry.exit_price, direction)
-        entry.updated_at = datetime.utcnow()
-        await session.commit()
-        await session.refresh(entry)
-    return _journal_to_dict(entry)
-
-
-async def get_open_journal_entries() -> List[dict]:
-    """Return journal entries with status=OPEN / outcome=open."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(Journal).where(Journal.outcome == "open").order_by(Journal.added_at.desc())
-        )
-        items = result.scalars().all()
-    return [_journal_to_dict(j) for j in items]
-
-
-async def delete_journal_entry(entry_id: int) -> bool:
-    async with get_session_factory()() as session:
-        result = await session.execute(select(Journal).where(Journal.id == entry_id))
-        entry = result.scalar_one_or_none()
-        if not entry:
-            return False
-        await session.delete(entry)
-        await session.commit()
-    return True
-
-
-async def get_journal_settings() -> dict:
-    """Return the single journal settings row, creating it with defaults if absent."""
-    async with get_session_factory()() as session:
-        result = await session.execute(select(JournalSettings).limit(1))
-        row = result.scalar_one_or_none()
-        if row is None:
-            row = JournalSettings(starting_balance=2000.0)
-            session.add(row)
-            await session.commit()
-            await session.refresh(row)
-        return {"id": row.id, "starting_balance": row.starting_balance}
-
-
-async def update_journal_settings(starting_balance: float) -> dict:
-    """Update starting_balance in journal settings."""
-    async with get_session_factory()() as session:
-        result = await session.execute(select(JournalSettings).limit(1))
-        row = result.scalar_one_or_none()
-        if row is None:
-            row = JournalSettings(starting_balance=starting_balance)
-            session.add(row)
-        else:
-            row.starting_balance = starting_balance
-            row.updated_at = datetime.utcnow()
-        await session.commit()
-        await session.refresh(row)
-        return {"id": row.id, "starting_balance": row.starting_balance}
-
-
-async def reset_journal() -> dict:
-    """Delete all journal entries and position snapshots. Returns count of deleted records."""
-    async with get_session_factory()() as session:
-        snap_result = await session.execute(select(PositionSnapshot))
-        snapshots = snap_result.scalars().all()
-        snap_count = len(snapshots)
-        for s in snapshots:
-            await session.delete(s)
-
-        entry_result = await session.execute(select(Journal))
-        journal_entries = entry_result.scalars().all()
-        entry_count = len(journal_entries)
-        for e in journal_entries:
-            await session.delete(e)
-
-        await session.commit()
-    return {"deleted_entries": entry_count, "deleted_snapshots": snap_count}
-
-
-async def get_journal_stats() -> dict:
-    entries = await get_journal()
-    closed = [e for e in entries if e["outcome"] in ("win", "loss")]
-    wins = [e for e in entries if e["outcome"] == "win"]
-    losses = [e for e in entries if e["outcome"] == "loss"]
-    open_trades = [e for e in entries if e["outcome"] == "open"]
-
-    settings = await get_journal_settings()
-    starting_balance = settings.get("starting_balance", 2000.0)
-
-    def _trade_pnl(e):
-        return e.get("final_pnl_pct") or e.get("gain_pct") or 0
-
-    win_rate = round(len(wins) / len(closed) * 100, 1) if closed else 0
-    avg_win = round(sum(_trade_pnl(e) for e in wins) / len(wins), 2) if wins else 0
-    avg_loss = round(sum(_trade_pnl(e) for e in losses) / len(losses), 2) if losses else 0
-    total_pnl = round(sum(_trade_pnl(e) for e in closed), 2)
-    pnl_usd = round(starting_balance * total_pnl / 100, 2)
-    portfolio_value_usd = round(starting_balance + pnl_usd, 2)
-
-    # Best tier by win rate
-    tier_stats: dict = {}
-    for e in closed:
-        t = e.get("tier") or "UNKNOWN"
-        tier_stats.setdefault(t, {"wins": 0, "total": 0})
-        tier_stats[t]["total"] += 1
-        if e["outcome"] == "win":
-            tier_stats[t]["wins"] += 1
-    best_tier = max(
-        tier_stats, key=lambda t: tier_stats[t]["wins"] / tier_stats[t]["total"]
-    ) if tier_stats else None
-
-    # Best score range
-    buckets: dict = {}
-    for e in closed:
-        sc = e.get("score") or 0
-        b = f"{int(sc // 10) * 10}-{int(sc // 10) * 10 + 10}"
-        buckets.setdefault(b, {"wins": 0, "total": 0})
-        buckets[b]["total"] += 1
-        if e["outcome"] == "win":
-            buckets[b]["wins"] += 1
-    best_range = max(
-        buckets, key=lambda b: buckets[b]["wins"] / buckets[b]["total"]
-    ) if buckets else None
-
-    # Best and worst individual trades
-    best_trade = None
-    worst_trade = None
-    if closed:
-        best_e = max(closed, key=_trade_pnl)
-        worst_e = min(closed, key=_trade_pnl)
-        best_trade = {
-            "symbol": best_e.get("symbol"),
-            "pnl_pct": round(_trade_pnl(best_e), 2),
-            "outcome": best_e.get("outcome"),
-            "days_held": best_e.get("days_held"),
-        }
-        worst_trade = {
-            "symbol": worst_e.get("symbol"),
-            "pnl_pct": round(_trade_pnl(worst_e), 2),
-            "outcome": worst_e.get("outcome"),
-            "days_held": worst_e.get("days_held"),
-        }
-
-    return {
-        "total_trades": len(entries),
-        "open_trades": len(open_trades),
-        "closed_trades": len(closed),
-        "win_rate_pct": win_rate,
-        "avg_gain_winners": avg_win,
-        "avg_loss_losers": avg_loss,
-        "total_pnl_pct": total_pnl,
-        "best_tier": best_tier,
-        "best_score_range": best_range,
-        "wins": len(wins),
-        "losses": len(losses),
-        "best_trade": best_trade,
-        "worst_trade": worst_trade,
-        "starting_balance": starting_balance,
-        "pnl_usd": pnl_usd,
-        "portfolio_value_usd": portfolio_value_usd,
-    }
-
 
 
 # ─── Scan Candidates ──────────────────────────────────────────────────────────
@@ -1971,23 +1469,6 @@ async def save_scan_candidates(scan_results: list) -> int:
     return saved
 
 
-async def mark_candidate_journaled(symbol: str) -> None:
-    """Mark today's scan candidate as journaled when user adds it to journal."""
-    from datetime import date as date_type
-    today = date_type.today()
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(ScanCandidate).where(
-                ScanCandidate.symbol == symbol.upper(),
-                ScanCandidate.scan_date == today,
-            )
-        )
-        cand = result.scalar_one_or_none()
-        if cand:
-            cand.was_journaled = True
-            await session.commit()
-
-
 async def get_candidates_missed() -> dict:
     """Return candidates that were not journaled and their outcome over 5d/10d/20d."""
     async with get_session_factory()() as session:
@@ -2056,220 +1537,11 @@ async def get_recent_fire_arm_symbols(days: int = 7) -> list[str]:
 
 # ─── Position Snapshots ───────────────────────────────────────────────────────
 
-async def save_position_snapshot(journal_id: int, day_number: int, price: float,
-                                  pct_from_entry: float, spy_daily_pct: float) -> None:
-    from datetime import date as date_type
-    today = date_type.today()
-    async with get_session_factory()() as session:
-        snap = PositionSnapshot(
-            journal_id=journal_id,
-            snapshot_date=today,
-            day_number=day_number,
-            price=price,
-            pct_from_entry=pct_from_entry,
-            spy_daily_pct=spy_daily_pct,
-        )
-        session.add(snap)
-        await session.commit()
-
-
-async def get_position_snapshots(journal_id: int) -> List[dict]:
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(PositionSnapshot)
-            .where(PositionSnapshot.journal_id == journal_id)
-            .order_by(PositionSnapshot.day_number.asc())
-        )
-        snaps = result.scalars().all()
-    return [
-        {
-            "day_number": s.day_number,
-            "snapshot_date": s.snapshot_date.isoformat() if s.snapshot_date else None,
-            "price": s.price,
-            "pct_from_entry": s.pct_from_entry,
-            "spy_daily_pct": s.spy_daily_pct,
-        }
-        for s in snaps
-    ]
-
-
-async def get_spy_cumulative_for_entry(journal_id: int) -> float:
-    """Sum all spy_daily_pct snapshots for a journal entry."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(PositionSnapshot.spy_daily_pct).where(PositionSnapshot.journal_id == journal_id)
-        )
-        rows = result.scalars().all()
-    return sum(r or 0 for r in rows)
-
-
-async def get_max_gain_day(journal_id: int) -> Optional[int]:
-    """Return day_number of the highest pct_from_entry snapshot."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(PositionSnapshot)
-            .where(PositionSnapshot.journal_id == journal_id)
-            .order_by(PositionSnapshot.pct_from_entry.desc())
-            .limit(1)
-        )
-        snap = result.scalar_one_or_none()
-    return snap.day_number if snap else None
-
 
 # ─── Deep Analytics ───────────────────────────────────────────────────────────
 
-async def get_deep_analytics() -> dict:
-    """Full analytics breakdown: by signal, timing, alpha, missed opportunities."""
-    entries = await get_journal()
-    closed = [e for e in entries if e.get("outcome") in ("win", "loss")]
-    if not closed:
-        return {"message": "No closed trades yet"}
-
-    def win_rate(group):
-        wins = sum(1 for e in group if e["outcome"] == "win")
-        return round(wins / len(group), 2) if group else 0
-
-    def avg_return(group):
-        vals = [e.get("final_pnl_pct") or e.get("gain_pct") or 0 for e in group]
-        return round(sum(vals) / len(vals), 2) if vals else 0
-
-    def avg_alpha(group):
-        vals = [e.get("alpha_pct") or 0 for e in group]
-        return round(sum(vals) / len(vals), 2) if vals else 0
-
-    # By Wyckoff
-    wyckoff_groups: dict = {}
-    for e in closed:
-        k = e.get("entry_wyckoff") or "UNKNOWN"
-        wyckoff_groups.setdefault(k, []).append(e)
-    by_wyckoff = [
-        {"state": k, "count": len(v), "win_rate": win_rate(v),
-         "avg_return": avg_return(v), "avg_alpha": avg_alpha(v)}
-        for k, v in sorted(wyckoff_groups.items(), key=lambda x: -len(x[1]))
-    ]
-
-    # By CMF bucket
-    cmf_buckets = [
-        (">90%ile", lambda e: (e.get("entry_cmf_pctl") or 0) > 90),
-        ("70-90%ile", lambda e: 70 < (e.get("entry_cmf_pctl") or 0) <= 90),
-        ("50-70%ile", lambda e: 50 < (e.get("entry_cmf_pctl") or 0) <= 70),
-        ("<50%ile", lambda e: (e.get("entry_cmf_pctl") or 0) <= 50),
-    ]
-    by_cmf = []
-    for label, fn in cmf_buckets:
-        g = [e for e in closed if fn(e)]
-        if g:
-            by_cmf.append({"bucket": label, "count": len(g), "win_rate": win_rate(g), "avg_return": avg_return(g)})
-
-    # By Hype bucket
-    hype_buckets = [
-        ("<20", lambda e: (e.get("entry_hype") or 0) < 20),
-        ("20-40", lambda e: 20 <= (e.get("entry_hype") or 0) < 40),
-        ("40-60", lambda e: 40 <= (e.get("entry_hype") or 0) < 60),
-        (">60", lambda e: (e.get("entry_hype") or 0) >= 60),
-    ]
-    by_hype = []
-    for label, fn in hype_buckets:
-        g = [e for e in closed if fn(e)]
-        if g:
-            by_hype.append({"bucket": label, "count": len(g), "win_rate": win_rate(g), "avg_return": avg_return(g)})
-
-    # By Tier
-    tier_groups: dict = {}
-    for e in closed:
-        k = e.get("tier") or "UNKNOWN"
-        tier_groups.setdefault(k, []).append(e)
-    by_tier = [
-        {"tier": k, "count": len(v), "win_rate": win_rate(v), "avg_return": avg_return(v)}
-        for k, v in sorted(tier_groups.items(), key=lambda x: -len(x[1]))
-    ]
-
-    # Timing
-    hold_days = [e.get("days_held") or 0 for e in closed]
-    max_gain_days = [e.get("max_gain_day") for e in closed if e.get("max_gain_day")]
-    missed = [e.get("missed_exit_pct") or 0 for e in closed]
-    avg_hold = round(sum(hold_days) / len(hold_days), 1) if hold_days else 0
-    avg_max_gain_day = round(sum(max_gain_days) / len(max_gain_days), 1) if max_gain_days else 0
-    avg_missed = round(sum(missed) / len(missed), 2) if missed else 0
-    suggested_hold = int(avg_max_gain_day) if avg_max_gain_day else None
-    exit_too_late = sum(1 for e in closed if (e.get("missed_exit_pct") or 0) > 3)
-    exit_too_early = sum(1 for e in closed if (e.get("days_held") or 0) < (avg_max_gain_day or 999))
-
-    # Alpha
-    alpha_vals = [e.get("alpha_pct") for e in closed if e.get("alpha_pct") is not None]
-    avg_alpha_val = round(sum(alpha_vals) / len(alpha_vals), 2) if alpha_vals else 0
-    positive_alpha = sum(1 for a in alpha_vals if a > 0)
-    positive_alpha_rate = round(positive_alpha / len(alpha_vals), 2) if alpha_vals else 0
-
-    # Missed opportunities (from scan_candidates)
-    try:
-        missed_opp = await get_candidates_missed()
-    except Exception:
-        missed_opp = {}
-
-    return {
-        "signal_performance": {
-            "by_wyckoff": by_wyckoff,
-            "by_cmf_bucket": by_cmf,
-            "by_hype_bucket": by_hype,
-            "by_tier": by_tier,
-        },
-        "timing": {
-            "avg_max_gain_day": avg_max_gain_day,
-            "avg_days_held": avg_hold,
-            "avg_missed_exit_pct": avg_missed,
-            "suggested_hold_days": suggested_hold,
-            "exit_too_late_count": exit_too_late,
-            "exit_too_early_count": exit_too_early,
-        },
-        "alpha": {
-            "avg_alpha_vs_spy": avg_alpha_val,
-            "positive_alpha_rate": positive_alpha_rate,
-        },
-        "missed_opportunities": missed_opp,
-        "total_closed": len(closed),
-    }
-
 
 # ─── EOD Log ──────────────────────────────────────────────────────────────────
-
-async def save_eod_log(log_date: str, content: str) -> None:
-    """Upsert an end-of-day log for the given date (YYYY-MM-DD)."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(EodLog).where(EodLog.log_date == log_date)
-        )
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.content = content
-            existing.generated_at = datetime.utcnow()
-        else:
-            session.add(EodLog(log_date=log_date, content=content))
-        await session.commit()
-
-
-async def get_eod_log(log_date: str) -> Optional[dict]:
-    """Return EOD log for a given date, or None."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(EodLog).where(EodLog.log_date == log_date)
-        )
-        row = result.scalar_one_or_none()
-        if not row:
-            return None
-        return {"log_date": row.log_date, "content": row.content, "generated_at": row.generated_at.isoformat()}
-
-
-async def get_latest_eod_log() -> Optional[dict]:
-    """Return the most recent EOD log."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(EodLog).order_by(EodLog.log_date.desc()).limit(1)
-        )
-        row = result.scalar_one_or_none()
-        if not row:
-            return None
-        return {"log_date": row.log_date, "content": row.content, "generated_at": row.generated_at.isoformat()}
 
 
 # ─── Market Regime ─────────────────────────────────────────────────────────────
@@ -2536,40 +1808,6 @@ async def get_sector_strength_for_sector(sector: str) -> Optional[dict]:
 
 # ─── Pattern Streaks ──────────────────────────────────────────────────────────
 
-async def get_active_streaks(min_days: int = 2) -> List[dict]:
-    """
-    Return active pattern streaks seen today or yesterday with at least min_days length.
-    Ordered by streak_days desc, then avg_score desc.
-    """
-    from datetime import date as _date, timedelta
-    today = _date.today()
-    yesterday = today - timedelta(days=1)
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(PatternStreak)
-            .where(
-                PatternStreak.last_seen >= yesterday,
-                PatternStreak.streak_days >= min_days,
-            )
-            .order_by(PatternStreak.streak_days.desc(), PatternStreak.avg_score.desc())
-        )
-        streaks = result.scalars().all()
-    return [
-        {
-            "symbol": s.symbol,
-            "streak_days": s.streak_days,
-            "streak_start": s.streak_start.isoformat() if s.streak_start else None,
-            "avg_score": round(s.avg_score or 0, 1),
-            "avg_cmf_pctl": round(s.avg_cmf_pctl or 0, 1),
-            "avg_vol_ratio": round(s.avg_vol_ratio or 0, 2),
-            "avg_hype": s.avg_hype or 0,
-            "tier": s.tier,
-            "wyckoff": s.wyckoff,
-            "last_seen": s.last_seen.isoformat() if s.last_seen else None,
-        }
-        for s in streaks
-    ]
-
 
 # ─── Data Rotation ─────────────────────────────────────────────────────────────
 
@@ -2647,161 +1885,6 @@ async def rotate_old_data() -> dict:
 
 
 # ─── Macro Event Bias (Trump News Layer — Version Alpha) ──────────────────────
-
-def _macro_event_to_dict(ev: MacroEventBias) -> dict:
-    import json as _json
-    def _parse(val):
-        if isinstance(val, list):
-            return val
-        try:
-            return _json.loads(val) if val else []
-        except Exception:
-            return []
-
-    return {
-        "id":                 ev.id,
-        "event_id":           ev.event_id,
-        "title":              ev.title,
-        "source_url":         ev.source_url,
-        "published_at":       ev.published_at.isoformat() if ev.published_at else None,
-        "fetched_at":         ev.fetched_at.isoformat() if ev.fetched_at else None,
-        "relevance_score":    ev.relevance_score,
-        "event_classes":      _parse(ev.event_classes),
-        "primary_class":      ev.primary_class,
-        "market_bias":        ev.market_bias,
-        "time_horizon":       ev.time_horizon,
-        "confidence":         ev.confidence,
-        "surprise_level":     ev.surprise_level,
-        "volatility_bias":    ev.volatility_bias,
-        "oil_bias":           ev.oil_bias,
-        "rates_bias":         ev.rates_bias,
-        "dollar_bias":        ev.dollar_bias,
-        "bullish_sectors":    _parse(ev.bullish_sectors),
-        "bearish_sectors":    _parse(ev.bearish_sectors),
-        "bullish_industries": _parse(ev.bullish_industries),
-        "bearish_industries": _parse(ev.bearish_industries),
-        "is_active":          ev.is_active,
-    }
-
-
-async def upsert_macro_events(events: list[dict]) -> int:
-    """
-    Idempotent upsert of classified macro events.
-    Uses event_id (SHA1 of title+date) to detect duplicates.
-    Returns count of newly inserted rows.
-    """
-    import json as _json
-    if not events:
-        return 0
-
-    inserted = 0
-    async with get_session_factory()() as session:
-        for ev in events:
-            try:
-                result = await session.execute(
-                    select(MacroEventBias).where(MacroEventBias.event_id == ev["event_id"])
-                )
-                existing = result.scalar_one_or_none()
-                if existing:
-                    # Update is_active status (might change as events age)
-                    existing.is_active = ev.get("is_active", True)
-                    continue
-
-                # Parse published_at
-                try:
-                    pub = datetime.fromisoformat(ev["published_at"].replace("Z", "+00:00"))
-                    pub = pub.replace(tzinfo=None)  # store as UTC naive
-                except Exception:
-                    pub = datetime.utcnow()
-
-                row = MacroEventBias(
-                    event_id        = ev["event_id"],
-                    title           = ev["title"],
-                    source_url      = ev.get("source_url", ""),
-                    published_at    = pub,
-                    fetched_at      = datetime.utcnow(),
-                    relevance_score = ev.get("relevance_score", 50),
-                    event_classes   = _json.dumps(ev.get("event_classes", [])),
-                    primary_class   = ev.get("primary_class", "GENERAL_POLITICAL_NOISE"),
-                    market_bias     = ev.get("market_bias", "NEUTRAL"),
-                    time_horizon    = ev.get("time_horizon", "SHORT"),
-                    confidence      = ev.get("confidence", 50),
-                    surprise_level  = ev.get("surprise_level", 20),
-                    volatility_bias = ev.get("volatility_bias", "LOW"),
-                    oil_bias        = ev.get("oil_bias", "NEUTRAL"),
-                    rates_bias      = ev.get("rates_bias", "NEUTRAL"),
-                    dollar_bias     = ev.get("dollar_bias", "NEUTRAL"),
-                    bullish_sectors   = _json.dumps(ev.get("bullish_sectors", [])),
-                    bearish_sectors   = _json.dumps(ev.get("bearish_sectors", [])),
-                    bullish_industries= _json.dumps(ev.get("bullish_industries", [])),
-                    bearish_industries= _json.dumps(ev.get("bearish_industries", [])),
-                    is_active       = ev.get("is_active", True),
-                )
-                session.add(row)
-                inserted += 1
-            except Exception as e:
-                logger.warning(f"upsert_macro_events failed for event_id={ev.get('event_id')}: {e}")
-
-        await session.commit()
-
-    logger.info(f"upsert_macro_events: {inserted} new events inserted (of {len(events)} total)")
-    return inserted
-
-
-async def get_macro_events_latest(limit: int = 20) -> list[dict]:
-    """Return the most recent macro events ordered by published_at desc."""
-    try:
-        async with get_session_factory()() as session:
-            result = await session.execute(
-                select(MacroEventBias)
-                .order_by(MacroEventBias.published_at.desc())
-                .limit(limit)
-            )
-            rows = result.scalars().all()
-            return [_macro_event_to_dict(r) for r in rows]
-    except Exception as e:
-        logger.error(f"get_macro_events_latest failed: {e}")
-        return []
-
-
-async def get_macro_events_history(days: int = 7, limit: int = 100) -> list[dict]:
-    """Return events from the last N days."""
-    try:
-        cutoff = datetime.utcnow() - timedelta(days=days)
-        async with get_session_factory()() as session:
-            result = await session.execute(
-                select(MacroEventBias)
-                .where(MacroEventBias.published_at >= cutoff)
-                .order_by(MacroEventBias.published_at.desc())
-                .limit(limit)
-            )
-            rows = result.scalars().all()
-            return [_macro_event_to_dict(r) for r in rows]
-    except Exception as e:
-        logger.error(f"get_macro_events_history failed: {e}")
-        return []
-
-
-async def get_macro_events_active(max_age_days: int = 3) -> list[dict]:
-    """Return events that are still within their active window."""
-    try:
-        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
-        async with get_session_factory()() as session:
-            result = await session.execute(
-                select(MacroEventBias)
-                .where(
-                    (MacroEventBias.published_at >= cutoff) &
-                    (MacroEventBias.is_active == True)  # noqa: E712
-                )
-                .order_by(MacroEventBias.relevance_score.desc(), MacroEventBias.published_at.desc())
-            )
-            rows = result.scalars().all()
-            return [_macro_event_to_dict(r) for r in rows]
-    except Exception as e:
-        logger.error(f"get_macro_events_active failed: {e}")
-        return []
-
-
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
