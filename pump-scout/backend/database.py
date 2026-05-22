@@ -420,48 +420,6 @@ class PatternStreak(Base):
     alerted = Column(Integer, default=0)   # bitmask: bit0=day3 sent, bit1=day5 sent
 
 
-class RibbonCandidate(Base):
-    """
-    EMA ribbon secondary pass — analytical discovery only.
-    Captures liquid compression setups that lack the volume anomaly (>= 2x)
-    required by the main scan pipeline.  Three intraday upserts overwrite the
-    same (scan_date, symbol) row so only the freshest snapshot is kept.
-    """
-    __tablename__ = "ribbon_candidates"
-    __table_args__ = (UniqueConstraint("scan_date", "symbol", name="uq_ribbon_date_symbol"),)
-
-    id          = Column(Integer, primary_key=True, index=True)
-    scan_date   = Column(Date, nullable=False, index=True)
-    symbol      = Column(String(10), nullable=False, index=True)
-    price       = Column(Float, nullable=True)
-    today_vol   = Column(Integer, nullable=True)
-    anomaly_ratio          = Column(Float, nullable=True)
-    ema8        = Column(Float, nullable=True)
-    ema13       = Column(Float, nullable=True)
-    ema20       = Column(Float, nullable=True)
-    ema21       = Column(Float, nullable=True)
-    ema34       = Column(Float, nullable=True)
-    ema50       = Column(Float, nullable=True)
-    ema55       = Column(Float, nullable=True)
-    ema89       = Column(Float, nullable=True)
-    ema200      = Column(Float, nullable=True)
-    ema_spread_pct         = Column(Float, nullable=True)
-    ribbon_compression     = Column(String(10), nullable=True)
-    bullish_stack          = Column(Boolean, default=False)
-    bearish_stack          = Column(Boolean, default=False)
-    compression_and_bullish = Column(Boolean, default=False)
-    ribbon_position        = Column(Float, nullable=True)
-    ema8_slope             = Column(String(10), nullable=True)
-    cmf_pctl    = Column(Float, nullable=True)
-    rsi         = Column(Float, nullable=True)
-    bb_sqz_bars = Column(Integer, default=0)
-    bb_squeeze  = Column(Boolean, default=False)
-    obv_strength = Column(String(10), nullable=True)
-    rs_score    = Column(Float, default=0)
-    sector      = Column(String(50), nullable=True)
-    scanned_at  = Column(DateTime, default=datetime.utcnow)
-
-
 class MacroEventBias(Base):
     """
     Trump News Event Bias Layer — Version Alpha.
@@ -2615,124 +2573,6 @@ async def get_active_streaks(min_days: int = 2) -> List[dict]:
 
 # ─── Data Rotation ─────────────────────────────────────────────────────────────
 
-async def save_ribbon_candidates(candidates: list[dict]) -> int:
-    """
-    Upsert ribbon pass candidates.
-    ON CONFLICT (scan_date, symbol) updates key fields so the latest intraday
-    snapshot always wins.
-    """
-    if not candidates:
-        return 0
-    from datetime import date as date_type
-    today = date_type.today()
-    saved = 0
-    async with get_engine().begin() as conn:
-        for c in candidates:
-            try:
-                params = {
-                    "scan_date":   today,
-                    "symbol":      c["symbol"],
-                    "price":       c.get("price"),
-                    "today_vol":   c.get("today_vol"),
-                    "anomaly_ratio": c.get("anomaly_ratio"),
-                    "ema8":        c.get("ema8"),
-                    "ema13":       c.get("ema13"),
-                    "ema20":       c.get("ema20"),
-                    "ema21":       c.get("ema21"),
-                    "ema34":       c.get("ema34"),
-                    "ema50":       c.get("ema50"),
-                    "ema55":       c.get("ema55"),
-                    "ema89":       c.get("ema89"),
-                    "ema200":      c.get("ema200"),
-                    "ema_spread_pct":         c.get("ema_spread_pct"),
-                    "ribbon_compression":     c.get("ribbon_compression", "NONE"),
-                    "bullish_stack":          bool(c.get("bullish_stack", False)),
-                    "bearish_stack":          bool(c.get("bearish_stack", False)),
-                    "compression_and_bullish": bool(c.get("compression_and_bullish", False)),
-                    "ribbon_position":        c.get("ribbon_position"),
-                    "ema8_slope":             c.get("ema8_slope", "FLAT"),
-                    "cmf_pctl":    c.get("cmf_pctl"),
-                    "rsi":         c.get("rsi"),
-                    "bb_sqz_bars": c.get("bb_sqz_bars", 0),
-                    "bb_squeeze":  bool(c.get("bb_squeeze", False)),
-                    "obv_strength": c.get("obv_strength"),
-                    "rs_score":    c.get("rs_score", 0.0),
-                    "sector":      c.get("sector"),
-                }
-                if _IS_SQLITE:
-                    await conn.execute(text("""
-                        INSERT OR REPLACE INTO ribbon_candidates (
-                            scan_date, symbol, price, today_vol, anomaly_ratio,
-                            ema8, ema13, ema20, ema21, ema34, ema50, ema55, ema89, ema200,
-                            ema_spread_pct, ribbon_compression,
-                            bullish_stack, bearish_stack, compression_and_bullish,
-                            ribbon_position, ema8_slope,
-                            cmf_pctl, rsi, bb_sqz_bars, bb_squeeze,
-                            obv_strength, rs_score, sector, scanned_at
-                        ) VALUES (
-                            :scan_date, :symbol, :price, :today_vol, :anomaly_ratio,
-                            :ema8, :ema13, :ema20, :ema21, :ema34, :ema50, :ema55, :ema89, :ema200,
-                            :ema_spread_pct, :ribbon_compression,
-                            :bullish_stack, :bearish_stack, :compression_and_bullish,
-                            :ribbon_position, :ema8_slope,
-                            :cmf_pctl, :rsi, :bb_sqz_bars, :bb_squeeze,
-                            :obv_strength, :rs_score, :sector, CURRENT_TIMESTAMP
-                        )
-                    """), params)
-                else:
-                    await conn.execute(text("""
-                        INSERT INTO ribbon_candidates (
-                            scan_date, symbol, price, today_vol, anomaly_ratio,
-                            ema8, ema13, ema20, ema21, ema34, ema50, ema55, ema89, ema200,
-                            ema_spread_pct, ribbon_compression,
-                            bullish_stack, bearish_stack, compression_and_bullish,
-                            ribbon_position, ema8_slope,
-                            cmf_pctl, rsi, bb_sqz_bars, bb_squeeze,
-                            obv_strength, rs_score, sector, scanned_at
-                        ) VALUES (
-                            :scan_date, :symbol, :price, :today_vol, :anomaly_ratio,
-                            :ema8, :ema13, :ema20, :ema21, :ema34, :ema50, :ema55, :ema89, :ema200,
-                            :ema_spread_pct, :ribbon_compression,
-                            :bullish_stack, :bearish_stack, :compression_and_bullish,
-                            :ribbon_position, :ema8_slope,
-                            :cmf_pctl, :rsi, :bb_sqz_bars, :bb_squeeze,
-                            :obv_strength, :rs_score, :sector, NOW()
-                        )
-                        ON CONFLICT (scan_date, symbol) DO UPDATE SET
-                            price                   = EXCLUDED.price,
-                            today_vol               = EXCLUDED.today_vol,
-                            anomaly_ratio           = EXCLUDED.anomaly_ratio,
-                            ema_spread_pct          = EXCLUDED.ema_spread_pct,
-                            ribbon_compression      = EXCLUDED.ribbon_compression,
-                            bullish_stack           = EXCLUDED.bullish_stack,
-                            bearish_stack           = EXCLUDED.bearish_stack,
-                            compression_and_bullish = EXCLUDED.compression_and_bullish,
-                            ribbon_position         = EXCLUDED.ribbon_position,
-                            ema8_slope              = EXCLUDED.ema8_slope,
-                            cmf_pctl                = EXCLUDED.cmf_pctl,
-                            obv_strength            = EXCLUDED.obv_strength,
-                            rs_score                = EXCLUDED.rs_score,
-                            scanned_at              = NOW()
-                    """), params)
-                saved += 1
-            except Exception as e:
-                logger.warning(f"save_ribbon_candidates upsert failed for {c.get('symbol')}: {e}")
-    return saved
-
-
-async def get_ribbon_candidates(days_back: int = 1) -> list[dict]:
-    """Return ribbon candidates from the last N days as plain dicts."""
-    from datetime import date, timedelta
-    cutoff = date.today() - timedelta(days=days_back)
-    async with get_engine().begin() as conn:
-        result = await conn.execute(
-            text("SELECT * FROM ribbon_candidates WHERE scan_date >= :cutoff ORDER BY ema_spread_pct ASC"),
-            {"cutoff": cutoff},
-        )
-        rows = result.mappings().all()
-    return [dict(row) for row in rows]
-
-
 async def rotate_old_data() -> dict:
     """
     Delete old rows to prevent DB bloat.
@@ -2781,13 +2621,6 @@ async def rotate_old_data() -> dict:
             {"cutoff": cutoff_eod},
         )
         deleted["eod_logs"] = r.rowcount
-
-        cutoff_ribbon = today - timedelta(days=14)
-        r = await conn.execute(
-            text("DELETE FROM ribbon_candidates WHERE scan_date < :cutoff"),
-            {"cutoff": cutoff_ribbon},
-        )
-        deleted["ribbon_candidates"] = r.rowcount
 
     # Prune old study/replay runs — keep only the 3 most-recent complete runs each.
     # These tables have no time-based cutoff so they grow unboundedly without this.
@@ -5541,6 +5374,100 @@ async def delete_raw_pattern_run(run_id: int) -> dict:
         r = await conn.execute(text("DELETE FROM raw_pattern_runs WHERE id = :id"), {"id": run_id})
         counts["run"] = r.rowcount
         return counts
+
+
+async def drop_legacy_tables() -> dict:
+    """
+    Drop tables that are no longer in the SQLAlchemy schema.
+    Safe to call on every startup — uses IF EXISTS.
+    """
+    dropped: dict = {}
+    if _IS_SQLITE:
+        # SQLite handles DROP IF EXISTS cleanly with no CASCADE syntax.
+        legacy = ["ribbon_candidates"]
+        async with get_engine().begin() as conn:
+            for tbl in legacy:
+                try:
+                    await conn.execute(text(f"DROP TABLE IF EXISTS {tbl}"))
+                    dropped[tbl] = "dropped"
+                except Exception as e:
+                    dropped[tbl] = f"error: {e}"
+        return dropped
+
+    legacy = ["ribbon_candidates"]
+    async with get_engine().connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        for tbl in legacy:
+            try:
+                await conn.execute(text(f"DROP TABLE IF EXISTS {tbl} CASCADE"))
+                dropped[tbl] = "dropped"
+            except Exception as e:
+                dropped[tbl] = f"error: {e}"
+    return dropped
+
+
+async def wipe_database(skip: tuple[str, ...] = ()) -> dict:
+    """
+    DESTRUCTIVE: TRUNCATE every table in the SQLAlchemy schema (Base.metadata),
+    minus any in `skip`. Resets identity columns. Postgres only — uses
+    TRUNCATE ... RESTART IDENTITY CASCADE in a single statement so FK order
+    doesn't matter. On SQLite this falls back to DELETE per table.
+
+    Returns {"truncated": [...], "skipped": [...], "errors": {...}}.
+    """
+    all_tables = [t.name for t in Base.metadata.sorted_tables]
+    targets = [t for t in all_tables if t not in skip]
+    skipped = [t for t in all_tables if t in skip]
+    errors: dict[str, str] = {}
+
+    if _IS_SQLITE:
+        async with get_engine().begin() as conn:
+            await conn.execute(text("PRAGMA foreign_keys = OFF"))
+            for tbl in targets:
+                try:
+                    await conn.execute(text(f'DELETE FROM "{tbl}"'))
+                except Exception as e:
+                    errors[tbl] = str(e)
+            await conn.execute(text("PRAGMA foreign_keys = ON"))
+        return {"truncated": [t for t in targets if t not in errors],
+                "skipped": skipped, "errors": errors}
+
+    quoted = ", ".join(f'"{t}"' for t in targets)
+    if not quoted:
+        return {"truncated": [], "skipped": skipped, "errors": {}}
+    async with get_engine().connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        try:
+            await conn.execute(text(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE"))
+            return {"truncated": targets, "skipped": skipped, "errors": {}}
+        except Exception as e:
+            # Fall back per-table so one bad table doesn't block the rest.
+            errors["__batch__"] = str(e)
+            truncated: list[str] = []
+            for tbl in targets:
+                try:
+                    await conn.execute(text(f'TRUNCATE "{tbl}" RESTART IDENTITY CASCADE'))
+                    truncated.append(tbl)
+                except Exception as te:
+                    errors[tbl] = str(te)
+            return {"truncated": truncated, "skipped": skipped, "errors": errors}
+
+
+async def vacuum_analyze_all() -> dict:
+    """VACUUM ANALYZE every table in the schema (Postgres only — no-op on SQLite)."""
+    if _IS_SQLITE:
+        return {"vacuum": "skipped (sqlite)"}
+    results: dict[str, str] = {}
+    tables = [t.name for t in Base.metadata.sorted_tables]
+    async with get_engine().connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        for tbl in tables:
+            try:
+                await conn.execute(text(f'VACUUM ANALYZE "{tbl}"'))
+                results[tbl] = "ok"
+            except Exception as e:
+                results[tbl] = f"error: {e}"
+    return results
 
 
 async def cleanup_raw_pattern_runs(
