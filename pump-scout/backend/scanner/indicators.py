@@ -444,6 +444,18 @@ def calc_obv(candles: list) -> dict:
     }
 
 
+def _ema_series(closes: list, period: int) -> list:
+    """Full EMA series, same length as closes; None for the first period-1 bars."""
+    if len(closes) < period:
+        return [None] * len(closes)
+    k = 2.0 / (period + 1)
+    seed = sum(closes[:period]) / period
+    series: list = [None] * (period - 1) + [seed]
+    for c in closes[period:]:
+        series.append(c * k + series[-1] * (1 - k))
+    return series
+
+
 def calc_all(candles: list) -> dict:
     if len(candles) < 20:
         return {}
@@ -518,6 +530,30 @@ def calc_all(candles: list) -> dict:
         )
         bearish_stack = price_below_all and emas_in_bear_order
 
+        # Bull stack duration — consecutive recent bars with close > EMA8 > EMA21 > EMA50
+        if len(closes) >= 50:
+            _e8s  = _ema_series(closes, 8)
+            _e21s = _ema_series(closes, 21)
+            _e50s = _ema_series(closes, 50)
+            bull_stack_days = 0
+            for _i in range(len(closes) - 1, -1, -1):
+                if _e8s[_i] is None or _e21s[_i] is None or _e50s[_i] is None:
+                    break
+                if closes[_i] > _e8s[_i] > _e21s[_i] > _e50s[_i]:
+                    bull_stack_days += 1
+                else:
+                    break
+            # EMA50 reclaims — upward crosses of EMA50 in last 30 bars
+            ema50_reclaim_count = 0
+            _ws = max(1, len(closes) - 30)
+            for _i in range(_ws, len(closes)):
+                if _e50s[_i] is not None and _e50s[_i - 1] is not None:
+                    if closes[_i - 1] <= _e50s[_i - 1] and closes[_i] > _e50s[_i]:
+                        ema50_reclaim_count += 1
+        else:
+            bull_stack_days = 0
+            ema50_reclaim_count = 0
+
         compression_and_bullish = ribbon_compression != "NONE" and bullish_stack
 
         ribbon_position = (
@@ -542,6 +578,8 @@ def calc_all(candles: list) -> dict:
         compression_and_bullish = False
         ribbon_position = 50.0
         ema8_slope = "FLAT"
+        bull_stack_days = 0
+        ema50_reclaim_count = 0
 
     return {
         "price": round(price, 4),
@@ -599,4 +637,6 @@ def calc_all(candles: list) -> dict:
         "ribbon_position":         ribbon_position,
         "ema8_slope":              ema8_slope,
         "ribbon_periods_count":    len(ribbon_map),
+        "bull_stack_days":         bull_stack_days,
+        "ema50_reclaim_count":     ema50_reclaim_count,
     }

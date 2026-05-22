@@ -1,0 +1,1171 @@
+[
+  {
+    "signal_id": "DISC_LIQ_RECLAIM_001",
+    "signal_name": "DISC_LIQ_RECLAIM_001",
+    "family": "L",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Dry-up reclaim bar: low-volume bars then reclaim of prior close with lower wick",
+    "human_readable_definition": "2+ dry-up days in the pre-window AND at least 1 reclaim bar (low dips below previous close but price closes back above it). Suggests accumulation absorption \u2014 smart money quietly buying while the stock drifts down on light volume.",
+    "machine_conditions": [
+      "dryup_day_count_pre >= 2",
+      "reclaim_bar_count_pre >= 1"
+    ],
+    "required_fields": [
+      "dryup_day_count_pre",
+      "reclaim_bar_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Run discovery against run 98 to populate stats.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_LIQ_SPRING_EMA50_001",
+    "signal_name": "DISC_LIQ_SPRING_EMA50_001",
+    "family": "L",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "EMA50 spring reclaim: low dips below EMA50 then close recovers above, with prior dry-up",
+    "human_readable_definition": "Price tests below EMA50 intraday but closes back above it (spring test), AND had 2+ dry-up days before that bar. Classic Wyckoff spring through a moving average.",
+    "machine_conditions": [
+      "ema50_reclaim_count_pre >= 1",
+      "dryup_day_count_pre >= 2"
+    ],
+    "required_fields": [
+      "ema50_reclaim_count_pre",
+      "dryup_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_LIQ_ABSORPTION_001",
+    "signal_name": "DISC_LIQ_ABSORPTION_001",
+    "family": "L",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Repeated accumulation-like days with dry-up background",
+    "human_readable_definition": "At least 3 accumulation-like days (high lower wick, close mid-high on below-avg volume) AND 3+ dry-up days in the pre-window. Multi-day evidence of smart money absorption.",
+    "machine_conditions": [
+      "had_accumulation_like == True",
+      "accumulation_like_day_count >= 3",
+      "dryup_day_count_pre >= 3"
+    ],
+    "required_fields": [
+      "had_accumulation_like",
+      "accumulation_like_day_count",
+      "dryup_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_GAP_SHAKEOUT_001",
+    "signal_name": "DISC_GAP_SHAKEOUT_001",
+    "family": "G",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Gap-down shakeout reclaim: price shook out below support then recovered",
+    "human_readable_definition": "Episode had a spring test / LPS event (low breaks support, close recovers) AND at least 1 reclaim bar. Classic shakeout before breakout pattern.",
+    "machine_conditions": [
+      "had_spring_test_lps == True",
+      "reclaim_bar_count_pre >= 1"
+    ],
+    "required_fields": [
+      "had_spring_test_lps",
+      "reclaim_bar_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Based on Wyckoff spring/LPS concept.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_GAP_HOLD_DRYUP_001",
+    "signal_name": "DISC_GAP_HOLD_DRYUP_001",
+    "family": "G",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Gap-up hold after dry-up: volume expansion after quiet accumulation",
+    "human_readable_definition": "3+ dry-up days AND 1+ abnormal volume days in the pre-window. Quiet accumulation period followed by a volume surge.",
+    "machine_conditions": [
+      "dryup_day_count_pre >= 3",
+      "abnormal_volume_day_count_pre >= 1"
+    ],
+    "required_fields": [
+      "dryup_day_count_pre",
+      "abnormal_volume_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_EMA_CLUSTER_RECLAIM_001",
+    "signal_name": "DISC_EMA_CLUSTER_RECLAIM_001",
+    "family": "E",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "EMA cluster reclaim with extended bull stack",
+    "human_readable_definition": "2+ EMA50 reclaim events in the pre-window AND 3+ consecutive bull-stack days. Price repeatedly reclaiming and holding above the EMA50 with bullish EMA ordering.",
+    "machine_conditions": [
+      "ema50_reclaim_count_pre >= 2",
+      "bull_stack_days_pre >= 3"
+    ],
+    "required_fields": [
+      "ema50_reclaim_count_pre",
+      "bull_stack_days_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_D_CONF_CLUSTER_001",
+    "signal_name": "DISC_D_CONF_CLUSTER_001",
+    "family": "D",
+    "status": "DISCOVERED",
+    "intended_use": "WATCH_SUPPORT",
+    "description": "D-confluence cluster with quality structure",
+    "human_readable_definition": "4+ D-confluence days in the pre-window, D-confluence flag True, AND max structure score >= 55. Multiple D/WLNBB confluence signals with structural quality \u2014 indicates setup building.",
+    "machine_conditions": [
+      "d_confluence_day_count_pre >= 4",
+      "had_d_confluence_pre == True",
+      "max_structure_score_pre >= 55"
+    ],
+    "required_fields": [
+      "d_confluence_day_count_pre",
+      "had_d_confluence_pre",
+      "max_structure_score_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Intended as BUY_SUPPORT only after replay validation and Scanner V2 review.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_VOLUME_DRYUP_EXPAND_001",
+    "signal_name": "DISC_VOLUME_DRYUP_EXPAND_001",
+    "family": "V",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Dry-up then volume expansion: 5+ dry-up days followed by abnormal volume",
+    "human_readable_definition": "5+ dry-up days (volume < 60% of 20d avg) followed by at least 1 abnormal volume day (volume > 2\u00d7 20d avg). Classic 'quiet then loud' accumulation-to-ignition sequence.",
+    "machine_conditions": [
+      "dryup_day_count_pre >= 5",
+      "abnormal_volume_day_count_pre >= 1"
+    ],
+    "required_fields": [
+      "dryup_day_count_pre",
+      "abnormal_volume_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. High priority for replay validation.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_COMPRESSION_LONG_001",
+    "signal_name": "DISC_COMPRESSION_LONG_001",
+    "family": "C",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Extended compression: 8+ compression days before breakout",
+    "human_readable_definition": "8+ BB squeeze / ATR contraction days in the pre-window, AND had_compression=True. Extended tightening of price range before the explosive move.",
+    "machine_conditions": [
+      "compression_days_pre >= 8",
+      "had_compression == True"
+    ],
+    "required_fields": [
+      "compression_days_pre",
+      "had_compression"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_SPLIT_REGIME_RS_RECENT_001",
+    "signal_name": "DISC_SPLIT_REGIME_RS_RECENT_001",
+    "family": "S",
+    "status": "DISCOVERED",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Recent reverse split speculative regime with accumulation evidence",
+    "human_readable_definition": "Reverse split within 15 days of breakout (not artifact) AND 3+ dry-up days. This forms a separate speculative regime \u2014 do NOT mix with clean 4\u00d7 pump model.",
+    "machine_conditions": [
+      "reverse_split_0_5d_before_breakout OR reverse_split_6_15d_before_breakout",
+      "split_artifact_risk == False",
+      "dryup_day_count_pre >= 3"
+    ],
+    "required_fields": [
+      "reverse_split_0_5d_before_breakout",
+      "reverse_split_6_15d_before_breakout",
+      "split_artifact_risk",
+      "dryup_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "IMPORTANT: Keep this as RESEARCH_ONLY. Reverse split regime requires its own model \u2014 do not use for Scanner V2 BUY routing. For Pump Watch: HIGH expansion risk is only a regime marker here, not an automatic reject.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_COMPOSITE_BUY_PRESSURE_001",
+    "signal_name": "DISC_PUMP_COMPOSITE_BUY_PRESSURE_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Repeated buy pressure: 6+ BUY_CANDIDATE days in pre-window",
+    "human_readable_definition": "Scanner V2 issued BUY_CANDIDATE on 6+ different days in the 40-day pre-window. This is a critical separator per raw-pattern run 98 (4\u00d7 pump median \u2248 6 vs false_positive median \u2248 1). High repeated scanner agreement = strong accumulation signal.",
+    "machine_conditions": [
+      "buy_candidate_day_count_pre >= 6"
+    ],
+    "required_fields": [
+      "buy_candidate_day_count_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      98
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 98,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Based on key finding from run 98: buy_candidate_day_count_pre separates 4\u00d7 pumps from false positives more than almost any other feature. Median 4\u00d7 pump = 6 days, false_positive = 1 day.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_COMPOSITE_STRUCTURE_HIGH_001",
+    "signal_name": "DISC_PUMP_COMPOSITE_STRUCTURE_HIGH_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Max structure spike: high structure score with confirmed/triggered phase",
+    "human_readable_definition": "max_structure_score >= 70 AND (had_confirmed_structure OR had_triggered_structure). Strong scanner agreement that the stock had genuine structural setup before the pump.",
+    "machine_conditions": [
+      "max_structure_score_pre >= 70",
+      "had_confirmed_structure_pre == True OR had_triggered_structure_pre == True"
+    ],
+    "required_fields": [
+      "max_structure_score_pre",
+      "had_confirmed_structure_pre",
+      "had_triggered_structure_pre"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Seed pattern. Quality structure at pre-breakout is a known prerequisite for clean 4\u00d7 pumps.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_COMPOSITE_FULL_001",
+    "signal_name": "DISC_PUMP_COMPOSITE_FULL_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "PUMP_WATCH",
+    "description": "Full convergence: buy pressure + structure + dry-up + compression",
+    "human_readable_definition": "4+ BUY_CANDIDATE days AND max structure score >= 58 AND 5+ dry-up days AND had_compression=True. All four key signals converging at once. Highest-confidence pre-pump composite.",
+    "machine_conditions": [
+      "buy_candidate_day_count_pre >= 4",
+      "max_structure_score_pre >= 58",
+      "dryup_day_count_pre >= 5",
+      "had_compression == True"
+    ],
+    "required_fields": [
+      "buy_candidate_day_count_pre",
+      "max_structure_score_pre",
+      "dryup_day_count_pre",
+      "had_compression"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "Composite pattern requiring all four signal families simultaneously. High precision expected, lower recall.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "DISC_PUMP_AVOID_PUMP_001",
+    "signal_name": "DISC_PUMP_AVOID_PUMP_001",
+    "family": "P",
+    "status": "DISCOVERED",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Avoid-then-pump: scanner issued AVOID but stock pumped 4\u00d7 with accumulation evidence",
+    "human_readable_definition": "Scanner routed AVOID (had_np_avoid_pre=True) AND (had_d_confluence_pre OR had_accumulation_like). Cases where the safety router correctly blocked BUY but there was underlying accumulation activity.",
+    "machine_conditions": [
+      "had_np_avoid_pre == True",
+      "had_d_confluence_pre == True OR had_accumulation_like == True"
+    ],
+    "required_fields": [
+      "had_np_avoid_pre",
+      "had_d_confluence_pre",
+      "had_accumulation_like"
+    ],
+    "forbidden_fields": [],
+    "source_run_ids": [
+      98
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 98,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY. Based on run 98 finding: many missed 4\u00d7 pumps had had_np_avoid_pre=True. This does NOT mean AVOID routing is wrong \u2014 it is correct for trade safety. But for speculative pump discovery, this pattern is worth studying. Do NOT use to weaken Scanner V2 AVOID logic.",
+    "replay_status": "NOT_TESTED",
+    "source_type": "EPISODE_AGGREGATE"
+  },
+  {
+    "signal_id": "PX_IGNITION_CONFIRM_1B",
+    "signal_name": "PX_IGNITION_CONFIRM_1B",
+    "family": "PX",
+    "status": "EXPERIMENTAL",
+    "intended_use": "PUMP_WATCH_CONFIRMATION",
+    "description": "Single-bar ignition confirm: EXPANSION + STRONG_CLOSE + VOL_SPIKE + WIDE_RANGE on one bar",
+    "human_readable_definition": "A single bar shows expansion, strong close, volume spike, and wide range simultaneously. This is an ignition/breakout confirmation bar \u2014 NOT an early entry signal. Observed in run 103 V1B bar mining.",
+    "machine_conditions": [
+      "bar_source_type == SINGLE_BAR",
+      "bar_tags contains EXPANSION",
+      "bar_tags contains STRONG_CLOSE",
+      "bar_tags contains VOL_SPIKE",
+      "bar_tags contains WIDE_RANGE"
+    ],
+    "required_fields": [],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 103,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 8,
+    "sample_count_false_positive": 1,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": 9.6,
+    "false_positive_rate": 0.0167,
+    "split_artifact_exposure": 0.125,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "EXPERIMENTAL. Discovered in run 103 V1B bar mining. Do NOT use as early entry. Confirmation/ignition only. Do NOT wire into Scanner V2 BUY routing.",
+    "replay_status": "TESTED_RUN_103",
+    "source_type": "SINGLE_BAR"
+  },
+  {
+    "signal_id": "PX_SHAKEOUT_RECLAIM_5B",
+    "signal_name": "PX_SHAKEOUT_RECLAIM_5B",
+    "family": "PX",
+    "status": "EXPERIMENTAL",
+    "intended_use": "PUMP_WATCH_SETUP_CONTEXT",
+    "description": "5-bar shakeout reclaim: DRYUP + GAP_DOWN + INSIDE_BAR + LOWER_WICK_RECLAIM + STRONG_CLOSE + WEAK_CLOSE sequence",
+    "human_readable_definition": "A 5-bar rolling sequence showing: dry-up compression, a gap-down shakeout, inside bar consolidation, a lower-wick reclaim bar, then a strong close followed by a weak close. Classic shakeout-then-accumulation pattern. Observed in run 103 V1B.",
+    "machine_conditions": [
+      "bar_source_type == FIVE_BAR_SEQUENCE",
+      "sequence_signature contains DRYUP",
+      "sequence_signature contains GAP_DOWN",
+      "sequence_signature contains INSIDE_BAR",
+      "sequence_signature contains LOWER_WICK_RECLAIM",
+      "sequence_signature contains STRONG_CLOSE",
+      "sequence_signature contains WEAK_CLOSE"
+    ],
+    "required_fields": [],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 103,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 10,
+    "sample_count_false_positive": 4,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": 3.0,
+    "false_positive_rate": 0.0667,
+    "split_artifact_exposure": 0.1,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "EXPERIMENTAL setup context. Not early entry. Use with other signals. Do NOT wire into Scanner V2 BUY routing.",
+    "replay_status": "TESTED_RUN_103",
+    "source_type": "FIVE_BAR_SEQUENCE"
+  },
+  {
+    "signal_id": "PX_GAP_RESET_HOLD_5B",
+    "signal_name": "PX_GAP_RESET_HOLD_5B",
+    "family": "PX",
+    "status": "EXPERIMENTAL",
+    "intended_use": "PUMP_WATCH_SETUP_CONTEXT",
+    "description": "5-bar gap reset hold: DRYUP + GAP_DOWN + GAP_UP + GAP_UP_HOLD + INSIDE_BAR + LOWER_WICK_RECLAIM + STRONG_CLOSE + WEAK_CLOSE + WIDE_RANGE",
+    "human_readable_definition": "A 5-bar rolling sequence: dryup, gap-down reset, gap-up reclaim, hold of the gap-up level (inside bar), lower wick test, strong close, weak close, wide range. Shows the classic gap-reset-then-hold structure before a pump. Observed in run 103 V1B.",
+    "machine_conditions": [
+      "bar_source_type == FIVE_BAR_SEQUENCE",
+      "sequence_signature contains GAP_DOWN",
+      "sequence_signature contains GAP_UP",
+      "sequence_signature contains GAP_UP_HOLD",
+      "sequence_signature contains INSIDE_BAR",
+      "sequence_signature contains LOWER_WICK_RECLAIM",
+      "sequence_signature contains STRONG_CLOSE",
+      "sequence_signature contains WEAK_CLOSE",
+      "sequence_signature contains WIDE_RANGE"
+    ],
+    "required_fields": [],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 103,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 11,
+    "sample_count_false_positive": 5,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": 2.64,
+    "false_positive_rate": 0.0833,
+    "split_artifact_exposure": 0.0909,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "EXPERIMENTAL setup context. Not early entry. Needs more data before production use. Do NOT wire into Scanner V2 BUY routing.",
+    "replay_status": "TESTED_RUN_103",
+    "source_type": "FIVE_BAR_SEQUENCE"
+  },
+  {
+    "signal_id": "PX_RECLAIM_STRONG_1B",
+    "signal_name": "PX_RECLAIM_STRONG_1B",
+    "family": "PX",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "PUMP_WATCH_SUBFEATURE",
+    "description": "Single-bar reclaim + strong close: RECLAIM_BAR + STRONG_CLOSE",
+    "human_readable_definition": "A single bar that is a reclaim bar (low dips below prior close but closes back above) with a strong close. Weak standalone signal \u2014 false positive rate too high for solo use. Best as a subfeature combined with dryup/compression/D-confluence. Observed in run 103 V1B.",
+    "machine_conditions": [
+      "bar_source_type == SINGLE_BAR",
+      "bar_tags contains RECLAIM_BAR",
+      "bar_tags contains STRONG_CLOSE"
+    ],
+    "required_fields": [],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 103,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 11,
+    "sample_count_false_positive": 7,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": 1.886,
+    "false_positive_rate": 0.1167,
+    "split_artifact_exposure": 0.1818,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY. Weak standalone \u2014 must be combined with episode-aggregate features like dryup/compression/D-confluence. Do NOT wire into Scanner V2 BUY routing.",
+    "replay_status": "TESTED_RUN_103",
+    "source_type": "SINGLE_BAR"
+  },
+  {
+    "signal_id": "PX_WEAK_STRESS_2B",
+    "signal_name": "PX_WEAK_STRESS_2B",
+    "family": "PX",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "PUMP_WATCH_STRESS_CONTEXT",
+    "description": "2-bar weak stress: WEAK_CLOSE \u2192 WEAK_CLOSE \u2014 consecutive seller pressure before reversal",
+    "human_readable_definition": "Two consecutive bars both closing weak (near the low). This can mark pre-breakout seller exhaustion or stress absorption. Appears before some 4x pumps as a stress/distribution test. Observed in run 103 V1B.",
+    "machine_conditions": [
+      "bar_source_type == TWO_BAR_SEQUENCE",
+      "bar_1_tags contains WEAK_CLOSE",
+      "bar_2_tags contains WEAK_CLOSE"
+    ],
+    "required_fields": [],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      103
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 103,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 14,
+    "sample_count_false_positive": 7,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": 2.4,
+    "false_positive_rate": 0.1167,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY stress/context signal. Not a buy or confirmation. Context only \u2014 shows seller stress before pump. Do NOT wire into Scanner V2 BUY routing.",
+    "replay_status": "TESTED_RUN_103",
+    "source_type": "TWO_BAR_SEQUENCE"
+  },
+  {
+    "signal_id": "PX_FLOW_GAP_DOWN_RECLAIM_001",
+    "signal_name": "PX_FLOW_GAP_DOWN_RECLAIM_001",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Gap-down bar that closes near the top with strong positive CLV \u2014 intraday reclaim on down-gap.",
+    "human_readable_definition": "Bar opens below prior close (gap down) but CLV is strongly positive (close near high of the bar). OHLCV-proxy: suggests absorption buyers stepped in on the down-gap. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "gap_pct < -0.01",
+      "clv > 0.4",
+      "TAG_GAP_DOWN_RECLAIM_FLOW in flow_tags"
+    ],
+    "required_fields": [
+      "gap_pct",
+      "clv",
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_ABSORPTION_RECLAIM_001",
+    "signal_name": "PX_FLOW_ABSORPTION_RECLAIM_001",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Large lower wick with strong CLV: bar dips low but recovers \u2014 absorption tag.",
+    "human_readable_definition": "Bar has a large lower wick (price dipped significantly below open) and CLV is positive (closed nearer the high). OHLCV-proxy for demand absorption. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "TAG_LOWER_WICK_ABSORPTION in flow_tags",
+      "TAG_BUY_PRESSURE_HIGH in flow_tags"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_IGNITION_001",
+    "signal_name": "PX_FLOW_IGNITION_001",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "High-effort bull bar: large volume, strong close, high CLV \u2014 flow ignition proxy.",
+    "human_readable_definition": "EFFORT_RESULT_BULL tag: bar has above-average volume AND close in upper 20% of bar range AND positive CLV. OHLCV-proxy for effort-to-result confirmation. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "TAG_EFFORT_RESULT_BULL in flow_tags",
+      "TAG_CLOSE_HIGH in flow_tags"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_DRYUP_TO_DELTA_001",
+    "signal_name": "PX_FLOW_DRYUP_TO_DELTA_001",
+    "family": "F",
+    "source_type": "TWO_BAR_SEQUENCE",
+    "feature_family": "FLOW",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Low-effort bar followed by high bull-delta bar: dryup transitions to positive signed-volume proxy.",
+    "human_readable_definition": "Two-bar sequence: first bar has LOW_EFFORT tag (below-avg volume, small move), second bar has DELTA_PROXY_BULL (positive signed_volume_proxy z-score). OHLCV-proxy for accumulation-to-ignition. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "bar[-2]: TAG_LOW_EFFORT_HIGH_RESULT or small volume",
+      "bar[-1]: TAG_DELTA_PROXY_BULL in flow_tags"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_CMF_TURNUP_001",
+    "signal_name": "PX_FLOW_CMF_TURNUP_001",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "CMF turns positive from negative: money flow reversal proxy on 5-bar window.",
+    "human_readable_definition": "CMF_TURN_UP tag: CMF(5) crossed from negative to positive on this bar. OHLCV-proxy for short-term money flow reversal. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "TAG_CMF_TURN_UP in flow_tags",
+      "TAG_CMF_POSITIVE in flow_tags"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_OBV_ACCUM_001",
+    "signal_name": "PX_FLOW_OBV_ACCUM_001",
+    "family": "F",
+    "source_type": "THREE_BAR_SEQUENCE",
+    "feature_family": "FLOW",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "OBV trending up over 3 bars: sustained on-balance volume accumulation proxy.",
+    "human_readable_definition": "OBV_ACCUM_3D tag present: OBV cumulative sum has a positive 3-bar slope. OHLCV-proxy for consistent net-buying pressure over 3 days. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "TAG_OBV_ACCUM_3D in flow_tags"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_SUPPLY_TRAP_001",
+    "signal_name": "PX_FLOW_SUPPLY_TRAP_001",
+    "family": "F",
+    "source_type": "TWO_BAR_SEQUENCE",
+    "feature_family": "FLOW",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Upper wick supply bar followed by absorption bar: supply trap then demand absorption.",
+    "human_readable_definition": "Two-bar sequence: first bar has UPPER_WICK_SUPPLY (large upper wick, price rejected at high, negative CLV), second bar has LOWER_WICK_ABSORPTION (dip absorbed, positive CLV). OHLCV-proxy for supply trap resolved by demand. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "bar[-2]: TAG_UPPER_WICK_SUPPLY in flow_tags",
+      "bar[-1]: TAG_LOWER_WICK_ABSORPTION in flow_tags"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "V1C seed pattern \u2014 OHLCV flow proxy. Do NOT wire into Scanner V2 BUY routing. RESEARCH_ONLY.",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_STRESS_PREP_1B",
+    "signal_name": "PX_FLOW_STRESS_PREP_1B",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_BEARISH_STRESS",
+    "status": "EXPERIMENTAL",
+    "intended_use": "PUMP_WATCH_CONTEXT",
+    "description": "Single-bar bearish stress: ADL distribution + OBV distribution + CMF negative + upper-wick supply. Signals active supply/distribution overhead.",
+    "human_readable_definition": "Single-bar signature with 3+ bearish flow tags: ADL_DISTRIB_3D (ADL trending down), OBV_DISTRIB_3D (OBV trending down), CMF_NEGATIVE (Chaikin MF negative), UPPER_WICK_SUPPLY (large upper wick with negative CLV). OHLCV-proxy for concentrated supply pressure. NOT true bid/ask flow. Use as PUMP_WATCH context for active distribution overhead \u2014 do NOT route to BUY.",
+    "machine_conditions": [
+      "signature=ADL_DISTRIB_3D+CMF_NEGATIVE+OBV_DISTRIB_3D+UPPER_WICK_SUPPLY",
+      "feature_family=FLOW",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      137
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 137,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 10,
+    "sample_count_false_positive": null,
+    "sample_count_normal_winner": null,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": 0.222,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "reliability_score_estimate": 0.7046,
+    "notes": "Run 137: cnt_4x=10, fpr=22.2%, reliability\u22480.70. EXPERIMENTAL \u2014 confirmed in run 137. Do NOT add direct FLOW score boost. Do NOT route to BUY. PUMP_WATCH context: active overhead supply/distribution. flow_subtype=FLOW_BEARISH_STRESS. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_ADL_OBV_DIVERGENCE_1B",
+    "signal_name": "PX_FLOW_ADL_OBV_DIVERGENCE_1B",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_DIVERGENCE",
+    "status": "EXPERIMENTAL",
+    "intended_use": "PUMP_WATCH_CONTEXT",
+    "description": "ADL/OBV divergence: ADL accumulating while OBV distributing. Hidden accumulation despite surface selling.",
+    "human_readable_definition": "Single-bar signature: ADL_ACCUM_3D (ADL trending up \u2014 net money-flow positive) co-occurring with OBV_DISTRIB_3D (OBV trending down \u2014 on-balance volume declining). Classic accumulation divergence: smart money accumulating on upticks while broader volume is net-selling. OHLCV proxy only. NOT true bid/ask flow. Use as PUMP_WATCH context for hidden accumulation \u2014 do NOT route to BUY.",
+    "machine_conditions": [
+      "signature=ADL_ACCUM_3D+OBV_DISTRIB_3D",
+      "feature_family=FLOW",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [
+      137
+    ],
+    "discovery_date": "2026-05-05",
+    "last_run_id": 137,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 9,
+    "sample_count_false_positive": null,
+    "sample_count_normal_winner": null,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": 0.148,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "reliability_score_estimate": 0.6907,
+    "notes": "Run 137: cnt_4x=9, fpr=14.8%, reliability\u22480.69. EXPERIMENTAL \u2014 confirmed in run 137. Do NOT add direct FLOW score boost. Do NOT route to BUY. PUMP_WATCH context: hidden accumulation divergence. flow_subtype=FLOW_DIVERGENCE. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_BEAR_PRESSURE_RECLAIM_WATCH",
+    "signal_name": "PX_FLOW_BEAR_PRESSURE_RECLAIM_WATCH",
+    "family": "F",
+    "source_type": "TWO_BAR_SEQUENCE",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_ABSORPTION",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Bear pressure followed by reclaim bar: selling pressure absorbed then price reclaims. Watch for failed distribution.",
+    "human_readable_definition": "Two-bar sequence: first bar has bearish flow characteristics (OBV_DISTRIB_3D or CMF_NEGATIVE), second bar shows reclaim (BUY_PRESSURE_HIGH or ADL_ACCUM_3D or CLOSE_HIGH). Candidate for failed distribution / demand absorption pattern. OHLCV proxy only. NOT true bid/ask flow. RESEARCH_ONLY \u2014 not confirmed in live runs.",
+    "machine_conditions": [
+      "bar[-2]: OBV_DISTRIB_3D or CMF_NEGATIVE in flow_tags",
+      "bar[-1]: BUY_PRESSURE_HIGH or ADL_ACCUM_3D in flow_tags",
+      "feature_family=FLOW",
+      "source_type=TWO_BAR_SEQUENCE"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY seed pattern \u2014 not yet confirmed in any run. Watch for failed distribution with demand absorption. Do NOT add direct FLOW score boost. Do NOT route to BUY. flow_subtype=FLOW_ABSORPTION. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_FLOW_ABSORPTION_WATCH",
+    "signal_name": "PX_FLOW_ABSORPTION_WATCH",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "FLOW",
+    "flow_subtype": "FLOW_ABSORPTION",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "RESEARCH_ONLY",
+    "description": "Accumulation absorption: ADL accumulating with positive CLV or signed volume, despite surface selling pressure.",
+    "human_readable_definition": "Single-bar: ADL_ACCUM_3D (net money-flow positive) co-occurring with CLV_POSITIVE or SIGNED_VOL_POSITIVE (close-location or volume-weighted positive), while any bearish tag is also present (UPPER_WICK_SUPPLY or CLOSE_LOW). Wyckoff absorption proxy: demand soaking up supply. OHLCV proxy only. NOT true bid/ask flow. RESEARCH_ONLY.",
+    "machine_conditions": [
+      "ADL_ACCUM_3D in flow_tags",
+      "CLV_POSITIVE or SIGNED_VOL_POSITIVE in flow_tags",
+      "UPPER_WICK_SUPPLY or CLOSE_LOW in flow_tags",
+      "feature_family=FLOW",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY seed pattern \u2014 not yet confirmed in any run. Wyckoff absorption proxy. Do NOT add direct FLOW score boost. Do NOT route to BUY. flow_subtype=FLOW_ABSORPTION. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  },
+  {
+    "signal_id": "PX_COMBINED_DRYUP_FLOW_STRESS_1B",
+    "signal_name": "PX_COMBINED_DRYUP_FLOW_STRESS_1B",
+    "family": "F",
+    "source_type": "SINGLE_BAR",
+    "feature_family": "COMBINED",
+    "flow_subtype": "FLOW_BEARISH_STRESS",
+    "status": "RESEARCH_ONLY",
+    "intended_use": "PUMP_WATCH_CONTEXT",
+    "description": "Combined price-action + flow: dryup/compression bar with bearish flow stress tags. Pre-pump stress context.",
+    "human_readable_definition": "Single-bar combined signature: price-action dryup/compression tag (DRYUP or COMPRESSION or LOW_VOL) co-occurring with bearish flow tags (ADL_DISTRIB_3D or OBV_DISTRIB_3D or CMF_NEGATIVE). Represents the tension between volume compression and distribution pressure typical in pre-pump setups with overhead supply. COMBINED feature family: OHLCV price-action + OHLCV flow proxy. NOT true bid/ask flow.",
+    "machine_conditions": [
+      "DRYUP or COMPRESSION or LOW_VOL in bar_tags",
+      "ADL_DISTRIB_3D or OBV_DISTRIB_3D or CMF_NEGATIVE in flow_tags",
+      "feature_family=COMBINED",
+      "source_type=SINGLE_BAR"
+    ],
+    "required_fields": [
+      "flow_tags",
+      "bar_tags"
+    ],
+    "forbidden_fields": [
+      "split_artifact_risk"
+    ],
+    "source_run_ids": [],
+    "discovery_date": "2026-05-05",
+    "last_run_id": null,
+    "last_updated": "2026-05-05",
+    "sample_count_4x": 0,
+    "sample_count_false_positive": 0,
+    "sample_count_normal_winner": 0,
+    "lift_vs_false_positive": null,
+    "false_positive_rate": null,
+    "split_artifact_exposure": null,
+    "reverse_split_exposure": null,
+    "precision_estimate": null,
+    "recall_all_4x": null,
+    "notes": "RESEARCH_ONLY seed pattern \u2014 not yet confirmed in any run. COMBINED feature family: dryup/compression + bearish flow stress. PUMP_WATCH context for pre-pump overhead supply detection. Do NOT add direct score boost. Do NOT route to BUY. flow_subtype=FLOW_BEARISH_STRESS. safety_note=Do not route to BUY.",
+    "safety_note": "Do not route to BUY",
+    "replay_status": "NOT_TESTED"
+  }
+]

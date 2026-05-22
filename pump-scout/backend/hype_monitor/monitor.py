@@ -14,8 +14,6 @@ from hype_monitor.velocity import calc_velocity
 from hype_monitor.hype_score import calc_hype_score
 from hype_monitor.divergence import detect_divergences
 from hype_monitor.ai_analyst import analyze as ai_analyze
-from hype_monitor.alerter import send_hype_alerts, send_hype_summary
-from alerts.telegram import is_configured as telegram_configured
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +58,7 @@ async def _process_ticker(
                     ticker, hype_score, velocity, divergences, ticker_data, news_detail
                 )
 
-            # Send Telegram alerts for this ticker's divergences
-            alerted = []
-            if divergences and telegram_configured():
-                alerted = await send_hype_alerts(
-                    ticker, hype_score, velocity, divergences, ticker_data, ai_result
-                )
+            alerted: list = []
 
             return {
                 "ticker": ticker,
@@ -138,10 +131,6 @@ async def run_hype_monitor() -> list[dict[str, Any]]:
     # Keep last 200 history entries
     _alert_history = _alert_history[-200:]
 
-    # Send summary for HOT/VIRAL tickers
-    if telegram_configured():
-        await send_hype_summary(results)
-
     _latest_results = results
     _last_run_at = datetime.now(timezone.utc)
 
@@ -171,13 +160,30 @@ def get_alert_history() -> list[dict]:
 
 
 def get_status() -> dict:
+    hot = [r["ticker"] for r in _latest_results if r["hype_score"].get("hype_tier") in ("HOT", "VIRAL")]
+    social_total = sum(r.get("velocity", {}).get("count_24h", 0) for r in _latest_results)
+
+    top_hype = sorted(_latest_results, key=lambda x: x["hype_score"].get("hype_index", 0), reverse=True)[:8]
+    top_hype_out = []
+    for r in top_hype:
+        hs = r.get("hype_score", {})
+        news = r.get("news", {})
+        top_hype_out.append({
+            "ticker":      r["ticker"],
+            "tier":        hs.get("hype_tier", "COLD"),
+            "hype_index":  hs.get("hype_index", 0),
+            "social_24h":  r.get("velocity", {}).get("count_24h", 0),
+            "news_count":  news.get("total_count_24h") or news.get("count_24h", 0),
+            "divergences": len(r.get("divergences", [])),
+            "headlines":   (news.get("headlines") or [])[:2],
+        })
+
     return {
-        "last_run_at": _last_run_at.isoformat() if _last_run_at else None,
-        "tickers_monitored": len(_latest_results),
-        "hot_tickers": [
-            r["ticker"] for r in _latest_results
-            if r["hype_score"].get("hype_tier") in ("HOT", "VIRAL")
-        ],
-        "total_divergences": sum(len(r.get("divergences", [])) for r in _latest_results),
-        "alert_count_24h": len(_alert_history),
+        "last_run_at":        _last_run_at.isoformat() if _last_run_at else None,
+        "tickers_monitored":  len(_latest_results),
+        "hot_tickers":        hot,
+        "total_divergences":  sum(len(r.get("divergences", [])) for r in _latest_results),
+        "alert_count_24h":    len(_alert_history),
+        "social_count":       social_total,
+        "top_hype":           top_hype_out,
     }

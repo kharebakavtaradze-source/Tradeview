@@ -167,15 +167,17 @@ async def fetch_grouped_daily(target_date: str = None) -> dict:
 
 
 # ── Non-stock exclusion cache ─────────────────────────────────────────────────
-# Covers: ETF, ETN, ETV (exchange-traded vehicles), FUND (open-end / closed-end),
-# plus a hardcoded safety net for leveraged/inverse products and crypto spot ETFs
-# that Polygon may list under unusual types.
+# Covers: ETF, ETN, ETV (exchange-traded vehicles), FUND (open-end funds),
+# CEF (closed-end funds — Polygon's dedicated type), WARRANT (exchange-listed
+# warrants, e.g. ABVEW / ARQQW / CCCXW), RIGHT (rights offerings), plus a
+# hardcoded safety net for leveraged/inverse products and crypto spot ETFs that
+# Polygon may list under unusual types or CS (common stock).
 
 # Polygon security types to exclude (all are non-equity instruments)
-_EXCLUDED_POLYGON_TYPES = ("ETF", "ETN", "ETV", "FUND")
+_EXCLUDED_POLYGON_TYPES = ("ETF", "ETN", "ETV", "FUND", "CEF", "WARRANT", "RIGHT")
 
-# Known leveraged/inverse products and crypto spot ETFs — safety net for any
-# that slip through the API type filter (misclassified or new listings).
+# Known leveraged/inverse products, crypto spot ETFs, and other non-stock
+# instruments — safety net for anything misclassified or newly listed.
 _HARDCODED_EXCLUSIONS: set[str] = {
     # ── Leveraged / inverse (ProShares) ──────────────────────────────────────
     "TQQQ", "SQQQ", "UPRO", "SPXU", "SPXL", "SPXS",
@@ -186,17 +188,39 @@ _HARDCODED_EXCLUSIONS: set[str] = {
     "UGAZ", "GUSH", "DRIP", "NAIL", "SOXL", "SOXS",
     "FNGU", "FNGD", "TECL", "TECS", "DPST", "FAZ",
     "FAS",  "ERX",  "ERY",  "RETL", "SHLD",
+    "ROM",  "RXL",  "DDM",  "MVV",  "UWM",  "SAA",
+    "USD",  "UYG",  "EFO",  "EET",  "EZJ",  "MIDU",
+    "UMDD", "URPIX","UTSL", "UBOT", "LBAY", "HIBS",
     # ── Leveraged / inverse (Direxion) ───────────────────────────────────────
     "TMF",  "TMV",  "TBF",  "TBT",  "TBX",
     "EDC",  "EDZ",  "INDL", "BRZU", "MEXI",
     "DRN",  "DRV",  "CURE", "PILL",
+    "DFEN", "DDUP", "WEBL", "WEBS", "WANT", "TPOR",
+    "DUSL", "BULZ", "BERZ", "HIBL", "HIBS",
     # ── Crypto spot ETFs ─────────────────────────────────────────────────────
     "GBTC", "ETHE", "IBIT", "FBTC", "BITB", "BTCO",
     "ARKB", "BRRR", "HODL", "EZBC", "DEFI",
     "ETHW", "CETH", "ETHV", "QETH", "FETH",
+    "BTCW", "SBTC", "YBTC", "MAXI", "BITU", "BITX",
+    "BITI", "ETHU", "METH", "SETH",
     # ── Volatility products ───────────────────────────────────────────────────
     "VXX",  "UVXY", "SVXY", "VIXY", "VIXM",
     "TVIX", "TVIZ", "XIV",  "ZIV",
+    # ── Broad-market / sector ETFs that sometimes appear ────────────────────
+    "SPY",  "QQQ",  "IWM",  "DIA",  "MDY",  "IJH",  "IJR",
+    "XLF",  "XLE",  "XLV",  "XLU",  "XLK",  "XLI",  "XLY",
+    "XLP",  "XLB",  "XLRE", "XLC",
+    "GLD",  "SLV",  "GDX",  "GDXJ", "USO",  "UGA",
+    "TLT",  "IEF",  "SHY",  "HYG",  "LQD",  "AGG",  "BND",
+    "EEM",  "EFA",  "VWO",  "VEA",  "VTI",  "VOO",  "VXF",
+    "ARKK", "ARKG", "ARKF", "ARKQ", "ARKX", "ARKW",
+    # ── Nasdaq / exchange LULD test tickers ──────────────────────────────────
+    # These are official exchange test symbols used during Limit Up/Limit Down
+    # band adjustment tests.  They trade at artificially extreme prices (e.g.
+    # ZWZZT has appeared at $12,999.87 intraday) that generate false pump
+    # signals.  Polygon classifies them as CS (common stock) so they bypass
+    # the Polygon type filter and must be hardcoded here.
+    "ZWZZT", "ZAZZT", "ZBZX", "ZXZZT", "ZVZZT",
 }
 
 _excluded_cache: set[str] = set()
@@ -206,8 +230,8 @@ _excluded_cache_date: Optional[str] = None
 async def get_us_etf_symbols() -> set[str]:
     """
     Fetch all non-stock securities from Polygon reference API.
-    Covers ETF, ETN, ETV, FUND types + hardcoded leveraged/inverse/crypto safety net.
-    Cached in memory for 7 days.
+    Covers ETF, ETN, ETV, FUND, CEF, WARRANT, RIGHT types + hardcoded
+    leveraged/inverse/crypto safety net. Cached in memory for 7 days.
     Returns set of uppercase ticker strings.
 
     Kept as get_us_etf_symbols() for backwards-compat with all call sites.
@@ -263,7 +287,7 @@ async def get_us_etf_symbols() -> set[str]:
         _excluded_cache      = excluded
         _excluded_cache_date = today
         logger.info(f"Exclusion cache refreshed: {len(excluded)} total symbols "
-                    f"(ETF/ETN/ETV/FUND + {len(_HARDCODED_EXCLUSIONS)} hardcoded)")
+                    f"(ETF/ETN/ETV/FUND/CEF/WARRANT/RIGHT + {len(_HARDCODED_EXCLUSIONS)} hardcoded)")
     else:
         logger.warning("Polygon returned 0 results — using hardcoded exclusions only")
         _excluded_cache      = excluded   # still use the hardcoded set
@@ -272,18 +296,24 @@ async def get_us_etf_symbols() -> set[str]:
     return _excluded_cache
 
 
-async def fetch_candles_massive(symbol: str, days: int = 200) -> list:
+async def fetch_candles_massive(symbol: str, days: int = 200, as_of_date: Optional[str] = None) -> list:
     """
     Fetch up to `days` daily OHLCV bars for one symbol.
     Handles Massive pagination via next_url.
     Returns list sorted oldest→newest, same format as Yahoo candles.
     Returns [] on failure.
+
+    as_of_date (YYYY-MM-DD): if provided, data is cut at this date.
+        Used by Historical Replay mode to prevent future leakage.
+        Live scans leave this None and get today's data as before.
     """
     if not MASSIVE_API_KEY:
         return []
 
-    end_date   = date.today().strftime("%Y-%m-%d")
-    start_date = (date.today() - timedelta(days=days + 60)).strftime("%Y-%m-%d")
+    # ── Time cutoff (future-leakage prevention for replay mode) ──────────────
+    _cutoff = date.fromisoformat(as_of_date) if as_of_date else date.today()
+    end_date   = _cutoff.strftime("%Y-%m-%d")
+    start_date = (_cutoff - timedelta(days=days + 60)).strftime("%Y-%m-%d")
     url = f"{MASSIVE_BASE}/v2/aggs/ticker/{symbol.upper()}/range/1/day/{start_date}/{end_date}"
 
     candles: list = []
@@ -328,6 +358,31 @@ async def fetch_candles_massive(symbol: str, days: int = 200) -> list:
 
 
 # ── Ticker Details (sector / market_cap enrichment) ───────────────────────────
+
+# EQUITY_TYPES: canonical allowlist imported from stock_universe_filter.
+# Re-exported here for backwards-compatibility with existing import sites.
+from scanner.stock_universe_filter import COMMON_STOCK_TYPES as EQUITY_TYPES  # noqa: E402
+
+
+async def fetch_ticker_type(symbol: str) -> str | None:
+    """
+    Fetch the Polygon security type for one symbol (e.g. 'CS', 'ETF', 'CEF').
+    Used as a per-symbol safeguard against instruments misclassified as CS.
+    Returns None on any failure (caller should treat as unknown / allow through).
+    """
+    if not MASSIVE_API_KEY:
+        return None
+
+    url = f"{MASSIVE_BASE}/v3/reference/tickers/{symbol.upper()}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
+            resp = await client.get(url, params=_params())
+        if resp.status_code != 200:
+            return None
+        return (resp.json().get("results") or {}).get("type") or None
+    except Exception:
+        return None
+
 
 async def fetch_ticker_details(symbol: str) -> dict | None:
     """

@@ -180,7 +180,6 @@ function Confirmations({ ticker }) {
 }
 
 function TickerCard({ ticker, apiUrl }) {
-  const [aiOpen, setAiOpen] = useState(false);
   const [showJournal, setShowJournal] = useState(false);
   const sig = SIGNAL_CONFIG[ticker.ribbon_signal] || SIGNAL_CONFIG.NEUTRAL;
   const tierColor = TIER_COLORS[ticker.tier] || '#888';
@@ -255,11 +254,6 @@ function TickerCard({ ticker, apiUrl }) {
         >
           + Journal
         </button>
-        {ticker.ai_analysis && (
-          <button className={styles.aiBtn} onClick={() => setAiOpen(v => !v)}>
-            AI Анализ {aiOpen ? '▲' : '▼'}
-          </button>
-        )}
       </div>
 
       {showJournal && (
@@ -270,13 +264,6 @@ function TickerCard({ ticker, apiUrl }) {
         />
       )}
 
-      {aiOpen && ticker.ai_analysis && (
-        <div className={styles.aiPanel}>
-          {typeof ticker.ai_analysis === 'string'
-            ? ticker.ai_analysis
-            : ticker.ai_analysis.summary || JSON.stringify(ticker.ai_analysis, null, 2)}
-        </div>
-      )}
     </div>
   );
 }

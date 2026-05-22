@@ -1,0 +1,311 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// at https://mozilla.org/MPL/2.0/
+//@version=5
+indicator("Pump Scout Signals", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SETTINGS
+// ══════════════════════════════════════════════════════════════════════════════
+
+var G_VOL   = "Volume"
+var G_BAR   = "Bar Patterns"
+var G_FLOW  = "Flow"
+var G_COMP  = "Compression"
+var G_DISP  = "Display"
+
+// Volume
+vol_len         = input.int(20,   "Volume MA Length",             group=G_VOL)
+dryup_pct       = input.float(0.55,"Dry-up: % of vol MA",         group=G_VOL, minval=0.2, maxval=0.9, step=0.05)
+show_dryup      = input.bool(true, "Show Dry-up",                 group=G_VOL)
+
+// Bar patterns
+show_strong_cl  = input.bool(true, "Strong Close",                group=G_BAR)
+show_reclaim    = input.bool(true, "Reclaim + Strong Close",      group=G_BAR)
+show_gap_up     = input.bool(true, "Gap Up",                      group=G_BAR)
+show_wide_range = input.bool(true, "Wide Range Bar",              group=G_BAR)
+show_inside     = input.bool(false,"Inside Bar",                  group=G_BAR)
+
+// Flow
+cmf_len         = input.int(20,   "CMF Length",                   group=G_FLOW)
+show_dconf      = input.bool(true, "D-Confluence Proxy",          group=G_FLOW)
+
+// Compression
+bb_len          = input.int(20,   "BB Length",                    group=G_COMP)
+bb_mult         = input.float(2.0,"BB StdDev",                    group=G_COMP)
+comp_thresh     = input.float(0.75,"Compression Threshold",       group=G_COMP, minval=0.4, maxval=0.95)
+show_comp_bg    = input.bool(true, "Compression Background",      group=G_COMP)
+
+// Display
+show_ema21      = input.bool(true, "EMA 21",                      group=G_DISP)
+show_ema50      = input.bool(true, "EMA 50",                      group=G_DISP)
+show_ema200     = input.bool(true, "EMA 200",                     group=G_DISP)
+pw_threshold    = input.int(5,    "Pump Watch Score Threshold",   group=G_DISP, minval=1, maxval=10)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  VOLUME
+// ══════════════════════════════════════════════════════════════════════════════
+
+vol_ma   = ta.sma(volume, vol_len)
+is_dryup = volume < vol_ma * dryup_pct
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  BAR GEOMETRY
+// ══════════════════════════════════════════════════════════════════════════════
+
+body        = math.abs(close - open)
+upper_wick  = high  - math.max(close, open)
+lower_wick  = math.min(close, open) - low
+bar_range   = high - low + 1e-9
+atr14       = ta.atr(14)
+
+// ── Strong close: closes in top 30% of range (DISC_BAR_SINGLE_BAR_STRONG_CLOSE, R152 reliability 0.709)
+is_strong_close = close >= (low + bar_range * 0.70) and bar_range > atr14 * 0.3
+
+// ── Wide range: range > 1.8× ATR
+is_wide_range = bar_range > atr14 * 1.8
+
+// ── Inside bar
+is_inside = high < high[1] and low > low[1]
+
+// ── Gap up: opens > previous high
+is_gap_up = open > high[1] * 1.003
+
+// ── Gap down: opens < previous low
+is_gap_down = open < low[1] * 0.997
+
+// ── Reclaim bar: opens below previous low, closes above it
+is_reclaim = open < low[1] and close > low[1]
+
+// ── Reclaim + strong close (DISC_BAR_SINGLE_BAR_RECLAIM_BAR_STRONG_CLOSE, R152 reliability 0.628)
+is_reclaim_strong = is_reclaim and is_strong_close
+
+// ── Dryup gap-down strong close (DISC_BAR_SINGLE_BAR_DRYUP_GAP_DOWN_STRONG_CLOSE, R152 reliability 0.694)
+is_dryup_gap_sc = is_gap_down and is_strong_close and is_dryup
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  FLOW SIGNALS
+//  Mirrors the FLOW feature family from Run 152 pattern discovery
+// ══════════════════════════════════════════════════════════════════════════════
+
+// CMF (Chaikin Money Flow) — proxies ADL_ACCUM_3D / CMF_POSITIVE tags
+mfm  = bar_range > 0 ? ((close - low) - (high - close)) / bar_range : 0.0
+mfv  = mfm * volume
+cmf  = ta.sma(mfv, cmf_len) / (ta.sma(volume, cmf_len) + 1e-9)
+
+cmf_pos     = cmf >  0.05    // ADL_ACCUM_3D + CMF_POSITIVE
+cmf_neg     = cmf < -0.05    // ADL_DISTRIB_3D + CMF_NEGATIVE
+
+// OBV trend
+obv          = ta.obv
+obv_ma       = ta.sma(obv, 20)
+obv_accum    = obv > obv_ma   // OBV_ACCUM_3D
+obv_distrib  = obv < obv_ma   // OBV_DISTRIB_3D
+
+// ADL (on-balance accumulation/distribution line)
+adl_mult = bar_range > 0 ? ((close - low) - (high - close)) / bar_range : 0.0
+adl      = ta.cum(adl_mult * volume)
+adl_ma   = ta.sma(adl, 20)
+adl_accum   = adl > adl_ma
+adl_distrib = adl < adl_ma
+
+// Buy pressure proxy (BUY_PRESSURE_HIGH / LOW)
+buy_pressure_high = close > (low + bar_range * 0.60) and volume > vol_ma * 1.2
+buy_pressure_low  = close < (low + bar_range * 0.40) or volume < vol_ma * 0.7
+
+// Upper wick supply (UPPER_WICK_SUPPLY: wick > 40% of range, bearish context)
+upper_wick_supply = upper_wick > bar_range * 0.40 and upper_wick > body
+
+// Lower wick absorption (LOWER_WICK_ABSORPTION)
+lower_wick_absorb = lower_wick > bar_range * 0.40 and lower_wick > body
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  COMPRESSION (Bollinger Band squeeze + ATR contraction)
+// ══════════════════════════════════════════════════════════════════════════════
+
+[bb_mid, bb_upper, bb_lower] = ta.bb(close, bb_len, bb_mult)
+bb_width    = (bb_upper - bb_lower) / (bb_mid + 1e-9)
+bb_width_ma = ta.sma(bb_width, 50)
+is_compressed    = bb_width < bb_width_ma * comp_thresh
+
+atr_ma           = ta.sma(atr14, 30)
+atr_contracted   = atr14 < atr_ma * comp_thresh
+
+compression = is_compressed or atr_contracted
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  EMAs — Bull Stack detection
+// ══════════════════════════════════════════════════════════════════════════════
+
+ema9   = ta.ema(close, 9)
+ema21  = ta.ema(close, 21)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+
+// Bull stack: ema9 > ema21 > ema50 (mirrors bull_stack_days_pre logic)
+bull_stack  = ema9 > ema21 and ema21 > ema50
+above_ema50 = close > ema50
+
+// Near EMA50 (within 3%) — typical D-confluence setup zone
+near_ema50 = math.abs(close - ema50) / ema50 < 0.03
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  D-CONFLUENCE PROXY
+//  Approximates D4_L34, D6_BEUP (strong D-types from np_priority_scorer _D_HIGH/_D_MED_L)
+//  NOT D4_BEUP (demoted to _D_POOR — R35: -2.59% 5d, 40.4% WR)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// D4_L34 proxy: bull stack + near EMA50 + strong close + OBV accumulating
+d4_l34_proxy  = bull_stack and near_ema50 and is_strong_close and obv_accum and not upper_wick_supply
+
+// D6_BEUP proxy: all D4_L34 conditions + buy pressure high + CMF positive + clean dryup recent
+d6_beup_proxy = d4_l34_proxy and (cmf_pos or buy_pressure_high) and
+     ta.valuewhen(is_dryup, bar_index, 0) >= bar_index - 10
+
+// Best D-confluence proxy: D6 (stronger) or D4_L34
+d_confluence_proxy = d6_beup_proxy or d4_l34_proxy
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  PUMP WATCH COMPOSITE SCORE
+//  Simplified version of pump_watch_scorer.py logic
+//  Max theoretical: ~10 pts
+// ══════════════════════════════════════════════════════════════════════════════
+
+pump_score = 0
+
+// Scanner pressure proxy (buy_candidate_day_count_pre equivalent)
+bc_days_proxy = ta.barssince(not (close > ema50 and is_strong_close and volume > vol_ma))
+if bc_days_proxy <= 3
+    pump_score += 2
+    pump_score
+
+// Structure quality
+if bull_stack
+    pump_score += 1
+    pump_score
+if above_ema50
+    pump_score += 1
+    pump_score
+
+// Compression / dry-up (base building)
+if compression
+    pump_score += 2
+    pump_score
+if is_dryup
+    pump_score += 1
+    pump_score
+
+// D-confluence quality
+if d6_beup_proxy
+    pump_score += 3
+    pump_score
+else if d4_l34_proxy
+    pump_score += 2
+    pump_score
+
+// Flow quality
+if cmf_pos and obv_accum
+    pump_score += 2
+    pump_score
+else if cmf_pos or obv_accum
+    pump_score += 1
+    pump_score
+
+// R152 bar quality signals (DISC_BAR_SINGLE_BAR_STRONG_CLOSE, DISC_BAR_SINGLE_BAR_RECLAIM_BAR_STRONG_CLOSE)
+if is_strong_close
+    pump_score += 1
+    pump_score
+if is_reclaim_strong
+    pump_score += 1
+    pump_score
+
+// Penalties
+if upper_wick_supply and not lower_wick_absorb
+    pump_score -= 1
+    pump_score
+if buy_pressure_low and not compression
+    pump_score -= 1
+    pump_score
+
+pump_score := math.max(pump_score, 0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  PLOTS — Overlay
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── EMAs
+plot(show_ema21  ? ema21  : na, "EMA 21",  color=color.new(color.yellow, 35), linewidth=1)
+plot(show_ema50  ? ema50  : na, "EMA 50",  color=color.new(color.orange, 25), linewidth=2)
+plot(show_ema200 ? ema200 : na, "EMA 200", color=color.new(color.red,    35), linewidth=2)
+
+// ── Compression background
+bgcolor(show_comp_bg and compression ? color.new(color.blue, 91) : na, title="Compression Zone")
+
+// ── Bar pattern markers
+// Dry-up (gray circle below bar)
+plotshape(show_dryup and is_dryup ? low : na,
+     style=shape.circle, size=size.tiny, location=location.belowbar,
+     color=color.new(color.gray, 30), title="Dry-up")
+
+// Strong close (lime triangle, below bar)
+plotshape(show_strong_cl and is_strong_close and not is_reclaim and not is_gap_up ? low : na,
+     style=shape.triangleup, size=size.tiny, location=location.belowbar,
+     color=color.new(color.lime, 30), title="Strong Close")
+
+// Gap up (orange arrow below bar)
+plotshape(show_gap_up and is_gap_up ? low : na,
+     style=shape.arrowup, size=size.tiny, location=location.belowbar,
+     color=color.new(color.orange, 20), title="Gap Up")
+
+// Wide range bar (yellow diamond above bar)
+plotshape(show_wide_range and is_wide_range and not is_gap_up ? high : na,
+     style=shape.diamond, size=size.tiny, location=location.abovebar,
+     color=color.new(color.yellow, 30), title="Wide Range Bar")
+
+// Inside bar (gray cross above bar)
+plotshape(show_inside and is_inside ? high : na,
+     style=shape.xcross, size=size.tiny, location=location.abovebar,
+     color=color.new(color.gray, 50), title="Inside Bar")
+
+// Reclaim + strong close — bright green up arrow (R152 DISC pattern)
+plotshape(show_reclaim and is_reclaim_strong ? low : na,
+     style=shape.arrowup, size=size.small, location=location.belowbar,
+     color=color.new(color.green, 0), title="Reclaim+Strong Close")
+
+// Dryup gap-down strong close — teal label (R152 DISC pattern)
+plotshape(is_dryup_gap_sc ? low : na,
+     style=shape.triangleup, size=size.small, location=location.belowbar,
+     color=color.new(color.teal, 0), title="Dryup Gap-Down Strong Close")
+
+// ── D-confluence proxy (blue diamond above bar)
+plotshape(show_dconf and d6_beup_proxy ? high : na,
+     style=shape.diamond, size=size.normal, location=location.abovebar,
+     color=color.new(color.blue, 0), title="D6-BEUP Proxy")
+
+plotshape(show_dconf and d4_l34_proxy and not d6_beup_proxy ? high : na,
+     style=shape.diamond, size=size.small, location=location.abovebar,
+     color=color.new(color.blue, 40), title="D4-L34 Proxy")
+
+// ── Pump Watch signal: score ≥ threshold — purple label below bar
+pump_watch_signal = pump_score >= pw_threshold
+
+if pump_watch_signal
+    score_str = "PW:" + str.tostring(pump_score)
+    lbl_color = pump_score >= 8 ? color.new(color.purple, 0) :
+         pump_score >= 6 ? color.new(color.purple, 30) :
+         color.new(color.purple, 55)
+    label.new(bar_index, low * 0.995, score_str,
+         style=label.style_label_up,
+         color=lbl_color,
+         textcolor=color.white,
+         size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(pump_watch_signal,   "Pump Watch Signal",          "PumpScout: PW score " + str.tostring(pump_score) + " on {{ticker}} ({{interval}})")
+alertcondition(d6_beup_proxy,       "D6-BEUP Proxy",              "PumpScout: D6-BEUP proxy on {{ticker}}")
+alertcondition(d4_l34_proxy,        "D4-L34 Proxy",               "PumpScout: D4-L34 proxy on {{ticker}}")
+alertcondition(is_reclaim_strong,   "Reclaim+Strong Close",       "PumpScout: Reclaim+StrongClose on {{ticker}}")
+alertcondition(is_dryup_gap_sc,     "Dryup Gap-Down Strong Close","PumpScout: DryupGapDown+SC on {{ticker}}")
+alertcondition(compression,         "Compression Zone",           "PumpScout: Compression detected on {{ticker}}")

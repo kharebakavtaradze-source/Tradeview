@@ -4,100 +4,180 @@ import AppNav from '../components/AppNav';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-const PHASE_LABELS = {
-  idle:              'Idle — not running',
-  fetching_universe: 'Fetching universe from Polygon…',
-  filtering_etf:     'Loading ETF exclusion list… (first run only, cached 7 days)',
-  filtering:         'Applying price/volume filters…',
-  scoring:           'Scoring candidates…',
-  enriching:         'Enriching sector data…',
-  saving:            'Saving results to database…',
-  done:              'Done',
-  error:             'Failed',
-};
-
-// Rough expected duration per phase in seconds (shown as hint when no ETA available)
-const PHASE_HINTS = {
-  fetching_universe: '~5–15s',
-  filtering_etf:     '~5–30s (then cached for 7 days)',
-  filtering:         '~2s',
-  scoring:           '~4–6 min for 3000 candidates (40 concurrent)',
-  enriching:         '~2–5 min',
-  saving:            '~5s',
-};
-
-function fmtSecs(s) {
-  if (s == null) return '—';
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
-}
 
 export default function AdminPage() {
   const [symbol, setSymbol] = useState('AAPL');
-  const [scanDate, setScanDate] = useState('');
   const [massiveResult, setMassiveResult] = useState(null);
   const [enrichResult, setEnrichResult] = useState(null);
-  const [universeResult, setUniverseResult] = useState(null);
   const [regimeResult, setRegimeResult] = useState(null);
-  const [scanStatus, setScanStatus] = useState(null);
   const [loading, setLoading] = useState({});
   const [error, setError] = useState({});
-  const pollRef = useRef(null);
+  const [replayRunId, setReplayRunId] = useState('');
+  const [recalcResult, setRecalcResult] = useState(null);
+  const [rebuildResult, setRebuildResult] = useState(null);
+  const [refreshSectorResult, setRefreshSectorResult] = useState(null);
+  const [refreshSectorStatus, setRefreshSectorStatus] = useState(null);
+  const sectorRefreshPollRef = useRef(null);
 
-  // Poll /api/admin/universe-scan/status every 5s
-  const startPolling = () => {
-    if (pollRef.current) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/admin/universe-scan/status`);
-        const data = await res.json();
-        setScanStatus(data);
-        if (!data.running) stopPolling();
-      } catch (_) {}
-    }, 5000);
+  // ── Clean DB state ──────────────────────────────────────────────────────────
+  const [dbResults, setDbResults]             = useState({});
+  const [dbConfirm, setDbConfirm]             = useState({});
+  const [rawKeepN, setRawKeepN]               = useState('0');
+  const [rawDryRun, setRawDryRun]             = useState(true);
+  const [rawVacuum, setRawVacuum]             = useState(false);
+  const [delReplayId, setDelReplayId]         = useState('');
+  const [delPumpId, setDelPumpId]             = useState('');
+  const [delRawId, setDelRawId]               = useState('');
+  // cleanup-all
+  const [allKeepN, setAllKeepN]               = useState('3');
+  const [allCandleDays, setAllCandleDays]     = useState('200');
+  const [allDryRun, setAllDryRun]             = useState(true);
+  // candle cache
+  const [candleDays, setCandleDays]           = useState('200');
+  const [candleDryRun, setCandleDryRun]       = useState(true);
+  // replay bulk
+  const [replayKeepN, setReplayKeepN]         = useState('3');
+  const [replayBulkDryRun, setReplayBulkDryRun] = useState(true);
+  // pump study bulk
+  const [pumpKeepN, setPumpKeepN]             = useState('3');
+  const [pumpBulkDryRun, setPumpBulkDryRun]   = useState(true);
+
+  // ── Demand Scanner state ────────────────────────────────────────────────────
+  const [scanStatus,    setScanStatus]    = useState(null);   // progress dict
+  const [scanLaunching, setScanLaunching] = useState(false);
+  const [scanError,     setScanError]     = useState('');
+  const scanPollRef = useRef(null);
+
+  const SCAN_PHASE_LABEL = {
+    idle:               'Idle — not running',
+    loading_cache:      'Loading bars from DB cache…',
+    fetching_universe:  'Fetching universe from Massive…',
+    filtering:          'Filtering by price / volume / type…',
+    fetching_candles:   'Fetching candles for candidates…',
+    analyzing:          'Running Demand Engine on tickers…',
+    enriching:          'Enriching: sector / hype / regime…',
+    enriching_context:  'Enriching: macro context…',
+    demand_composite:   'Computing demand composite scores…',
+    done:               'Scan complete',
+    error:              'Error',
   };
 
-  const stopPolling = () => {
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  const fetchScanStatus = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/demand-scanner/status`);
+      const data = await res.json();
+      setScanStatus(data);
+      if (!data.running && scanPollRef.current) {
+        clearInterval(scanPollRef.current);
+        scanPollRef.current = null;
+      }
+    } catch (_) {}
   };
 
-  // Fetch status once on mount, start polling if already running
   useEffect(() => {
-    fetch(`${API_URL}/api/admin/universe-scan/status`)
-      .then(r => r.json())
-      .then(data => {
-        setScanStatus(data);
-        if (data.running) startPolling();
-      })
-      .catch(() => {});
-    return stopPolling;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    fetchScanStatus();
+    return () => { if (scanPollRef.current) clearInterval(scanPollRef.current); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function call(key, url) {
+  const startScanPoll = () => {
+    if (scanPollRef.current) return;
+    scanPollRef.current = setInterval(fetchScanStatus, 2500);
+  };
+
+  const handleRunScan = async (mode = 'full') => {
+    setScanLaunching(true);
+    setScanError('');
+    try {
+      const res = await fetch(`${API_URL}/api/demand-scanner/run?scan_mode=${mode}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'already_running') {
+        setScanError('Scan already in progress — check status below');
+      }
+      await fetchScanStatus();
+      startScanPoll();
+    } catch (e) {
+      setScanError(e.message);
+    } finally {
+      setScanLaunching(false);
+    }
+  };
+
+  const startSectorRefreshPolling = () => {
+    if (sectorRefreshPollRef.current) return;
+    sectorRefreshPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/refresh-sector-data/status`);
+        const data = await res.json();
+        setRefreshSectorStatus(data);
+        if (!data.running) {
+          clearInterval(sectorRefreshPollRef.current);
+          sectorRefreshPollRef.current = null;
+        }
+      } catch (_) {}
+    }, 4000);
+  };
+
+
+  async function call(key, url, method = 'GET') {
     setLoading(l => ({ ...l, [key]: true }));
     setError(e => ({ ...e, [key]: null }));
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, method !== 'GET' ? { method } : undefined);
       const data = await res.json();
-      if (key === 'massive')  setMassiveResult(data);
-      if (key === 'enrich')   setEnrichResult(data);
-      if (key === 'regime')   setRegimeResult(data);
-      if (key === 'universe') {
-        setUniverseResult(data);
-        // Begin polling status after triggering
+      if (key === 'massive')        setMassiveResult(data);
+      if (key === 'enrich')         setEnrichResult(data);
+      if (key === 'regime')         setRegimeResult(data);
+      if (key === 'refresh_sector') {
+        setRefreshSectorResult(data);
         setTimeout(() => {
-          fetch(`${API_URL}/api/admin/universe-scan/status`)
-            .then(r => r.json()).then(d => { setScanStatus(d); if (d.running) startPolling(); })
+          fetch(`${API_URL}/api/admin/refresh-sector-data/status`)
+            .then(r => r.json()).then(d => { setRefreshSectorStatus(d); if (d.running) startSectorRefreshPolling(); })
             .catch(() => {});
-        }, 1500);
+        }, 1000);
       }
     } catch (err) {
       setError(e => ({ ...e, [key]: err.message }));
     } finally {
       setLoading(l => ({ ...l, [key]: false }));
     }
+  }
+
+  async function callPost(key, url, setter) {
+    setLoading(l => ({ ...l, [key]: true }));
+    setError(e => ({ ...e, [key]: null }));
+    try {
+      const res = await fetch(url, { method: 'POST' });
+      const data = await res.json();
+      if (setter) setter(data);
+    } catch (err) {
+      setError(e => ({ ...e, [key]: err.message }));
+    } finally {
+      setLoading(l => ({ ...l, [key]: false }));
+    }
+  }
+
+  // ── Clean DB helpers ────────────────────────────────────────────────────────
+  async function dbCall(key, url, method = 'GET', body = null) {
+    setLoading(l => ({ ...l, [key]: true }));
+    setError(e => ({ ...e, [key]: null }));
+    setDbResults(r => ({ ...r, [key]: null }));
+    try {
+      const opts = { method };
+      if (body !== null) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
+      const res = await fetch(url, opts);
+      const data = await res.json();
+      setDbResults(r => ({ ...r, [key]: data }));
+    } catch (err) {
+      setError(e => ({ ...e, [key]: err.message }));
+    } finally {
+      setLoading(l => ({ ...l, [key]: false }));
+      setDbConfirm(c => ({ ...c, [key]: false }));
+    }
+  }
+
+  function requireConfirm(key) {
+    if (!dbConfirm[key]) { setDbConfirm(c => ({ ...c, [key]: true })); return false; }
+    return true;
   }
 
   const card = { marginBottom: 24, background: '#0d0d1e', border: '1px solid #1a1a32', borderRadius: 8, padding: '20px 20px' };
@@ -121,6 +201,187 @@ export default function AdminPage() {
           </span>
         </div>
         <div style={{ padding: '0 28px' }}>
+
+        {/* ── Demand Scanner ── */}
+        {(() => {
+          const s = scanStatus;
+          const isRunning = s?.running;
+          const phase = s?.phase || 'idle';
+          const isDone = phase === 'done';
+          const isError = phase === 'error';
+
+          const pct = (() => {
+            if (!s || phase === 'idle') return 0;
+            if (isDone) return 100;
+            if (phase === 'loading_cache') return 15;
+            if (phase === 'fetching_universe') return 5;
+            if (phase === 'filtering') return 12;
+            if (phase === 'fetching_candles') return 25;
+            if (phase === 'analyzing') {
+              const total = s.universe_size || 1;
+              const done  = s.analyzed_count || 0;
+              return Math.round(25 + (done / total) * 50);
+            }
+            if (phase === 'enriching') return 80;
+            if (phase === 'enriching_context') return 88;
+            if (phase === 'demand_composite') return 94;
+            return 0;
+          })();
+
+          const fmtSecs = (s) => {
+            if (!s) return '—';
+            if (s < 60) return `${s}s`;
+            return `${Math.floor(s / 60)}m ${s % 60}s`;
+          };
+
+          const statBox = (label, value, color = '#eaeaf6') => (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 70, padding: '8px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: 6, border: '1px solid #1a1a32' }}>
+              <span style={{ fontSize: 18, fontWeight: 800, color, fontFamily: 'var(--font-mono, monospace)', lineHeight: 1 }}>{value ?? '—'}</span>
+              <span style={{ fontSize: 9, color: '#56567a', marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+            </div>
+          );
+
+          const tierChip = (label, count, color) => count > 0 ? (
+            <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: color + '22', border: `1px solid ${color}44`, color }}>
+              {label} {count}
+            </span>
+          ) : null;
+
+          return (
+            <div style={{ ...card, marginBottom: 24, border: isRunning ? '1px solid rgba(0,212,245,0.3)' : isError ? '1px solid rgba(248,113,113,0.3)' : '1px solid #1a1a32' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                <p style={{ ...label, margin: 0 }}>⚡ Demand Scanner</p>
+                {isRunning && (
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', background: 'rgba(0,212,245,0.12)', border: '1px solid rgba(0,212,245,0.35)', borderRadius: 4, padding: '2px 7px', color: '#00d4f5', animation: 'pulse 1.5s infinite' }}>
+                    RUNNING
+                  </span>
+                )}
+                {isDone && (
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', background: 'rgba(40,217,113,0.12)', border: '1px solid rgba(40,217,113,0.35)', borderRadius: 4, padding: '2px 7px', color: '#28d971' }}>
+                    COMPLETE
+                  </span>
+                )}
+                {isError && (
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.35)', borderRadius: 4, padding: '2px 7px', color: '#f87171' }}>
+                    ERROR
+                  </span>
+                )}
+                {s?.scanned_at && (
+                  <span style={{ fontSize: 10, color: '#56567a', marginLeft: 'auto' }}>
+                    Last scan: {new Date(s.scanned_at).toLocaleString()}
+                  </span>
+                )}
+              </div>
+
+              {/* Phase + progress bar */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                  <span style={{ fontSize: 11, color: isError ? '#f87171' : isRunning ? '#00d4f5' : isDone ? '#28d971' : '#56567a' }}>
+                    {SCAN_PHASE_LABEL[phase] || phase}
+                    {isRunning && phase === 'analyzing' && s?.analyzed_count != null && s?.universe_size != null && (
+                      <span style={{ color: '#56567a' }}> — {s.analyzed_count} / {s.universe_size}</span>
+                    )}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#56567a', fontFamily: 'monospace' }}>
+                    {isRunning || isDone ? `${pct}%` : ''}
+                    {s?.elapsed_secs ? `  ${fmtSecs(s.elapsed_secs)}` : ''}
+                  </span>
+                </div>
+                {(isRunning || isDone) && (
+                  <div style={{ height: 4, background: '#1a1a32', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, background: isError ? '#f87171' : isDone ? '#28d971' : '#00d4f5', borderRadius: 2, transition: 'width 0.5s ease' }} />
+                  </div>
+                )}
+                {isError && s?.last_error && (
+                  <div style={{ fontSize: 10, color: '#f87171', marginTop: 6 }}>{s.last_error}</div>
+                )}
+              </div>
+
+              {/* Stats row */}
+              {s && (s.universe_size > 0 || isDone) && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                  {statBox('Universe',  s.universe_size,  '#eaeaf6')}
+                  {statBox('Fetched',   s.fetched_count,  '#9898c0')}
+                  {statBox('Analyzed',  s.analyzed_count, '#9898c0')}
+                  {statBox('Skipped',   s.skipped_count,  '#56567a')}
+                  {statBox('Elapsed',   fmtSecs(s.elapsed_secs), '#56567a')}
+                  {statBox('Excluded',  s.excluded_non_common_stock_count, '#56567a')}
+                </div>
+              )}
+
+              {/* NP signal counts */}
+              {s && (s.fire_count > 0 || s.strong_count > 0 || s.setup_count > 0) && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: '#56567a', textTransform: 'uppercase', marginBottom: 6 }}>NP Structure</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {tierChip('FIRE',   s.fire_count,   '#f43f5e')}
+                    {tierChip('STRONG', s.strong_count, '#f59e0b')}
+                    {tierChip('SETUP',  s.setup_count,  '#3b82f6')}
+                  </div>
+                </div>
+              )}
+
+              {/* Demand tier counts */}
+              {s && (s.demand_prime_count > 0 || s.demand_high_count > 0 || s.demand_watch_count > 0) && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: '#56567a', textTransform: 'uppercase', marginBottom: 6 }}>Demand Tiers</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {tierChip('PRIME',    s.demand_prime_count, '#28d971')}
+                    {tierChip('HIGH',     s.demand_high_count,  '#00d4f5')}
+                    {tierChip('WATCH',    s.demand_watch_count, '#f59e0b')}
+                    {tierChip('ATS_PRIME',s.ats_prime_count,    '#c084fc')}
+                  </div>
+                </div>
+              )}
+
+              {/* Scan mode badge */}
+              {s?.scan_mode && s.scan_mode !== 'full' && (
+                <div style={{ marginBottom: 10 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', padding: '2px 7px', borderRadius: 4, background: s.scan_mode === 'incremental' ? 'rgba(245,158,11,0.12)' : 'rgba(124,90,245,0.12)', border: s.scan_mode === 'incremental' ? '1px solid rgba(245,158,11,0.35)' : '1px solid rgba(124,90,245,0.35)', color: s.scan_mode === 'incremental' ? '#f59e0b' : '#c084fc', textTransform: 'uppercase' }}>
+                    {s.scan_mode === 'incremental' ? '⚡ Incremental' : '♻ Recalculate'}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#56567a', marginLeft: 8 }}>
+                    {s.scan_mode === 'incremental' ? 'Only re-analyzed tickers with new bars' : 'Re-ran signals from cached bars — no API calls'}
+                  </span>
+                </div>
+              )}
+
+              {/* Run buttons */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => handleRunScan('full')}
+                  disabled={scanLaunching || isRunning}
+                  style={{ background: 'rgba(0,212,245,0.12)', border: '1px solid rgba(0,212,245,0.35)', borderRadius: 4, padding: '7px 18px', color: '#00d4f5', cursor: (scanLaunching || isRunning) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning) ? 0.5 : 1 }}
+                >
+                  {scanLaunching ? '⏳ Starting…' : isRunning ? '⏳ Running…' : '▶ Full Scan'}
+                </button>
+                <button
+                  onClick={() => handleRunScan('incremental')}
+                  disabled={scanLaunching || isRunning || !s?.has_results}
+                  title="Re-analyze only tickers with a new bar since last scan (1 API call)"
+                  style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 4, padding: '7px 16px', color: '#f59e0b', cursor: (scanLaunching || isRunning || !s?.has_results) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning || !s?.has_results) ? 0.4 : 1 }}
+                >
+                  ⚡ Refresh Today
+                </button>
+                <button
+                  onClick={() => handleRunScan('recalculate')}
+                  disabled={scanLaunching || isRunning || !s?.has_results}
+                  title="Re-run all signals from cached bars — zero API calls"
+                  style={{ background: 'rgba(124,90,245,0.10)', border: '1px solid rgba(124,90,245,0.35)', borderRadius: 4, padding: '7px 16px', color: '#c084fc', cursor: (scanLaunching || isRunning || !s?.has_results) ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (scanLaunching || isRunning || !s?.has_results) ? 0.4 : 1 }}
+                >
+                  ♻ Recalculate
+                </button>
+                <button
+                  onClick={fetchScanStatus}
+                  style={{ background: 'transparent', border: '1px solid #2a2a4a', borderRadius: 4, padding: '7px 14px', color: '#56567a', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}
+                >
+                  ↻ Refresh
+                </button>
+                {scanError && <span style={{ fontSize: 10, color: '#f87171' }}>{scanError}</span>}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Automation Flow ── */}
         <div style={{ ...card, marginBottom: 24 }}>
@@ -155,11 +416,6 @@ export default function AdminPage() {
               { gmt4: '00:25', et: '16:25', color: '#ffd740', tag: 'REGIME', name: 'Finviz Sector Performance', desc: 'Refreshes Finviz sector momentum cache (11 sectors: change%, rank, A/B/C/D/F class). Used for sector bonus in scoring and sector flow bar on home page.' },
               { gmt4: '00:30', et: '16:30', color: '#cc44ff', tag: 'AI PORT', name: 'AI Portfolio Daily Report', desc: 'Claude AI generates a daily portfolio report in Russian: P&L summary, best position, concerns, tomorrow plan. Sends to Telegram.' },
               { gmt4: '00:35', et: '16:35', color: '#888888', tag: 'EOD LOG', name: 'EOD Log Generator', desc: 'Generates a markdown summary of the full trading day: top signals, regime, sector rotation, portfolio status. Available via "EOD Log" button on home page.' },
-            ]},
-            // NIGHT
-            { group: 'NIGHT', items: [
-              { gmt4: '06:00', et: '22:00', color: '#ff4466', tag: 'PIPELINE 1 ★', name: 'Massive EOD Universe Scan', desc: 'Main daily scan. One Polygon API call → all US stocks (~8000). Filters by price ($1.50–$500) and volume (>200K). Top 3000 by dollar-volume (40 concurrent batches) → full indicator scoring (RSI, CMF, Wyckoff, OBV, ATR, EMA ribbon…) → FIRE/ARM/BASE tiers. ~4–6 min.' },
-              { gmt4: 'after EOD ↑', et: '—', color: '#888888', tag: 'ENRICH', name: 'Sector/Industry Enrichment', desc: 'Runs automatically after successful universe scan completion. Fills missing sector & industry data for scanned symbols via Massive Reference Data API. Rate-limited to 1 call per 15s. Triggered by scan success — not a fixed clock time.' },
             ]},
             // WEEKLY
             { group: 'WEEKLY', items: [
@@ -196,131 +452,6 @@ export default function AdminPage() {
           ))}
         </div>
 
-        {/* ── Run Universe Scan ── */}
-        <div style={card}>
-          <p style={label}>Run Universe Scan (Massive EOD)</p>
-          <p style={{ margin: '0 0 12px', fontSize: 11, color: '#9898c0', lineHeight: 1.6 }}>
-            Fetches all US stocks (~5–8K) from Polygon → filters by price ($1.50–$500) and volume (&gt;200K) → takes top 3000 by dollar volume → full indicator scoring.<br />
-            <span style={{ color: '#56567a' }}>Batched 40 concurrent Polygon calls. Covers virtually the entire filtered universe (~2,500–3,000 stocks) in ~4–6 min.</span><br />
-            Scheduled: 06:00 GMT+4 Mon–Fri (= 22:00 ET). Sector enrichment runs automatically after.
-          </p>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input
-              value={scanDate}
-              onChange={e => setScanDate(e.target.value)}
-              placeholder="Date YYYY-MM-DD (blank = today)"
-              style={{ flex: 1, minWidth: 200, background: 'rgba(255,255,255,0.06)', border: '1px solid #1a1a32', borderRadius: 4, padding: '6px 10px', color: '#eaeaf6', fontFamily: 'inherit', fontSize: 11 }}
-            />
-            <button
-              onClick={() => {
-                const url = scanDate
-                  ? `${API_URL}/api/admin/run-universe-scan?date=${scanDate}`
-                  : `${API_URL}/api/admin/run-universe-scan`;
-                call('universe', url);
-              }}
-              disabled={loading.universe}
-              style={{ background: 'rgba(0,212,245,0.15)', border: '1px solid rgba(0,212,245,0.4)', borderRadius: 4, padding: '7px 18px', color: '#00d4f5', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}
-            >
-              {loading.universe ? '⏳ Starting…' : '📊 Run Universe Scan'}
-            </button>
-            <a
-              href={`${API_URL}/api/scan/universe/latest`}
-              target="_blank"
-              rel="noreferrer"
-              style={{ fontSize: 10, color: '#56567a', textDecoration: 'none' }}
-            >
-              view results ↗
-            </a>
-          </div>
-          {error.universe && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.universe}</div>}
-          {universeResult && (
-            <pre style={pre}>{JSON.stringify(universeResult, null, 2)}</pre>
-          )}
-
-          {/* ── Live progress widget ── */}
-          {scanStatus && scanStatus.phase !== 'idle' && (
-            <div style={{ marginTop: 14, background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '12px 14px', border: `1px solid ${scanStatus.running ? 'rgba(0,212,245,0.3)' : scanStatus.phase === 'done' ? 'rgba(40,217,113,0.25)' : 'rgba(255,100,100,0.25)'}` }}>
-              {/* Phase + running indicator */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                {scanStatus.running && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#00d4f5', boxShadow: '0 0 6px #00d4f5', display: 'inline-block', animation: 'pulse 1.2s infinite' }} />}
-                {!scanStatus.running && scanStatus.phase === 'done' && <span style={{ color: '#44ff64', fontSize: 13 }}>✓</span>}
-                {!scanStatus.running && scanStatus.phase === 'error' && <span style={{ color: '#ff6b6b', fontSize: 13 }}>✗</span>}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#eaeaf6' }}>
-                    {PHASE_LABELS[scanStatus.phase] || scanStatus.phase}
-                  </span>
-                  {PHASE_HINTS[scanStatus.phase] && scanStatus.candidates_total === 0 && (
-                    <span style={{ fontSize: 10, color: '#56567a', fontStyle: 'italic' }}>
-                      Expected: {PHASE_HINTS[scanStatus.phase]}
-                    </span>
-                  )}
-                </div>
-                {scanStatus.target_date && (
-                  <span style={{ marginLeft: 'auto', fontSize: 10, color: '#56567a', flexShrink: 0 }}>
-                    {scanStatus.target_date}
-                  </span>
-                )}
-              </div>
-
-              {/* Candidate scoring progress — shown as soon as candidates_total is known */}
-              {scanStatus.candidates_total > 0 && (() => {
-                const total     = scanStatus.candidates_total;
-                const done      = scanStatus.candidates_done;
-                const remaining = Math.max(0, total - done);
-                const pct       = Math.min(100, Math.round((done / total) * 100));
-                const barColor  = scanStatus.running ? '#00d4f5' : '#28d971';
-                return (
-                  <div style={{ marginBottom: 4 }}>
-                    {/* Big 3 numbers */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 8 }}>
-                      {[
-                        { label: 'Started',   val: total.toLocaleString(),     color: '#aaa'    },
-                        { label: 'Scanned',   val: done.toLocaleString(),      color: barColor  },
-                        { label: 'Remaining', val: remaining.toLocaleString(), color: remaining === 0 ? '#28d971' : '#ffd700' },
-                      ].map(({ label, val, color }) => (
-                        <div key={label} style={{ background: '#0d0d1e', borderRadius: 5, padding: '7px 10px', textAlign: 'center', border: `1px solid ${color}22` }}>
-                          <div style={{ fontSize: 9, color: '#56567a', marginBottom: 3, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{label}</div>
-                          <div style={{ fontSize: 18, fontWeight: 800, color, lineHeight: 1 }}>{val}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {/* Progress bar */}
-                    <div style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden', marginBottom: 4 }}>
-                      <div style={{ height: '100%', borderRadius: 3, background: barColor, width: `${pct}%`, transition: 'width 0.5s ease' }} />
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>
-                      <span>Scoring candidates</span>
-                      <span>{pct}% complete</span>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Stats grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginTop: 4 }}>
-                {[
-                  ['Universe', scanStatus.universe_raw > 0 ? scanStatus.universe_raw.toLocaleString() : '—'],
-                  ['Filtered', scanStatus.universe_filtered > 0 ? scanStatus.universe_filtered.toLocaleString() : '—'],
-                  ['Results', scanStatus.results_count || '—'],
-                  ['🔥 FIRE', scanStatus.fire_count || '—'],
-                  ['💪 ARM', scanStatus.arm_count || '—'],
-                  ['Errors', scanStatus.errors || '0'],
-                  ['Elapsed', fmtSecs(scanStatus.elapsed_secs)],
-                  ['ETA', scanStatus.running ? fmtSecs(scanStatus.eta_secs) : '—'],
-                ].map(([label, val]) => (
-                  <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '5px 8px', textAlign: 'center' }}>
-                    <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginBottom: 2 }}>{label}</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#e0e0e0' }}>{val}</div>
-                  </div>
-                ))}
-              </div>
-
-              {scanStatus.last_error && (
-                <div style={{ marginTop: 8, fontSize: 10, color: '#ff8888' }}>Error: {scanStatus.last_error}</div>
-              )}
-            </div>
-          )}
-        </div>
 
         {/* ── Test Massive Connection ── */}
         <div style={card}>
@@ -369,6 +500,42 @@ export default function AdminPage() {
           )}
         </div>
 
+        {/* ── Refresh & Apply All Sector Data ── */}
+        <div style={card}>
+          <p style={label}>Refresh &amp; Apply All Sector Data</p>
+          <p style={{ margin: '0 0 12px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
+            Two-step sector refresh:<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>1. Universe cache sync</strong> — pulls fresh type / SIC code / SIC description from Massive for all CS/ADR/ADRC tickers.<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>2. GICS normalization</strong> — converts raw SIC descriptions in SectorCache to proper GICS sector names using the sector resolver.<br />
+            Runs in background. Use after initial setup or when sector column shows raw SIC text.
+          </p>
+          <button
+            onClick={() => call('refresh_sector', `${API_URL}/api/admin/refresh-sector-data`, 'POST')}
+            disabled={loading.refresh_sector || refreshSectorStatus?.running}
+            style={{ background: 'rgba(255,160,50,0.12)', border: '1px solid rgba(255,160,50,0.4)', borderRadius: 4, padding: '7px 18px', color: '#ffa030', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: (loading.refresh_sector || refreshSectorStatus?.running) ? 0.6 : 1 }}
+          >
+            {(loading.refresh_sector || refreshSectorStatus?.running) ? '⏳ Running…' : '🗂 Refresh & Apply Sectors'}
+          </button>
+          {error.refresh_sector && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.refresh_sector}</div>}
+          {refreshSectorStatus && refreshSectorStatus.phase !== 'idle' && (
+            <div style={{ marginTop: 10, fontSize: 11, color: 'rgba(255,255,255,0.55)', lineHeight: 1.8 }}>
+              <div>Phase: <strong style={{ color: '#ffa030' }}>{refreshSectorStatus.phase}</strong>{refreshSectorStatus.running ? ' ⏳' : ''}</div>
+              {refreshSectorStatus.universe_synced > 0 && <div>Universe synced: <strong style={{ color: '#eaeaf6' }}>{refreshSectorStatus.universe_synced}</strong> tickers</div>}
+              {refreshSectorStatus.phase === 'done' && (
+                <>
+                  <div>GICS normalized: <strong style={{ color: '#44ff64' }}>{refreshSectorStatus.normalized}</strong> sectors updated</div>
+                  <div>Already GICS: <strong style={{ color: '#56567a' }}>{refreshSectorStatus.already_gics}</strong> unchanged</div>
+                </>
+              )}
+              {refreshSectorStatus.last_error && <div style={{ color: '#ff6b6b' }}>Error: {refreshSectorStatus.last_error}</div>}
+              {refreshSectorStatus.finished_at && <div style={{ color: '#56567a' }}>Finished: {refreshSectorStatus.finished_at}</div>}
+            </div>
+          )}
+          {refreshSectorResult && refreshSectorResult.error && (
+            <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>{refreshSectorResult.error}</div>
+          )}
+        </div>
+
         {/* ── Refresh Market Regime ── */}
         <div style={card}>
           <p style={label}>Refresh Market Regime &amp; ETF Data</p>
@@ -389,31 +556,332 @@ export default function AdminPage() {
           )}
         </div>
 
+        {/* ── Replay Recalculation ── */}
+        <div style={card}>
+          <p style={label}>Replay Recalculation — Fast Refresh (No Full Rescan)</p>
+          <p style={{ margin: '0 0 14px', fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
+            Refresh derived outputs for an existing replay run without re-scanning the universe.<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>Recalculate Derived Fields</strong> — re-runs <code style={{ fontSize: 10 }}>_decide()</code> on every candidate using current logic, then rebuilds the research bundle. Rewrites <code style={{ fontSize: 10 }}>np_decision</code> / <code style={{ fontSize: 10 }}>np_decision_reason</code>.<br />
+            <strong style={{ color: 'rgba(255,255,255,0.6)' }}>Rebuild Research Bundle</strong> — rebuilds summary &amp; performance buckets only, no candidate edits.<br />
+            <span style={{ color: 'rgba(255,100,100,0.7)' }}>Full replay still required</span> for: state/quality/expansion engine changes, scanner gates, candidate generation.
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <label style={{ fontSize: 11, color: '#56567a', whiteSpace: 'nowrap' }}>Run ID</label>
+            <input
+              type="number"
+              value={replayRunId}
+              onChange={e => setReplayRunId(e.target.value)}
+              placeholder="e.g. 17"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #1a1a32', borderRadius: 4, padding: '5px 10px', color: '#eaeaf6', fontSize: 12, fontFamily: 'inherit', width: 90 }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => {
+                if (!replayRunId) return;
+                setRecalcResult(null);
+                callPost('recalc', `${API_URL}/api/replay/${replayRunId}/recalculate-derived-fields`, setRecalcResult);
+              }}
+              disabled={loading.recalc || !replayRunId}
+              style={{ background: 'rgba(0,212,245,0.1)', border: '1px solid rgba(0,212,245,0.3)', borderRadius: 4, padding: '7px 18px', color: '#00d4f5', cursor: replayRunId ? 'pointer' : 'not-allowed', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: replayRunId ? 1 : 0.5 }}
+            >
+              {loading.recalc ? '⏳ Recalculating…' : '⚡ Recalculate Derived Fields'}
+            </button>
+            <button
+              onClick={() => {
+                if (!replayRunId) return;
+                setRebuildResult(null);
+                callPost('rebuild', `${API_URL}/api/replay/${replayRunId}/rebuild-research-bundle`, setRebuildResult);
+              }}
+              disabled={loading.rebuild || !replayRunId}
+              style={{ background: 'rgba(68,255,100,0.08)', border: '1px solid rgba(68,255,100,0.25)', borderRadius: 4, padding: '7px 18px', color: '#44ff64', cursor: replayRunId ? 'pointer' : 'not-allowed', fontSize: 11, fontFamily: 'inherit', fontWeight: 700, opacity: replayRunId ? 1 : 0.5 }}
+            >
+              {loading.rebuild ? '⏳ Rebuilding…' : '📊 Rebuild Research Bundle'}
+            </button>
+          </div>
+          {error.recalc  && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.recalc}</div>}
+          {error.rebuild && <div style={{ color: '#ff6b6b', fontSize: 11, marginTop: 8 }}>Error: {error.rebuild}</div>}
+          {recalcResult  && <pre style={pre}>{JSON.stringify(recalcResult,  null, 2)}</pre>}
+          {rebuildResult && <pre style={pre}>{JSON.stringify(rebuildResult, null, 2)}</pre>}
+        </div>
+
+        {/* ── Clean DB ── */}
+        {(() => {
+          const sectionLabel = { fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', color: '#56567a', textTransform: 'uppercase', marginBottom: 12 };
+          const row = { display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 0', borderBottom: '1px solid #13132a' };
+          const rowTitle = { fontSize: 12, fontWeight: 700, color: '#c8c8e8', marginBottom: 2 };
+          const rowDesc = { fontSize: 10, color: '#56567a', marginBottom: 8, lineHeight: 1.5 };
+          const inputStyle = { background: '#07070f', border: '1px solid #2a2a4a', borderRadius: 4, color: '#eaeaf6', fontSize: 11, padding: '4px 8px', width: 80 };
+          const btn = (danger) => ({
+            padding: '5px 14px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700,
+            background: danger ? 'rgba(239,68,68,0.15)' : 'rgba(124,90,245,0.15)',
+            color: danger ? '#f87171' : '#c084fc',
+            border: `1px solid ${danger ? 'rgba(239,68,68,0.35)' : 'rgba(124,90,245,0.35)'}`,
+          });
+          const confirmBtn = { padding: '5px 14px', borderRadius: 4, border: '1px solid rgba(239,68,68,0.7)', cursor: 'pointer', fontSize: 11, fontWeight: 700, background: 'rgba(239,68,68,0.25)', color: '#fca5a5' };
+          const cancelBtn = { padding: '5px 10px', borderRadius: 4, border: '1px solid #2a2a4a', cursor: 'pointer', fontSize: 11, background: 'transparent', color: '#56567a' };
+          const resultPre = (isDryRun) => ({ margin: '8px 0 0', fontSize: 10, color: isDryRun ? '#00d4f5' : '#f87171', background: 'rgba(0,0,0,0.4)', borderRadius: 4, padding: 10, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: "'SF Mono', monospace" });
+
+          const CleanRow = ({ id, title, desc, danger = true, children, onRun }) => (
+            <div style={row}>
+              <div style={rowTitle}>{title}</div>
+              <div style={rowDesc}>{desc}</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {children}
+                {dbConfirm[id]
+                  ? <>
+                      <span style={{ fontSize: 11, color: '#f87171', fontWeight: 600 }}>Sure?</span>
+                      <button style={confirmBtn} onClick={onRun}>Yes, delete</button>
+                      <button style={cancelBtn} onClick={() => setDbConfirm(c => ({ ...c, [id]: false }))}>Cancel</button>
+                    </>
+                  : <button style={btn(danger)} disabled={loading[id]} onClick={() => { if (danger) { setDbConfirm(c => ({ ...c, [id]: true })); } else { onRun(); } }}>
+                      {loading[id] ? 'Running…' : danger ? 'Run' : 'Run'}
+                    </button>
+                }
+                {error[id] && <span style={{ fontSize: 10, color: '#f87171' }}>{error[id]}</span>}
+              </div>
+              {dbResults[id] && (
+                <pre style={resultPre(dbResults[id].dry_run !== false && (dbResults[id].dry_run === true || dbResults[id].dry_run === undefined))}>
+                  {JSON.stringify(dbResults[id], null, 2)}
+                </pre>
+              )}
+            </div>
+          );
+
+          return (
+            <div style={{ ...card, marginBottom: 24 }}>
+              <p style={{ ...sectionLabel, marginBottom: 16 }}>Clean DB</p>
+
+              {/* 0a. Full DB Cleanup — all at once */}
+              <CleanRow
+                id="cleanupAll"
+                title="Full DB Cleanup — All at Once"
+                desc="Runs all cleanup ops in one call: delete old replay runs, raw-pattern runs, pump-study runs, prune candle cache, then VACUUM ANALYZE all major tables. Set dry_run=on first to preview."
+                onRun={() => {
+                  const n = parseInt(allKeepN, 10);
+                  const d = parseInt(allCandleDays, 10);
+                  const params = new URLSearchParams({
+                    keep_last_n: isNaN(n) ? 3 : n,
+                    keep_candle_days: isNaN(d) ? 200 : d,
+                    dry_run: allDryRun,
+                  });
+                  dbCall('cleanupAll', `${API_URL}/api/admin/cleanup-all?${params}`, 'POST');
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={allKeepN} onChange={e => setAllKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Candle days <input type="number" min="30" value={allCandleDays} onChange={e => setAllCandleDays(e.target.value)} style={{ ...inputStyle, width: 60 }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: allDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={allDryRun} onChange={e => setAllDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
+
+              {/* 0b. Candle Cache Prune */}
+              <CleanRow
+                id="candlePrune"
+                title="Candle Cache — Prune Old Bars"
+                desc="Delete candle_cache rows older than N days. Does not touch run data. Dry run shows count without deleting."
+                onRun={() => {
+                  const d = parseInt(candleDays, 10);
+                  const params = new URLSearchParams({
+                    keep_last_n: 9999,
+                    keep_candle_days: isNaN(d) ? 200 : d,
+                    dry_run: candleDryRun,
+                  });
+                  dbCall('candlePrune', `${API_URL}/api/admin/cleanup-all?${params}`, 'POST');
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep days <input type="number" min="30" value={candleDays} onChange={e => setCandleDays(e.target.value)} style={{ ...inputStyle, width: 60 }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: candleDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={candleDryRun} onChange={e => setCandleDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
+
+              {/* 0c. Replay bulk cleanup */}
+              <CleanRow
+                id="replayBulk"
+                title="Replay — Bulk Cleanup"
+                desc="Delete old complete replay runs (+ signal candidates, outcomes, missed movers). Keep the N most recent. Dry run first."
+                onRun={() => {
+                  const n = parseInt(replayKeepN, 10);
+                  dbCall('replayBulk', `${API_URL}/api/replay/cleanup`, 'POST', {
+                    keep_last_n: isNaN(n) ? 3 : n,
+                    dry_run: replayBulkDryRun,
+                  });
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={replayKeepN} onChange={e => setReplayKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: replayBulkDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={replayBulkDryRun} onChange={e => setReplayBulkDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
+
+              {/* 0d. Pump study bulk cleanup */}
+              <CleanRow
+                id="pumpBulk"
+                title="Pump Study — Bulk Cleanup"
+                desc="Delete old complete pump-study runs (episodes, snapshots, events, clusters, comparisons, AI summaries). Keep the N most recent. Dry run first."
+                onRun={() => {
+                  const n = parseInt(pumpKeepN, 10);
+                  dbCall('pumpBulk', `${API_URL}/api/replay/pump-study/cleanup`, 'POST', {
+                    keep_last_n: isNaN(n) ? 3 : n,
+                    dry_run: pumpBulkDryRun,
+                  });
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={pumpKeepN} onChange={e => setPumpKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: pumpBulkDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={pumpBulkDryRun} onChange={e => setPumpBulkDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+              </CleanRow>
+
+              {/* 1. Rotate old data */}
+              <CleanRow
+                id="rotate"
+                title="Rotate Old Data"
+                danger={false}
+                desc="Delete rows older than retention limits: scans (30d), scan_candidates (60d), position_snapshots (60d), eod_logs (90d), ribbon_candidates (14d). Journal, watchlist, market_regime are never touched."
+                onRun={() => dbCall('rotate', `${API_URL}/api/admin/rotate-data`)}
+              />
+
+              {/* 2. Raw pattern bulk cleanup */}
+              <CleanRow
+                id="rawBulk"
+                title="Raw Pattern Study — Bulk Cleanup"
+                desc="Delete old complete raw-pattern-study runs (+ all child rows: daily features, episode features, discovered patterns, AI summaries, comparisons). Keep the N most recent. Run dry-run first to preview."
+                onRun={() => {
+                  const n = parseInt(rawKeepN, 10);
+                  dbCall('rawBulk', `${API_URL}/api/replay/raw-pattern-study/cleanup`, 'POST', {
+                    keep_last_n: isNaN(n) ? 0 : n,
+                    dry_run: rawDryRun,
+                    vacuum: rawVacuum && !rawDryRun,
+                  });
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  Keep last <input type="number" min="0" value={rawKeepN} onChange={e => setRawKeepN(e.target.value)} style={{ ...inputStyle, width: 50 }} /> runs
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: rawDryRun ? '#00d4f5' : '#f87171' }}>
+                  <input type="checkbox" checked={rawDryRun} onChange={e => setRawDryRun(e.target.checked)} />
+                  Dry run
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#c8c8e8' }}>
+                  <input type="checkbox" checked={rawVacuum} onChange={e => setRawVacuum(e.target.checked)} disabled={rawDryRun} />
+                  Vacuum (SQLite only)
+                </label>
+              </CleanRow>
+
+              {/* 3. Delete single raw pattern run */}
+              <CleanRow
+                id="rawSingle"
+                title="Raw Pattern Study — Delete Single Run"
+                desc="Hard-delete one raw-pattern-study run by ID, including all child records."
+                onRun={() => { if (!delRawId) return; dbCall('rawSingle', `${API_URL}/api/replay/raw-pattern-study/${delRawId}`, 'DELETE'); }}
+              >
+                <input type="number" placeholder="Run ID" value={delRawId} onChange={e => setDelRawId(e.target.value)} style={inputStyle} />
+              </CleanRow>
+
+              {/* 4. Delete single pump study run */}
+              <CleanRow
+                id="pumpSingle"
+                title="Pump Study — Delete Single Run"
+                desc="Hard-delete one pump-study run by ID (episodes, snapshots, events, clusters, comparisons, AI summaries)."
+                onRun={() => { if (!delPumpId) return; dbCall('pumpSingle', `${API_URL}/api/replay/pump-study/${delPumpId}`, 'DELETE'); }}
+              >
+                <input type="number" placeholder="Run ID" value={delPumpId} onChange={e => setDelPumpId(e.target.value)} style={inputStyle} />
+              </CleanRow>
+
+              {/* 5. Delete single replay run */}
+              <CleanRow
+                id="replaySingle"
+                title="Replay Run — Delete Single Run"
+                desc="Hard-delete one replay run by ID (signal candidates, outcomes, missed movers)."
+                onRun={() => { if (!delReplayId) return; dbCall('replaySingle', `${API_URL}/api/replay/${delReplayId}`, 'DELETE'); }}
+              >
+                <input type="number" placeholder="Run ID" value={delReplayId} onChange={e => setDelReplayId(e.target.value)} style={inputStyle} />
+              </CleanRow>
+
+              {/* 6. Journal reset */}
+              <CleanRow
+                id="journal"
+                title="Journal Reset"
+                desc="Delete ALL journal entries and position snapshots. Irreversible."
+                onRun={() => dbCall('journal', `${API_URL}/api/journal/reset`, 'DELETE')}
+              />
+
+            </div>
+          );
+        })()}
+
         {/* ── Quick Links ── */}
         <div style={card}>
           <p style={label}>Direct Backend Links</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {[
-              ['/api/admin/test-massive?symbol=' + symbol, 'Test Massive connection'],
-              ['/api/admin/run-universe-scan', 'Trigger universe scan (background)'],
-              ['/api/admin/universe-scan/status', 'Live scan progress'],
-              ['/api/admin/enrich-sectors', 'Trigger sector enrichment'],
-              ['/api/market-regime/refresh', 'Refresh ETF / market regime (background)'],
-              ['/api/market-regime', 'Latest market regime'],
-              ['/api/scan/universe/latest', 'Latest EOD universe scan results'],
-              ['/api/scan/intraday/latest', 'Latest intraday scan results'],
-              ['/api/scan/latest', 'Latest scan (any type)'],
-              ['/health', 'Health check'],
-            ].map(([path, desc]) => (
-              <div key={path} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
-                <a href={`${API_URL}${path}`} target="_blank" rel="noreferrer"
-                  style={{ fontSize: 10, color: '#00d4f5', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                  {path}
-                </a>
-                <span style={{ fontSize: 10, color: '#56567a' }}>— {desc}</span>
+          {[
+            {
+              group: 'Admin / Scanner',
+              links: [
+                ['/api/admin/test-massive?symbol=' + symbol, 'Test Massive connection'],
+                ['/api/admin/enrich-sectors', 'Trigger sector enrichment (missing only)'],
+                ['/api/admin/refresh-sector-data/status', 'Sector refresh status'],
+                ['/api/market-regime/refresh', 'Refresh ETF / market regime (background)'],
+                ['/api/market-regime', 'Latest market regime'],
+                ['/api/demand-scanner/latest', 'Latest demand scanner results'],
+                ['/api/replay/history', 'Replay run history'],
+                ['/health', 'Health check'],
+              ],
+            },
+            {
+              group: 'Raw Pattern Study',
+              links: [
+                ['/api/replay/raw-pattern-study/runs', 'List all raw-pattern-study runs'],
+                ['/api/replay/pump-study/runs', 'List all pump-study runs'],
+                ['/api/replay/raw-pattern-study/100', 'Run 100 detail (change ID in URL)'],
+                ['/api/replay/raw-pattern-study/100/episodes', 'Run 100 — episode features'],
+                ['/api/replay/raw-pattern-study/100/daily-features', 'Run 100 — daily bar features (PRE/POST)'],
+                ['/api/replay/raw-pattern-study/100/comparisons', 'Run 100 — ticker comparisons'],
+              ],
+            },
+            {
+              group: 'Pattern Discovery',
+              links: [
+                ['/api/replay/raw-pattern-study/100/discover/status', 'Discovery progress for run 100'],
+                ['/api/replay/raw-pattern-study/100/discover/results', 'Discovered patterns for run 100'],
+                ['/api/replay/raw-pattern-study/100/discover/export-full', 'Full discovery export JSON for run 100 (all patterns + episodes)'],
+                ['/api/replay/raw-pattern-study/100/pump-watch', 'Pump Watch scores for run 100'],
+                ['/api/replay/signal-registry', 'Discovered signal registry (JSON)'],
+              ],
+            },
+          ].map(({ group, links }) => (
+            <div key={group} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', color: '#56567a', marginBottom: 6, textTransform: 'uppercase' }}>
+                {group}
               </div>
-            ))}
-          </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {links.map(([path, desc]) => (
+                  <div key={path} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+                    <a href={`${API_URL}${path}`} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 10, color: '#00d4f5', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                      {path}
+                    </a>
+                    <span style={{ fontSize: 10, color: '#56567a' }}>— {desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
 
         </div>

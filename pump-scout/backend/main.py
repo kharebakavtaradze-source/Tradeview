@@ -2,19 +2,23 @@
 Pump Scout — FastAPI backend
 Endpoints for scan results, ticker detail, manual scan trigger, and health.
 """
+import asyncio
 import csv
 import io
 import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 import anthropic
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -25,46 +29,41 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from database import (
-    add_journal_entry,
-    add_to_watchlist,
-    close_ai_position,
-    delete_journal_entry,
-    get_active_streaks,
-    get_ai_portfolio_history,
-    get_all_ai_positions,
     get_candidates_missed,
     get_candidates_summary,
-    get_deep_analytics,
-    get_journal,
-    get_journal_entry,
-    get_journal_stats,
     get_latest_scan,
-    get_latest_scan_by_type,
     get_market_regime_history,
     get_market_regime_latest,
-    get_open_ai_positions,
-    get_portfolio_state,
-    get_position_snapshots,
-    get_scan_history,
     get_sector_strength_for_sector,
     get_sector_strength_latest,
-    get_watchlist,
     init_db,
-    mark_candidate_journaled,
-    remove_from_watchlist,
-    save_scan,
-    update_journal_entry,
-    get_eod_log,
-    get_latest_eod_log,
-    get_macro_events_latest,
-    get_macro_events_history,
-    get_macro_events_active,
-    upsert_macro_events,
+    # Historical Replay Layer
+    create_replay_run,
+    update_replay_run,
+    get_replay_run,
+    get_replay_history,
+    get_replay_candidates,
+    get_replay_outcomes,
+    get_replay_missed_movers,
+    # Pump Study AI Layer
+    get_pump_ai_summary,
+    save_pump_ai_summary,
+    save_demand_ticker_history,
+    get_demand_ticker_history,
+    get_ai_journal_state,
+    get_ai_journal_positions,
+    get_ai_journal_entries,
+    reset_ai_journal,
+    get_pattern_memory,
+    get_ai_performance_stats,
+    get_trade_lessons,
+    get_blacklisted_patterns,
+    backfill_replay_demand_scores,
+    backfill_pump_episode_demand_scores,
+    backfill_raw_pattern_demand_scores,
 )
-from scanner.runner import run_scan
-from scheduler import start_scheduler, stop_scheduler
-from alerts.telegram import get_status as telegram_status
-from alerts.telegram import send_scan_alert, send_test_alert
+from scanner.massive_data import get_us_etf_symbols
+from scanner.sector_map import NON_STOCK_SECURITIES
 from hype_monitor.monitor import (
     get_alert_history,
     get_hype_for_ticker,
@@ -79,14 +78,81 @@ from hype_monitor.divergence import detect_divergences
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
 
+_STARTUP_TRANSIENT_HINTS = (
+    "recovery mode",
+    "starting up",
+    "the database system is starting",
+    "not yet accepting connections",
+    "consistent recovery state",
+    "cannotconnectnow",
+    "connection refused",
+    "could not connect to server",
+    "server closed the connection",
+    "ssl connection has been closed",
+)
+
+
+def _is_startup_transient(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(h in msg for h in _STARTUP_TRANSIENT_HINTS) or \
+           exc.__class__.__name__ == "CannotConnectNowError"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init DB + start scheduler. Shutdown: stop scheduler."""
+    """Startup: init DB with bounded retries for Postgres replicas still in recovery."""
     logger.info("Starting up Pump Scout backend...")
-    await init_db()
-    start_scheduler()
+
+    # Retry init_db with exponential backoff (~2 minutes total) so that a
+    # standby Postgres still replaying WAL doesn't crash-loop the container.
+    # Non-transient failures (bad schema, auth) still raise immediately.
+    delays = [2, 4, 8, 16, 30, 30, 30]  # seconds — ~2 min budget
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate([0] + delays, start=1):
+        if delay:
+            logger.warning(
+                f"init_db transient failure (attempt {attempt - 1}/{len(delays)}); "
+                f"retrying in {delay}s: {last_exc}"
+            )
+            await asyncio.sleep(delay)
+        try:
+            await init_db()
+            if attempt > 1:
+                logger.info(f"init_db succeeded on attempt {attempt}")
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if not _is_startup_transient(exc):
+                logger.error(f"init_db failed with non-transient error: {exc}")
+                raise
+    if last_exc is not None:
+        # Out of retries but error is transient. Continue startup so the
+        # status endpoint can render the situation; subsequent DB-touching
+        # requests will still fail until Postgres finishes recovery.
+        logger.error(
+            f"init_db still failing after retries; starting app anyway so "
+            f"/api/admin/status can report state. Last error: {last_exc}"
+        )
+
+    try:
+        from database import drop_legacy_tables
+        dropped = await drop_legacy_tables()
+        if dropped:
+            logger.info(f"Legacy tables: {dropped}")
+    except Exception as _exc:
+        logger.warning(f"drop_legacy_tables failed (non-fatal): {_exc}")
+    try:
+        from scanner.massive_reference import load_from_db as _load_universe
+        await _load_universe()
+    except Exception as _exc:
+        logger.warning(f"Universe snapshot bootstrap failed (non-fatal): {_exc}")
+    try:
+        from scanner.new_pump_runner import load_latest_from_db as _load_scan
+        await _load_scan()
+    except Exception as _exc:
+        logger.warning(f"Demand scan restore failed (non-fatal): {_exc}")
     yield
-    stop_scheduler()
     logger.info("Pump Scout backend shut down.")
 
 
@@ -108,37 +174,214 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Background scan state ────────────────────────────────────────────────────
-
-_scan_running = False
-
-
-async def _run_scan_background():
-    global _scan_running
-    if _scan_running:
-        logger.info("Scan already running — skipping")
-        return
-    _scan_running = True
-    try:
-        result = await run_scan()
-        await save_scan(result)
-        logger.info("Manual scan complete and saved")
-        await send_scan_alert(result)
-    except Exception as e:
-        logger.error(f"Background scan error: {e}", exc_info=True)
-    finally:
-        _scan_running = False
-
+# Gzip all JSON responses ≥ 1 KB (browser sends Accept-Encoding: gzip automatically)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
+
+_etf_exclusions_cache: set[str] | None = None
+
+async def _get_exclusion_set() -> set[str]:
+    """Cache ETF/fund symbols to exclude from stock results."""
+    global _etf_exclusions_cache
+    if _etf_exclusions_cache is None:
+        try:
+            etfs = await get_us_etf_symbols()
+            _etf_exclusions_cache = set(etfs) | NON_STOCK_SECURITIES
+        except Exception:
+            _etf_exclusions_cache = NON_STOCK_SECURITIES
+    return _etf_exclusions_cache
+
+
+def _strip_non_stocks(results: list, exclusions: set[str]) -> list:
+    """Remove ETFs and non-stock securities from a result list."""
+    return [r for r in results if r.get("symbol", "") not in exclusions]
+
 
 @app.get("/api/health")
 async def health():
     return {
         "status": "ok",
-        "scan_running": _scan_running,
         "version": "14.0",
     }
+
+
+@app.get("/api/admin/status")
+async def admin_status():
+    """
+    Pre-flight health check for the analytics stack. Returns one nested
+    object per subsystem with an `ok` boolean and a human-readable
+    `detail` line. The Studio Hub renders this as a green/red checklist.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    from sqlalchemy import text as _text
+    from database import get_engine
+
+    # Recognise Postgres "transient" states so the UI can render them in
+    # yellow (will-recover) rather than red (broken). Railway restarts +
+    # CDC replicas often leave the DB unreadable for a few seconds; auto-
+    # poll resolves it without operator intervention.
+    _TRANSIENT_HINTS = (
+        "recovery mode",
+        "starting up",
+        "shutting down",
+        "the database system is starting",
+        "the database system is not yet accepting connections",
+        "not yet accepting connections",
+        "consistent recovery state has not been yet reached",
+        "consistent recovery state",
+        "cannotconnectnow",
+        "connection refused",
+        "could not connect to server",
+        "server closed the connection",
+        "ssl connection has been closed",
+        "ssl connection has been closed unexpectedly",
+        "connection was closed in the middle of operation",
+        "connection is closed",
+        "terminating connection due to administrator command",
+    )
+
+    def _classify(err_str: str) -> bool:
+        msg = (err_str or "").lower()
+        return any(h in msg for h in _TRANSIENT_HINTS)
+
+    out: dict = {"ok": True, "checks": {}, "any_transient": False}
+    checks = out["checks"]
+
+    # 1. Database connection + scoring_config import
+    try:
+        async with get_engine().connect() as conn:
+            await conn.execute(_text("SELECT 1"))
+        checks["database"] = {"ok": True, "detail": "Connected."}
+    except Exception as e:
+        transient = _classify(str(e))
+        checks["database"] = {
+            "ok": False, "transient": transient,
+            "detail": ("Recovering — will retry: " if transient else "Connection failed: ") + str(e),
+        }
+        out["ok"] = False
+        if transient: out["any_transient"] = True
+
+    try:
+        from scanner.scoring_config import VERSION, SIGNALS
+        checks["scoring_config"] = {
+            "ok":      True,
+            "version": VERSION,
+            "signals": len(SIGNALS),
+            "detail":  f"Loaded v={VERSION} with {len(SIGNALS)} signals.",
+        }
+    except Exception as e:
+        checks["scoring_config"] = {"ok": False, "detail": f"Import failed: {e}"}
+        out["ok"] = False
+
+    # 2. Migrations: column-existence smoke test on demand_ticker_history.
+    #    If the bar-label snapshot columns are missing, the deployed
+    #    backend is behind on a378052.
+    try:
+        async with get_engine().connect() as conn:
+            try:
+                await conn.execute(_text(
+                    "SELECT tz_t_signal, scoring_config_version FROM demand_ticker_history LIMIT 1"
+                ))
+                checks["migrations"] = {"ok": True, "detail": "All expected columns present."}
+            except Exception as col_err:
+                transient = _classify(str(col_err))
+                checks["migrations"] = {
+                    "ok":        False,
+                    "transient": transient,
+                    "detail":    (
+                        f"Recovering — will retry: {col_err}"
+                        if transient
+                        else f"Schema missing columns: {col_err}. Restart backend to run pending ALTERs."
+                    ),
+                }
+                out["ok"] = False
+                if transient: out["any_transient"] = True
+    except Exception:
+        pass
+
+    # 3. Live history accumulation
+    try:
+        async with get_engine().connect() as conn:
+            row = (await conn.execute(_text(
+                "SELECT COUNT(*) AS n, MAX(scanned_at) AS latest FROM demand_ticker_history"
+            ))).fetchone()
+            n = (row[0] if row else 0) or 0
+            latest = row[1] if row else None
+            age_minutes = None
+            if latest:
+                latest_dt = latest if isinstance(latest, _dt) else _dt.fromisoformat(str(latest))
+                age_minutes = round((_dt.utcnow() - latest_dt).total_seconds() / 60)
+        if n == 0:
+            checks["live_history"] = {
+                "ok": False, "rows": 0,
+                "detail": "Empty. Trigger a scan or wait for scheduler — Signals Explorer / Live X-Ref need data here.",
+            }
+        else:
+            stale = age_minutes is not None and age_minutes > 8 * 60
+            checks["live_history"] = {
+                "ok": not stale, "rows": n,
+                "latest": latest.isoformat() if hasattr(latest, "isoformat") else str(latest),
+                "age_minutes": age_minutes,
+                "detail": (
+                    f"{n} rows; latest {age_minutes}m ago."
+                    + (" Stale (>8h) — scheduler may be down." if stale else "")
+                ),
+            }
+    except Exception as e:
+        transient = _classify(str(e))
+        checks["live_history"] = {
+            "ok": False, "transient": transient,
+            "detail": ("Recovering — will retry: " if transient else "Query failed: ") + str(e),
+        }
+        if transient: out["any_transient"] = True
+
+    # 4. Run inventory: pump-study / raw-pattern / replay counts by status
+    async def _count_by_status(table: str) -> tuple[dict, bool]:
+        try:
+            async with get_engine().connect() as conn:
+                rs = await conn.execute(_text(
+                    f"SELECT status, COUNT(*) FROM {table} GROUP BY status"
+                ))
+                return {r[0]: r[1] for r in rs.fetchall()}, False
+        except Exception as e:
+            transient = _classify(str(e))
+            return {"_error": str(e), "_transient": transient}, transient
+
+    for label, table in (
+        ("pump_studies",        "pump_study_runs"),
+        ("raw_pattern_studies", "raw_pattern_runs"),
+        ("replays",             "replay_runs"),
+    ):
+        counts, transient = await _count_by_status(table)
+        err = counts.pop("_error", None)
+        counts.pop("_transient", None)
+        if err:
+            checks[label] = {
+                "ok": False, "transient": transient,
+                "detail": ("Recovering — will retry: " if transient else "Query failed: ") + err,
+            }
+            if transient: out["any_transient"] = True
+        else:
+            checks[label] = {
+                "ok":     True,
+                "counts": counts,
+                "detail": ", ".join(f"{k}={v}" for k, v in counts.items()) or "none",
+            }
+
+    # 5. Candle cache (range cache + DB cache)
+    try:
+        from scanner.candle_store import get_range_cache_stats
+        rstats = get_range_cache_stats()
+        checks["candle_cache"] = {
+            "ok":            True,
+            "range_cache":   rstats,
+            "detail":        f"in-process: {rstats.get('symbols_cached', 0)} symbols, hit_rate={rstats.get('hit_rate')}",
+        }
+    except Exception as e:
+        checks["candle_cache"] = {"ok": False, "detail": f"Cache stats failed: {e}"}
+
+    return out
 
 
 async def _fetch_live_price_v8(symbol: str, client) -> dict | None:
@@ -205,68 +448,6 @@ async def get_live_prices(symbols: str = ""):
     return result
 
 
-@app.get("/api/scan/latest")
-async def get_latest():
-    """Return the most recent scan results."""
-    data = await get_latest_scan()
-    if not data:
-        return {
-            "results": [],
-            "scanned_at": None,
-            "total": 0,
-            "tier_counts": {},
-            "message": "No scan data yet. Trigger a manual scan or wait for the scheduled run.",
-        }
-    # Strip heavy candle data from list response
-    results = data.get("results", [])
-    slim = []
-    for r in results:
-        entry = {k: v for k, v in r.items() if k != "candles"}
-        slim.append(entry)
-
-    return {
-        **{k: v for k, v in data.items() if k != "results"},
-        "results": slim,
-    }
-
-
-@app.get("/api/scan/history")
-async def get_history(days: int = 30):
-    """Return scan history summary for the last N days."""
-    history = await get_scan_history(days=min(days, 90))
-    return {"history": history, "days": days}
-
-
-@app.get("/api/scan/universe/latest")
-async def get_universe_scan_latest():
-    """Return the latest Massive EOD universe scan results."""
-    data = await get_latest_scan_by_type("massive_eod")
-    if not data:
-        return {
-            "results": [], "scanned_at": None, "total": 0,
-            "scan_type": "massive_eod",
-            "message": "No EOD universe scan yet. Runs at 17:00 ET Mon–Fri.",
-        }
-    results = data.get("results", [])
-    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
-    return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
-
-
-@app.get("/api/scan/intraday/latest")
-async def get_intraday_scan_latest():
-    """Return the latest Yahoo intraday validation scan results."""
-    data = await get_latest_scan_by_type("yahoo_intraday")
-    if not data:
-        return {
-            "results": [], "scanned_at": None, "total": 0,
-            "scan_type": "yahoo_intraday",
-            "message": "No intraday scan yet. Runs at 8:00, 9:30, 12:00 ET Mon–Fri.",
-        }
-    results = data.get("results", [])
-    slim = [{k: v for k, v in r.items() if k != "candles"} for r in results]
-    return {**{k: v for k, v in data.items() if k != "results"}, "results": slim}
-
-
 @app.get("/api/ticker/{symbol}")
 async def get_ticker(symbol: str):
     """Return full detail for one ticker from the latest scan, including candles."""
@@ -315,322 +496,6 @@ async def get_ticker(symbol: str):
     }
 
 
-@app.get("/api/scan/run")
-async def trigger_scan_get(background_tasks: BackgroundTasks):
-    """Manually trigger a scan via GET. Runs in background."""
-    if _scan_running:
-        return {"status": "already_running", "message": "A scan is already in progress"}
-    background_tasks.add_task(_run_scan_background)
-    return {"status": "started", "message": "Scan started in background"}
-
-
-@app.post("/api/scan/run")
-async def trigger_scan(background_tasks: BackgroundTasks):
-    """Manually trigger a scan via POST. Runs in background."""
-    if _scan_running:
-        return {"status": "already_running", "message": "A scan is already in progress"}
-
-    background_tasks.add_task(_run_scan_background)
-    return {"status": "started", "message": "Scan started in background"}
-
-
-# ─── Watchlist routes ────────────────────────────────────────────────────────
-
-@app.get("/api/watchlist")
-async def list_watchlist():
-    items = await get_watchlist()
-    return {"watchlist": items}
-
-
-@app.post("/api/watchlist/{symbol}")
-async def add_watchlist(symbol: str, notes: Optional[str] = None):
-    item = await add_to_watchlist(symbol.upper(), notes)
-    return {"status": "added", "item": item}
-
-
-@app.delete("/api/watchlist/{symbol}")
-async def remove_watchlist(symbol: str):
-    removed = await remove_from_watchlist(symbol.upper())
-    if not removed:
-        raise HTTPException(status_code=404, detail=f"{symbol} not in watchlist")
-    return {"status": "removed", "symbol": symbol.upper()}
-
-
-# ─── Journal routes ───────────────────────────────────────────────────────────
-
-@app.get("/api/journal")
-async def list_journal():
-    entries = await get_journal()
-    return {"entries": entries}
-
-
-@app.get("/api/journal/stats")
-async def journal_stats():
-    return await get_journal_stats()
-
-
-@app.get("/api/journal/live-prices")
-async def journal_live_prices():
-    """
-    Return live prices + P&L% for all open journal positions.
-    Uses v8/finance/chart (same API as the main scanner) — reliable from Railway.
-    Called by frontend every 60s during market hours.
-    """
-    import asyncio, httpx
-    from database import get_open_journal_entries
-
-    entries = await get_open_journal_entries()
-    if not entries:
-        return {}
-
-    entry_map = {e["symbol"]: e["entry_price"] for e in entries}
-    sym_list = list(entry_map.keys())
-    semaphore = asyncio.Semaphore(8)
-
-    async def fetch_one(sym: str, client) -> tuple[str, dict | None]:
-        async with semaphore:
-            data = await _fetch_live_price_v8(sym, client)
-            return sym, data
-
-    async with httpx.AsyncClient() as client:
-        tasks = [fetch_one(sym, client) for sym in sym_list]
-        pairs = await asyncio.gather(*tasks, return_exceptions=True)
-
-    result = {}
-    for item in pairs:
-        if not isinstance(item, tuple):
-            continue
-        sym, data = item
-        if not data:
-            continue
-        price = data["price"]
-        entry_price = entry_map.get(sym, 0)
-        pct = round((price - entry_price) / entry_price * 100, 2) if entry_price else 0
-        result[sym] = {"price": price, "pct": pct, "change_pct": data.get("change_pct")}
-
-    return result
-
-
-# ── ATR / R/R helpers ──────────────────────────────────────────────────────────
-
-def _calculate_suggested_levels(entry_price: float, atr: float, tier: str) -> dict:
-    """ATR-based stop and target. Guarantees minimum 2.5:1 R/R."""
-    stop_multipliers = {
-        "FIRE": 1.2, "ARM": 1.5, "BASE": 2.0,
-        "STEALTH": 1.5, "SYMPATHY": 1.5, "WATCH": 2.0,
-    }
-    stop_mult = stop_multipliers.get(tier.upper(), 1.5)
-    target_mult = stop_mult * 2.5  # always 2.5x stop distance → 2.5:1 R/R
-
-    stop = round(entry_price - atr * stop_mult, 2)
-    target = round(entry_price + atr * target_mult, 2)
-    stop_pct = round((stop - entry_price) / entry_price * 100, 1)
-    target_pct = round((target - entry_price) / entry_price * 100, 1)
-    rr_ratio = round(abs(target_pct / stop_pct), 2) if stop_pct != 0 else 0
-
-    return {
-        "stop": stop, "target": target,
-        "stop_pct": stop_pct, "target_pct": target_pct,
-        "rr_ratio": rr_ratio, "atr_used": round(atr, 4),
-        "stop_mult": stop_mult, "target_mult": target_mult,
-    }
-
-
-def _validate_risk_reward(entry: float, stop: float, target: float) -> dict:
-    """Validate R/R ratio. Returns level: OK / WARN / BLOCK."""
-    if stop >= entry:
-        return {"valid": False, "level": "BLOCK",
-                "error": "Stop должен быть ниже цены входа"}
-    if target <= entry:
-        return {"valid": False, "level": "BLOCK",
-                "error": "Target должен быть выше цены входа"}
-    risk = entry - stop
-    reward = target - entry
-    ratio = round(reward / risk, 2)
-    if ratio < 1.0:
-        return {"valid": False, "level": "BLOCK", "ratio": ratio,
-                "error": f"R/R {ratio:.2f}:1 слишком плохой. Минимум 1:1"}
-    if ratio < 2.0:
-        return {"valid": True, "level": "WARN", "ratio": ratio,
-                "warning": f"R/R {ratio:.2f}:1 — лучше искать минимум 2:1"}
-    return {"valid": True, "level": "OK", "ratio": ratio}
-
-
-@app.get("/api/journal/suggest-levels")
-async def suggest_levels(symbol: str, entry: float, tier: str = "ARM"):
-    """Return ATR-based suggested stop and target for a symbol."""
-    symbol = symbol.upper()
-    atr = None
-
-    # Look up ATR from the latest scan result for this symbol
-    try:
-        scan = await get_latest_scan()
-        if scan:
-            for r in scan.get("results", []):
-                if r.get("symbol") == symbol:
-                    atr = r.get("indicators", {}).get("atr")
-                    break
-    except Exception:
-        pass
-
-    if not atr or atr <= 0:
-        # Fallback: estimate ATR as 3% of entry price
-        atr = round(entry * 0.03, 4)
-
-    levels = _calculate_suggested_levels(entry, atr, tier)
-    return {"symbol": symbol, "entry": entry, "tier": tier, **levels}
-
-
-@app.get("/api/journal/adaptive-weights")
-async def adaptive_weights_endpoint():
-    """Return adaptive scoring weights based on closed journal trades."""
-    from scanner.adaptive_weights import get_adaptive_weights
-    return await get_adaptive_weights()
-
-
-@app.get("/api/journal/{entry_id}")
-async def get_single_journal_entry(entry_id: int):
-    entry = await get_journal_entry(entry_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
-    return entry
-
-
-@app.post("/api/journal")
-async def create_journal_entry(data: Dict[str, Any]):
-    if not data.get("symbol") or not data.get("entry_price"):
-        raise HTTPException(status_code=400, detail="symbol and entry_price are required")
-
-    # R/R validation — block entries with ratio < 1.0 unless user explicitly overrides
-    entry_p = float(data["entry_price"])
-    stop_p = data.get("stop_loss")
-    target_p = data.get("target_price")
-    rr_result = None
-    if stop_p and target_p:
-        rr_result = _validate_risk_reward(entry_p, float(stop_p), float(target_p))
-        if rr_result["level"] == "BLOCK" and not data.get("override_rr"):
-            raise HTTPException(status_code=400, detail=rr_result["error"])
-
-    entry = await add_journal_entry(data)
-    # Mark today's scan candidate as journaled (non-fatal)
-    try:
-        await mark_candidate_journaled(data["symbol"])
-    except Exception:
-        pass
-
-    response: dict = {"status": "added", "entry": entry}
-    if rr_result and rr_result.get("level") == "WARN":
-        response["warning"] = rr_result.get("warning")
-        response["rr_ratio"] = rr_result.get("ratio")
-    return response
-
-
-@app.put("/api/journal/{entry_id}")
-async def update_entry(entry_id: int, data: Dict[str, Any]):
-    entry = await update_journal_entry(entry_id, data)
-    if not entry:
-        raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
-    return {"status": "updated", "entry": entry}
-
-
-@app.delete("/api/journal/{entry_id}")
-async def delete_entry(entry_id: int):
-    deleted = await delete_journal_entry(entry_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Journal entry {entry_id} not found")
-    return {"status": "deleted"}
-
-
-@app.get("/api/journal/export")
-async def export_journal():
-    entries = await get_journal()
-    output = io.StringIO()
-    fields = ["id", "symbol", "added_at", "entry_price", "entry_date", "exit_price",
-              "exit_date", "tier", "score", "outcome", "gain_pct", "notes", "tags"]
-    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
-    for e in entries:
-        row = {**e, "tags": ",".join(e.get("tags") or [])}
-        writer.writerow(row)
-    output.seek(0)
-    return StreamingResponse(
-        io.BytesIO(output.getvalue().encode()),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=pump_scout_journal.csv"},
-    )
-
-
-@app.post("/api/journal/insights")
-async def journal_insights():
-    """Send journal data to Claude for pattern analysis (legacy endpoint)."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
-    entries = await get_journal()
-    stats = await get_journal_stats()
-    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
-    prompt = (
-        f"Trade journal stats: {json.dumps(stats)}\n\n"
-        f"Recent trades (last 20): {json.dumps(entries[:20])}\n\n"
-        "Provide concise coaching insights:\n"
-        "1. WIN PATTERNS — what setups are working?\n"
-        "2. MISTAKE PATTERNS — what to avoid?\n"
-        "3. FOCUS — top 2 things to improve?\n"
-        "Keep it under 300 words, be direct and specific."
-    )
-    try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=400,
-            system="You are a trading coach analyzing a trader's journal for actionable patterns.",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return {"insights": response.content[0].text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/journal/insights")
-async def journal_insights_cumulative():
-    """Cumulative AI insights from closed trades (6h cache)."""
-    from journal_autoclose import get_cumulative_insights
-    result = await get_cumulative_insights()
-    return result
-
-
-# Deep analytics cache
-_deep_analytics_cache: dict = {}
-_DEEP_ANALYTICS_TTL = 3600  # 1 hour
-
-import time as _time
-
-@app.get("/api/journal/deep-analytics")
-async def journal_deep_analytics():
-    """Full signal performance breakdown (1h cache)."""
-    now = _time.time()
-    if _deep_analytics_cache.get("result") and now - _deep_analytics_cache.get("ts", 0) < _DEEP_ANALYTICS_TTL:
-        return {**_deep_analytics_cache["result"], "from_cache": True}
-    result = await get_deep_analytics()
-    _deep_analytics_cache["result"] = result
-    _deep_analytics_cache["ts"] = now
-    return result
-
-
-@app.get("/api/journal/snapshots/{entry_id}")
-async def journal_snapshots(entry_id: int):
-    """Return daily position snapshots for a journal entry."""
-    snaps = await get_position_snapshots(entry_id)
-    return {"journal_id": entry_id, "snapshots": snaps}
-
-
-@app.get("/api/journal/test-autoclose")
-async def test_autoclose():
-    """Dry-run auto-close: shows what WOULD be closed without writing to DB."""
-    from journal_autoclose import auto_close_journal
-    result = await auto_close_journal(dry_run=True)
-    return result
-
-
 # ─── Scan Candidates routes ────────────────────────────────────────────────────
 
 @app.get("/api/candidates/missed")
@@ -643,89 +508,6 @@ async def candidates_missed():
 async def candidates_summary():
     """Return aggregate stats by tier for scan candidates."""
     return {"summary": await get_candidates_summary()}
-
-
-# ─── AI Portfolio routes ───────────────────────────────────────────────────────
-
-@app.get("/api/ai-portfolio/state")
-async def ai_portfolio_state():
-    return await get_portfolio_state()
-
-
-@app.get("/api/ai-portfolio/positions")
-async def ai_portfolio_positions():
-    return {"positions": await get_open_ai_positions()}
-
-
-@app.get("/api/ai-portfolio/history")
-async def ai_portfolio_history_route():
-    positions = await get_all_ai_positions(50)
-    history = await get_ai_portfolio_history(30)
-    return {"positions": positions, "history": history}
-
-
-@app.get("/api/ai-portfolio/report/latest")
-async def ai_portfolio_latest_report():
-    state = await get_portfolio_state()
-    return {
-        "total_value": state["total_value"],
-        "cash": state["cash"],
-        "total_pnl_pct": state["total_pnl_pct"],
-        "report": state.get("daily_report"),
-        "decisions": state.get("decisions_json"),
-    }
-
-
-@app.get("/api/ai-portfolio/report/{report_date}")
-async def ai_portfolio_report_by_date(report_date: str):
-    """Return AI portfolio state for a specific date (YYYY-MM-DD)."""
-    from sqlalchemy import select
-    from database import AIPortfolioState, get_session_factory
-    import json as _json
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(AIPortfolioState).where(AIPortfolioState.date == report_date)
-        )
-        state = result.scalar_one_or_none()
-    if not state:
-        raise HTTPException(status_code=404, detail=f"No portfolio data for {report_date}")
-    return {
-        "date": state.date,
-        "total_value": state.total_value,
-        "cash": state.cash,
-        "total_pnl_pct": state.total_pnl_pct or 0,
-        "report": _json.loads(state.daily_report) if state.daily_report else None,
-        "decisions": _json.loads(state.decisions_json) if state.decisions_json else None,
-    }
-
-
-@app.post("/api/ai-portfolio/run-now")
-async def ai_portfolio_run_now(background_tasks: BackgroundTasks):
-    """Manually trigger AI portfolio decisions."""
-    from ai_portfolio import ai_portfolio_decisions as run_decisions
-    background_tasks.add_task(run_decisions)
-    return {"status": "started", "message": "AI portfolio decisions running in background"}
-
-
-@app.post("/api/ai-portfolio/refresh-prices")
-async def ai_portfolio_refresh_prices():
-    """
-    Fetch live prices for all open AI positions and update P&L.
-    Safe to call any time — no AI decisions made, prices only.
-    """
-    from ai_portfolio import update_ai_positions_intraday
-    from database import get_open_ai_positions
-    positions = await get_open_ai_positions()
-    if not positions:
-        return {"status": "ok", "message": "No open positions to update", "updated": 0}
-    await update_ai_positions_intraday()
-    positions_after = await get_open_ai_positions()
-    return {
-        "status": "ok",
-        "updated": len(positions_after),
-        "message": f"Prices refreshed for {len(positions_after)} positions",
-        "positions": positions_after,
-    }
 
 
 # ─── Hype Monitor routes (specific routes BEFORE parameterized {symbol}) ───────
@@ -787,24 +569,6 @@ async def hype_for_ticker(symbol: str):
     }
 
 
-# ─── Alert routes ─────────────────────────────────────────────────────────────
-
-@app.get("/api/alerts/status")
-async def alerts_status():
-    return telegram_status()
-
-
-@app.get("/api/alerts/test")
-async def alerts_test():
-    sent = await send_test_alert()
-    if not sent:
-        status = telegram_status()
-        if not status["configured"]:
-            raise HTTPException(status_code=503, detail="Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-        raise HTTPException(status_code=500, detail="Telegram send failed — check logs")
-    return {"status": "sent", "message": "Test alert delivered to Telegram"}
-
-
 # ─── Market Regime routes ──────────────────────────────────────────────────────
 
 @app.get("/api/market-regime")
@@ -850,324 +614,418 @@ async def sector_strength_latest():
     return {"sectors": sectors}
 
 
-# ── EMA Ribbon Scanner helpers ────────────────────────────────────────────────
+# ─── Bar Labels endpoint ───────────────────────────────────────────────────────
 
-def _passes_mode(mode: str, compression: str, bullish: bool, cb: bool, anomaly: float) -> bool:
-    if mode == "compression":
-        return compression != "NONE"
-    if mode == "breakout":
-        return bool(cb) and anomaly >= 1.8
-    if mode == "stack":
-        return bool(bullish)
-    return True  # "all"
+@app.get("/api/bar-labels/{symbol}")
+async def bar_labels(symbol: str, bars: int = 60):
+    """Per-bar T/Z/WLNBB/PREUP combined signal labels for a symbol."""
+    from scanner.massive_data import fetch_candles_massive
+    from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
 
+    candles_raw = await fetch_candles_massive(symbol.upper(), days=max(bars + 50, 120))
+    if not candles_raw:
+        raise HTTPException(status_code=404, detail=f"No candles for {symbol}")
 
-def _ribbon_signal(cb: bool, bullish: bool, bearish: bool, compression: str, anomaly: float) -> str:
-    if cb and anomaly >= 1.8:
-        return "COMPRESSION_BREAKOUT"
-    if cb:
-        return "COMPRESSION_ALIGNED"
-    if bullish:
-        return "BULLISH_STACK"
-    if bearish:
-        return "BEARISH_STACK"
-    if compression != "NONE":
-        return "COMPRESSION_WATCH"
-    return "NEUTRAL"
+    # Convert from Polygon format {o,h,l,c,v,t} to {open,high,low,close,volume,date}
+    candles = []
+    for bar in candles_raw:
+        d = None
+        if bar.get("t"):
+            from datetime import datetime, timezone
+            d = datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        candles.append({
+            "date":   d,
+            "open":   bar["o"], "high": bar["h"],
+            "low":    bar["l"], "close": bar["c"],
+            "volume": bar["v"],
+        })
 
-
-def _ribbon_quality(spread: float, signal: str, ind: dict) -> int:
-    q = 0
-    if spread < 1.0:   q += 35
-    elif spread < 2.0: q += 25
-    elif spread < 3.0: q += 15
-    elif spread < 5.0: q += 5
-    q += {"COMPRESSION_BREAKOUT": 30, "COMPRESSION_ALIGNED": 20,
-          "BULLISH_STACK": 20, "COMPRESSION_WATCH": 10}.get(signal, 0)
-    cmf = ind.get("cmf_pctl", 0) or 0
-    if cmf > 70:   q += 10
-    elif cmf > 50: q += 5
-    if ind.get("bb_squeeze"):         q += 7
-    if (ind.get("bb_sqz_bars") or 0) >= 5: q += 5
-    if (ind.get("rs_score") or 0) > 5:     q += 5
-    # OBV — handle both sources (scan has nested obv dict; DB row has obv_strength directly)
-    obv_str = (
-        ind.get("obv", {}).get("obv_strength")
-        if isinstance(ind.get("obv"), dict)
-        else ind.get("obv_strength")
-    )
-    if obv_str == "STRONG":   q += 8
-    elif obv_str == "MEDIUM": q += 4
-    return min(100, q)
+    labels = compute_combined_bar_labels(candles, last_n=bars)
+    return {"symbol": symbol.upper(), "bars": labels, "total": len(labels)}
 
 
-def _ribbon_item_from_scan(r: dict, ind: dict, score_data: dict, signal: str, quality: int) -> dict:
-    obv_data = ind.get("obv") or {}
-    return {
-        "symbol":       r["symbol"],
-        "price":        r["price"],
-        "sector":       r.get("sector", "Unknown"),
-        "tier":         score_data.get("tier"),
-        "total_score":  score_data.get("total_score"),
-        "source":       "main_scan",
-        "ribbon_signal":          signal,
-        "ribbon_quality":         quality,
-        "ema_spread_pct":         ind.get("ema_spread_pct"),
-        "ribbon_compression":     ind.get("ribbon_compression", "NONE"),
-        "bullish_stack":          ind.get("bullish_stack", False),
-        "bearish_stack":          ind.get("bearish_stack", False),
-        "compression_and_bullish": ind.get("compression_and_bullish", False),
-        "ribbon_position":        ind.get("ribbon_position"),
-        "ema8_slope":             ind.get("ema8_slope"),
-        "ribbon_periods_count":   ind.get("ribbon_periods_count"),
-        "ema8":   ind.get("ema8"),   "ema13": ind.get("ema13"),
-        "ema20":  ind.get("ema20"),  "ema21": ind.get("ema21"),
-        "ema34":  ind.get("ema34"),  "ema50": ind.get("ema50"),
-        "ema55":  ind.get("ema55"),  "ema89": ind.get("ema89"),
-        "ema200": ind.get("ema200"),
-        "cmf_pctl":      ind.get("cmf_pctl", 0),
-        "anomaly_ratio": ind.get("anomaly_ratio", 0),
-        "bb_squeeze":    ind.get("bb_squeeze", False),
-        "bb_sqz_bars":   ind.get("bb_sqz_bars", 0),
-        "rs_score":      ind.get("rs_score", 0),
-        "rsi":           (ind.get("rsi") or {}).get("value"),
-        "obv_strength":  obv_data.get("obv_strength") if obv_data else None,
-        "obv_divergence": obv_data.get("obv_divergence") if obv_data else None,
-        "earnings_risk": r.get("earnings_risk", "NONE"),
-        "ai_analysis":   r.get("ai_analysis"),
-    }
+# ─── Demand Composite Scanner ─────────────────────────────────────────────────
 
-
-def _ribbon_item_from_db(row: dict, signal: str, quality: int) -> dict:
-    # row is already a plain dict (converted via .mappings().all())
-    return {
-        "symbol":       row["symbol"],
-        "price":        row.get("price"),
-        "sector":       row.get("sector", "Unknown"),
-        "tier":         None,
-        "total_score":  None,
-        "source":       "ribbon_pass",
-        "ribbon_signal":          signal,
-        "ribbon_quality":         quality,
-        "ema_spread_pct":         row.get("ema_spread_pct"),
-        "ribbon_compression":     row.get("ribbon_compression", "NONE"),
-        "bullish_stack":          row.get("bullish_stack", False),
-        "bearish_stack":          row.get("bearish_stack", False),
-        "compression_and_bullish": row.get("compression_and_bullish", False),
-        "ribbon_position":        row.get("ribbon_position"),
-        "ema8_slope":             row.get("ema8_slope"),
-        "ribbon_periods_count":   7,
-        "ema8":   row.get("ema8"),   "ema13": row.get("ema13"),
-        "ema20":  row.get("ema20"),  "ema21": row.get("ema21"),
-        "ema34":  row.get("ema34"),  "ema50": row.get("ema50"),
-        "ema55":  row.get("ema55"),  "ema89": row.get("ema89"),
-        "ema200": row.get("ema200"),
-        "cmf_pctl":      row.get("cmf_pctl", 0),
-        "anomaly_ratio": row.get("anomaly_ratio", 0),
-        "bb_squeeze":    row.get("bb_squeeze", False),
-        "bb_sqz_bars":   row.get("bb_sqz_bars", 0),
-        "rs_score":      row.get("rs_score", 0),
-        "rsi":           row.get("rsi"),
-        "obv_strength":  row.get("obv_strength"),
-        "obv_divergence": None,
-        "earnings_risk": "NONE",
-        "ai_analysis":   None,
-    }
-
-
-@app.get("/api/scan/ribbon")
-async def get_ribbon_scanner(
-    mode: str = "all",
-    max_spread: float = 5.0,
-    min_volume: int = 200000,
-    bullish_only: bool = False,
+@app.get("/api/demand-scanner/latest")
+async def demand_scanner_latest(
+    tier:       str   = "",    # PRIME_BUY | HIGH_CONF_BUY | BUY_WATCH | SETUP_MONITOR | SKIP
+    ats_signal: str   = "",    # ATS_PRIME | ATS_SETUP | ATS_WATCH | ATS_NONE
+    min_score:  float = 0.0,
+    limit:      int   = 300,
 ):
     """
-    EMA Ribbon Scanner — read-only, no new scan triggered.
-    Merges two sources:
-      1. Main scan results (tickers with anomaly_ratio >= 2x)
-      2. ribbon_candidates table (compression setups, anomaly_ratio < 2x)
+    Demand Composite Scanner — returns results pre-scored with demand_composite_score,
+    demand_composite_tier, and ATS signal. Results are sorted PRIME_BUY first.
 
-    mode: 'all' | 'compression' | 'breakout' | 'stack'
+    demand_composite_tier:
+      PRIME_BUY      score >= 13  (all systems go)
+      HIGH_CONF_BUY  score 9–12   (strong stack, low FP risk)
+      BUY_WATCH      score 6–8    (setup forming)
+      SETUP_MONITOR  score 3–5    (early)
+      SKIP           score < 3 or toxic regime
+
+    ATS (Accumulation Trap Signal): 5-condition candle-level composite.
     """
-    from database import get_ribbon_candidates
-    from scanner.massive_data import get_us_etf_symbols
-    from scanner.sector_map import NON_STOCK_SECURITIES
+    from scanner.new_pump_runner import get_latest, load_latest_from_db
+    from scanner.demand_composite_scanner import apply_demand_composite, TIER_ORDER
 
-    scan = await get_latest_scan()
-    main_results = scan.get("results", []) if scan else []
+    data = get_latest()
+    # If in-memory is empty (fresh deploy), try DB restore once
+    if not data.get("results"):
+        await load_latest_from_db()
+        data = get_latest()
+    results = data.get("results", [])
 
-    # ETF exclusion — filter stale DB rows that pre-date the ETF fix
+    exclusions = await _get_exclusion_set()
+    results    = _strip_non_stocks(results, exclusions)
+
+    # Apply demand composite if not already applied (e.g. from cached run)
+    if results and "demand_composite_score" not in results[0]:
+        results = apply_demand_composite(results)
+    else:
+        # Re-sort cached results by tier+score
+        results = sorted(results, key=lambda r: (
+            TIER_ORDER.get(r.get("demand_composite_tier") or "SKIP", 4),
+            -(r.get("demand_composite_score") or 0.0),
+        ))
+
+    if tier:
+        results = [r for r in results if r.get("demand_composite_tier") == tier]
+    if ats_signal:
+        results = [r for r in results if r.get("ats_signal") == ats_signal]
+    if min_score > 0:
+        results = [r for r in results if (r.get("demand_composite_score") or 0) >= min_score]
+
+    from collections import Counter
+    tier_counts = dict(Counter(r.get("demand_composite_tier") or "SKIP" for r in results))
+    ats_counts  = dict(Counter(r.get("ats_signal") or "ATS_NONE" for r in results))
+
+    return {
+        "results":        results[:min(limit, 1000)],
+        "total":          len(results),
+        "tier_counts":    tier_counts,
+        "ats_counts":     ats_counts,
+        "scanned_at":     data.get("scanned_at"),
+        "universe":       data.get("universe", 0),
+        "elapsed_secs":   data.get("elapsed_secs"),
+        "demand_prime_count":  data.get("demand_prime_count", 0),
+        "demand_high_count":   data.get("demand_high_count", 0),
+        "demand_watch_count":  data.get("demand_watch_count", 0),
+        "ats_prime_count":     data.get("ats_prime_count", 0),
+        "filters": {
+            "tier": tier, "ats_signal": ats_signal,
+            "min_score": min_score, "limit": limit,
+        },
+    }
+
+
+@app.post("/api/demand-scanner/run")
+@app.get("/api/demand-scanner/run")
+async def demand_scanner_run(background_tasks: BackgroundTasks, scan_mode: str = "full"):
+    """
+    Trigger a demand scan in the background. Poll /api/demand-scanner/status.
+
+    scan_mode:
+      full        — full universe fetch + candle fetch + analyze all tickers (default)
+      incremental — 1 API call; only re-analyze tickers with a new bar since last scan
+      recalculate — zero API calls; reload from DB cache and re-run all signals
+    """
+    from scanner.new_pump_runner import is_running, run_new_pump_scan
+    if is_running():
+        return {"status": "already_running", "message": "Scan already in progress"}
+    if scan_mode not in ("full", "incremental", "recalculate"):
+        scan_mode = "full"
+    background_tasks.add_task(run_new_pump_scan, scan_mode=scan_mode)
+    return {"status": "started", "message": f"Demand scan started (mode={scan_mode})", "scan_mode": scan_mode}
+
+
+@app.get("/api/demand-scanner/status")
+async def demand_scanner_status():
+    """Live progress for the running demand scan."""
+    from scanner.new_pump_runner import is_running, get_progress, get_latest
+    data = get_latest()
+    prog = get_progress()
+    return {
+        **prog,
+        "has_results":         bool(data.get("results")),
+        "scanned_at":          data.get("scanned_at"),
+        "result_count":        len(data.get("results", [])),
+        "demand_prime_count":  data.get("demand_prime_count", 0),
+        "demand_high_count":   data.get("demand_high_count", 0),
+        "demand_watch_count":  data.get("demand_watch_count", 0),
+        "ats_prime_count":     data.get("ats_prime_count", 0),
+        "fetched_count":       data.get("fetched", prog.get("fetched_count", 0)),
+        "scan_mode":           data.get("scan_mode", prog.get("scan_mode", "full")),
+    }
+
+
+@app.get("/api/demand-scanner/history/{symbol}")
+async def demand_ticker_history(symbol: str, limit: int = 30):
+    """Per-scan score trajectory for a single ticker."""
+    from database import get_demand_ticker_history as _gdth
+    rows = await _gdth(symbol.upper(), limit=min(limit, 60))
+    return {"symbol": symbol.upper(), "history": rows}
+
+
+@app.post("/api/demand-scanner/narrative")
+async def demand_scanner_narrative(request: Request):
+    """Generate an AI setup narrative for a single demand scanner result."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    result    = await request.json()
+    symbol    = result.get("symbol", "UNKNOWN")
+    tier      = result.get("demand_composite_tier", "UNKNOWN")
+    score     = result.get("demand_composite_score", 0)
+    breakdown = result.get("demand_score_breakdown", {})
+    reasons   = result.get("demand_buy_reasons", [])
+    risks     = result.get("demand_risk_flags", [])
+    ats       = result.get("ats_signal", "ATS_NONE")
+    ats_met   = result.get("ats_conditions_met", [])
+    ats_miss  = result.get("ats_conditions_missing", [])
+    price     = result.get("price") or 0.0
+    dryup     = result.get("dc_dryup_streak", 0)
+    ema_dist  = result.get("dc_ema_dist_pct")
+    max_gain  = result.get("dc_max_gain_10d", 0)
+    vol_ratio = result.get("dc_vol_ratio", 1.0)
+    tight     = result.get("dc_tight_range", False)
+    atr_pct   = result.get("dc_atr_bucket", "")
+    cfr_tags  = result.get("cfr_reasons", []) or []
+    np_dec    = result.get("new_pump_label", "") or result.get("np_decision", "")
+    v2_dec    = result.get("scanner_v2_decision", "")
+    has_l34   = result.get("has_l34_np_ld", False)
+    has_wc    = result.get("has_wc_gap_ld", False)
+    l34_wlnbb = result.get("l34_wlnbb", False)
+
+    _SYSTEM = (
+        "You are a quantitative trading analyst specializing in small-cap momentum setups. "
+        "You interpret pump scanner signals grounded in real backtested research.\n\n"
+        "SCORING SYSTEM (R156 research baseline):\n"
+        "  demand_composite_score: 0–20 scale. Tiers: PRIME_BUY≥13, HIGH_CONF_BUY≥9, BUY_WATCH≥6, SETUP_MONITOR≥3, SKIP<3.\n"
+        "  Score components: regime(max5) + base_pump(max4) + demand_bars(max5) + ATS(max5) + context(±2).\n\n"
+        "ATS — ACCUMULATION TRAP SIGNAL (5 conditions):\n"
+        "  vol_dryup_3d     = last 3 bars all <55% of 20-day avg volume (accumulation silence)\n"
+        "  atr_contracting  = 5d ATR <70% of 20d ATR (coil forming)\n"
+        "  demand_bar       = L34/NP or lower-wick reclaim in last 5 days (buyers stepped in)\n"
+        "  near_ema50       = price within -5%/+8% of EMA50 (support zone)\n"
+        "  not_pumped       = max gain last 10 days <35% (fresh setup, not extended)\n"
+        "  ATS_PRIME=5/5, ATS_SETUP=4/5, ATS_WATCH=3/5.\n\n"
+        "KEY RESEARCH FINDINGS (R156):\n"
+        "  - CFR_A: 33.1% 4x rate, best selector in system.\n"
+        "  - dryup+compression+LD: rank #1 overall, rel=0.82, lift=11.67x (gold standard).\n"
+        "  - L34_NP_LD (lower-wick reclaim after NP+L34): rank #13, rel=0.77, lift=10.8x.\n"
+        "  - WC_GAP_LD (weak-close -> gap-up + reclaim): rank #8, rel=0.77, lift=10.5x.\n\n"
+        "Write a 3-4 sentence setup narrative. Be direct and specific. No fluff.\n"
+        "Structure: (1) what the signal stack shows, (2) what the ATS conditions mean for timing, "
+        "(3) key risk or invalidation, (4) one-line action summary."
+    )
+
+    _user_prompt = (
+        f"TICKER: {symbol}\n"
+        f"Price: ${price:.2f}  |  Tier: {tier}  |  Score: {score}/20\n"
+        f"ATR bucket: {atr_pct}  |  EMA50 distance: {f'{ema_dist:+.1f}%' if ema_dist is not None else 'N/A'}\n"
+        f"Volume ratio (today/20d): {vol_ratio:.2f}x  |  Dryup streak: {dryup} bars\n"
+        f"Max gain last 10d: {max_gain:.1f}%  |  Tight range: {tight}\n\n"
+        f"SCORE BREAKDOWN: {json.dumps(breakdown)}\n"
+        f"BUY REASONS: {', '.join(reasons) or 'none'}\n"
+        f"RISK FLAGS: {', '.join(risks) or 'none'}\n\n"
+        f"ATS SIGNAL: {ats}\n"
+        f"  Conditions met:     {', '.join(ats_met) or 'none'}\n"
+        f"  Conditions missing: {', '.join(ats_miss) or 'none'}\n\n"
+        f"DEMAND BAR FLAGS:\n"
+        f"  has_l34_np_ld={has_l34}  has_wc_gap_ld={has_wc}  l34_wlnbb={l34_wlnbb}\n\n"
+        f"NP ENGINE: {np_dec}  |  Scanner v2: {v2_dec}\n"
+        f"CFR tags: {', '.join(cfr_tags[:5]) if cfr_tags else 'none'}\n\n"
+        "Write the setup narrative now."
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0)
     try:
-        etf_symbols = await get_us_etf_symbols()
-    except Exception:
-        etf_symbols = set()
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": _user_prompt}],
+        )
+        return {
+            "symbol":    symbol,
+            "narrative": response.content[0].text,
+            "usage": {
+                "input_tokens":                response.usage.input_tokens,
+                "cache_read_input_tokens":     getattr(response.usage, "cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
+                "output_tokens":               response.usage.output_tokens,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    def _is_etf(sym: str) -> bool:
-        return sym.upper() in etf_symbols or sym.upper() in NON_STOCK_SECURITIES
 
-    # SOURCE 2: ribbon candidates table (last 1 day)
-    ribbon_rows = await get_ribbon_candidates(days_back=1)
+# ── AI Trading Journal endpoints ──────────────────────────────────────────────
 
-    seen: set = set()
-    all_items: list = []
-
-    # Process main scan results
-    for r in main_results:
-        if _is_etf(r["symbol"]):
-            continue
-        ind        = r.get("indicators", {})
-        score_data = r.get("score", {})
-        symbol     = r["symbol"]
-
-        spread  = ind.get("ema_spread_pct", 999.0)
-        vol     = ind.get("today_vol", 0)
-        comp    = ind.get("ribbon_compression", "NONE")
-        bullish = ind.get("bullish_stack", False)
-        bearish = ind.get("bearish_stack", False)
-        cb      = ind.get("compression_and_bullish", False)
-        anomaly = ind.get("anomaly_ratio", 0)
-
-        if vol < min_volume:      continue
-        if spread > max_spread:   continue
-        if bullish_only and not bullish: continue
-        if not _passes_mode(mode, comp, bullish, cb, anomaly): continue
-
-        signal  = _ribbon_signal(cb, bullish, bearish, comp, anomaly)
-        quality = _ribbon_quality(spread, signal, ind)
-        if quality < 5:           continue
-
-        seen.add(symbol)
-        all_items.append(_ribbon_item_from_scan(r, ind, score_data, signal, quality))
-
-    # Process ribbon_candidates (secondary pass — no volume spike)
-    for row in ribbon_rows:
-        symbol = row["symbol"]
-        if symbol in seen:
-            continue
-        if _is_etf(symbol):
-            continue
-
-        spread  = row.get("ema_spread_pct", 999.0) or 999.0
-        vol     = row.get("today_vol", 0) or 0
-        comp    = row.get("ribbon_compression", "NONE") or "NONE"
-        bullish = bool(row.get("bullish_stack", False))
-        bearish = bool(row.get("bearish_stack", False))
-        cb      = bool(row.get("compression_and_bullish", False))
-        anomaly = row.get("anomaly_ratio", 0) or 0
-
-        if vol < min_volume:      continue
-        if spread > max_spread:   continue
-        if bullish_only and not bullish: continue
-        if not _passes_mode(mode, comp, bullish, cb, anomaly): continue
-
-        signal  = _ribbon_signal(cb, bullish, bearish, comp, anomaly)
-        quality = _ribbon_quality(spread, signal, row)
-        if quality < 5:           continue
-
-        seen.add(symbol)
-        all_items.append(_ribbon_item_from_db(row, signal, quality))
-
-    all_items.sort(key=lambda x: x["ribbon_quality"], reverse=True)
-
-    summary = {
-        "total":       len(all_items),
-        "from_main":   sum(1 for x in all_items if x["source"] == "main_scan"),
-        "from_ribbon": sum(1 for x in all_items if x["source"] == "ribbon_pass"),
-        "breakouts":   sum(1 for x in all_items if x["ribbon_signal"] == "COMPRESSION_BREAKOUT"),
-        "aligned":     sum(1 for x in all_items if x["ribbon_signal"] == "COMPRESSION_ALIGNED"),
-        "stacks":      sum(1 for x in all_items if x.get("bullish_stack")),
-        "compression": sum(1 for x in all_items if x.get("ribbon_compression") != "NONE"),
-        "bearish":     sum(1 for x in all_items if x.get("bearish_stack")),
-    }
-
+@app.get("/api/ai-journal/state")
+async def ai_journal_state_route():
+    state    = await get_ai_journal_state()
+    positions = await get_ai_journal_positions("OPEN")
+    invested = sum(p["cost_basis"] for p in positions)
+    closed   = await get_ai_journal_positions("CLOSED")
+    total_pnl = sum(p["pnl_usd"] for p in closed)
+    wins      = sum(1 for p in closed if p["pnl_usd"] > 0)
+    win_rate  = round(wins / len(closed) * 100, 1) if closed else 0
     return {
-        "results":    all_items,
-        "count":      len(all_items),
-        "summary":    summary,
-        "scanned_at": scan.get("scanned_at") if scan else None,
-        "filter": {
-            "mode":         mode,
-            "max_spread":   max_spread,
-            "min_volume":   min_volume,
-            "bullish_only": bullish_only,
-        },
+        **state,
+        "open_positions": len(positions),
+        "invested":        round(invested, 2),
+        "cash":            round(state["capital"] - invested, 2),
+        "total_pnl_usd":   round(total_pnl, 2),
+        "closed_trades":   len(closed),
+        "win_rate_pct":    win_rate,
     }
 
 
-@app.get("/api/scan/ignition")
-async def get_ignition_scan(
-    mode: str = "all",
-    min_volume: int = 200_000,
-    min_quality: int = 0,
-    bullish_only: bool = False,
-    max_results: int = 100,
-):
-    """
-    Early Pump Ignition Layer — pre-breakout detection.
+@app.get("/api/ai-journal/positions")
+async def ai_journal_positions_route(status: str = "OPEN"):
+    return {"positions": await get_ai_journal_positions(status)}
 
-    Merges main scan results (volume-anomaly confirmed) + ribbon_candidates
-    (EMA compression setups), applies ignition scoring, and returns ranked
-    pre-breakout setups.
 
-    mode: 'all' | 'confirmed' | 'early' | 'watch'
-      all       — all signals including NO_IGNITION
-      confirmed — IGNITION_CONFIRMED only (quality≥60, 4+ signals)
-      early     — IGNITION_CONFIRMED + EARLY_IGNITION
-      watch     — all except NO_IGNITION
+@app.get("/api/ai-journal/entries")
+async def ai_journal_entries_route(limit: int = 10):
+    limit = min(limit, 30)
+    return {"entries": await get_ai_journal_entries(limit)}
 
-    min_quality: 0–100, filter by ignition_quality
-    bullish_only: true = exclude bearish stack tickers
-    max_results: cap result count (max 200)
-    """
-    from scanner.early_ignition import build_ignition_response
-    from database import get_ribbon_candidates
 
-    max_results = min(max_results, 200)
+@app.post("/api/ai-journal/run")
+async def ai_journal_run(background_tasks: BackgroundTasks):
+    """Trigger an AI journal session using the latest demand scan data."""
+    latest = await get_latest_scan()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No scan data — run a demand scan first")
+    results = latest.get("results", [])
+    if not results:
+        raise HTTPException(status_code=404, detail="Scan has no results")
+    from ai_journal import run_journal_session
+    summary = await run_journal_session(results)
+    if "error" in summary:
+        raise HTTPException(status_code=503, detail=summary["error"])
+    return summary
 
-    # SOURCE 1: Main scan results (last Yahoo intraday or EOD scan)
-    scan = await get_latest_scan()
-    main_results = scan.get("results", []) if scan else []
 
-    # Also include EOD universe scan results for broader coverage
-    eod_scan = await get_latest_scan_by_type("massive_eod")
-    eod_results = eod_scan.get("results", []) if eod_scan else []
+@app.post("/api/ai-journal/reset")
+async def ai_journal_reset_route(capital: float = 500.0):
+    return await reset_ai_journal(new_capital=capital)
 
-    # Merge both scans — main scan (intraday) takes priority over EOD
-    main_symbols = {r["symbol"] for r in main_results}
-    combined_main = main_results + [r for r in eod_results if r["symbol"] not in main_symbols]
 
-    # SOURCE 2: Ribbon candidates (compression setups, last 1 day)
-    ribbon_rows = await get_ribbon_candidates(days_back=1)
+@app.post("/api/ai-journal/backfill")
+async def ai_journal_backfill():
+    """Backfill forward returns for recorded signal outcomes."""
+    from ai_journal import backfill_forward_returns
+    result = await backfill_forward_returns()
+    return result
 
-    result = build_ignition_response(
-        main_results=combined_main,
-        ribbon_results=ribbon_rows,
-        mode=mode,
-        min_volume=min_volume,
-        min_quality=min_quality,
-        bullish_only=bullish_only,
-        max_results=max_results,
-    )
 
-    scanned_at = None
-    if scan:
-        scanned_at = scan.get("scanned_at")
-    elif eod_scan:
-        scanned_at = eod_scan.get("scanned_at")
+@app.get("/api/ai-journal/patterns")
+async def ai_journal_patterns():
+    """Return persisted pattern memory."""
+    patterns = await get_pattern_memory(20)
+    return {"patterns": patterns}
 
-    return {
-        **result,
-        "scanned_at": scanned_at,
-        "filter": {
-            "mode":        mode,
-            "min_volume":  min_volume,
-            "min_quality": min_quality,
-            "bullish_only": bullish_only,
-            "max_results": max_results,
-        },
-    }
 
+@app.get("/api/ai-journal/stats")
+async def ai_journal_stats():
+    """Return overall performance stats."""
+    return await get_ai_performance_stats()
+
+
+@app.get("/api/ai-journal/lessons")
+async def ai_journal_lessons(limit: int = 20):
+    """Return AI-generated trade lessons from closed positions."""
+    lessons = await get_trade_lessons(min(limit, 50))
+    return {"lessons": lessons}
+
+
+@app.get("/api/ai-journal/blacklist")
+async def ai_journal_blacklist():
+    """Return signal blacklist entries."""
+    entries = await get_blacklisted_patterns()
+    return {"blacklist": entries}
+
+
+@app.get("/api/demand-scanner/similar/{symbol}")
+async def demand_similar_pumps(symbol: str, top_n: int = 5):
+    """Find historical pump episodes most similar to this ticker's current setup."""
+    from scanner.demand_similarity import find_similar
+
+    # Get current scanner result for this symbol
+    latest = await get_latest_scan()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No scan data available")
+
+    results = latest.get("results", [])
+    candidate = next((r for r in results if r.get("symbol") == symbol.upper()), None)
+    if not candidate:
+        raise HTTPException(status_code=404, detail=f"{symbol} not in latest scan")
+
+    # Get all pump episodes from DB
+    from database import get_pump_study_runs, get_pump_episodes
+    runs = await get_pump_study_runs(limit=5)
+    episodes = []
+    for run in runs:
+        eps = await get_pump_episodes(run["id"], limit=300)
+        episodes.extend(eps)
+
+    if not episodes:
+        return {"symbol": symbol.upper(), "similar": [], "note": "No pump study data available"}
+
+    similar = find_similar(candidate, episodes, top_n=min(top_n, 10))
+    return {"symbol": symbol.upper(), "similar": similar, "candidate_score": candidate.get("demand_composite_score")}
+
+
+@app.get("/api/demand-scanner/news")
+async def demand_scanner_news(symbols: str = "", limit: int = 20):
+    """Fetch recent Polygon news for a comma-separated list of demand scanner tickers."""
+    import asyncio, httpx
+    from scanner.massive_data import MASSIVE_API_KEY
+
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:15]
+    if not sym_list or not MASSIVE_API_KEY:
+        return {"articles": []}
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def _fetch(sym: str, client) -> list:
+        async with semaphore:
+            try:
+                resp = await client.get(
+                    "https://api.polygon.io/v2/reference/news",
+                    params={"ticker": sym, "limit": 5, "order": "desc",
+                            "sort": "published_utc", "apiKey": MASSIVE_API_KEY},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("results", [])
+            except Exception:
+                pass
+        return []
+
+    async with httpx.AsyncClient() as client:
+        batches = await asyncio.gather(*[_fetch(s, client) for s in sym_list], return_exceptions=True)
+
+    seen, articles = set(), []
+    for batch in batches:
+        if isinstance(batch, list):
+            for a in batch:
+                key = a.get("id") or a.get("title", "")
+                if key and key not in seen:
+                    seen.add(key)
+                    articles.append(a)
+
+    articles.sort(key=lambda a: a.get("published_utc", ""), reverse=True)
+    return {"articles": articles[:limit]}
+
+
+
+# ─── Scanner v2 — New Pump as structural core ─────────────────────────────────
 
 @app.get("/api/sector-performance/latest")
 async def sector_performance_latest():
@@ -1226,6 +1084,97 @@ async def sector_strength_by_sector(sector: str):
     return {**data, "tickers_detail": tickers_detail}
 
 
+# ─── Sectors v2 routes ────────────────────────────────────────────────────────
+
+@app.get("/api/sectors/overview")
+async def sectors_overview():
+    """Multi-timeframe sector performance, EMA trend, RS, RRG coords, and risk mode. 30-min cache."""
+    from sectors.sector_engine import get_sector_snapshot
+    return await get_sector_snapshot()
+
+
+@app.get("/api/sectors/rrg")
+async def sectors_rrg():
+    """Normalized RRG coordinates and weekly trail for each SPDR sector ETF. 30-min cache."""
+    from sectors.sector_engine import get_rrg_data
+    return await get_rrg_data()
+
+
+@app.get("/api/sectors/heatmap")
+async def sectors_heatmap():
+    """Sector heatmap data — same as overview but returns only the sectors sub-dict."""
+    from sectors.sector_engine import get_sector_snapshot
+    snap = await get_sector_snapshot()
+    return {
+        "as_of":     snap.get("as_of"),
+        "risk_mode": snap.get("risk_mode"),
+        "sectors":   snap.get("sectors", {}),
+    }
+
+
+@app.get("/api/sectors/top-movers")
+async def sectors_top_movers():
+    """Top scan movers for each sector ETF (based on holdings membership)."""
+    from sectors.sector_engine import get_all_top_movers
+    return await get_all_top_movers()
+
+
+@app.get("/api/sectors/subsector-map")
+async def sectors_subsector_map():
+    """Full static subsector taxonomy — ETF → subsector → tickers. No live data."""
+    from sectors.subsector_map import get_subsector_map
+    return get_subsector_map()
+
+
+@app.get("/api/sectors/context/{symbol}")
+async def sector_context_for_symbol(symbol: str):
+    """Sector + subsector context for a single ticker."""
+    from sectors.sector_engine import get_sector_snapshot
+    from sectors.subsector_map import get_symbol_context
+    snap = await get_sector_snapshot()
+    return get_symbol_context(symbol, snap)
+
+
+@app.get("/api/sectors/{etf}")
+async def sector_detail(etf: str):
+    """Full detail for one sector ETF: returns, trend, RS, top holdings, top movers."""
+    from sectors.sector_engine import get_sector_detail, SECTOR_ETFS
+    etf = etf.upper()
+    if etf not in SECTOR_ETFS:
+        raise HTTPException(status_code=404, detail=f"Unknown sector ETF: {etf}")
+    return await get_sector_detail(etf)
+
+
+@app.get("/api/sectors/{etf}/subsectors")
+async def sector_subsectors(etf: str):
+    """Subsectors for one sector ETF with strength labels and active ticker counts."""
+    from sectors.sector_engine import get_sector_snapshot, SECTOR_ETFS
+    from sectors.subsector_map import get_subsectors_for_etf
+    etf = etf.upper()
+    if etf not in SECTOR_ETFS:
+        raise HTTPException(status_code=404, detail=f"Unknown sector ETF: {etf}")
+    snap = await get_sector_snapshot()
+    result = get_subsectors_for_etf(etf, snap)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"No subsectors for {etf}")
+    return result
+
+
+@app.get("/api/sectors/{etf}/subsectors/{subsector}")
+async def sector_subsector_detail(etf: str, subsector: str):
+    """Tickers and top active movers for one subsector."""
+    from sectors.sector_engine import get_sector_snapshot, SECTOR_ETFS
+    from sectors.subsector_map import get_subsector_detail, SUBSECTOR_TAXONOMY
+    etf = etf.upper()
+    if etf not in SECTOR_ETFS:
+        raise HTTPException(status_code=404, detail=f"Unknown sector ETF: {etf}")
+    snap = await get_sector_snapshot()
+    result = get_subsector_detail(etf, subsector, snap)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Subsector '{subsector}' not found in {etf}")
+    return result
+
+
 # ─── Admin / Maintenance routes ───────────────────────────────────────────────
 
 @app.get("/api/admin/test-massive")
@@ -1233,11 +1182,13 @@ async def admin_test_massive(symbol: str = "AAPL"):
     """
     Test the Massive/Polygon connection.
     Fetches a sample from grouped daily data + ticker details for one symbol.
+    Also returns universe filter classification for the requested symbol.
     """
     from scanner.massive_data import (
-        fetch_grouped_daily, fetch_ticker_details,
+        fetch_grouped_daily, fetch_ticker_details, fetch_ticker_type,
         get_last_trading_day, MASSIVE_API_KEY,
     )
+    from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
     if not MASSIVE_API_KEY:
         return {"error": "MASSIVE_API_KEY not set in environment", "api_key_set": False}
 
@@ -1250,6 +1201,12 @@ async def admin_test_massive(symbol: str = "AAPL"):
 
     # Also test ticker details for the requested symbol
     details = await fetch_ticker_details(symbol.upper())
+
+    # Universe filter classification for the requested symbol
+    ticker_type     = await fetch_ticker_type(symbol.upper())
+    meta            = {"type": ticker_type} if ticker_type else {}
+    filter_reason   = get_universe_filter_reason(meta) if ticker_type else "UNKNOWN_SECURITY_TYPE"
+    is_stock        = is_common_stock(meta) if ticker_type else False
 
     # Check DB cache
     from database import get_sector_full_from_db
@@ -1264,253 +1221,210 @@ async def admin_test_massive(symbol: str = "AAPL"):
         "sample":         sample,
         "ticker_details": details,
         "db_cached":      cached,
+        "universe_filter": {
+            "symbol":                symbol.upper(),
+            "security_type":         ticker_type,
+            "is_common_stock":       is_stock,
+            "universe_filter_reason": filter_reason,
+        },
     }
 
 
-@app.get("/api/admin/enrich-sectors")
-async def admin_enrich_sectors(background_tasks: BackgroundTasks):
+@app.get("/api/admin/universe-filter/check")
+async def admin_universe_filter_check(symbols: str = "AAPL,SPY,TQQQ,GLD"):
     """
-    Manually trigger the Massive sector/industry enrichment job.
-    Runs in background — rate limited to 1 call per 15s.
-    Returns immediately with count of symbols queued.
+    Audit the universe filter classification for a comma-separated list of symbols.
+    Returns security_type, is_common_stock, and universe_filter_reason for each.
+
+    Example: /api/admin/universe-filter/check?symbols=AAPL,SPY,TQQQ,GLD,GBTC
     """
-    from database import get_symbols_needing_enrichment
-    missing = await get_symbols_needing_enrichment(limit=200)
+    from scanner.massive_data import fetch_ticker_type
+    from scanner.stock_universe_filter import is_common_stock, get_universe_filter_reason
 
-    async def _run():
-        from scheduler import enrich_sector_cache
-        await enrich_sector_cache()
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:30]
 
-    background_tasks.add_task(_run)
+    import asyncio as _asyncio
+    type_results = await _asyncio.gather(
+        *[fetch_ticker_type(s) for s in sym_list],
+        return_exceptions=True,
+    )
+
+    output = []
+    for sym, t in zip(sym_list, type_results):
+        if isinstance(t, Exception):
+            t = None
+        meta   = {"type": t} if t else {}
+        reason = get_universe_filter_reason(meta) if t else "UNKNOWN_SECURITY_TYPE"
+        output.append({
+            "symbol":                sym,
+            "security_type":         t,
+            "is_common_stock":       is_common_stock(meta) if t else False,
+            "universe_filter_reason": reason,
+        })
+
+    included = [r for r in output if r["is_common_stock"]]
+    excluded = [r for r in output if not r["is_common_stock"]]
+
     return {
-        "status":  "started",
-        "queued":  len(missing),
-        "message": f"Enriching {len(missing)} symbols in background (1 per 15s)",
+        "checked":  len(output),
+        "included": len(included),
+        "excluded": len(excluded),
+        "results":  output,
     }
 
 
-@app.get("/api/admin/run-universe-scan")
-async def admin_run_universe_scan(background_tasks: BackgroundTasks, date: str = None):
+
+
+_sector_refresh_status: dict = {
+    "running": False, "phase": "idle",
+    "started_at": None, "finished_at": None,
+    "universe_synced": 0, "normalized": 0, "already_gics": 0, "last_error": None,
+}
+
+
+async def _normalize_sector_cache_gics() -> tuple[int, int]:
     """
-    Manually trigger the Massive EOD universe scan.
-    Runs in background — fetches all US stocks and scores top 600.
-    Returns immediately; check /api/scan/universe/latest for results.
+    Scan SectorCache for entries with raw SIC descriptions (not GICS names) and
+    apply resolve_sector() to convert them to proper GICS names in-place.
+    Returns (updated_count, already_gics_count).
     """
+    from database import get_session_factory, SectorCache, save_sector_to_db
+    from scanner.sector_resolver import resolve_sector
+    from sqlalchemy import select as _sa_select
+
+    _GICS = frozenset({
+        "Information Technology", "Health Care", "Financials",
+        "Consumer Discretionary", "Consumer Staples", "Energy",
+        "Industrials", "Materials", "Real Estate",
+        "Communication Services", "Utilities",
+    })
+
+    async with get_session_factory()() as _sess:
+        rows = (await _sess.execute(_sa_select(SectorCache))).scalars().all()
+        snapshot = [(r.symbol, r.sector or "", r.industry or "") for r in rows]
+
+    already_gics = 0
+    pending: list[tuple[str, str, str]] = []
+    for sym, sector, industry in snapshot:
+        if sector in _GICS:
+            already_gics += 1
+        elif sector and sector not in ("Unknown", "UNKNOWN"):
+            pending.append((sym, sector, industry))
+
+    updated = 0
+    for sym, sector, industry in pending:
+        try:
+            resolved_sector, resolved_industry, _ = resolve_sector(
+                symbol=sym,
+                raw_sector=sector,
+                raw_industry=industry or sector,
+                sic_code=None,
+                sic_description=sector,
+            )
+            if resolved_sector and resolved_sector not in ("Unknown", "UNKNOWN"):
+                await save_sector_to_db(
+                    sym,
+                    sector=resolved_sector,
+                    industry=resolved_industry or industry or "",
+                    massive_fetched=True,
+                )
+                updated += 1
+        except Exception as _exc:
+            logger.debug(f"[SectorNorm] {sym}: {_exc}")
+
+    return updated, already_gics
+
+
+@app.post("/api/admin/refresh-sector-data")
+async def admin_refresh_sector_data(background_tasks: BackgroundTasks):
+    """
+    Refresh and apply all sector info in two steps:
+      1. sync_universe_cache() — pull fresh type/sic_code/sic_description from Massive
+      2. Normalize SectorCache — apply resolve_sector() to convert raw SIC → GICS names
+    Runs in background. Poll /api/admin/refresh-sector-data/status for progress.
+    """
+    global _sector_refresh_status
+    if _sector_refresh_status.get("running"):
+        return {"status": "already_running", "phase": _sector_refresh_status.get("phase")}
+
     from scanner.massive_data import MASSIVE_API_KEY
     if not MASSIVE_API_KEY:
-        return {"error": "MASSIVE_API_KEY not set — cannot run universe scan"}
+        return {"error": "MASSIVE_API_KEY not set — cannot sync universe cache"}
 
     async def _run():
-        from scanner.universe_scan import run_universe_scan
-        await run_universe_scan(target_date=date)
+        global _sector_refresh_status
+        _sector_refresh_status.update({
+            "running": True, "phase": "syncing_universe",
+            "started_at": datetime.utcnow().isoformat(), "finished_at": None,
+            "universe_synced": 0, "normalized": 0, "already_gics": 0, "last_error": None,
+        })
+        try:
+            from scanner.massive_reference import sync_universe_cache
+            count = await sync_universe_cache(save_to_db=True)
+            _sector_refresh_status["universe_synced"] = count
 
-    from scanner.massive_data import get_last_trading_day
-    resolved_date = date or get_last_trading_day(offset=0)
+            _sector_refresh_status["phase"] = "normalizing"
+            normalized, already_gics = await _normalize_sector_cache_gics()
+            _sector_refresh_status.update({
+                "normalized": normalized, "already_gics": already_gics, "phase": "done",
+            })
+        except Exception as exc:
+            _sector_refresh_status.update({"phase": "error", "last_error": str(exc)})
+            logger.error(f"[RefreshSectors] {exc}", exc_info=True)
+        finally:
+            _sector_refresh_status["running"] = False
+            _sector_refresh_status["finished_at"] = datetime.utcnow().isoformat()
 
     background_tasks.add_task(_run)
+    return {"status": "started", "message": "Universe cache sync + sector normalization running in background"}
+
+
+@app.get("/api/admin/refresh-sector-data/status")
+async def admin_refresh_sector_data_status():
+    return dict(_sector_refresh_status)
+
+
+
+
+# ─── Candle Cache admin routes ─────────────────────────────────────────────────
+
+@app.post("/api/admin/candle-cache/clear/{symbol}")
+async def clear_candle_cache(symbol: str):
+    """Force-clear candle cache for one ticker (use after known split/bad data)."""
+    from database import get_session_factory, CandleCache
+    from sqlalchemy import delete
+    async with get_session_factory()() as session:
+        await session.execute(
+            delete(CandleCache).where(CandleCache.symbol == symbol.upper())
+        )
+        await session.commit()
+    return {"status": "cleared", "symbol": symbol.upper()}
+
+
+@app.get("/api/admin/candle-cache/status")
+async def candle_cache_status():
+    """Return cache coverage stats."""
+    from database import get_session_factory, CandleCache
+    from sqlalchemy import select, func
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(
+                func.count(func.distinct(CandleCache.symbol)).label("symbols"),
+                func.count(CandleCache.id).label("total_bars"),
+                func.max(CandleCache.date).label("latest_date"),
+                func.min(CandleCache.date).label("oldest_date"),
+            )
+        )
+        row = result.one()
+    from scanner.candle_store import get_range_cache_stats
     return {
-        "status":      "started",
-        "target_date": resolved_date,
-        "message":     f"Universe scan running in background for {resolved_date}. Check /api/scan/universe/latest for results.",
+        "cached_symbols": row.symbols,
+        "total_bars":     row.total_bars,
+        "latest_date":    row.latest_date,
+        "oldest_date":    row.oldest_date,
+        "range_cache":    get_range_cache_stats(),
     }
 
-
-@app.get("/api/admin/universe-scan/status")
-async def admin_universe_scan_status():
-    """
-    Live progress of the universe scan.
-    Poll every 5s while running=true.
-    Returns phase, candidates_done/total, FIRE/ARM counts, elapsed/ETA.
-    """
-    from scanner.universe_scan import get_progress
-    return get_progress()
-
-
-# ─── EOD Log routes ────────────────────────────────────────────────────────────
-
-@app.get("/api/eod-log/latest")
-async def eod_log_latest():
-    """Return the most recent EOD log as plain Markdown text (file download)."""
-    from fastapi.responses import PlainTextResponse
-    log = await get_latest_eod_log()
-    if not log:
-        raise HTTPException(status_code=404, detail="No EOD logs generated yet.")
-    filename = f"pump-scout-eod-{log['log_date']}.md"
-    return PlainTextResponse(
-        content=log["content"],
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@app.get("/api/eod-log/{log_date}")
-async def eod_log_by_date(log_date: str):
-    """Return EOD log for a specific date (YYYY-MM-DD) as plain Markdown."""
-    from fastapi.responses import PlainTextResponse
-    log = await get_eod_log(log_date)
-    if not log:
-        raise HTTPException(status_code=404, detail=f"No EOD log for {log_date}.")
-    filename = f"pump-scout-eod-{log_date}.md"
-    return PlainTextResponse(
-        content=log["content"],
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@app.post("/api/eod-log/generate-now")
-async def eod_log_generate_now(background_tasks: BackgroundTasks):
-    """Manually trigger EOD log generation (runs in background)."""
-    from eod_log import run_eod_log
-    background_tasks.add_task(run_eod_log)
-    return {"status": "started", "message": "EOD log generation started in background"}
-
-
-# ─── Pattern Streak routes ─────────────────────────────────────────────────────
-
-@app.get("/api/streaks/active")
-async def active_streaks(min_days: int = 2):
-    """Return active pattern streaks — tickers that appeared in ARM+ scans consecutively."""
-    streaks = await get_active_streaks(min_days=min_days)
-    return {"streaks": streaks, "count": len(streaks)}
-
-
-# ─── Notification test routes ──────────────────────────────────────────────────
-
-@app.get("/api/notifications/test-morning-brief")
-async def test_morning_brief():
-    """Send a test morning brief to Telegram immediately."""
-    from notifications.morning_brief import send_morning_brief
-    ok = await send_morning_brief()
-    if not ok:
-        raise HTTPException(status_code=500, detail="Morning brief send failed — check Telegram config and logs")
-    return {"status": "sent", "message": "Morning brief delivered to Telegram"}
-
-
-@app.get("/api/notifications/test-price-alert")
-async def test_price_alert():
-    """Run a price alert check immediately (ignores cooldown)."""
-    from notifications.price_alerts import check_price_alerts, ALERT_COOLDOWN
-    # Clear cooldowns so the test actually sends
-    ALERT_COOLDOWN.clear()
-    result = await check_price_alerts()
-    return {"status": "done", **result}
-
-
-# ─── Earnings routes ───────────────────────────────────────────────────────────
-
-@app.get("/api/earnings/upcoming")
-async def earnings_upcoming(days: int = 14):
-    """
-    Return upcoming earnings for tracked symbols (recent scan + open journal).
-    Sorted by days_until. Returns all calendar symbols if no tracked set available.
-    """
-    from data.finnhub_provider import get_earnings_calendar, is_configured
-    if not is_configured():
-        return {"earnings": [], "count": 0, "note": "FINNHUB_API_KEY not configured"}
-
-    calendar = await get_earnings_calendar(days_ahead=days)
-    if not calendar:
-        return {"earnings": [], "count": 0}
-
-    # Tracked = recent scan results + open journal positions
-    tracked: set = set()
-    open_symbols: set = set()
-    try:
-        scan = await get_latest_scan()
-        if scan:
-            tracked.update(r["symbol"] for r in scan.get("results", []))
-    except Exception:
-        pass
-    try:
-        from database import get_open_journal_entries
-        positions = await get_open_journal_entries()
-        open_symbols = {p["symbol"] for p in positions}
-        tracked.update(open_symbols)
-    except Exception:
-        pass
-
-    earnings = [
-        {"symbol": sym, "in_journal": sym in open_symbols, **info}
-        for sym, info in calendar.items()
-        if not tracked or sym in tracked
-    ]
-    earnings.sort(key=lambda x: x["days_until"])
-    return {"earnings": earnings, "count": len(earnings)}
-
-
-@app.get("/api/earnings/{symbol}")
-async def earnings_for_symbol(symbol: str):
-    """Return next earnings date/info for a specific symbol."""
-    from data.finnhub_provider import get_earnings_for_symbol, is_configured
-    if not is_configured():
-        return {"has_earnings": False, "note": "FINNHUB_API_KEY not configured"}
-    return await get_earnings_for_symbol(symbol.upper())
-
-
-# ─── Macro Events — Trump News Bias Layer (Version Alpha) ────────────────────
-#
-# Read-only contextual intelligence. NEVER modifies scores, tiers, or rankings.
-# Display-only layer for informational market context.
-
-@app.get("/api/events/trump/latest")
-async def trump_events_latest(limit: int = 20):
-    """
-    Latest Trump-related macro events (most recent first).
-    Returns up to `limit` events regardless of age.
-    """
-    events = await get_macro_events_latest(limit=min(limit, 50))
-    return {"events": events, "count": len(events)}
-
-
-@app.get("/api/events/trump/history")
-async def trump_events_history(days: int = 7, limit: int = 100):
-    """
-    Historical Trump macro events from the last N days.
-    Useful for reviewing the event timeline.
-    """
-    events = await get_macro_events_history(days=min(days, 30), limit=min(limit, 200))
-    return {"events": events, "count": len(events), "days": days}
-
-
-@app.get("/api/events/trump/active-bias")
-async def trump_active_bias(max_age_days: int = 3):
-    """
-    Aggregated active macro bias from recent Trump events (last 1–3 days).
-    Returns:
-      - overall_market_bias: BULLISH / BEARISH / RISK_OFF / MIXED / NEUTRAL
-      - overall_volatility: LOW / MEDIUM / HIGH / VERY_HIGH
-      - top_bullish_sectors, top_bearish_sectors
-      - active_classes: which event categories are active
-      - regime_summary: human-readable sentence
-      - recent_events: raw event list feeding into the bias
-    """
-    from news.trump_news import compute_active_bias
-
-    active_events = await get_macro_events_active(max_age_days=min(max_age_days, 7))
-    bias = compute_active_bias(active_events, max_age_days=min(max_age_days, 7))
-    return {
-        **bias,
-        "recent_events": active_events,
-    }
-
-
-@app.post("/api/events/trump/refresh")
-async def trump_events_refresh(background_tasks: BackgroundTasks):
-    """
-    Manually trigger a Trump news fetch + classify + upsert cycle.
-    Runs in background; returns immediately with {ok: true, message: str}.
-    """
-    async def _do_refresh():
-        try:
-            from news.trump_news import fetch_and_classify_events
-            logger.info("Manual Trump news refresh triggered")
-            events = await fetch_and_classify_events(use_manual=True)
-            inserted = await upsert_macro_events(events)
-            logger.info(f"Trump news refresh: {len(events)} classified, {inserted} new")
-        except Exception as e:
-            logger.error(f"Trump news refresh failed: {e}", exc_info=True)
-
-    background_tasks.add_task(_do_refresh)
-    return {"ok": True, "message": "News refresh started in background"}
 
 
 # ─── Admin ─────────────────────────────────────────────────────────────────────
@@ -1522,3 +1436,3568 @@ async def admin_rotate_data():
     deleted = await rotate_old_data()
     total = sum(deleted.values())
     return {"ok": True, "total_deleted": total, "breakdown": deleted}
+
+
+@app.post("/api/admin/backfill-demand-scores")
+async def admin_backfill_demand_scores(background_tasks: BackgroundTasks):
+    """Backfill demand composite scores into replay, pump, and raw-pattern tables."""
+    from database import (
+        backfill_replay_demand_scores,
+        backfill_pump_episode_demand_scores,
+        backfill_raw_pattern_demand_scores,
+    )
+    async def _run():
+        r1 = await backfill_replay_demand_scores()
+        r2 = await backfill_pump_episode_demand_scores()
+        r3 = await backfill_raw_pattern_demand_scores()
+        logger.info(f"[Backfill] replay={r1} pump={r2} raw={r3}")
+    background_tasks.add_task(_run)
+    return {"status": "started", "message": "Backfill running in background"}
+
+
+# ─── Historical Replay Layer ──────────────────────────────────────────────────
+# Research-only mode. Completely isolated from live production data.
+# Results stored in replay_* tables only. Live scan/journal never touched.
+#
+# LIVE vs REPLAY separation:
+#   - All replay data is under /api/replay/ — never mixed into /api/scan/
+#   - Replay runs use a separate progress tracker (_replay_progress)
+#   - No replay data is written to Scan, ScanCandidate, or Journal tables
+#
+# Future leakage prevention:
+#   - fetch_candles_massive(as_of_date=...) cuts data at the scan date
+#   - grouped_daily is fetched for the exact as_of_date
+#   - No live market_regime or sector_performance data used during replay
+
+@app.post("/api/replay/run")
+async def replay_run(body: dict, background_tasks: BackgroundTasks):
+    """
+    Start a historical replay run.
+
+    Single date:
+        {"as_of_date": "2026-03-05"}
+        {"as_of_date": "2026-03-05", "universe_mode": "approx"}
+
+    Date range:
+        {"start_date": "2026-03-01", "end_date": "2026-03-31"}
+        {"start_date": "2026-03-01", "end_date": "2026-03-31", "universe_mode": "approx"}
+
+    Returns immediately with run_id. Poll /api/replay/status for progress.
+    """
+    from replay.replay_engine import get_replay_progress
+
+    # Guard: one replay at a time
+    prog = get_replay_progress()
+    if prog.get("running"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Replay already running (run_id={prog.get('run_id')}). "
+                   "Wait for it to finish or check /api/replay/status."
+        )
+
+    universe_mode = body.get("universe_mode", "approx")
+    as_of_date    = body.get("as_of_date")
+    start_date    = body.get("start_date")
+    end_date      = body.get("end_date")
+
+    # Validate inputs
+    if as_of_date:
+        try:
+            from datetime import date as _d
+            _d.fromisoformat(as_of_date)
+        except ValueError:
+            raise HTTPException(400, detail=f"Invalid as_of_date: {as_of_date!r} (use YYYY-MM-DD)")
+
+        async def _run_single():
+            try:
+                from replay.replay_engine import run_single_day_replay
+                await run_single_day_replay(as_of_date, universe_mode=universe_mode)
+            except Exception as e:
+                logger.error(f"Replay single-day failed: {e}", exc_info=True)
+
+        background_tasks.add_task(_run_single)
+        return {
+            "ok":           True,
+            "mode":         "single_day",
+            "as_of_date":   as_of_date,
+            "universe_mode":universe_mode,
+            "message":      f"Replay started for {as_of_date}. Poll /api/replay/status for progress.",
+        }
+
+    elif start_date and end_date:
+        try:
+            from datetime import date as _d
+            _d.fromisoformat(start_date)
+            _d.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(400, detail="Invalid start_date or end_date (use YYYY-MM-DD)")
+
+        if start_date > end_date:
+            raise HTTPException(400, detail="start_date must be <= end_date")
+
+        async def _run_range():
+            try:
+                from replay.replay_engine import run_date_range_replay
+                await run_date_range_replay(start_date, end_date, universe_mode=universe_mode)
+            except Exception as e:
+                logger.error(f"Replay date-range failed: {e}", exc_info=True)
+
+        background_tasks.add_task(_run_range)
+        return {
+            "ok":           True,
+            "mode":         "date_range",
+            "start_date":   start_date,
+            "end_date":     end_date,
+            "universe_mode":universe_mode,
+            "message":      f"Replay started for {start_date}→{end_date}. Poll /api/replay/status.",
+        }
+
+    else:
+        raise HTTPException(
+            400,
+            detail="Provide either 'as_of_date' (single day) or 'start_date'+'end_date' (range)."
+        )
+
+
+@app.get("/api/replay/status")
+async def replay_status():
+    """Live progress of the currently running (or last completed) replay."""
+    from replay.replay_engine import get_replay_progress
+    return get_replay_progress()
+
+
+@app.get("/api/replay/history")
+async def replay_history(limit: int = 20):
+    """List of past replay runs, newest first."""
+    runs = await get_replay_history(limit=min(limit, 50))
+    return {"runs": runs, "count": len(runs)}
+
+
+@app.get("/api/replay/{run_id}")
+async def replay_get_run(run_id: int):
+    """Full detail for one replay run."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    return run
+
+
+@app.get("/api/replay/{run_id}/candidates")
+async def replay_get_candidates(run_id: int, limit: int = 500):
+    """All signal candidates found during a replay run, sorted by score."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    candidates = await get_replay_candidates(run_id, limit=min(limit, 1000))
+    return {"run_id": run_id, "candidates": candidates, "count": len(candidates)}
+
+
+@app.get("/api/replay/{run_id}/export")
+async def replay_export_candidates(run_id: int, format: str = "csv"):
+    """
+    Download replay candidates as CSV or JSON.
+    ?format=csv   Flat CSV of all candidates.
+    ?format=json  Full JSON list.
+    """
+    from fastapi.responses import Response
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    candidates = await get_replay_candidates(run_id, limit=10000)
+
+    fmt = format.lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(400, detail="format must be csv or json")
+
+    if fmt == "json":
+        import json as _json
+        return Response(
+            content=_json.dumps(candidates, default=str),
+            media_type="application/json",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="replay_{run_id}_candidates.json"'
+            },
+        )
+
+    # CSV
+    fieldnames = [
+        "id", "scan_date", "symbol", "price", "tier", "total_score",
+        "sector",
+        "new_pump_score", "new_pump_label", "np_decision",
+        "demand_composite_score", "demand_composite_tier",
+        "ats_signal", "readiness_score", "readiness_tier", "flow_score",
+        "tz_t_signal", "tz_z_signal", "preup_token", "predn_token",
+        "line3", "line4", "line5",
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(candidates)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="replay_{run_id}_candidates.csv"'
+        },
+    )
+
+
+@app.get("/api/replay/{run_id}/outcomes")
+async def replay_get_outcomes(run_id: int):
+    """Forward outcome rows for all candidates in a replay run."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    outcomes = await get_replay_outcomes(run_id)
+    return {"run_id": run_id, "outcomes": outcomes, "count": len(outcomes)}
+
+
+@app.get("/api/replay/{run_id}/missed")
+async def replay_get_missed(run_id: int):
+    """Missed mover analysis for a replay run."""
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    missed = await get_replay_missed_movers(run_id)
+    return {"run_id": run_id, "missed_movers": missed, "count": len(missed)}
+
+
+@app.get("/api/replay/{run_id}/summary")
+async def replay_get_summary(run_id: int):
+    """
+    Aggregated summary for one replay run: outcome distribution,
+    avg returns by horizon, best/worst setups, missed movers count.
+    """
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    candidates = await get_replay_candidates(run_id, limit=5000)
+    outcomes   = await get_replay_outcomes(run_id)
+    missed     = await get_replay_missed_movers(run_id)
+
+    # Aggregate by horizon
+    from collections import defaultdict
+    by_horizon: dict = defaultdict(list)
+    for o in outcomes:
+        if o.get("return_pct") is not None:
+            by_horizon[o["horizon"]].append(o["return_pct"])
+
+    avg_returns = {}
+    for h, vals in by_horizon.items():
+        avg_returns[h] = round(sum(vals) / len(vals), 2) if vals else None
+
+    # Outcome label distribution (5d only)
+    label_dist: dict = defaultdict(int)
+    for o in outcomes:
+        if o.get("horizon") == "5d" and o.get("outcome_label"):
+            label_dist[o["outcome_label"]] += 1
+
+    # Best / worst 5 by 5d return
+    five_d = [o for o in outcomes if o.get("horizon") == "5d" and o.get("return_pct") is not None]
+    five_d.sort(key=lambda x: x["return_pct"], reverse=True)
+    best5  = [{"symbol": o["symbol"], "return_5d": o["return_pct"], "label": o.get("outcome_label")} for o in five_d[:5]]
+    worst5 = [{"symbol": o["symbol"], "return_5d": o["return_pct"], "label": o.get("outcome_label")} for o in five_d[-5:]]
+
+    # Tier distribution of candidates (legacy score tier)
+    tier_dist: dict = defaultdict(int)
+    for c in candidates:
+        tier_dist[c.get("tier", "?")] += 1
+
+    # Demand composite tier distribution
+    demand_tier_dist: dict = defaultdict(int)
+    for c in candidates:
+        demand_tier_dist[c.get("demand_composite_tier") or "SKIP"] += 1
+
+    return {
+        "run_id":                   run_id,
+        "run":                      run,
+        "total_candidates":         len(candidates),
+        "total_outcomes":           len(outcomes),
+        "missed_movers":            len(missed),
+        "avg_returns":              avg_returns,
+        "outcome_labels":           dict(label_dist),
+        "tier_distribution":        dict(tier_dist),
+        "demand_tier_distribution": dict(demand_tier_dist),
+        "best_5":                   best5,
+        "worst_5":                  worst5,
+    }
+
+
+# ── Research Bundle endpoints ─────────────────────────────────────────────────
+# Read-only reporting layer. Never modifies live scanner, scoring, or journal.
+
+@app.get("/api/replay/{run_id}/research-bundle")
+async def replay_research_bundle(run_id: int):
+    """
+    Build and return the full demand-engine research bundle for a replay run.
+    Covers: summary, performance by demand tier, ATS signal, readiness tier,
+    NP label, best/worst candidates, and missed movers.
+    """
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    from replay.research_bundle_demand import build_research_bundle
+    try:
+        bundle = await build_research_bundle(run_id)
+        return bundle
+    except Exception as exc:
+        logger.error(f"[BUNDLE] run_id={run_id} build failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Bundle build failed: {str(exc)[:200]}")
+
+
+@app.get("/api/replay/{run_id}/research-bundle/markdown")
+async def replay_research_bundle_markdown(run_id: int):
+    """
+    Return the demand research bundle as a human-readable Markdown report.
+    Suitable for pasting into AI chat or saving as a .md file.
+    """
+    from fastapi.responses import PlainTextResponse
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    from replay.research_bundle_demand import build_research_bundle, render_research_bundle_markdown
+    try:
+        bundle   = await build_research_bundle(run_id)
+        markdown = render_research_bundle_markdown(bundle)
+        return PlainTextResponse(content=markdown, media_type="text/markdown")
+    except Exception as exc:
+        logger.error(f"[BUNDLE/MD] run_id={run_id} failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Markdown render failed: {str(exc)[:200]}")
+
+
+@app.get("/api/replay/{run_id}/research-bundle/download")
+async def replay_research_bundle_download(
+    run_id: int,
+    format: str = "json",
+):
+    """
+    Download the demand research bundle as a JSON or Markdown file.
+    ?format=json  (default) — downloads bundle.json
+    ?format=markdown         — downloads bundle.md
+    """
+    import json as _json
+    from fastapi.responses import Response
+    run = await get_replay_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+
+    from replay.research_bundle_demand import build_research_bundle, render_research_bundle_markdown
+    try:
+        bundle = await build_research_bundle(run_id)
+        if format == "markdown":
+            content  = render_research_bundle_markdown(bundle)
+            filename = f"replay_{run_id}_research_bundle.md"
+            return Response(
+                content=content,
+                media_type="text/markdown",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        else:
+            content  = _json.dumps(bundle, indent=2, default=str)
+            filename = f"replay_{run_id}_research_bundle.json"
+            return Response(
+                content=content,
+                media_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+    except Exception as exc:
+        logger.error(f"[BUNDLE/DL] run_id={run_id} failed: {exc}", exc_info=True)
+        raise HTTPException(500, detail=f"Download failed: {str(exc)[:200]}")
+
+
+@app.delete("/api/replay/{run_id}")
+async def delete_replay_run_endpoint(run_id: int):
+    """
+    Permanently delete a replay run and all its linked child records.
+
+    Cascade order:
+        replay_signal_candidates → replay_outcomes → replay_missed_movers
+        → replay_runs
+
+    Returns deleted row counts per table.
+    """
+    from database import delete_replay_run
+    try:
+        counts = await delete_replay_run(run_id)
+    except ValueError:
+        raise HTTPException(404, detail=f"Replay run {run_id} not found")
+    except Exception as exc:
+        logger.error("delete_replay_run run_id=%s error: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "deleted": counts,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  4× PUMP STUDY API  —  Phase 4
+#  All endpoints are replay-only.  No live scanner logic is touched.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_pump_study_markdown(run: dict, episodes: list[dict]) -> str:
+    """
+    Deterministic markdown summary of a pump study run.
+    Pure data — no AI, no external calls.
+    """
+    lines: list[str] = [
+        f"# 4× Pump Study — Run {run['id']}",
+        "",
+        f"**Date range:** {run['start_date']} → {run['end_date']}  ",
+        f"**Status:** {run['status']}  ",
+        f"**Window:** {run['window_days']} trading days  "
+        f"|  **Min multiple:** {run['min_multiple']}×  ",
+        f"**Symbols scanned:** {run.get('symbols_scanned', 0)}  "
+        f"|  **Episodes:** {run.get('episode_count', 0)}  ",
+        f"**Snapshots:** {run.get('snapshot_count', 0)}  "
+        f"|  **Events:** {run.get('event_count', 0)}  ",
+        "",
+    ]
+
+    if run.get("error_message"):
+        lines += [f"> **Error:** {run['error_message']}", ""]
+    if run.get("notes"):
+        lines += [f"> {run['notes']}", ""]
+
+    # Pump family distribution
+    family_counts: dict[str, int] = {}
+    for ep in episodes:
+        fam = ep.get("pump_type") or "UNKNOWN"
+        family_counts[fam] = family_counts.get(fam, 0) + 1
+
+    if family_counts:
+        lines += ["## Pump Family Distribution", "", "| Family | Count |", "|---|---|"]
+        for fam, cnt in sorted(family_counts.items(), key=lambda x: -x[1]):
+            lines.append(f"| {fam} | {cnt} |")
+        lines.append("")
+
+    # Episode table (capped at 200 rows for readability)
+    if episodes:
+        lines += [
+            "## Canonical Episodes",
+            "",
+            "| # | Symbol | Family | Start | Peak | Multiple | Days | "
+            "Drawdown | Wyckoff |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+        shown = episodes[:200]
+        for i, ep in enumerate(shown, 1):
+            dd = ep.get("max_drawdown_before_peak")
+            dd_str = f"{dd:.1f}%" if dd is not None else "—"
+            lines.append(
+                f"| {i} | **{ep['symbol']}** | {ep.get('pump_type') or '?'} "
+                f"| {ep['pump_start_date']} | {ep['pump_peak_date']} "
+                f"| {ep['pump_multiple']:.2f}× | {ep.get('days_to_peak') or '?'} "
+                f"| {dd_str} "
+                f"| {ep.get('strongest_wyckoff_state') or '—'} |"
+            )
+        if len(episodes) > 200:
+            lines.append(
+                f"| — | *(+{len(episodes) - 200} more — use /export?format=json)* "
+                "| | | | | | | | |"
+            )
+        lines.append("")
+
+    lines += [
+        "---",
+        f"*Pump Scout deterministic export — no AI. Run ID: {run['id']}.  "
+        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}*",
+    ]
+    return "\n".join(lines)
+
+
+# ── 1. Launch a new pump study run ────────────────────────────────────────────
+
+@app.post("/api/replay/pump-study/run")
+async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
+    """
+    Launch a new 4× pump study background run.
+
+    Body (JSON):
+        start_date     str    YYYY-MM-DD  required
+        end_date       str    YYYY-MM-DD  required
+        window_days    int    default 14
+        min_multiple   float  default 4.0
+        universe_limit int    default 0   (0 = no limit)
+
+    Returns immediately with run_id.
+    Poll GET /api/replay/pump-study/{run_id} for progress.
+    """
+    from datetime import date as _d
+    from database import create_pump_study_run
+    from replay.pump_study_engine import get_pump_study_progress
+
+    prog = get_pump_study_progress()
+    if prog.get("running"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A pump study is already running (run_id={prog.get('run_id')}). "
+                "Wait for it to finish or check its status."
+            ),
+        )
+
+    start_date = body.get("start_date")
+    end_date   = body.get("end_date")
+    if not start_date or not end_date:
+        raise HTTPException(400, detail="start_date and end_date are required")
+
+    try:
+        _d.fromisoformat(start_date)
+        _d.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(400, detail="Invalid date format — use YYYY-MM-DD")
+
+    if start_date > end_date:
+        raise HTTPException(400, detail="start_date must be <= end_date")
+
+    params = {
+        "start_date":     start_date,
+        "end_date":       end_date,
+        "window_days":    int(body.get("window_days",    14)),
+        "min_multiple":   float(body.get("min_multiple", 1.2)),
+        "universe_limit": int(body.get("universe_limit", 0)),
+    }
+    # Auto-build raw-pattern features after the pump-study completes so
+    # Re-score / Pattern Study tabs are usable without a second click.
+    # Pass auto_build_features=false in the request body to disable.
+    auto_build_features = bool(body.get("auto_build_features", True))
+
+    run_id = await create_pump_study_run(params)
+
+    async def _run_bg():
+        try:
+            from replay.pump_study_engine import run_pump_study
+            await run_pump_study(run_id, params)
+        except Exception as exc:
+            logger.error(
+                f"[PUMP_STUDY] run_id={run_id} background task failed: {exc}",
+                exc_info=True,
+            )
+            return
+
+        if not auto_build_features:
+            return
+
+        # Chain raw-pattern-study so demand fields land on pump_episodes
+        # automatically. Best-effort: any failure here is logged but does
+        # not roll back the pump-study run.
+        try:
+            from database import (
+                create_raw_pattern_run,
+                update_raw_pattern_run as _upd,
+                get_pump_study_run,
+            )
+            from replay.pump_study_engine import (
+                build_raw_pattern_daily_features,
+                build_raw_pattern_episode_features_timing,
+                build_raw_pattern_episode_features_candle,
+                build_raw_pattern_episode_features_volume_compression,
+                build_raw_pattern_episode_features_structure,
+                build_raw_pattern_episode_features_ema,
+                build_raw_pattern_episode_features_new_pump,
+                build_raw_pattern_episode_features_demand,
+                build_raw_pattern_episode_features_structural_v2,
+                build_raw_pattern_episode_features_splits,
+                build_raw_pattern_comparisons,
+            )
+
+            ps_run = await get_pump_study_run(run_id)
+            if not ps_run or ps_run.get("status") != "complete":
+                logger.warning(f"[PUMP_STUDY] auto-build skipped: pump_study {run_id} not complete")
+                return
+
+            raw_run_id = await create_raw_pattern_run(
+                pump_study_run_id=run_id,
+                start_date=ps_run.get("start_date"),
+                end_date=ps_run.get("end_date"),
+                notes="auto-built after pump_study completion",
+            )
+            logger.info(f"[PUMP_STUDY] auto-build: raw_pattern_study run={raw_run_id} started")
+            try:
+                await _upd(raw_run_id, {"status": "running", "started_at": datetime.utcnow()})
+                await build_raw_pattern_daily_features(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_timing(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_candle(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_volume_compression(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_structure(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_ema(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_new_pump(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_demand(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_structural_v2(raw_run_id, run_id)
+                await build_raw_pattern_episode_features_splits(raw_run_id, run_id)
+                await build_raw_pattern_comparisons(raw_run_id, run_id)
+                await _upd(raw_run_id, {"status": "complete", "finished_at": datetime.utcnow()})
+                logger.info(f"[PUMP_STUDY] auto-build: raw_pattern_study run={raw_run_id} complete")
+                # Backfill demand_*_at_breakout on the pump_episodes rows so the
+                # Pump Study Studio "Episodes" table renders demand columns.
+                try:
+                    res = await backfill_pump_episode_demand_scores()
+                    logger.info(
+                        f"[PUMP_STUDY] auto-build demand backfill: "
+                        f"updated={res.get('updated', 0)} skipped={res.get('skipped', 0)}"
+                    )
+                except Exception as exc:
+                    logger.exception(f"[PUMP_STUDY] auto-build demand backfill failed: {exc}")
+            except Exception as exc:
+                await _upd(raw_run_id, {
+                    "status": "error", "error_message": str(exc)[:500],
+                    "finished_at": datetime.utcnow(),
+                })
+                logger.exception(f"[PUMP_STUDY] auto-build raw_pattern_study run={raw_run_id} failed: {exc}")
+        except Exception as exc:
+            logger.exception(f"[PUMP_STUDY] auto-build setup failed for run={run_id}: {exc}")
+
+    background_tasks.add_task(_run_bg)
+
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "status":  "running",
+        "params":  params,
+        "auto_build_features": auto_build_features,
+        "message": (
+            f"Pump study launched (run_id={run_id}). "
+            f"Poll GET /api/replay/pump-study/{run_id} for live progress."
+            + (" Raw-pattern features will auto-build on completion." if auto_build_features else "")
+        ),
+    }
+
+
+# ── 2. List all pump study runs ───────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/runs")
+async def pump_study_list_runs(limit: int = 20):
+    """
+    List all pump study runs, most recent first.
+    Each row includes status, counts, and date range.
+    """
+    from database import get_pump_study_runs
+    runs = await get_pump_study_runs(limit=limit)
+    return {"ok": True, "runs": runs, "count": len(runs)}
+
+
+# ── 3. Run metadata + live progress ──────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}")
+async def pump_study_run_detail(run_id: int):
+    """
+    Run metadata, counts, and live progress (if run is still active).
+
+    Response shape:
+        run:      PumpStudyRun fields
+        progress: live in-memory progress dict (only when this run is active)
+    """
+    from database import get_pump_study_run
+    from replay.pump_study_engine import get_pump_study_progress
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Pump study run {run_id} not found")
+
+    prog = get_pump_study_progress()
+    progress = prog if prog.get("run_id") == run_id else None
+
+    return {"ok": True, "run": run, "progress": progress}
+
+
+# ── 4. Canonical episodes ─────────────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/episodes")
+async def pump_study_episodes(
+    run_id:       int,
+    symbol:       Optional[str]   = None,
+    pump_type:    Optional[str]   = None,
+    min_multiple: Optional[float] = None,
+    caught_only:  bool = False,
+    missed_only:  bool = False,
+    limit:        int  = 200,
+):
+    """
+    List canonical pump episodes for a run.
+
+    Query params:
+        symbol        ticker filter (case-insensitive)
+        pump_type     family label filter (e.g. ACCUMULATION_TO_EXPANSION)
+        min_multiple  minimum pump multiple
+        caught_only   only scanner-flagged episodes
+        missed_only   only episodes NOT flagged by scanner
+        limit         max rows (default 200)
+    """
+    from database import get_pump_study_run, get_pump_episodes
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    episodes = await get_pump_episodes(
+        run_id,
+        limit        = min(limit, 2000),
+        symbol       = symbol.upper() if symbol else None,
+        pump_type    = pump_type,
+        min_multiple = min_multiple,
+        caught_only  = caught_only,
+        missed_only  = missed_only,
+    )
+    return {"ok": True, "run_id": run_id, "episodes": episodes, "count": len(episodes)}
+
+
+# ── 5. Episode detail (summary + snapshots + events + cluster) ────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/episodes/{episode_id}")
+async def pump_study_episode_detail(run_id: int, episode_id: int):
+    """
+    Full episode detail for one canonical episode.
+
+    Response shape:
+        episode:   PumpEpisode fields (enriched with pump_type, features)
+        snapshots: all daily PRE/PUMP/POST snapshots (ordered by date)
+        events:    all timeline milestone events (ordered by date)
+        cluster:   cluster metadata for this episode
+    """
+    from database import (
+        get_pump_study_run,
+        get_pump_episode,
+        get_pump_episode_snapshots,
+        get_pump_episode_events,
+        get_pump_clusters,
+        get_pump_cluster_detections,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    episode = await get_pump_episode(episode_id)
+    if not episode or episode.get("run_id") != run_id:
+        raise HTTPException(404, detail=f"Episode {episode_id} not found in run {run_id}")
+
+    snapshots = await get_pump_episode_snapshots(episode_id)
+    events    = await get_pump_episode_events(episode_id)
+
+    clusters = await get_pump_clusters(run_id)
+    cluster  = next(
+        (c for c in clusters if c.get("canonical_episode_id") == episode_id), None
+    )
+
+    # Enrich cluster with its raw detection rows
+    if cluster:
+        cluster["raw_detections"] = await get_pump_cluster_detections(
+            run_id, cluster["cluster_id"]
+        )
+
+    return {
+        "ok":       True,
+        "episode":  episode,
+        "snapshots": snapshots,
+        "events":   events,
+        "cluster":  cluster,
+    }
+
+
+# ── 6. Daily snapshots (run-level, with filters) ──────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/daily-snapshots")
+async def pump_study_daily_snapshots(
+    run_id:     int,
+    episode_id: Optional[int] = None,
+    phase:      Optional[str] = None,
+    limit:      int = 5000,
+):
+    """
+    Daily PRE/PUMP/POST indicator snapshots for a run (or one episode).
+
+    Query params:
+        episode_id   filter to a specific episode
+        phase        PRE | PUMP | POST
+        limit        max rows (default 5000)
+    """
+    from database import get_pump_study_run, get_run_snapshots
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    if phase and phase.upper() not in ("PRE", "PUMP", "POST"):
+        raise HTTPException(400, detail="phase must be PRE, PUMP, or POST")
+
+    snapshots = await get_run_snapshots(
+        run_id,
+        episode_id = episode_id,
+        phase      = phase.upper() if phase else None,
+        limit      = min(limit, 20000),
+    )
+    return {
+        "ok":        True,
+        "run_id":    run_id,
+        "snapshots": snapshots,
+        "count":     len(snapshots),
+    }
+
+
+# ── 7. Timeline milestone events ──────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/timeline")
+async def pump_study_timeline(run_id: int, episode_id: Optional[int] = None):
+    """
+    Timeline milestone events for a run (or one episode).
+
+    Query params:
+        episode_id   filter to a specific episode
+    """
+    from database import get_pump_study_run, get_pump_study_timeline
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    events = await get_pump_study_timeline(run_id, episode_id=episode_id)
+    return {
+        "ok":       True,
+        "run_id":   run_id,
+        "events":   events,
+        "count":    len(events),
+    }
+
+
+# ── 8. Cluster mapping ────────────────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/clusters")
+async def pump_study_clusters(run_id: int):
+    """
+    Raw detection clustering results — one row per cluster per symbol.
+    Each cluster maps to one canonical episode via canonical_episode_id.
+    Raw detections are nested under each cluster for full auditability.
+    """
+    from database import (
+        get_pump_study_run,
+        get_pump_clusters,
+        get_pump_episode_detections,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    clusters = await get_pump_clusters(run_id)
+    raw_dets = await get_pump_episode_detections(run_id)
+
+    # Index raw detections by cluster_id for O(1) grouping
+    det_by_cluster: dict[str, list] = {}
+    for d in raw_dets:
+        cid = d.get("cluster_id")
+        if cid:
+            det_by_cluster.setdefault(cid, []).append(d)
+
+    for cl in clusters:
+        cl["raw_detections"] = det_by_cluster.get(cl["cluster_id"], [])
+
+    return {
+        "ok":             True,
+        "run_id":         run_id,
+        "clusters":       clusters,
+        "cluster_count":  len(clusters),
+        "raw_det_count":  len(raw_dets),
+    }
+
+
+# ── 9. Comparison groups + members ───────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/comparisons")
+async def pump_study_comparisons(run_id: int):
+    """
+    Comparison groups with aggregate stats and individual member rows.
+
+    Groups:
+        4x_pump       all canonical episodes
+        normal_winner sub-4x moves from the same symbol universe
+        false_positive episodes with severe POST reversal
+        missed_mover  universe symbols with no 4x detection
+
+    Response shape:
+        groups[].stats    aggregate distribution stats (mean/median/p25/p75/p90)
+        groups[].members  individual member rows with features_json
+    """
+    from database import (
+        get_pump_study_run,
+        get_pump_comparison_groups,
+        get_pump_comparison_members,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    groups  = await get_pump_comparison_groups(run_id)
+    members = await get_pump_comparison_members(run_id)
+
+    # Nest members under their group by group_name
+    members_by_group: dict[str, list] = {}
+    for m in members:
+        members_by_group.setdefault(m["group_name"], []).append(m)
+
+    for g in groups:
+        g["members"] = members_by_group.get(g["group_name"], [])
+
+    return {
+        "ok":            True,
+        "run_id":        run_id,
+        "groups":        groups,
+        "total_members": len(members),
+    }
+
+
+# ── 10. Export ────────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/pump-study/{run_id}/export")
+async def pump_study_export(
+    run_id: int,
+    format: str = "json",
+    min_multiple: float = 1.2,
+):
+    """
+    Download a pump study export.
+
+    ?format=json          Full structured JSON bundle (run + episodes + clusters +
+                          comparison groups + timeline events).
+    ?format=csv           Flat CSV of canonical episodes (one row per episode).
+    ?format=markdown      Deterministic markdown summary — no AI, no external calls.
+    ?format=snapshots_4x  Bar-by-bar signal data (T/Z/L/VIX/PSAR/RSI2) for
+                          episodes >= min_multiple (default 1.2 = 20%). Use
+                          ?min_multiple=4 to include only 4x+ episodes.
+    """
+    from fastapi.responses import Response
+    from database import (
+        get_pump_study_run,
+        get_pump_episodes,
+        get_pump_clusters,
+        get_pump_comparison_groups,
+        get_pump_comparison_members,
+        get_pump_study_timeline,
+        get_snapshots_for_episodes,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    fmt = format.lower()
+    if fmt not in ("json", "csv", "markdown", "snapshots_4x"):
+        raise HTTPException(400, detail="format must be json, csv, markdown, or snapshots_4x")
+
+    episodes = await get_pump_episodes(run_id, limit=10000)
+
+    # ── snapshots_4x — per-bar bar labels filtered by min_multiple ───────────
+    if fmt == "snapshots_4x":
+        from scanner.manual_d_wlnbb_features import compute_combined_bar_labels
+
+        _min_multiple = max(1.0, min_multiple)
+        pumps_4x  = [e for e in episodes if (e.get("pump_multiple") or 0) >= _min_multiple]
+        ep_ids    = [e["id"] for e in pumps_4x]
+        raw_snaps = await get_snapshots_for_episodes(ep_ids)
+
+        ep_lookup = {e["id"]: e for e in pumps_4x}
+
+        # Group snapshots by episode, sorted by date, to run bar label engine
+        from collections import defaultdict as _dd
+        snaps_by_ep: dict = _dd(list)
+        for s in raw_snaps:
+            snaps_by_ep[s["episode_id"]].append(s)
+        for ep_id in snaps_by_ep:
+            snaps_by_ep[ep_id].sort(key=lambda s: s["date"])
+
+        bar_labels = []
+        for ep_id, snaps in snaps_by_ep.items():
+            ep = ep_lookup.get(ep_id, {})
+
+            # Build candle list for bar label engine (needs open/high/low/close/volume)
+            candles = [
+                {"open": s["open"], "high": s["high"], "low": s["low"],
+                 "close": s["close"], "volume": s["volume"], "date": s["date"]}
+                for s in snaps
+                if s.get("open") and s.get("close")
+            ]
+
+            # Compute bar labels for all bars (engine needs preceding context)
+            try:
+                computed_labels = compute_combined_bar_labels(candles, last_n=len(candles))
+                # Index by date for fast lookup
+                lbl_by_date = {lbl["date"]: lbl for lbl in computed_labels if lbl.get("date")}
+            except Exception:
+                lbl_by_date = {}
+
+            for s in snaps:
+                snap = s.get("snapshot") or {}
+                cf   = snap.get("custom_flags") or {}
+                lbl  = lbl_by_date.get(s["date"]) or {}
+
+                bar_labels.append({
+                    "episode_id":       ep_id,
+                    "symbol":           s["symbol"],
+                    "pump_multiple":    ep.get("pump_multiple"),
+                    "pump_type":        ep.get("pump_type"),
+                    "pump_start_date":  ep.get("pump_start_date"),
+                    "pump_peak_date":   ep.get("pump_peak_date"),
+                    "date":             s["date"],
+                    "phase":            s["window_phase"],
+                    "rel_day":          s["relative_day_from_start"],
+                    "rel_day_peak":     s["relative_day_from_peak"],
+                    # OHLCV
+                    "open":             s.get("open"),
+                    "high":             s.get("high"),
+                    "low":              s.get("low"),
+                    "close":            s.get("close"),
+                    "volume":           s.get("volume"),
+                    "gap_pct":          s.get("gap_pct"),
+                    "daily_return_pct": s.get("daily_return_pct"),
+                    "cum_return_pct":   s.get("cum_return_pct"),
+                    "vol_ratio":        s.get("volume_vs_avg20"),
+                    "vol_zscore":       s.get("volume_zscore"),
+                    "atr_pct":          s.get("atr_pct"),
+                    "bb_width":         s.get("bb_width"),
+                    "bb_squeeze":       s.get("bb_squeeze"),
+                    "rsi":              s.get("rsi"),
+                    "intraday_range_pct": s.get("intraday_range_pct"),
+                    "close_position":   s.get("close_position"),
+                    "wyckoff_state":    s.get("wyckoff_state"),
+                    # Bar label signals — computed from OHLCV via bar label engine
+                    "bkt":              lbl.get("bucket"),
+                    "t_signal":         lbl.get("t_signal"),
+                    "z_signal":         lbl.get("z_signal"),
+                    "l_signal":         lbl.get("l_digits"),
+                    "preup":            lbl.get("preup"),
+                    "predn":            lbl.get("predn"),
+                    "body_class":       lbl.get("body_class"),
+                    "wick_class":       lbl.get("wick_class"),
+                    "gap_class":        lbl.get("gap_class"),
+                    "range_class":      lbl.get("range_class"),
+                    "line3":            lbl.get("line3"),
+                    "line4":            lbl.get("line4"),
+                    "vix_token":        lbl.get("vix_token") or cf.get("vix_token") or None,
+                    "psar_token":       lbl.get("psar_token") or cf.get("psar_token") or None,
+                    "rsi2_token":       lbl.get("rsi2_token") or cf.get("rsi2_token") or None,
+                    "line5":            lbl.get("line5"),
+                    # Custom flags (booleans from feature_json)
+                    "has_l34":          cf.get("has_l34"),
+                    "has_l43":          cf.get("has_l43"),
+                    "has_l22":          cf.get("has_l22"),
+                    "has_np":           cf.get("has_np"),
+                    "has_d":            cf.get("has_d"),
+                    "has_wlnbb":        cf.get("has_wlnbb"),
+                })
+
+        bar_labels.sort(key=lambda b: (b["episode_id"], b["date"]))
+
+        bundle = {
+            "export_type":   "pump_study_bar_labels_4x",
+            "run_id":        run_id,
+            "min_multiple":  _min_multiple,
+            "episode_count": len(pumps_4x),
+            "bar_count":     len(bar_labels),
+            "episodes":      pumps_4x,
+            "bar_labels":    bar_labels,
+            "exported_at":   datetime.utcnow().isoformat() + "Z",
+        }
+        return Response(
+            content=json.dumps(bundle, indent=2, default=str),
+            media_type="application/json",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="pump_study_{run_id}_bar_labels_{_min_multiple}x.json"'
+            },
+        )
+
+    # ── CSV ───────────────────────────────────────────────────────────────────
+    if fmt == "csv":
+        fieldnames = [
+            "id", "symbol", "pump_type",
+            "pump_start_date", "pump_peak_date", "pump_window_days",
+            "start_price", "peak_price",
+            "pump_multiple", "pump_return_pct",
+            "days_to_peak", "days_to_double", "max_drawdown_before_peak",
+            "had_ribbon", "had_ignition",
+            "max_volume_anomaly", "largest_gap_pct",
+            "was_in_universe", "was_flagged_by_scanner",
+            "sector", "industry",
+            "demand_score_at_breakout", "demand_tier_at_breakout",
+            "ats_at_breakout", "readiness_at_breakout", "readiness_tier_at_breakout",
+            "tz_t_signal_at_breakout", "tz_z_signal_at_breakout",
+            "preup_token_at_breakout", "line5_at_breakout",
+        ]
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(episodes)
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="pump_study_{run_id}_episodes.csv"'
+            },
+        )
+
+    # ── Markdown ──────────────────────────────────────────────────────────────
+    if fmt == "markdown":
+        content = _build_pump_study_markdown(run, episodes)
+        return Response(
+            content=content,
+            media_type="text/markdown",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="pump_study_{run_id}_summary.md"'
+            },
+        )
+
+    # ── JSON (full structured bundle) ────────────────────────────────────────
+    clusters = await get_pump_clusters(run_id)
+    groups   = await get_pump_comparison_groups(run_id)
+    members  = await get_pump_comparison_members(run_id)
+    timeline = await get_pump_study_timeline(run_id)
+
+    bundle = {
+        "export_type":        "pump_study_4x",
+        "run":                run,
+        "episodes":           episodes,
+        "clusters":           clusters,
+        "comparison_groups":  groups,
+        "comparison_members": members,
+        "timeline_events":    timeline,
+        "note":               (
+            "Daily snapshots omitted from JSON export (can be large). "
+            f"Fetch per episode via /api/replay/pump-study/{run_id}/daily-snapshots"
+            "?episode_id=<id>"
+        ),
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+    }
+    return Response(
+        content=json.dumps(bundle, indent=2, default=str),
+        media_type="application/json",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="pump_study_{run_id}_full.json"'
+        },
+    )
+
+
+@app.delete("/api/replay/pump-study/{run_id}")
+async def delete_pump_study_run_endpoint(run_id: int):
+    """
+    Permanently delete a pump-study run and all its linked child records.
+
+    Cascade order:
+        pump_episode_snapshots → pump_episode_events → pump_episode_detections
+        → pump_comparison_members → pump_comparison_groups → pump_clusters
+        → pump_episodes → pump_study_ai_summaries → pump_study_runs
+
+    Returns deleted row counts per table.
+    """
+    from database import delete_pump_study_run
+    try:
+        counts = await delete_pump_study_run(run_id)
+    except ValueError:
+        raise HTTPException(404, detail=f"Pump study run {run_id} not found")
+    except Exception as exc:
+        logger.error("delete_pump_study_run run_id=%s error: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "deleted": counts,
+    }
+
+
+@app.delete("/api/replay/raw-pattern-study/{run_id}")
+async def delete_raw_pattern_study_run_endpoint(run_id: int):
+    """
+    Permanently delete a raw-pattern-study run and all its child records.
+
+    Cascade order:
+        raw_pattern_comparison_members → raw_pattern_comparisons
+        → raw_pattern_episode_features → raw_pattern_daily_features
+        → raw_pattern_ai_summaries → discovered_patterns → raw_pattern_runs
+    """
+    from database import delete_raw_pattern_run
+    try:
+        counts = await delete_raw_pattern_run(run_id)
+    except ValueError:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    except Exception as exc:
+        logger.error("delete_raw_pattern_run run_id=%s error: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "deleted": counts,
+    }
+
+
+class CleanupRequest(BaseModel):
+    keep_last_n: int = 5
+    """Keep the N most-recent complete runs; delete older ones (default: 5)."""
+    dry_run: bool = True
+    """If True (default), preview what would be deleted without deleting."""
+    vacuum: bool = False
+    """If True (and not dry_run), run VACUUM after deletion to reclaim disk space."""
+
+
+@app.post("/api/replay/raw-pattern-study/cleanup")
+async def raw_pattern_study_cleanup(body: CleanupRequest = CleanupRequest()):
+    """
+    Admin: bulk-delete old raw-pattern-study runs to reclaim DB storage.
+
+    Keeps the N most-recent complete runs; deletes all older ones including
+    their discovered_patterns, episode_features, daily_features, ai_summaries,
+    and comparison records.
+
+    By default runs as a dry-run (no deletions). Pass dry_run=false to execute.
+    Pass vacuum=true (with dry_run=false) to VACUUM the database afterward.
+    """
+    from database import cleanup_raw_pattern_runs
+    try:
+        result = await cleanup_raw_pattern_runs(
+            keep_last_n=body.keep_last_n,
+            dry_run=body.dry_run,
+            vacuum=body.vacuum and not body.dry_run,
+        )
+    except Exception as exc:
+        logger.exception("raw_pattern_study_cleanup failed")
+        raise HTTPException(500, detail=str(exc))
+    return result
+
+
+@app.post("/api/replay/pump-study/cleanup")
+async def pump_study_cleanup(body: CleanupRequest = CleanupRequest()):
+    """
+    Admin: bulk-delete old pump-study runs to reclaim DB storage.
+    Keeps the N most-recent complete runs; deletes all child rows
+    (snapshots, events, detections, episodes, clusters, comparisons).
+    Default is dry_run=true — pass dry_run=false to execute.
+    """
+    from database import cleanup_pump_study_runs
+    try:
+        result = await cleanup_pump_study_runs(
+            keep_last_n=body.keep_last_n,
+            dry_run=body.dry_run,
+        )
+    except Exception as exc:
+        logger.exception("pump_study_cleanup failed")
+        raise HTTPException(500, detail=str(exc))
+    return result
+
+
+@app.post("/api/replay/cleanup")
+async def replay_cleanup(body: CleanupRequest = CleanupRequest()):
+    """
+    Admin: bulk-delete old replay runs to reclaim DB storage.
+    Keeps the N most-recent complete runs; deletes all child rows
+    (signal candidates, outcomes, missed movers).
+    Default is dry_run=true — pass dry_run=false to execute.
+    """
+    from database import cleanup_replay_runs
+    try:
+        result = await cleanup_replay_runs(
+            keep_last_n=body.keep_last_n,
+            dry_run=body.dry_run,
+        )
+    except Exception as exc:
+        logger.exception("replay_cleanup failed")
+        raise HTTPException(500, detail=str(exc))
+    return result
+
+
+@app.post("/api/replay/pump-study/{run_id}/score-demand")
+async def pump_study_score_demand(run_id: int, background_tasks: BackgroundTasks):
+    """
+    Re-score a pump-study run with the CURRENT scoring_config without
+    re-fetching candles. Reads existing snapshots, re-runs demand scoring,
+    rebuilds comparisons, and stamps the run with the new config version.
+
+    Saves hours: a full pump study is 3–5h, this re-score finishes in minutes.
+    """
+    from database import (
+        get_raw_pattern_runs,
+        update_pump_study_run,
+        update_raw_pattern_run,
+    )
+    from replay.pump_study_engine import (
+        build_raw_pattern_episode_features_demand,
+        build_raw_pattern_comparisons,
+    )
+    from scanner.scoring_config import VERSION as _CFG_VER
+
+    raw_runs = await get_raw_pattern_runs(pump_study_run_id=run_id, limit=1)
+    if not raw_runs:
+        raise HTTPException(404, detail="No raw-pattern-study run found for this pump study. Run a raw pattern study first.")
+
+    raw_run_id = raw_runs[0]["id"]
+
+    async def _run():
+        try:
+            n = await build_raw_pattern_episode_features_demand(raw_run_id, run_id)
+            logger.info(f"[ReScore] pump_study={run_id} raw={raw_run_id} demand_patched={n}")
+
+            comp_n = await build_raw_pattern_comparisons(raw_run_id, run_id)
+            logger.info(f"[ReScore] pump_study={run_id} raw={raw_run_id} comparisons_rebuilt={comp_n}")
+
+            await update_pump_study_run(run_id, {"scoring_config_version": _CFG_VER})
+            await update_raw_pattern_run(raw_run_id, {"scoring_config_version": _CFG_VER})
+            logger.info(f"[ReScore] pump_study={run_id} stamped with config {_CFG_VER}")
+        except Exception as exc:
+            logger.exception(f"[ReScore] failed pump_study={run_id}: {exc}")
+
+    background_tasks.add_task(_run)
+    return {
+        "ok":                 True,
+        "pump_study_run_id":  run_id,
+        "raw_run_id":         raw_run_id,
+        "target_config_version": _CFG_VER,
+        "status":             "rescoring_started",
+        "message":            "Re-scoring with current scoring_config. Poll the run-detail endpoint to see updated version.",
+    }
+
+
+@app.post("/api/admin/cleanup-all")
+async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, dry_run: bool = True):
+    """
+    Run all cleanup operations in one call:
+      - Delete old replay runs (keep_last_n most recent complete)
+      - Delete old raw-pattern-study runs (keep_last_n most recent complete)
+      - Delete old pump-study runs (keep_last_n most recent complete)
+      - Prune candle_cache rows older than keep_candle_days
+      - VACUUM ANALYZE all major tables (only when dry_run=false)
+
+    Default is dry_run=true — pass ?dry_run=false to execute.
+    """
+    from database import (
+        cleanup_replay_runs,
+        cleanup_raw_pattern_runs,
+        cleanup_pump_study_runs,
+        prune_candle_cache,
+        prune_orphaned_records,
+    )
+    results = {}
+    try:
+        results["replay"]          = await cleanup_replay_runs(keep_last_n=keep_last_n, dry_run=dry_run)
+        results["raw_pattern"]     = await cleanup_raw_pattern_runs(keep_last_n=keep_last_n, dry_run=dry_run, vacuum=False)
+        results["pump_study"]      = await cleanup_pump_study_runs(keep_last_n=keep_last_n, dry_run=dry_run)
+        results["candle_cache"]    = await prune_candle_cache(keep_days=keep_candle_days, dry_run=dry_run)
+        results["orphans"]         = await prune_orphaned_records(dry_run=dry_run)
+    except Exception as exc:
+        logger.exception("admin_cleanup_all failed")
+        raise HTTPException(500, detail=str(exc))
+
+    if not dry_run:
+        # VACUUM ANALYZE reclaims space from dropped columns and deleted rows
+        try:
+            from database import get_engine
+            async with get_engine().connect() as conn:
+                await conn.execution_options(isolation_level="AUTOCOMMIT")
+                for tbl in (
+                    "candle_cache",
+                    "discovered_patterns",
+                    "replay_signal_candidates",
+                    "raw_pattern_episode_features",
+                    "raw_pattern_daily_features",
+                    "pump_episodes",
+                    "pump_episode_snapshots",
+                    "pump_episode_detections",
+                ):
+                    try:
+                        await conn.execute(text(f"VACUUM ANALYZE {tbl}"))
+                    except Exception as ve:
+                        logger.warning(f"VACUUM {tbl} failed (non-fatal): {ve}")
+            results["vacuum"] = "done"
+        except Exception as ve:
+            results["vacuum"] = f"failed: {ve}"
+
+    results["dry_run"] = dry_run
+    return results
+
+
+
+@app.post("/api/admin/db/rebuild")
+async def admin_db_rebuild(background_tasks: BackgroundTasks, sync_universe: bool = True):
+    """
+    Bring an empty database back to a usable state.
+
+    Steps:
+      1. init_db()              — idempotent CREATE TABLE for every model + run any
+                                   pending column migrations.
+      2. drop_legacy_tables()   — drop ribbon_candidates if it survived the wipe.
+      3. sync_universe_cache()  — (background) pull fresh ticker reference data
+                                   from Massive so sector/SIC lookups work.
+      4. detect_market_regime() — (background) populate the market_regime table.
+
+    Single-row tables (journal_settings, ai_journal_state) self-seed on first
+    read, so they need no explicit kick. Scan results / pump studies / replays
+    are driven by their own user-triggered endpoints.
+
+    Returns immediately; poll /api/admin/refresh-sector-data/status for the
+    universe sync, /api/market-regime for the regime row.
+    """
+    from database import init_db, drop_legacy_tables
+
+    steps: dict = {}
+
+    try:
+        await init_db()
+        steps["init_db"] = "ok"
+    except Exception as exc:
+        steps["init_db"] = f"error: {exc}"
+        raise HTTPException(500, detail=f"init_db failed: {exc}")
+
+    try:
+        steps["drop_legacy"] = await drop_legacy_tables()
+    except Exception as exc:
+        steps["drop_legacy"] = f"error: {exc}"
+
+    async def _sync_universe():
+        try:
+            from scanner.massive_reference import sync_universe_cache
+            count = await sync_universe_cache(save_to_db=True)
+            logger.info(f"[REBUILD] universe_cache synced: {count} rows")
+        except Exception as exc:
+            logger.exception(f"[REBUILD] sync_universe_cache failed: {exc}")
+
+    async def _refresh_regime():
+        try:
+            from scanner.market_regime import detect_market_regime
+            await detect_market_regime()
+            logger.info("[REBUILD] market_regime refreshed")
+        except Exception as exc:
+            logger.exception(f"[REBUILD] detect_market_regime failed: {exc}")
+
+    if sync_universe:
+        background_tasks.add_task(_sync_universe)
+        steps["universe_cache"] = "started (background)"
+    else:
+        steps["universe_cache"] = "skipped"
+
+    background_tasks.add_task(_refresh_regime)
+    steps["market_regime"] = "started (background)"
+
+    return {
+        "ok":    True,
+        "steps": steps,
+        "next":  [
+            "Trigger a demand scan: POST /api/demand-scanner/run",
+            "Start a pump study:    POST /api/replay/pump-study/run",
+            "Refresh sectors:       POST /api/admin/refresh-sector-data",
+        ],
+    }
+
+
+async def _build_research_context_text(run_id: int) -> str:
+    """
+    Build a compact, AI-prompt-ready research context string from a completed
+    Raw Pattern Study run.  Returns empty string on any failure.
+    """
+    from collections import Counter
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_episode_features,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_ai_summary,
+    )
+    from replay.pump_study_engine import extract_top_schemes, generate_engine_patch_plan
+
+    try:
+        run = await get_raw_pattern_run(run_id)
+        if not run or run.get("status") != "complete":
+            return ""
+
+        episodes = await get_raw_pattern_episode_features(run_id, limit=2000)
+        comps    = await get_raw_pattern_comparisons(run_id)
+
+        group_counts = dict(Counter(
+            ep.get("group_type") for ep in episodes if ep.get("group_type")
+        ))
+        schemes  = extract_top_schemes(episodes).get("schemes", [])[:5]
+        verdicts = generate_engine_patch_plan(comps).get("feature_verdicts", [])
+
+        lines = [
+            f"=== RAW PATTERN STUDY CONTEXT (Run #{run_id}, "
+            f"{run.get('start_date')} to {run.get('end_date')}, {len(episodes)} episodes) ===",
+            "SAMPLE: " + ", ".join(f"{k}={v}" for k, v in sorted(group_counts.items()))
+            + " (missed_mover=excluded/no-anchor)",
+        ]
+
+        if schemes:
+            lines.append("\nTOP DISCRIMINATING SCHEMES (4× rate vs false positive rate):")
+            for s in schemes:
+                gm    = s.get("group_match") or {}
+                p4x   = (gm.get("4x_pump")       or {}).get("pct", 0)
+                pfp   = (gm.get("false_positive") or {}).get("pct", 0)
+                ratio = s.get("separator_ratio")
+                badge = s.get("separator_badge") or (f"{ratio:.2f}×" if ratio else "—")
+                lines.append(f"  {s.get('label', s.get('scheme_id'))}: 4x={p4x:.0f}%, fp={pfp:.0f}% [{badge}]")
+
+        for vt in ("BOOST", "INCREASE", "PENALIZE", "REDUCE"):
+            feats = [v["feature"] for v in verdicts if v.get("verdict") == vt]
+            if feats:
+                tag = "WEIGHT HIGHER" if vt in ("BOOST", "INCREASE") else "WEIGHT LOWER"
+                lines.append(f"{tag} ({vt}): {', '.join(feats[:7])}")
+
+        timing_keys = {
+            "days_in_base",
+            "days_from_breakout_to_peak",
+            "compression_days_pre",
+            "days_from_first_abnormal_volume_to_breakout",
+            "dryup_day_count_pre",
+        }
+        timing_4x: dict[str, float] = {}
+        for c in comps:
+            fn = c.get("feature_name")
+            if fn in timing_keys and c.get("group_name") == "4x_pump" and c.get("median_value") is not None:
+                timing_4x[fn] = c["median_value"]
+        if timing_4x:
+            lines.append("\nKEY 4× MEDIANS: " + ", ".join(
+                f"{k}={v:.0f}d" for k, v in timing_4x.items()
+            ))
+
+        # Structural v2 context — aggregate across all episodes
+        sv2_fields = [
+            ("had_confirmed_structure_pre",  "confirmed_structure"),
+            ("had_triggered_structure_pre",  "triggered_structure"),
+            ("had_np_buy_candidate_pre",     "np_buy_candidate"),
+            ("had_d6_beup_pre",              "d6_beup"),
+            ("had_d4_beup_pre",              "d4_beup"),
+        ]
+        total = len(episodes) or 1
+        sv2_pcts: list[str] = []
+        for field, label in sv2_fields:
+            cnt = sum(1 for ep in episodes if ep.get(field) is True)
+            if cnt:
+                sv2_pcts.append(f"{label}={cnt/total*100:.0f}%")
+        if sv2_pcts:
+            lines.append("\nNP STRUCTURAL PRE-PUMP (%episodes): " + ", ".join(sv2_pcts))
+
+        # Split context
+        split_ctx_counts: dict[str, int] = {}
+        for ep in episodes:
+            sc = ep.get("split_context") or "NO_SPLIT"
+            split_ctx_counts[sc] = split_ctx_counts.get(sc, 0) + 1
+        artifact_n = sum(1 for ep in episodes if ep.get("split_artifact_risk") is True)
+        if any(k != "NO_SPLIT" for k in split_ctx_counts):
+            lines.append(
+                "SPLIT CONTEXT: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(split_ctx_counts.items()))
+                + (f" | artifact_risk={artifact_n}" if artifact_n else "")
+            )
+
+        cached_ai = await get_raw_pattern_ai_summary(run_id)
+        if cached_ai and not cached_ai.get("parse_failed"):
+            rec = (cached_ai.get("analysis") or {}).get("recommendation") or cached_ai.get("recommendation") or ""
+            if rec:
+                lines.append(f"\nAI RECOMMENDATION: {rec}")
+
+        lines.append("=== END CONTEXT ===")
+        return "\n".join(lines)
+
+    except Exception as exc:
+        logger.warning("_build_research_context_text run_id=%s failed: %s", run_id, exc)
+        return ""
+
+
+def _repair_json(raw: str) -> str:
+    """
+    Lightweight single-pass JSON repair.
+    Handles the most common model failure modes:
+      - trailing comma before } or ]
+      - unterminated string at end of output (truncation)
+      - accidental markdown code fences (```json ... ```)
+    Returns a repaired string — caller still must json.loads() it.
+    """
+    import re
+
+    # Strip markdown fences
+    s = raw.strip()
+    if s.startswith("```"):
+        lines = s.splitlines()
+        # drop first line (```json or ```) and last line if it's ```
+        start = 1
+        end   = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
+        s = "\n".join(lines[start:end]).strip()
+
+    # Remove trailing commas before } or ]
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+
+    # If string appears truncated (odd number of unescaped quotes → unterminated string),
+    # try to close it cleanly by appending closing punctuation.
+    # Count unescaped double-quotes
+    unescaped = len(re.findall(r'(?<!\\)"', s))
+    if unescaped % 2 != 0:
+        # Unterminated string — close it, then close any open structures
+        s = s.rstrip()
+        # Close the open string
+        s += '"'
+        # Count unclosed { and [ by simple depth tracking
+        depth_brace   = s.count("{") - s.count("}")
+        depth_bracket = s.count("[") - s.count("]")
+        # Close innermost open arrays first, then objects
+        s += "]" * max(0, depth_bracket) + "}" * max(0, depth_brace)
+
+    return s
+
+
+@app.delete("/api/replay/pump-study/{run_id}/ai-summary")
+async def pump_study_delete_ai_summary(run_id: int):
+    """
+    Delete a stored AI summary so it can be regenerated.
+    Used by the frontend Retry button to clear a cached parse_failed row.
+    """
+    from database import PumpStudyAISummary, get_session_factory
+    from sqlalchemy import select as sa_select
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            sa_select(PumpStudyAISummary).where(PumpStudyAISummary.run_id == run_id)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            await session.delete(row)
+            await session.commit()
+    return {"ok": True, "deleted": True, "run_id": run_id}
+
+
+@app.get("/api/replay/pump-study/{run_id}/ai-summary")
+async def pump_study_ai_summary(run_id: int, raw_pattern_run_id: Optional[int] = None):
+    """
+    Lazy AI pattern-analysis for a completed pump-study run.
+
+    On first request: builds a deterministic evidence bundle from stored DB
+    data, calls Claude, stores the result, and returns it.
+    On subsequent requests: returns the cached row immediately.
+
+    Evidence is 100% price/volume/indicator-derived.  No external news or
+    catalyst data is ingested.  The model is explicitly instructed to flag
+    this limitation and not invent catalysts.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    from database import (
+        get_pump_study_run,
+        get_pump_episodes,
+        get_pump_comparison_groups,
+        get_pump_study_timeline,
+        get_pump_ai_summary,
+        save_pump_ai_summary,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    terminal = ("completed", "comparison_complete")
+    if run.get("status") not in terminal:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run {run_id} status is '{run.get('status')}'. "
+                "AI summary requires a completed run."
+            ),
+        )
+
+    # ── Return cached result if available (skip when research context requested) ─
+    cached = await get_pump_ai_summary(run_id) if not raw_pattern_run_id else None
+    if cached:
+        # If previous attempt failed to parse, surface that clearly so UI can retry
+        if cached.get("parse_failed"):
+            return {
+                "ok":          False,
+                "parse_failed": True,
+                "run_id":      run_id,
+                "message":     "AI summary could not be parsed — model returned malformed JSON.",
+                "parse_error": cached.get("parse_error"),
+                "raw_text":    (cached.get("raw_response") or "")[:500],
+                "model_used":  cached.get("model_used"),
+                "cached":      True,
+            }
+        cached["ok"]           = True
+        cached["cached"]       = True
+        cached["generated_at"] = cached.get("created_at")
+        return cached
+
+    # ── Build deterministic evidence bundle ───────────────────────────────────
+    episodes = await get_pump_episodes(run_id, limit=500)
+    groups   = await get_pump_comparison_groups(run_id)
+    events   = await get_pump_study_timeline(run_id)
+
+    # Event type frequencies across all episodes
+    event_freq: dict[str, int] = {}
+    for ev in events:
+        t = ev.get("event_type", "unknown")
+        event_freq[t] = event_freq.get(t, 0) + 1
+
+    # Catch / miss breakdown
+    caught = sum(1 for ep in episodes if ep.get("caught_by_scanner") is True)
+    missed = sum(1 for ep in episodes if ep.get("caught_by_scanner") is False)
+    total  = caught + missed
+
+    # Family distribution
+    family_counts: dict[str, int] = {}
+    for ep in episodes:
+        k = ep.get("pump_type") or "UNKNOWN"
+        family_counts[k] = family_counts.get(k, 0) + 1
+
+    # Group stats index (group_name → stats dict)
+    group_stats = {g["group_name"]: g.get("stats", {}) for g in groups}
+
+    evidence = {
+        "run_params": {
+            "date_range":    f"{run.get('start_date')} to {run.get('end_date')}",
+            "min_multiple":  run.get("min_multiple"),
+            "window_days":   run.get("window_days"),
+            "episode_count": run.get("episode_count"),
+        },
+        "catch_rate": {
+            "caught":   caught,
+            "missed":   missed,
+            "rate_pct": round(caught / max(1, total) * 100, 1),
+        },
+        "family_distribution": family_counts,
+        "event_type_frequency": event_freq,
+        "group_stats": group_stats,
+        "data_limitations": {
+            "catalyst_news_available": False,
+            "note": (
+                "No external news or catalyst data was ingested. "
+                "Analysis is limited to price, volume, and indicator-derived features."
+            ),
+        },
+    }
+
+    # ── Prompt (compact — reduces token count and truncation risk) ────────────
+    evidence_compact = json.dumps(evidence, separators=(",", ":"), default=str)
+
+    research_section = ""
+    if raw_pattern_run_id:
+        ctx_text = await _build_research_context_text(raw_pattern_run_id)
+        if ctx_text:
+            research_section = f"PRIOR RESEARCH CONTEXT:\n{ctx_text}\n\n"
+            logger.info("pump_study_ai_summary run_id=%s: injecting Raw Pattern Study #%s context",
+                        run_id, raw_pattern_run_id)
+
+    prompt = (
+        research_section
+        + "EVIDENCE (price/volume/indicator only, no news):\n"
+        f"{evidence_compact}\n\n"
+        "Answer 6 questions using ONLY the evidence. "
+        "Keep each array item under 15 words. No newlines inside strings.\n"
+        "Q1: Patterns before 4x pumps (cite event_type_frequency counts).\n"
+        "Q2: Earliest signals (reference event types).\n"
+        "Q3: 4x_pump vs false_positive (cite group_stats numbers).\n"
+        "Q4: 4x_pump vs normal_winner (cite group_stats numbers).\n"
+        "Q5: Which Scanner v2 structural signal is most predictive for this pump type — "
+        "one of: d_confluence_signal|structure_phase_scoring|compression_expansion_gate|"
+        "expansion_timing_risk|new_pump_l34_sequence|priority_score_threshold.\n"
+        "Q6: Scanner v2 improvement needed — EXACTLY one of: "
+        "Boost d_confluence weights|"
+        "Tighten structure_score thresholds|"
+        "Add compression_expansion gate|"
+        "Improve AVOID routing|"
+        "Extend sympathy context|"
+        "Tune expansion_timing_risk filter.\n\n"
+        "Rules: no invented catalysts. Note data limitations. "
+        "If group_stats empty, say insufficient data.\n\n"
+        "Output ONLY this JSON object — no markdown, no prose, no code fences:\n"
+        '{"patterns":["..."],'
+        '"earliest_signals":["..."],'
+        '"true_vs_false_positive":["..."],'
+        '"true_vs_normal_winner":["..."],'
+        '"scanner_v2_component":"...",'
+        '"recommendation":"EXACT option",'
+        '"recommendation_rationale":"1 sentence",'
+        '"limitations":["..."]}'
+    )
+
+    _MODEL = "claude-haiku-4-5-20251001"
+
+    # ── Call Claude ───────────────────────────────────────────────────────────
+    raw_text = ""
+    try:
+        ai_client = anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0)
+        response  = await ai_client.messages.create(
+            model      = _MODEL,
+            max_tokens = 1200,
+            system     = (
+                "You are a quantitative research assistant. "
+                "Output only a single valid JSON object — "
+                "no markdown fences, no prose, no newlines inside string values."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = response.content[0].text.strip()
+    except Exception as exc:
+        logger.error("pump_study_ai_summary: API call failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # ── Safe JSON parse with one repair attempt ───────────────────────────────
+    analysis = None
+    parse_err = None
+    try:
+        analysis = json.loads(raw_text)
+    except json.JSONDecodeError as exc1:
+        logger.warning("pump_study_ai_summary: initial JSON parse failed (%s); attempting repair", exc1)
+        try:
+            repaired  = _repair_json(raw_text)
+            analysis  = json.loads(repaired)
+            logger.info("pump_study_ai_summary: JSON repair succeeded")
+        except json.JSONDecodeError as exc2:
+            parse_err = str(exc2)
+            logger.error("pump_study_ai_summary: JSON repair also failed: %s", exc2)
+
+    # ── Persist ───────────────────────────────────────────────────────────────
+    if analysis is None:
+        # Store the failure for audit; do NOT crash the route
+        await save_pump_ai_summary(run_id, {
+            "analysis":      {},
+            "recommendation": "",
+            "evidence":      evidence,
+            "limitations":   "",
+            "model_used":    _MODEL,
+            "parse_failed":  True,
+            "raw_response":  raw_text,
+            "parse_error":   parse_err,
+        })
+        return {
+            "ok":          False,
+            "parse_failed": True,
+            "run_id":      run_id,
+            "message":     "AI summary could not be parsed — model returned malformed JSON.",
+            "parse_error": parse_err,
+            "raw_text":    raw_text[:500] if raw_text else "",
+            "model_used":  _MODEL,
+            "cached":      False,
+        }
+
+    limitations_text = "\n".join(analysis.get("limitations", []))
+    await save_pump_ai_summary(run_id, {
+        "analysis":       analysis,
+        "recommendation": analysis.get("recommendation", ""),
+        "evidence":       evidence,
+        "limitations":    limitations_text,
+        "model_used":     _MODEL,
+        "parse_failed":   False,
+        "raw_response":   None,
+        "parse_error":    None,
+    })
+
+    return {
+        "ok":      True,
+        "run_id":  run_id,
+        "analysis": analysis,
+        "evidence_summary": {
+            "episodes_analyzed": len(episodes),
+            "event_types_found": len(event_freq),
+            "groups_found":      len(groups),
+        },
+        "model_used":    _MODEL,
+        "generated_at":  datetime.utcnow().isoformat() + "Z",
+        "cached":        False,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Unified Analytics Platform — scoring config + signal lift
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/analytics/scoring-config")
+async def get_scoring_config():
+    """Return the current scoring configuration (signal weights + thresholds)."""
+    from scanner.scoring_config import as_dict
+    return {"ok": True, "config": as_dict()}
+
+
+# ── Live-history analytics ────────────────────────────────────────────────────
+# Query demand_ticker_history by bar-label signals (TZ, PREUP, line3/4/5,
+# wyckoff). Powers "show me all P55 + T1G in the last 30 days" and
+# co-occurrence / lift-style summaries.
+
+_HISTORY_FILTER_COLUMNS = {
+    "tz_t_signal", "tz_z_signal",
+    "best_tz_t_signal_15bar", "best_tz_z_signal_15bar",
+    "preup_token", "predn_token",
+    "line3", "line4", "line5",
+    "l_digits", "wyckoff_state",
+    "demand_composite_tier", "ats_signal", "readiness_tier",
+    "scoring_config_version",
+}
+
+
+def _binom_test_one_sided_greater(k: int, n: int, p: float) -> float:
+    """
+    P(X >= k) under Binomial(n, p). One-sided test: "is the observed
+    success count significantly greater than what null hypothesis p
+    would predict?" Returns a p-value in [0, 1].
+
+    Pure stdlib (math.lgamma). Switches to a normal approximation for
+    large n to avoid summing thousands of PMF terms.
+    """
+    import math
+
+    if n <= 0 or k <= 0:
+        return 1.0
+    if k > n:
+        return 0.0
+    p = max(min(p, 1.0), 0.0)
+    if p <= 0.0:
+        return 0.0 if k > 0 else 1.0
+    if p >= 1.0:
+        return 1.0 if k <= n else 0.0
+
+    # Normal approximation when n is large and np, n(1-p) both >= 10.
+    if n >= 200 and n * p >= 10 and n * (1 - p) >= 10:
+        mean = n * p
+        sd   = math.sqrt(n * p * (1 - p))
+        # Continuity correction: P(X >= k) ≈ P(Z >= (k - 0.5 - mean)/sd)
+        z = (k - 0.5 - mean) / sd
+        # 1 - Phi(z) via erfc
+        return 0.5 * math.erfc(z / math.sqrt(2.0))
+
+    # Exact: sum PMF from k to n.
+    log_p   = math.log(p)
+    log_1mp = math.log(1.0 - p)
+    log_nfact = math.lgamma(n + 1)
+    acc = 0.0
+    for i in range(k, n + 1):
+        log_pmf = (log_nfact
+                   - math.lgamma(i + 1)
+                   - math.lgamma(n - i + 1)
+                   + i * log_p
+                   + (n - i) * log_1mp)
+        acc += math.exp(log_pmf)
+        if acc >= 1.0:
+            return 1.0
+    return acc
+
+
+@app.get("/api/analytics/live-history/filter")
+async def analytics_live_history_filter(
+    days:          int           = 30,
+    limit:         int           = 500,
+    symbol:        Optional[str] = None,
+    tz_t:          Optional[str] = None,
+    tz_z:          Optional[str] = None,
+    best_tz_t_15:  Optional[str] = None,
+    best_tz_z_15:  Optional[str] = None,
+    preup:         Optional[str] = None,
+    predn:         Optional[str] = None,
+    line3:         Optional[str] = None,
+    line4:         Optional[str] = None,
+    line5:         Optional[str] = None,
+    l_digits:      Optional[str] = None,
+    wyckoff:       Optional[str] = None,
+    tier:          Optional[str] = None,
+    ats:           Optional[str] = None,
+    min_score:     float         = 0.0,
+    config_version: Optional[str] = None,
+):
+    """
+    Filter demand_ticker_history rows by any subset of bar-label signals.
+
+    Use comma-separated values for OR within a field, e.g.
+    ?tz_t=T1,T1G,T4&preup=P55&days=14
+    """
+    from database import get_engine
+    from sqlalchemy import text as _text
+
+    def _csv(v: Optional[str]) -> list[str]:
+        return [p.strip() for p in (v or "").split(",") if p.strip()]
+
+    where: list[str] = ["scanned_at > datetime('now', :since)"]
+    params: dict = {"since": f"-{int(days)} days"}
+
+    def add_in(field: str, values: list[str]):
+        if not values:
+            return
+        placeholders = ",".join(f":{field}_{i}" for i in range(len(values)))
+        where.append(f"{field} IN ({placeholders})")
+        for i, v in enumerate(values):
+            params[f"{field}_{i}"] = v
+
+    if symbol:
+        where.append("symbol = :symbol")
+        params["symbol"] = symbol.upper()
+    add_in("tz_t_signal",            _csv(tz_t))
+    add_in("tz_z_signal",            _csv(tz_z))
+    add_in("best_tz_t_signal_15bar", _csv(best_tz_t_15))
+    add_in("best_tz_z_signal_15bar", _csv(best_tz_z_15))
+    add_in("preup_token",            _csv(preup))
+    add_in("predn_token",            _csv(predn))
+    add_in("line3",                  _csv(line3))
+    add_in("line4",                  _csv(line4))
+    add_in("line5",                  _csv(line5))
+    add_in("l_digits",               _csv(l_digits))
+    add_in("wyckoff_state",          _csv(wyckoff))
+    add_in("demand_composite_tier",  _csv(tier))
+    add_in("ats_signal",             _csv(ats))
+    add_in("scoring_config_version", _csv(config_version))
+
+    if min_score > 0:
+        where.append("demand_composite_score >= :min_score")
+        params["min_score"] = min_score
+
+    # Postgres uses different interval syntax; rewrite the WHERE clause.
+    is_pg = "postgres" in str(get_engine().url)
+    if is_pg:
+        where[0] = "scanned_at > NOW() - INTERVAL :since_pg"
+        params.pop("since", None)
+        params["since_pg"] = f"{int(days)} days"
+
+    sql = (
+        "SELECT scanned_at, symbol, demand_composite_score, demand_composite_tier, "
+        "ats_signal, readiness_tier, combined_score, "
+        "tz_t_signal, tz_z_signal, best_tz_t_signal_15bar, best_tz_z_signal_15bar, "
+        "preup_token, predn_token, line3, line4, line5, l_digits, wyckoff_state, "
+        "scoring_config_version "
+        "FROM demand_ticker_history "
+        f"WHERE {' AND '.join(where)} "
+        "ORDER BY scanned_at DESC "
+        "LIMIT :limit"
+    )
+    params["limit"] = min(int(limit), 5000)
+
+    async with get_engine().connect() as conn:
+        result = await conn.execute(_text(sql), params)
+        rows = [dict(r._mapping) for r in result.fetchall()]
+        for r in rows:
+            if hasattr(r.get("scanned_at"), "isoformat"):
+                r["scanned_at"] = r["scanned_at"].isoformat()
+
+    return {"ok": True, "count": len(rows), "days": days, "rows": rows}
+
+
+@app.get("/api/analytics/live-history/cooccurrence")
+async def analytics_live_history_cooccurrence(
+    group_by:          str            = "tz_t_signal,preup_token",
+    days:              int            = 30,
+    min_count:         int            = 3,
+    config_version:    Optional[str]  = None,
+    with_pump_lift:    bool           = False,
+    lift_window_days:  int            = 14,
+    lift_min_multiple: float          = 1.5,
+):
+    """
+    Group demand_ticker_history rows by any subset of bar-label fields and
+    return counts, average score, and tier distribution per combination.
+
+    group_by: comma-separated column list (e.g. "tz_t_signal,preup_token,line5")
+    Only whitelisted columns allowed — see _HISTORY_FILTER_COLUMNS.
+
+    Use min_count to suppress one-off combos. Sorted by count desc.
+
+    Pump lift (with_pump_lift=true):
+      For each scan row, looks up the best subsequent pump_episode for the
+      same symbol that started within lift_window_days. Returns:
+        - n_pumped:           rows that had ANY confirmed pump in the window
+        - n_pump_target:      rows whose best pump_multiple >= lift_min_multiple
+        - avg_pump_multiple:  mean of best multiples (over n_pumped)
+        - hit_rate:           n_pump_target / n
+      Use this to find which Live combos actually preceded real pumps vs
+      were just noise. Slower than the no-lift query (correlated subquery).
+    """
+    from database import get_engine
+    from sqlalchemy import text as _text
+
+    cols = [c.strip() for c in group_by.split(",") if c.strip()]
+    bad  = [c for c in cols if c not in _HISTORY_FILTER_COLUMNS]
+    if bad:
+        raise HTTPException(400, detail=f"Unknown group_by columns: {bad}")
+    if not cols:
+        raise HTTPException(400, detail="group_by is required")
+
+    is_pg = "postgres" in str(get_engine().url)
+    where = []
+    params: dict = {}
+    if is_pg:
+        where.append("h.scanned_at > NOW() - INTERVAL :since_pg")
+        params["since_pg"] = f"{int(days)} days"
+    else:
+        where.append("h.scanned_at > datetime('now', :since)")
+        params["since"] = f"-{int(days)} days"
+    if config_version:
+        where.append("h.scoring_config_version = :cv")
+        params["cv"] = config_version
+
+    col_expr_list = ", ".join(f"COALESCE(h.{c}, '') AS {c}" for c in cols)
+    group_expr    = ", ".join(cols)
+
+    if with_pump_lift:
+        # Correlated subquery: best pump_multiple for same symbol starting
+        # within lift_window_days AFTER the scan. NULL if no episode.
+        if is_pg:
+            best_multiple_sql = (
+                "(SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                " WHERE ep.symbol = h.symbol "
+                "   AND ep.pump_start_date::date >= h.scanned_at::date "
+                "   AND ep.pump_start_date::date <= (h.scanned_at::date + (:lift_days || ' days')::interval)::date"
+                ")"
+            )
+            params["lift_days"] = str(int(lift_window_days))
+        else:
+            best_multiple_sql = (
+                "(SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                " WHERE ep.symbol = h.symbol "
+                "   AND ep.pump_start_date >= date(h.scanned_at) "
+                "   AND ep.pump_start_date <= date(h.scanned_at, :lift_days_offset)"
+                ")"
+            )
+            params["lift_days_offset"] = f"+{int(lift_window_days)} days"
+
+        # Two-stage: compute best_multiple per scan, then aggregate.
+        sql = (
+            f"SELECT {col_expr_list}, "
+            "COUNT(*) AS n, "
+            "AVG(h.demand_composite_score) AS avg_score, "
+            "AVG(h.combined_score)         AS avg_combined, "
+            "SUM(CASE WHEN h.demand_composite_tier='PRIME_BUY'      THEN 1 ELSE 0 END) AS n_prime, "
+            "SUM(CASE WHEN h.demand_composite_tier='HIGH_CONF_BUY'  THEN 1 ELSE 0 END) AS n_high, "
+            "SUM(CASE WHEN h.demand_composite_tier='BUY_WATCH'      THEN 1 ELSE 0 END) AS n_watch, "
+            "SUM(CASE WHEN h.demand_composite_tier='SETUP_MONITOR'  THEN 1 ELSE 0 END) AS n_setup, "
+            f"SUM(CASE WHEN {best_multiple_sql} IS NOT NULL THEN 1 ELSE 0 END) AS n_pumped, "
+            f"SUM(CASE WHEN {best_multiple_sql} >= :lift_target THEN 1 ELSE 0 END) AS n_pump_target, "
+            f"AVG({best_multiple_sql}) AS avg_pump_multiple "
+            "FROM demand_ticker_history h "
+            f"WHERE {' AND '.join(where)} "
+            f"GROUP BY {group_expr} "
+            "HAVING COUNT(*) >= :min_count "
+            "ORDER BY n DESC "
+            "LIMIT 500"
+        )
+        params["lift_target"] = float(lift_min_multiple)
+    else:
+        sql = (
+            f"SELECT {col_expr_list}, "
+            "COUNT(*) AS n, "
+            "AVG(h.demand_composite_score) AS avg_score, "
+            "AVG(h.combined_score)         AS avg_combined, "
+            "SUM(CASE WHEN h.demand_composite_tier='PRIME_BUY'      THEN 1 ELSE 0 END) AS n_prime, "
+            "SUM(CASE WHEN h.demand_composite_tier='HIGH_CONF_BUY'  THEN 1 ELSE 0 END) AS n_high, "
+            "SUM(CASE WHEN h.demand_composite_tier='BUY_WATCH'      THEN 1 ELSE 0 END) AS n_watch, "
+            "SUM(CASE WHEN h.demand_composite_tier='SETUP_MONITOR'  THEN 1 ELSE 0 END) AS n_setup "
+            "FROM demand_ticker_history h "
+            f"WHERE {' AND '.join(where)} "
+            f"GROUP BY {group_expr} "
+            "HAVING COUNT(*) >= :min_count "
+            "ORDER BY n DESC "
+            "LIMIT 500"
+        )
+
+    params["min_count"] = max(1, int(min_count))
+
+    async with get_engine().connect() as conn:
+        result = await conn.execute(_text(sql), params)
+        rows = [dict(r._mapping) for r in result.fetchall()]
+
+    # Derived hit_rate + significance test (one-sided binomial, H0: p = baseline)
+    if with_pump_lift:
+        # Baseline: across ALL rows in the window, what fraction hit the
+        # target multiple? Same date filter, no group-by. Skip the
+        # config_version filter when comparing across versions; honour
+        # it otherwise so single-version analyses stay self-consistent.
+        if is_pg:
+            baseline_sql = (
+                "SELECT COUNT(*) AS n, "
+                "SUM(CASE WHEN (SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                "                WHERE ep.symbol = h.symbol "
+                "                  AND ep.pump_start_date::date >= h.scanned_at::date "
+                "                  AND ep.pump_start_date::date <= "
+                "                      (h.scanned_at::date + (:lift_days || ' days')::interval)::date "
+                ") >= :lift_target THEN 1 ELSE 0 END) AS n_target "
+                "FROM demand_ticker_history h "
+                "WHERE h.scanned_at > NOW() - INTERVAL :since_pg "
+                + (" AND h.scoring_config_version = :cv" if config_version else "")
+            )
+        else:
+            baseline_sql = (
+                "SELECT COUNT(*) AS n, "
+                "SUM(CASE WHEN (SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                "                WHERE ep.symbol = h.symbol "
+                "                  AND ep.pump_start_date >= date(h.scanned_at) "
+                "                  AND ep.pump_start_date <= date(h.scanned_at, :lift_days_offset) "
+                ") >= :lift_target THEN 1 ELSE 0 END) AS n_target "
+                "FROM demand_ticker_history h "
+                "WHERE h.scanned_at > datetime('now', :since) "
+                + (" AND h.scoring_config_version = :cv" if config_version else "")
+            )
+        baseline_params = {
+            "lift_target": params["lift_target"],
+        }
+        if is_pg:
+            baseline_params["since_pg"]  = params["since_pg"]
+            baseline_params["lift_days"] = params["lift_days"]
+        else:
+            baseline_params["since"]            = params["since"]
+            baseline_params["lift_days_offset"] = params["lift_days_offset"]
+        if config_version:
+            baseline_params["cv"] = config_version
+
+        async with get_engine().connect() as conn:
+            b_row = (await conn.execute(_text(baseline_sql), baseline_params)).fetchone()
+        b_n        = (b_row[0] if b_row else 0) or 0
+        b_target   = (b_row[1] if b_row else 0) or 0
+        baseline_p = (b_target / b_n) if b_n else 0.0
+
+        for r in rows:
+            n = r.get("n") or 0
+            r["hit_rate"]   = (r.get("n_pump_target") or 0) / n if n else None
+            # Lift = combo's hit rate divided by baseline. 1.0 = no edge,
+            # 2.0 = twice as likely to pump, 0.5 = half.
+            if n and baseline_p > 0:
+                r["lift_vs_baseline"] = round(r["hit_rate"] / baseline_p, 3)
+            else:
+                r["lift_vs_baseline"] = None
+            # One-sided binomial: P(observed n_pump_target or more under baseline_p).
+            # Low p_value = combo lifts pumps more than chance would predict.
+            r["p_value"] = round(
+                _binom_test_one_sided_greater(
+                    int(r.get("n_pump_target") or 0),
+                    int(n),
+                    baseline_p,
+                ),
+                6,
+            ) if n and baseline_p > 0 else None
+            r["significant"] = (
+                r["p_value"] is not None
+                and r["p_value"] < 0.05
+                and (r["lift_vs_baseline"] or 0) > 1.0
+            )
+
+    return {
+        "ok":              True,
+        "group_by":        cols,
+        "days":            days,
+        "config_version":  config_version,
+        "with_pump_lift":  with_pump_lift,
+        "lift_window_days":  lift_window_days  if with_pump_lift else None,
+        "lift_min_multiple": lift_min_multiple if with_pump_lift else None,
+        "baseline": ({
+            "n":          b_n,
+            "n_target":   b_target,
+            "hit_rate":   round(baseline_p, 6),
+        } if with_pump_lift else None),
+        "count":           len(rows),
+        "rows":            rows,
+    }
+
+
+# ── Live history maintenance ─────────────────────────────────────────────────
+
+@app.delete("/api/analytics/live-history")
+async def analytics_live_history_delete(
+    symbol: Optional[str] = None,
+    older_than_days: Optional[int] = None,
+    config_version: Optional[str] = None,
+    confirm: bool = False,
+):
+    """
+    Delete demand_ticker_history rows. ALL FILTERS ARE OPTIONAL but at
+    least one MUST be supplied; pass confirm=true to execute.
+
+    symbol:           limit to one ticker
+    older_than_days:  delete only rows scanned_at < (now - N days)
+    config_version:   limit to one scoring_config.VERSION
+
+    With no filters and confirm=true, all rows are deleted (full wipe).
+    A preview (would_delete count) is returned when confirm=false.
+    """
+    from database import get_engine
+    from sqlalchemy import text as _text
+
+    where: list[str] = []
+    params: dict = {}
+    if symbol:
+        where.append("symbol = :symbol")
+        params["symbol"] = symbol.upper()
+    if older_than_days is not None:
+        is_pg = "postgres" in str(get_engine().url)
+        if is_pg:
+            where.append("scanned_at < NOW() - INTERVAL :older_pg")
+            params["older_pg"] = f"{int(older_than_days)} days"
+        else:
+            where.append("scanned_at < datetime('now', :older)")
+            params["older"] = f"-{int(older_than_days)} days"
+    if config_version:
+        where.append("scoring_config_version = :cv")
+        params["cv"] = config_version
+
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    async with get_engine().connect() as conn:
+        count = (await conn.execute(_text(
+            f"SELECT COUNT(*) FROM demand_ticker_history{where_sql}"
+        ), params)).scalar() or 0
+
+        if not confirm:
+            return {
+                "ok":            True,
+                "would_delete":  count,
+                "confirm":       False,
+                "message":       "Pass confirm=true to execute the delete.",
+            }
+
+        await conn.execute(_text(f"DELETE FROM demand_ticker_history{where_sql}"), params)
+        await conn.commit()
+
+    return {"ok": True, "deleted": count, "confirm": True}
+
+
+# ── Backfill: hydrate old demand_ticker_history rows ─────────────────────────
+
+@app.post("/api/admin/backfill-demand-history")
+async def admin_backfill_demand_history(
+    background_tasks: BackgroundTasks,
+    limit: int = 500,
+    dry_run: bool = True,
+):
+    """
+    Re-score historical demand_ticker_history rows that pre-date the
+    bar-label-snapshot persistence (commit a378052). Walks rows where
+    tz_t_signal IS NULL AND scoring_config_version IS NULL, looks up
+    candles from candle_cache, re-runs score_demand_composite, and UPDATEs
+    the row in place. Old rows stay with their original demand score but
+    gain the bar-label snapshot for analytics.
+
+    limit:    max rows to process this call (default 500, raise for big jobs)
+    dry_run:  if true, just counts how many rows would be updated
+    """
+    from database import (
+        get_engine,
+        get_candle_cache,
+    )
+    from sqlalchemy import text as _text
+    from scanner.demand_composite_scanner import score_demand_composite
+    from scanner.scoring_config import VERSION as _CFG_VER
+
+    async with get_engine().connect() as conn:
+        result = await conn.execute(_text(
+            "SELECT id, symbol, scanned_at "
+            "FROM   demand_ticker_history "
+            "WHERE  tz_t_signal IS NULL AND scoring_config_version IS NULL "
+            "ORDER BY scanned_at DESC "
+            "LIMIT :limit"
+        ), {"limit": int(limit)})
+        candidates = [dict(r._mapping) for r in result.fetchall()]
+
+    if dry_run or not candidates:
+        return {
+            "ok":          True,
+            "dry_run":     dry_run,
+            "candidates":  len(candidates),
+            "message":     "Pass dry_run=false to execute." if dry_run else "Nothing to backfill.",
+        }
+
+    async def _run():
+        from database import get_session_factory, DemandTickerHistory
+        from sqlalchemy import select as _sel
+
+        updated = 0
+        skipped = 0
+        for row in candidates:
+            sym = row["symbol"]
+            try:
+                candles = await get_candle_cache(sym)
+                if not candles or len(candles) < 10:
+                    skipped += 1
+                    continue
+                # candle_cache uses o/h/l/c/v keys — scorer accepts that shape
+                stub_result = {"symbol": sym, "price": candles[-1].get("c"),
+                               "avg_volume": sum(c.get("v", 0) for c in candles[-20:]) / 20}
+                scored = score_demand_composite(stub_result, candles)
+                snap   = scored.get("bar_label_snapshot") or {}
+                async with get_session_factory()() as session:
+                    db_row = (await session.execute(
+                        _sel(DemandTickerHistory).where(DemandTickerHistory.id == row["id"])
+                    )).scalar_one_or_none()
+                    if not db_row:
+                        skipped += 1
+                        continue
+                    db_row.tz_t_signal            = snap.get("tz_t_signal")
+                    db_row.tz_z_signal            = snap.get("tz_z_signal")
+                    db_row.best_tz_t_signal_15bar = snap.get("best_tz_t_signal_15bar")
+                    db_row.best_tz_z_signal_15bar = snap.get("best_tz_z_signal_15bar")
+                    db_row.preup_token            = snap.get("preup_token")
+                    db_row.predn_token            = snap.get("predn_token")
+                    db_row.line3                  = snap.get("line3")
+                    db_row.line4                  = snap.get("line4")
+                    db_row.line5                  = snap.get("line5")
+                    db_row.l_digits               = snap.get("l_digits")
+                    db_row.scoring_config_version = f"{_CFG_VER}-backfill"
+                    await session.commit()
+                updated += 1
+            except Exception as exc:
+                logger.debug(f"[Backfill] {sym} id={row.get('id')} failed: {exc}")
+                skipped += 1
+        logger.info(f"[Backfill] demand_ticker_history updated={updated} skipped={skipped}")
+
+    background_tasks.add_task(_run)
+
+    return {
+        "ok":          True,
+        "dry_run":     False,
+        "candidates":  len(candidates),
+        "status":      "backfill_started",
+        "message":     f"Backfilling up to {len(candidates)} rows in background. Re-call to process the next batch.",
+    }
+
+
+def _parse_signals(ep: dict) -> list:
+    import json as _j
+    sigs = ep.get("confluence_signals") or ep.get("demand_signals") or []
+    if isinstance(sigs, str):
+        try:
+            sigs = _j.loads(sigs)
+        except Exception:
+            sigs = []
+    return sigs or []
+
+
+_SIGNAL_BOOL_COLS = [
+    "had_d_confluence_pre",
+    "had_core_d_beup_pre", "had_core_d_l34_pre",
+    "had_d6_beup_pre", "had_d4_beup_pre", "had_d3_beup_pre",
+    "had_l34_then_d4_3b_pre", "had_d4_then_beup_5b_pre", "had_d3_beup_toxic_pre",
+    "had_prime_buy_pre", "had_ats_prime_pre",
+    "had_valid_recent_setup", "had_valid_recent_trigger",
+    "had_valid_recent_confirm", "had_valid_full_sequence",
+    "had_breakout_retest", "had_spring_test_lps", "had_accumulation_like",
+    "had_compression",
+    "had_np_buy_candidate_pre", "had_np_watch_pre",
+    "had_late_confirm_sequence_pre", "had_expansion_risk_flag_pre",
+    "had_confirmed_structure_pre", "had_triggered_structure_pre",
+    "had_early_structure_pre", "had_setup_phase_pre",
+    "had_accumulation_ready_pre", "had_expansion_start_pre",
+    "had_overheated_expansion_pre",
+    "had_bull_stack_pre",
+    "demand_prime_at_breakout", "demand_high_at_breakout",
+    "demand_watch_or_better_at_breakout",
+    "ats_prime_at_breakout", "ats_setup_or_better_at_breakout",
+    "split_capped_demand_at_breakout", "illiquidity_capped_demand_at_breakout",
+    "has_split_near_episode", "has_reverse_split_near_episode",
+]
+
+_SIGNAL_CATEGORICAL_COLS = [
+    "demand_tier_at_breakout",
+    "ats_at_breakout",
+    "tz_t_signal_at_breakout",
+    "tz_z_signal_at_breakout",
+    "preup_token_at_breakout",
+    "line5_at_breakout",
+    "strongest_wyckoff_state",
+    "dominant_d_confluence_type_pre",
+    "best_new_pump_sequence_type",
+]
+
+
+def _episode_signals(ep: dict) -> list[str]:
+    """Derive a list of active signal flags from a raw_pattern_episode_features row."""
+    sigs: list[str] = []
+    for col in _SIGNAL_BOOL_COLS:
+        if ep.get(col):
+            sigs.append(col)
+    for col in _SIGNAL_CATEGORICAL_COLS:
+        v = ep.get(col)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s or s.upper() in ("NONE", "NULL", "UNKNOWN"):
+            continue
+        sigs.append(f"{col}={s}")
+    return sigs
+
+
+@app.get("/api/replay/pump-study/{run_id}/signal-lift")
+async def pump_study_signal_lift(run_id: int, baseline_max_multiple: float = 2.0):
+    """
+    Compute signal lift table for a pump study run.
+
+    Reads from the chained raw_pattern_episode_features run (which has
+    boolean / tier columns for every active signal at breakout).
+    Compares target group (episodes >= run's min_multiple) vs
+    baseline group (episodes < baseline_max_multiple).
+    Returns lift per signal, sorted by lift desc.
+    """
+    from database import (
+        get_pump_study_run,
+        get_raw_pattern_runs,
+        get_raw_pattern_episode_features,
+    )
+
+    run = await get_pump_study_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Run {run_id} not found")
+
+    raw_runs = await get_raw_pattern_runs(pump_study_run_id=run_id, limit=1)
+    raw_run = raw_runs[0] if raw_runs else None
+    raw_run_id = (raw_run or {}).get("id")
+
+    if not raw_run_id:
+        return {
+            "ok":           True,
+            "run_id":       run_id,
+            "raw_run_id":   None,
+            "n_target":     0,
+            "n_baseline":   0,
+            "signal_lift":  [],
+            "note":         "No raw-pattern-study run found for this pump study. "
+                            "Run /api/replay/raw-pattern-study/run to build features.",
+        }
+
+    episodes = await get_raw_pattern_episode_features(raw_run_id, limit=5000)
+
+    params = run.get("params") or {}
+    min_mult = float(params.get("min_multiple", 1.2))
+
+    target   = [e for e in episodes if (e.get("pump_multiple") or 0) >= min_mult]
+    baseline = [e for e in episodes if (e.get("pump_multiple") or 0) <  baseline_max_multiple]
+
+    n_target   = len(target)
+    n_baseline = len(baseline)
+    d_target   = n_target   or 1
+    d_baseline = n_baseline or 1
+
+    target_sigs   = [_episode_signals(e) for e in target]
+    baseline_sigs = [_episode_signals(e) for e in baseline]
+
+    all_signals: set[str] = set()
+    for s in target_sigs:   all_signals.update(s)
+    for s in baseline_sigs: all_signals.update(s)
+
+    rows = []
+    for sig in all_signals:
+        t_count = sum(1 for s in target_sigs   if sig in s)
+        b_count = sum(1 for s in baseline_sigs if sig in s)
+        t_rate  = t_count / d_target
+        b_rate  = b_count / d_baseline
+        lift    = round(t_rate / b_rate, 2) if b_rate > 0 else None
+        rows.append({
+            "signal":         sig,
+            "count":          t_count,
+            "target_count":   t_count,
+            "baseline_count": b_count,
+            "target_rate":    round(t_rate, 4),
+            "baseline_rate":  round(b_rate, 4),
+            "lift":           lift,
+        })
+
+    rows.sort(key=lambda r: ((r["lift"] or 0), r["target_count"]), reverse=True)
+
+    return {
+        "ok":           True,
+        "run_id":       run_id,
+        "raw_run_id":   raw_run_id,
+        "n_target":     n_target,
+        "n_baseline":   n_baseline,
+        "min_multiple": min_mult,
+        "baseline_max": baseline_max_multiple,
+        "signal_lift":  rows,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Raw Pattern Study endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _raw_pattern_markdown(run: dict, episodes: list[dict], comps: list[dict]) -> str:
+    """Deterministic markdown summary of a raw-pattern study run."""
+    lines = [
+        f"# Raw Pattern Study — Run {run['id']}",
+        f"",
+        f"**Status:** {run.get('status')}  ",
+        f"**Pump Study Run:** {run.get('pump_study_run_id')}  ",
+        f"**Episodes analysed:** {run.get('episode_feature_count', 0)}  ",
+        f"**Daily feature rows:** {run.get('raw_daily_count', 0)}  ",
+        f"**Comparison rows:** {run.get('comparison_count', 0)}  ",
+        f"",
+    ]
+    # Group summary
+    from collections import Counter
+    group_counts = Counter(ep.get("group_type") for ep in episodes)
+    if group_counts:
+        lines += ["## Group Breakdown", ""]
+        for g, n in sorted(group_counts.items()):
+            lines.append(f"- **{g}**: {n} episodes")
+        lines.append("")
+    # Comparison highlights: median per feature per group
+    if comps:
+        lines += ["## Feature Medians by Group", ""]
+        feat_groups: dict[str, dict[str, Any]] = {}
+        for c in comps:
+            feat_groups.setdefault(c["feature_name"], {})[c["group_name"]] = c.get("median_value")
+        for feat, groups in sorted(feat_groups.items()):
+            parts = "  |  ".join(f"{g}: {v}" for g, v in sorted(groups.items()) if v is not None)
+            if parts:
+                lines.append(f"- **{feat}**: {parts}")
+    return "\n".join(lines)
+
+
+# ── 1. Launch ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/replay/raw-pattern-study/run")
+async def raw_pattern_study_start(body: dict, background_tasks: BackgroundTasks):
+    """
+    Launch a new Raw Pattern Study run tied to an existing pump study run.
+
+    Body (JSON):
+        pump_study_run_id   int    required
+        notes               str    optional
+
+    Returns immediately with raw_run_id.
+    Poll GET /api/replay/raw-pattern-study/{run_id} for status.
+    """
+    from database import create_raw_pattern_run, get_pump_study_run, update_raw_pattern_run
+
+    psrun_id = body.get("pump_study_run_id")
+    if not psrun_id:
+        raise HTTPException(400, detail="pump_study_run_id is required")
+
+    ps_run = await get_pump_study_run(int(psrun_id))
+    if not ps_run:
+        raise HTTPException(404, detail=f"Pump study run {psrun_id} not found")
+
+    notes  = body.get("notes")
+    run_id = await create_raw_pattern_run(
+        pump_study_run_id=int(psrun_id),
+        start_date=ps_run.get("start_date"),
+        end_date=ps_run.get("end_date"),
+        notes=notes,
+    )
+
+    async def _run(raw_run_id: int, pump_study_run_id: int) -> None:
+        from database import update_raw_pattern_run as _upd
+        from replay.pump_study_engine import (
+            build_raw_pattern_daily_features,
+            build_raw_pattern_episode_features_timing,
+            build_raw_pattern_episode_features_candle,
+            build_raw_pattern_episode_features_volume_compression,
+            build_raw_pattern_episode_features_structure,
+            build_raw_pattern_episode_features_ema,
+            build_raw_pattern_episode_features_new_pump,
+            build_raw_pattern_episode_features_demand,
+            build_raw_pattern_episode_features_structural_v2,
+            build_raw_pattern_episode_features_splits,
+            build_raw_pattern_comparisons,
+        )
+        try:
+            await _upd(raw_run_id, {"status": "running",
+                                    "started_at": datetime.utcnow()})
+            await build_raw_pattern_daily_features(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_timing(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_candle(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_volume_compression(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_structure(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_ema(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_new_pump(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_demand(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_structural_v2(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_episode_features_splits(raw_run_id, pump_study_run_id)
+            await build_raw_pattern_comparisons(raw_run_id, pump_study_run_id)
+            await _upd(raw_run_id, {"status": "complete",
+                                    "finished_at": datetime.utcnow()})
+
+        except Exception as exc:
+            logger.error("raw_pattern_study run_id=%s failed: %s", raw_run_id, exc)
+            await _upd(raw_run_id, {"status": "error",
+                                    "error_message": str(exc)[:500],
+                                    "finished_at": datetime.utcnow()})
+
+    background_tasks.add_task(_run, run_id, int(psrun_id))
+
+    return {
+        "ok":                 True,
+        "raw_run_id":         run_id,
+        "pump_study_run_id":  int(psrun_id),
+        "status":             "running",
+        "message":            f"Raw Pattern Study launched. Poll GET /api/replay/raw-pattern-study/{run_id}",
+    }
+
+
+# ── 2. List runs ──────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/runs")
+async def raw_pattern_study_list_runs(
+    pump_study_run_id: Optional[int] = None,
+    limit: int = 20,
+):
+    """List raw-pattern-study runs, most recent first."""
+    from database import get_raw_pattern_runs
+    runs = await get_raw_pattern_runs(pump_study_run_id=pump_study_run_id, limit=limit)
+    return {"ok": True, "count": len(runs), "runs": runs}
+
+
+# ── 3. Run detail ─────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}")
+async def raw_pattern_study_detail(run_id: int):
+    """Return metadata, counts, and NP coverage stats for one raw-pattern-study run."""
+    from database import get_raw_pattern_run, get_np_coverage_stats
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    np_coverage = await get_np_coverage_stats(run_id)
+    return {"ok": True, "run": run, "np_coverage": np_coverage}
+
+
+# ── 4. Episode features ───────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/episodes")
+async def raw_pattern_study_episodes(
+    run_id: int,
+    group_type: Optional[str] = None,
+    limit: int = 1000,
+):
+    """Return raw_pattern_episode_features rows for a run."""
+    from database import get_raw_pattern_run, get_raw_pattern_episode_features
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    episodes = await get_raw_pattern_episode_features(
+        run_id, group_type=group_type, limit=limit
+    )
+    return {"ok": True, "run_id": run_id, "count": len(episodes), "episodes": episodes}
+
+
+# ── 5. Daily features ─────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/daily-features")
+async def raw_pattern_study_daily_features(
+    run_id: int,
+    episode_id: Optional[int] = None,
+    phase: Optional[str] = None,
+    limit: int = 2000,
+):
+    """Return raw_pattern_daily_features rows for a run."""
+    from database import get_raw_pattern_run, get_raw_pattern_daily_features
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    rows = await get_raw_pattern_daily_features(
+        run_id, episode_id=episode_id, phase=phase, limit=limit
+    )
+    return {"ok": True, "run_id": run_id, "count": len(rows), "rows": rows}
+
+
+# ── 5b. Clusters (proxy to the underlying pump-study) ─────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/clusters")
+async def raw_pattern_study_clusters(run_id: int):
+    """
+    Cluster view for a raw-pattern-study run.
+
+    Clusters are a pump-study concept (raw detections collapsed into canonical
+    episodes), so this endpoint resolves the parent pump_study_run_id and
+    returns the same shape as /api/replay/pump-study/{id}/clusters.
+    """
+    from database import (
+        get_raw_pattern_run,
+        get_pump_clusters,
+        get_pump_episode_detections,
+    )
+
+    raw_run = await get_raw_pattern_run(run_id)
+    if not raw_run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    pump_run_id = raw_run.get("pump_study_run_id")
+    if not pump_run_id:
+        raise HTTPException(400, detail=f"Raw pattern run {run_id} has no pump_study_run_id")
+
+    clusters = await get_pump_clusters(pump_run_id)
+    raw_dets = await get_pump_episode_detections(pump_run_id)
+
+    det_by_cluster: dict[str, list] = {}
+    for d in raw_dets:
+        cid = d.get("cluster_id")
+        if cid:
+            det_by_cluster.setdefault(cid, []).append(d)
+    for cl in clusters:
+        cl["raw_detections"] = det_by_cluster.get(cl["cluster_id"], [])
+
+    return {
+        "ok":             True,
+        "run_id":         run_id,
+        "pump_study_run_id": pump_run_id,
+        "clusters":       clusters,
+        "cluster_count":  len(clusters),
+        "raw_det_count":  len(raw_dets),
+    }
+
+
+# ── 6. Comparisons ────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/comparisons")
+async def raw_pattern_study_comparisons(
+    run_id: int,
+    group_name: Optional[str] = None,
+    feature_name: Optional[str] = None,
+):
+    """
+    Return comparison stats and member rows for a run.
+
+    Response:
+        comparisons  — list of (group_name, feature_name) stat rows
+        members      — list of member rows (per-episode feature snapshots)
+    """
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_comparison_members,
+    )
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    comps   = await get_raw_pattern_comparisons(run_id, group_name=group_name,
+                                                feature_name=feature_name)
+    members = await get_raw_pattern_comparison_members(run_id, group_name=group_name,
+                                                       limit=5000)
+    return {
+        "ok":          True,
+        "run_id":      run_id,
+        "comparisons": comps,
+        "members":     members,
+    }
+
+
+# ── 7. Export ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/export")
+async def raw_pattern_study_export(run_id: int, format: str = "json"):
+    """
+    Download a raw-pattern-study export.
+
+    format=json     — full structured export (run + episodes + comparisons)
+    format=csv      — flat episode feature rows
+    format=markdown — deterministic text summary
+    """
+    if format not in ("json", "csv", "markdown"):
+        raise HTTPException(400, detail="format must be one of: json, csv, markdown")
+
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_episode_features,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_comparison_members,
+    )
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    episodes = await get_raw_pattern_episode_features(run_id, limit=5000)
+    comps    = await get_raw_pattern_comparisons(run_id)
+
+    if format == "csv":
+        if not episodes:
+            raise HTTPException(404, detail="No episode features found for this run")
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=list(episodes[0].keys()))
+        writer.writeheader()
+        writer.writerows(episodes)
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="raw_pattern_{run_id}_episodes.csv"'},
+        )
+
+    if format == "markdown":
+        content = _raw_pattern_markdown(run, episodes, comps)
+        return StreamingResponse(
+            iter([content]),
+            media_type="text/markdown",
+            headers={"Content-Disposition":
+                     f'attachment; filename="raw_pattern_{run_id}_summary.md"'},
+        )
+
+    # json (default)
+    from replay.pump_study_engine import extract_top_schemes, generate_engine_patch_plan
+    from database import get_raw_pattern_ai_summary
+    members     = await get_raw_pattern_comparison_members(run_id, limit=5000)
+    engine_data = generate_engine_patch_plan(comps)
+    ai_summary  = await get_raw_pattern_ai_summary(run_id)
+    payload = json.dumps({
+        "export_type":      "raw_pattern_study",
+        "run":              run,
+        "episodes":         episodes,
+        "comparisons":      comps,
+        "members":          members,
+        "top_schemes":      extract_top_schemes(episodes).get("schemes", []),
+        "feature_verdicts": engine_data.get("feature_verdicts", []),
+        "engine_plan":      engine_data,
+        "ai_summary":       ai_summary,
+        "exported_at":      datetime.utcnow().isoformat() + "Z",
+    }, default=str)
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="raw_pattern_{run_id}_full.json"'},
+    )
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/daily-features/export")
+async def raw_pattern_daily_features_export(run_id: int, phase: Optional[str] = None):
+    """
+    Download per-bar daily features for a raw-pattern-study run as CSV.
+    Expands feature_json so L3/4/5 fields (body_class, wick_class, gap_class,
+    range_class, vix_token, psar_token, rsi2_token, line3, line4, line5) appear
+    as dedicated columns — ready for verification in a spreadsheet.
+
+    ?phase=PRE|PUMP|POST   (optional) filter to a single phase window.
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_daily_features
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+
+    rows = await get_raw_pattern_daily_features(run_id, phase=phase, limit=50000)
+    if not rows:
+        raise HTTPException(404, detail="No daily features found for this run")
+
+    L345_EXTRA = [
+        "body_class", "wick_class", "line3",
+        "gap_class", "range_class", "line4",
+        "vix_token", "psar_token", "rsi2_token", "line5",
+    ]
+    BASE_COLS = [
+        "id", "run_id", "episode_id", "symbol", "date", "phase",
+        "relative_day_from_start", "relative_day_from_peak",
+        "open", "high", "low", "close", "volume", "dollar_volume",
+        "gap_pct", "intraday_range_pct", "body_pct",
+        "upper_wick_pct", "lower_wick_pct", "close_position_in_bar",
+        "wide_range_bar", "narrow_range_bar",
+        "strong_close_near_high", "weak_close_near_low",
+        "volume_vs_avg20", "volume_zscore", "abnormal_volume_day", "dryup_day",
+        "atr", "atr_pct", "atr_expansion_state",
+        "compression_state", "bb_squeeze_bars",
+        "bullish_engulfing", "bearish_engulfing",
+        "inside_bar", "outside_bar", "doji_like", "reclaim_bar", "expansion_bar",
+    ] + L345_EXTRA
+
+    flat = []
+    for r in rows:
+        fj = r.get("feature_json") or {}
+        row = {col: r.get(col) for col in BASE_COLS if col not in L345_EXTRA}
+        for f in L345_EXTRA:
+            row[f] = fj.get(f, "")
+        flat.append(row)
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=BASE_COLS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(flat)
+    suffix = f"_{phase.lower()}" if phase else ""
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="raw_pattern_{run_id}_bars{suffix}.csv"'},
+    )
+
+
+# ── Pattern Discovery endpoints ───────────────────────────────────────────────
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/discover")
+async def start_pattern_discovery(run_id: int, body: dict, background_tasks: BackgroundTasks):
+    """
+    Launch pattern discovery for a completed raw-pattern-study run.
+    body: { mode, windows, exclude_split_artifacts, save_mode }
+    Runs in background; poll /discover/status to track progress.
+    """
+    from replay.pattern_miner import run_discovery, get_discovery_status
+
+    status = get_discovery_status(run_id)
+    if status.get("running"):
+        return {"status": "ALREADY_RUNNING", "phase": status.get("phase")}
+
+    mode          = body.get("mode", "both")
+    windows       = body.get("windows", [1, 2, 3, 5, 10])
+    exclude_split = body.get("exclude_split_artifacts", True)
+    save_mode     = body.get("save_mode", "compact")
+
+    async def _run():
+        try:
+            await run_discovery(run_id, mode=mode, windows=windows,
+                                exclude_split_artifacts=exclude_split,
+                                save_mode=save_mode)
+        except Exception as exc:
+            from replay.pattern_miner import _set_phase
+            _set_phase(run_id, "ERROR", error=str(exc)[:300])
+            logger.exception(f"[Discovery] run={run_id} failed: {exc}")
+
+    background_tasks.add_task(_run)
+    return {"status": "STARTED", "run_id": run_id, "mode": mode,
+            "windows": windows, "save_mode": save_mode}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/status")
+async def get_pattern_discovery_status(run_id: int):
+    """Poll discovery progress for a run."""
+    from replay.pattern_miner import get_discovery_status
+    return get_discovery_status(run_id)
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/results")
+async def get_pattern_discovery_results(run_id: int):
+    """Return all discovered patterns for a run, grouped by source_type."""
+    from database import get_discovered_patterns
+    patterns = await get_discovered_patterns(run_id)
+    if not patterns:
+        raise HTTPException(404, detail="No discovered patterns found for this run. Run Pattern Discovery first.")
+
+    by_source: dict = {}
+    for p in patterns:
+        src = p.get("source_type") or "EPISODE_AGGREGATE"
+        by_source.setdefault(src, []).append(p)
+
+    boost    = [p for p in patterns if p.get("recommendation") == "BOOST"]
+    increase = [p for p in patterns if p.get("recommendation") == "INCREASE"]
+    top_lift = sorted(
+        [p for p in patterns if p.get("lift_vs_false_positive") is not None],
+        key=lambda p: p["lift_vs_false_positive"], reverse=True,
+    )[:20]
+
+    return {
+        "patterns":         patterns,
+        "by_source_type":   by_source,
+        "top_by_lift":      top_lift,
+        "boost_patterns":   boost,
+        "increase_patterns": increase,
+        "summary": {
+            "total":          len(patterns),
+            "boost_count":    len(boost),
+            "increase_count": len(increase),
+            "penalize_count": len([p for p in patterns if p.get("recommendation") == "PENALIZE"]),
+            "v1a_count":      len(by_source.get("EPISODE_AGGREGATE", [])),
+            "v1b_count":      sum(len(v) for k, v in by_source.items() if k != "EPISODE_AGGREGATE"),
+        },
+    }
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/discover/export-full")
+async def export_pattern_discovery(run_id: int, section: str = "compact"):
+    """
+    Export discovered patterns.
+    section: compact | accepted | rankings | summary | episodes | full
+    """
+    from database import get_discovered_patterns
+    patterns = await get_discovered_patterns(run_id)
+
+    if section == "accepted":
+        data = [p for p in patterns if p.get("status") == "ACCEPTED"]
+    elif section == "rankings":
+        data = sorted(
+            [p for p in patterns if p.get("lift_vs_false_positive") is not None],
+            key=lambda p: p["lift_vs_false_positive"], reverse=True,
+        )
+    elif section == "compact":
+        data = [p for p in patterns
+                if p.get("recommendation") in ("BOOST", "INCREASE", "PENALIZE")
+                or (p.get("count_detected_4x") or 0) >= 3]
+    elif section == "summary":
+        boost    = [p for p in patterns if p.get("recommendation") == "BOOST"]
+        increase = [p for p in patterns if p.get("recommendation") == "INCREASE"]
+        penalize = [p for p in patterns if p.get("recommendation") == "PENALIZE"]
+        # Group by family
+        by_family: dict = {}
+        for p in patterns:
+            fam = p.get("feature_family") or "OTHER"
+            by_family.setdefault(fam, []).append(p)
+        return {
+            "run_id":            run_id,
+            "total_patterns":    len(patterns),
+            "boost_count":       len(boost),
+            "increase_count":    len(increase),
+            "penalize_count":    len(penalize),
+            "by_family":         {k: len(v) for k, v in by_family.items()},
+            "top_boost":         boost[:10],
+            "top_increase":      increase[:10],
+            "top_penalize":      penalize[:10],
+        }
+    elif section == "episodes":
+        # Map signal_id → list of episode conditions
+        return {"run_id": run_id, "patterns": patterns,
+                "note": "Use machine_conditions field on each pattern for episode matching logic"}
+    else:  # full
+        data = patterns
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"run_id": run_id, "section": section,
+                         "count": len(data), "patterns": data})
+
+
+# ── 8. AI summary ─────────────────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/ai-summary")
+async def raw_pattern_study_ai_summary(run_id: int):
+    """
+    Lazy AI pattern-analysis for a completed raw-pattern study run.
+
+    On first call: builds a deterministic evidence bundle from raw_pattern_comparisons
+    and raw_pattern_episode_features, calls Claude, stores the result, returns it.
+    On subsequent calls: returns the cached row immediately.
+
+    Evidence is 100% price/volume/indicator-derived.  No catalyst or news data.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(503, detail="ANTHROPIC_API_KEY not configured")
+
+    from database import (
+        get_raw_pattern_run,
+        get_raw_pattern_episode_features,
+        get_raw_pattern_comparisons,
+        get_raw_pattern_ai_summary,
+        save_raw_pattern_ai_summary,
+    )
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(409, detail=f"Run {run_id} status is '{run.get('status')}'. AI summary requires a completed run.")
+
+    # ── Return cached result ──────────────────────────────────────────────────
+    cached = await get_raw_pattern_ai_summary(run_id)
+    if cached:
+        if cached.get("parse_failed"):
+            return {
+                "ok": False, "parse_failed": True, "run_id": run_id, "cached": True,
+                "message": "AI summary could not be parsed — model returned malformed JSON.",
+                "parse_error": cached.get("parse_error"),
+                "raw_text": (cached.get("raw_response") or "")[:500],
+                "model_used": cached.get("model_used"),
+            }
+        cached.update({"ok": True, "cached": True, "generated_at": cached.get("created_at")})
+        return cached
+
+    # ── Build evidence bundle ─────────────────────────────────────────────────
+    episodes = await get_raw_pattern_episode_features(run_id, limit=2000)
+    comps    = await get_raw_pattern_comparisons(run_id)
+
+    # Group counts — explicitly note absent groups
+    from collections import Counter
+    group_counts = dict(Counter(ep.get("group_type") for ep in episodes if ep.get("group_type")))
+    all_groups   = ["4x_pump", "normal_winner", "false_positive", "missed_mover"]
+    absent_groups = [g for g in all_groups if g not in group_counts]
+
+    # Pivot comparisons: { feature → { group → stats + flags } }
+    pivot: dict[str, dict] = {}
+    feature_meta: dict[str, dict] = {}   # { feature → {priority, flags} } — one entry per feature
+    for c in comps:
+        fn    = c.get("feature_name")
+        gn    = c.get("group_name")
+        extra = c.get("stats") or {}          # stats_json unpacked by DB layer
+        if fn and gn:
+            pivot.setdefault(fn, {})[gn] = {
+                "median": c.get("median_value"),
+                "mean":   c.get("mean_value"),
+                "p25":    c.get("p25_value"),
+                "p75":    c.get("p75_value"),
+                "n":      c.get("member_count"),
+            }
+            # Keep first-seen meta per feature (same priority/flags across groups)
+            if fn not in feature_meta and extra:
+                feature_meta[fn] = {
+                    "priority":          extra.get("priority", "UNKNOWN"),
+                    "low_variance":      extra.get("low_variance_flag", False),
+                    "always_on":         extra.get("always_on_flag",    False),
+                    "outlier_risk":      extra.get("outlier_risk_flag", False),
+                }
+
+    # Separate features by priority tier for a focused evidence view
+    primary_features   = [f for f, m in feature_meta.items() if m.get("priority") == "PRIMARY"]
+    secondary_features = [f for f, m in feature_meta.items() if m.get("priority") == "SECONDARY"]
+    flagged_features   = [f for f, m in feature_meta.items()
+                          if m.get("low_variance") or m.get("always_on") or m.get("outlier_risk")]
+
+    evidence = {
+        "run_params": {
+            "date_range":            f"{run.get('start_date')} to {run.get('end_date')}",
+            "pump_study_run_id":     run.get("pump_study_run_id"),
+            "episode_feature_count": run.get("episode_feature_count"),
+            "comparison_count":      run.get("comparison_count"),
+        },
+        "group_counts":        group_counts,
+        "absent_groups":       absent_groups,
+        "primary_features":    primary_features,
+        "secondary_features":  secondary_features,
+        "flagged_low_signal":  flagged_features,
+        "feature_meta":        feature_meta,
+        "feature_stats_by_group": pivot,
+        "data_limitations": {
+            "catalyst_news_available": False,
+            "post_factum_labels_excluded": ["peak_day", "fade_day", "dump_day"],
+            "missed_mover_excluded": True,
+            "missed_mover_exclusion_reason": (
+                "missed_mover has no deterministic event anchor dates "
+                "(no pump_start_date / peak_date), so no PRE-window feature extraction "
+                "is structurally possible. It is formally excluded from episode-feature "
+                "comparison. Do not treat its absence as missing data."
+            ),
+            "note": (
+                "No external news or catalyst data. "
+                "peak_day/fade_day/dump_day are outcome labels — not usable as early signals. "
+                "Analysis limited to pre-breakout price, volume, and sequence features."
+            ),
+        },
+    }
+
+    evidence_compact = json.dumps(evidence, separators=(",", ":"), default=str)
+
+    _MODEL = "claude-haiku-4-5-20251001"
+
+    prompt = (
+        "You are a quantitative research assistant. "
+        "All evidence below is price/volume/sequence only — no news, no catalysts.\n\n"
+        "CRITICAL RULES:\n"
+        "  - peak_day, fade_day, dump_day are POST-FACTUM outcome labels. "
+        "Never use them as early discovery signals.\n"
+        "  - If a group listed in absent_groups is missing from the data, say so explicitly "
+        "instead of drawing conclusions about it.\n"
+        "  - missed_mover is FORMALLY EXCLUDED from episode-feature comparison because it has "
+        "no deterministic anchor dates. Do NOT treat it as absent data — acknowledge this "
+        "structural exclusion explicitly in the limitations array.\n"
+        "  - Focus Q1–Q3 on PRIMARY features listed in primary_features.\n"
+        "  - Each array item must be under 25 words. No newlines inside strings.\n\n"
+        "EVIDENCE:\n"
+        f"{evidence_compact}\n\n"
+        "Answer 5 questions using ONLY the evidence above:\n"
+        "Q1 (repeated_patterns): Which pre-breakout sequence/duration/structure patterns "
+        "appear most consistently before 4x_pump? Emphasise PRIMARY features: "
+        "compression_days_pre, days_from_first_compression_to_breakout, "
+        "days_from_breakout_to_peak, dryup_day_count_pre, had_accumulation_like, "
+        "had_spring_test_lps, had_bull_stack_pre, days_above_ema50_pre, "
+        "avg_ema_spread_pre, ema50_reclaim_count_pre.\n"
+        "Q2 (separators_vs_normal_winner): Which PRIMARY features show the largest median "
+        "gap between 4x_pump and normal_winner? Include EMA ribbon fields: "
+        "had_bull_stack_pre, days_above_ema50_pre, avg_ema_spread_pre, "
+        "ema50_reclaim_count_pre. If normal_winner is absent, state that.\n"
+        "Q3 (separators_vs_false_positive): Which PRIMARY features show the largest median "
+        "gap between 4x_pump and false_positive? If false_positive is absent, state that.\n"
+        "Q4 (noisy_features): Which features are low-signal — low variance, near-identical "
+        "medians across groups, always-on binary, or extreme outlier distortion? "
+        "Do NOT list peak_day/fade_day/dump_day as noisy — they are excluded by design.\n"
+        "Q5 (scanner_v2_changes): List 3–5 specific changes to improve Scanner v2 based on "
+        "the raw pattern data: d_confluence weights, structure_score thresholds, "
+        "compression_expansion_state gates, expansion_timing_risk calibration, "
+        "priority_score flag adjustments, or AVOID routing improvements.\n\n"
+        "Output ONLY this JSON — no markdown, no prose, no code fences:\n"
+        '{"repeated_patterns":["..."],'
+        '"separators_vs_normal_winner":["..."],'
+        '"separators_vs_false_positive":["..."],'
+        '"noisy_features":["..."],'
+        '"scanner_v2_changes":["..."],'
+        '"recommendation":"one sentence",'
+        '"limitations":["..."]}'
+    )
+
+    # ── Call Claude ───────────────────────────────────────────────────────────
+    raw_text = ""
+    try:
+        ai_client = anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0)
+        response  = await ai_client.messages.create(
+            model      = _MODEL,
+            max_tokens = 1400,
+            system     = (
+                "You are a quantitative research assistant. "
+                "Output only a single valid JSON object — "
+                "no markdown fences, no prose, no newlines inside string values."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = response.content[0].text.strip()
+    except Exception as exc:
+        logger.error("raw_pattern_ai_summary run_id=%s: API call failed: %s", run_id, exc)
+        raise HTTPException(500, detail=str(exc))
+
+    # ── Safe JSON parse with one repair attempt ───────────────────────────────
+    analysis  = None
+    parse_err = None
+    try:
+        analysis = json.loads(raw_text)
+    except json.JSONDecodeError as exc1:
+        logger.warning("raw_pattern_ai_summary: initial JSON parse failed (%s); attempting repair", exc1)
+        try:
+            analysis = json.loads(_repair_json(raw_text))
+            logger.info("raw_pattern_ai_summary: JSON repair succeeded")
+        except json.JSONDecodeError as exc2:
+            parse_err = str(exc2)
+            logger.error("raw_pattern_ai_summary: JSON repair also failed: %s", exc2)
+
+    # ── Persist ───────────────────────────────────────────────────────────────
+    if analysis is None:
+        await save_raw_pattern_ai_summary(run_id, {
+            "analysis": {}, "recommendation": "", "evidence": evidence,
+            "limitations": "", "model_used": _MODEL,
+            "parse_failed": True, "raw_response": raw_text, "parse_error": parse_err,
+        })
+        return {
+            "ok": False, "parse_failed": True, "run_id": run_id, "cached": False,
+            "message": "AI summary could not be parsed — model returned malformed JSON.",
+            "parse_error": parse_err, "raw_text": raw_text[:500] if raw_text else "",
+            "model_used": _MODEL,
+        }
+
+    limitations_text = "\n".join(analysis.get("limitations", []))
+    await save_raw_pattern_ai_summary(run_id, {
+        "analysis":       analysis,
+        "recommendation": analysis.get("recommendation", ""),
+        "evidence":       evidence,
+        "limitations":    limitations_text,
+        "model_used":     _MODEL,
+        "parse_failed":   False,
+        "raw_response":   None,
+        "parse_error":    None,
+    })
+
+    return {
+        "ok":          True,
+        "run_id":      run_id,
+        "analysis":    analysis,
+        "evidence_summary": {
+            "groups":         list(group_counts.keys()),
+            "features_compared": len(pivot),
+            "episodes_analyzed": len(episodes),
+        },
+        "model_used":    _MODEL,
+        "generated_at":  datetime.utcnow().isoformat() + "Z",
+        "cached":        False,
+    }
+
+
+# ── 9. Repair ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/repair")
+async def raw_pattern_study_repair(run_id: int):
+    """
+    Repair a completed raw-pattern run where group_type was empty and
+    comparison_count is 0.
+
+    Resolves episode → group mappings from pump_comparison_members,
+    patches group_type on raw_pattern_episode_features rows,
+    clears stale comparison rows, and rebuilds comparisons.
+    Safe to call multiple times (idempotent).
+    """
+    from database import get_raw_pattern_run
+    from replay.pump_study_engine import repair_raw_pattern_group_types
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if not run.get("pump_study_run_id"):
+        raise HTTPException(400, detail="Run has no pump_study_run_id — cannot resolve groups.")
+
+    result = await repair_raw_pattern_group_types(run_id, run["pump_study_run_id"])
+    return {"ok": True, "run_id": run_id, "pump_study_run_id": run["pump_study_run_id"], **result}
+
+
+@app.post("/api/replay/raw-pattern-study/{run_id}/repair-np-fields")
+async def raw_pattern_repair_np_fields(run_id: int, background_tasks: BackgroundTasks):
+    """
+    Backfill NP episode feature fields (had_valid_recent_*, best_new_pump_*,
+    all count-based aggregates) for a completed run where they are null.
+
+    Runs build_raw_pattern_episode_features_new_pump() then rebuilds
+    comparison rows so new fields appear in comparison stats.
+    Safe to call on any completed run — idempotent.
+    """
+    from database import get_raw_pattern_run, update_raw_pattern_run as _upd
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    pump_study_run_id = run.get("pump_study_run_id")
+    if not pump_study_run_id:
+        raise HTTPException(400, detail="Run has no pump_study_run_id.")
+
+    async def _repair(raw_run_id: int, ps_run_id: int) -> None:
+        from replay.pump_study_engine import (
+            build_raw_pattern_episode_features_new_pump,
+            build_raw_pattern_comparisons,
+        )
+        try:
+            patched = await build_raw_pattern_episode_features_new_pump(raw_run_id, ps_run_id)
+            comp    = await build_raw_pattern_comparisons(raw_run_id, ps_run_id)
+            logger.info("repair-np-fields run_id=%s patched=%s comp_rows=%s", raw_run_id, patched, comp)
+        except Exception as exc:
+            logger.error("repair-np-fields run_id=%s failed: %s", raw_run_id, exc)
+
+    background_tasks.add_task(_repair, run_id, pump_study_run_id)
+
+    return {
+        "ok":               True,
+        "run_id":           run_id,
+        "pump_study_run_id": pump_study_run_id,
+        "message":          "NP field backfill started in background. "
+                            f"Poll GET /api/replay/raw-pattern-study/{run_id} for status.",
+    }
+
+
+# ── 10. Top pre-pump schemes ───────────────────────────────────────────────────
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/top-schemes")
+async def raw_pattern_study_top_schemes(run_id: int):
+    """
+    Deterministic extraction of the top 3–5 repeated pre-pump sequence schemes
+    from stored episode features for a completed raw-pattern run.
+
+    Uses ONLY pre-breakout features.  peak / fade / dump are excluded entirely.
+    No AI — purely deterministic counting and ranking.
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_episode_features
+    from replay.pump_study_engine import extract_top_schemes
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run is not complete yet.")
+
+    episodes = await get_raw_pattern_episode_features(run_id, limit=5000)
+    result   = extract_top_schemes(episodes)
+    return {"ok": True, "run_id": run_id, **result}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/engine-patch-plan")
+async def raw_pattern_study_engine_patch_plan(run_id: int):
+    """
+    Deterministic Scanner v2 patch plan derived from raw pattern comparison medians.
+
+    Classifies each comparison feature as BOOST / INCREASE / PENALIZE / REDUCE / IGNORE
+    based on the separation ratio between 4x_pump and false_positive (or normal_winner
+    when false_positive is absent).
+
+    Returns 7 domain-area recommendations covering:
+      sequence_duration_weights, compression_persistence, volume_sweet_spot,
+      accumulation_spring_reclaim, ema_ribbon_quality, body_wick_noise_reduction,
+      scanner_v2_structural (NP signal chain: L34/G4/B2, d_confluence, structure_phase).
+
+    Purely deterministic — no AI, no external calls.
+    """
+    from database import get_raw_pattern_run, get_raw_pattern_comparisons
+    from replay.pump_study_engine import generate_engine_patch_plan
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run is not complete yet.")
+
+    comps = await get_raw_pattern_comparisons(run_id)
+    if not comps:
+        return {
+            "ok": True, "run_id": run_id,
+            "feature_verdicts": [], "recommendations": [], "has_data": False,
+            "summary": {"note": "No comparison data available for this run yet."},
+        }
+    try:
+        result = generate_engine_patch_plan(comps)
+    except Exception as exc:
+        logger.warning("engine_patch_plan run_id=%s failed: %s", run_id, exc)
+        return {
+            "ok": True, "run_id": run_id,
+            "feature_verdicts": [], "recommendations": [], "has_data": False,
+            "summary": {"note": f"Plan generation failed: {exc}"},
+        }
+    return {"ok": True, "run_id": run_id, "has_data": True, **result}
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/research-context")
+async def raw_pattern_research_context(run_id: int):
+    """
+    Export a compact, AI-prompt-ready research context from a completed
+    Raw Pattern Study run.  Includes top schemes, feature verdicts, key
+    timing medians, and the cached AI recommendation.
+
+    Used by the Scanner AI Analyst and Pump Study AI to inject prior
+    quantitative research findings into their prompts.
+    """
+    from database import get_raw_pattern_run
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run must be complete to export research context.")
+
+    context_text = await _build_research_context_text(run_id)
+    if not context_text:
+        raise HTTPException(500, detail="Failed to build research context — run may have no comparison data.")
+
+    return {
+        "ok":           True,
+        "run_id":       run_id,
+        "date_range":   f"{run.get('start_date')} to {run.get('end_date')}",
+        "context_text": context_text,
+    }
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/np-count-bundle")
+async def raw_pattern_np_count_bundle(run_id: int, fmt: str = "json"):
+    """
+    NP count-based research bundle for a Raw Pattern Study run.
+    Compares l34/fri34/g4/b2 fire counts, isolated signal counts,
+    full-sequence density, and validity-freshness density across
+    episode groups (4x_pump, false_positive, normal_winner, missed_mover).
+
+    ?fmt=markdown  → returns plain-text Markdown report
+    ?fmt=json      → returns structured JSON (default)
+    """
+    from replay.research_bundle import (
+        build_raw_pattern_research_bundle,
+        render_raw_pattern_bundle_markdown,
+    )
+    from fastapi.responses import PlainTextResponse
+
+    try:
+        bundle = await build_raw_pattern_research_bundle(run_id)
+    except ValueError as exc:
+        raise HTTPException(404, detail=str(exc))
+    except Exception as exc:
+        logger.exception("np_count_bundle run_id=%s failed", run_id)
+        raise HTTPException(500, detail=str(exc))
+
+    if fmt == "markdown":
+        return PlainTextResponse(render_raw_pattern_bundle_markdown(bundle))
+    return bundle
+
+
+@app.get("/api/replay/raw-pattern-study/{run_id}/split-impact")
+async def raw_pattern_split_impact(run_id: int):
+    """
+    Split / reverse-split impact analysis for a completed Raw Pattern Study run.
+
+    Returns performance_by_split_context, performance_by_reverse_split_timing,
+    split_artifact_candidates, split_impact_summary, and
+    scanner_v2_split_patch_recommendations.
+    """
+    from database import get_raw_pattern_run
+    from replay.pump_study_engine import build_split_impact_analysis
+
+    run = await get_raw_pattern_run(run_id)
+    if not run:
+        raise HTTPException(404, detail=f"Raw pattern run {run_id} not found")
+    if run.get("status") != "complete":
+        raise HTTPException(400, detail="Run must be complete to analyse split impact.")
+
+    try:
+        result = await build_split_impact_analysis(run_id)
+    except Exception as exc:
+        logger.exception("split_impact run_id=%s failed", run_id)
+        raise HTTPException(500, detail=str(exc))
+
+    return result
+

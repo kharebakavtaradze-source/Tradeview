@@ -1,5 +1,16 @@
 """
 Main scan orchestrator — ties together all scanner modules.
+
+LEGACY STATUS
+-------------
+This module is FROZEN as a feature source (OLD_MAIN_SCANNER_STATUS = "LEGACY_FEATURE_SOURCE").
+  - All existing endpoints (/api/scan/*) continue to work unchanged.
+  - Tier labels FIRE/ARM/BASE/WATCH are LEGACY labels only.
+    They do NOT map to Scanner v2 BUY/WATCH/AVOID decisions.
+  - Old FIRE cannot create a Scanner v2 BUY signal.
+  - HYPE/SYMPATHY/FLOW/STEALTH/SILENT features from this scanner may be consumed
+    as context inputs by Scanner v2 via scanner.legacy_context.extract_legacy_context().
+  - The authoritative decision engine is new_pump_engine.py (Scanner v2).
 """
 import logging
 from datetime import datetime
@@ -9,147 +20,14 @@ from .yahoo import fetch_batch, fetch_premarket_batch
 from .indicators import calc_all
 from .wyckoff import detect_regime
 from .scoring import score_ticker
-from .ai_analyst import analyze_batch
 from .sector_sympathy import get_sectors_batch, find_sector_leaders, calc_sympathy_score
 from .market_regime import calculate_sector_strength, get_latest_regime
+from . import new_pump_engine as _npe
 
 logger = logging.getLogger(__name__)
 
 # ETFs used purely for regime detection — excluded from trading results
 REGIME_ETFS = {"SPY", "QQQ", "XLE", "XLV", "XLU", "GLD", "IWM"}
-
-
-# Ribbon secondary pass is for analytical discovery only.
-# It intentionally captures liquid compression setups that lack breakout
-# volume confirmation and were excluded from the main scoring pipeline.
-async def run_ribbon_pass(
-    all_candles: dict,
-    main_scan_symbols: set,
-    spy_pct_5d: float = 0.0,
-) -> int:
-    """
-    Ribbon secondary pass — analytical discovery only.
-
-    Finds tickers with EMA compression that were excluded from the main scan
-    (anomaly_ratio < 2.0). Uses already-fetched OHLCV candles — no new
-    price data API calls.
-
-    Returns count of ribbon candidates saved to DB.
-    """
-    from scanner.sector_map import NON_STOCK_SECURITIES
-
-    # Load full ETF exclusion list (cached 7 days — fast after first call)
-    etf_symbols: set = set()
-    try:
-        from scanner.massive_data import get_us_etf_symbols
-        etf_symbols = await get_us_etf_symbols()
-    except Exception as e:
-        logger.warning(f"Ribbon pass: exclusion list unavailable (non-fatal): {e}")
-
-    candidates = []
-
-    for symbol, candles in all_candles.items():
-        sym_upper = symbol.upper()
-        # Skip ETFs / regime ETFs
-        if symbol in REGIME_ETFS:
-            continue
-        if sym_upper in etf_symbols:
-            continue
-        # Skip non-stock securities (CEFs, ETNs)
-        if sym_upper in NON_STOCK_SECURITIES:
-            continue
-        # Skip symbols already captured by main scan
-        if symbol in main_scan_symbols:
-            continue
-        # Need enough history for EMA89
-        if not candles or len(candles) < 100:
-            continue
-
-        try:
-            ind = calc_all(candles)
-            if not ind:
-                continue
-
-            price         = ind.get("price", 0)
-            today_vol     = ind.get("today_vol", 0)
-            anomaly_ratio = ind.get("anomaly_ratio", 0)
-            spread        = ind.get("ema_spread_pct", 999.0)
-
-            # Main scan already took anomaly_ratio >= 2.0
-            if anomaly_ratio >= 2.0:
-                continue
-            # Require EMA compression (spread < 3%)
-            if spread >= 3.0:
-                continue
-            # Minimum liquidity gate
-            if today_vol < 300_000:
-                continue
-
-            # Relative strength vs SPY (5-day)
-            rs_score = 0.0
-            if spy_pct_5d != 0.0 and len(candles) >= 6:
-                price_5d = candles[-6].get("c", price)
-                if price_5d > 0:
-                    rs_score = round((price - price_5d) / price_5d * 100 - spy_pct_5d, 2)
-
-            obv_data = ind.get("obv") or {}
-            rsi_data = ind.get("rsi") or {}
-
-            candidates.append({
-                "symbol":      symbol,
-                "price":       price,
-                "today_vol":   today_vol,
-                "anomaly_ratio": anomaly_ratio,
-                "ema8":        ind.get("ema8"),
-                "ema13":       ind.get("ema13"),
-                "ema20":       ind.get("ema20"),
-                "ema21":       ind.get("ema21"),
-                "ema34":       ind.get("ema34"),
-                "ema50":       ind.get("ema50"),
-                "ema55":       ind.get("ema55"),
-                "ema89":       ind.get("ema89"),
-                "ema200":      ind.get("ema200"),
-                "ema_spread_pct":          spread,
-                "ribbon_compression":      ind.get("ribbon_compression", "NONE"),
-                "bullish_stack":           ind.get("bullish_stack", False),
-                "bearish_stack":           ind.get("bearish_stack", False),
-                "compression_and_bullish": ind.get("compression_and_bullish", False),
-                "ribbon_position":         ind.get("ribbon_position"),
-                "ema8_slope":              ind.get("ema8_slope", "FLAT"),
-                "cmf_pctl":    ind.get("cmf_pctl"),
-                "rsi":         rsi_data.get("value"),
-                "bb_sqz_bars": ind.get("bb_sqz_bars", 0),
-                "bb_squeeze":  ind.get("bb_squeeze", False),
-                "obv_strength": obv_data.get("obv_strength"),
-                "rs_score":    rs_score,
-                "sector":      None,  # resolved below via batch lookup
-            })
-
-        except Exception as e:
-            logger.warning(f"Ribbon pass: error processing {symbol}: {e}")
-            continue
-
-    if not candidates:
-        return 0
-
-    # Batch sector lookup for ribbon symbols (single API round-trip)
-    try:
-        ribbon_symbols = [c["symbol"] for c in candidates]
-        sectors = await get_sectors_batch(ribbon_symbols)
-        for c in candidates:
-            c["sector"] = sectors.get(c["symbol"], "Unknown")
-    except Exception as e:
-        logger.warning(f"Ribbon pass: sector lookup failed (non-fatal): {e}")
-
-    # Persist to DB
-    try:
-        from database import save_ribbon_candidates
-        saved = await save_ribbon_candidates(candidates)
-        logger.info(f"Ribbon secondary pass: {saved} candidates saved ({len(candidates)} qualified)")
-        return saved
-    except Exception as e:
-        logger.error(f"Ribbon pass: save_ribbon_candidates failed: {e}")
-        return 0
 
 
 async def get_scan_symbols() -> tuple[list[str], dict]:
@@ -175,18 +53,7 @@ async def get_scan_symbols() -> tuple[list[str], dict]:
     except Exception as e:
         logger.warning(f"get_scan_symbols: recent candidates lookup failed: {e}")
 
-    # SOURCE 2: Open journal positions — always track what we're holding
-    source_journal = 0
-    try:
-        from database import get_open_journal_entries
-        open_positions = await get_open_journal_entries()
-        journal_syms = [p["symbol"] for p in open_positions if p.get("symbol")]
-        symbols.update(journal_syms)
-        source_journal = len(journal_syms)
-    except Exception as e:
-        logger.warning(f"get_scan_symbols: journal lookup failed: {e}")
-
-    # SOURCE 3: Regime ETFs (needed for market regime calculation)
+    # SOURCE 2: Regime ETFs (needed for market regime calculation)
     symbols.update(REGIME_ETFS)
 
     # FALLBACK: If no EOD candidates yet (first run / cold start),
@@ -204,7 +71,6 @@ async def get_scan_symbols() -> tuple[list[str], dict]:
     total = len(symbols)
     source_counts = {
         "eod_candidates": source_eod_candidates,
-        "journal":         source_journal,
         "regime_etfs":     len(REGIME_ETFS),
         "screener_fallback": source_screener,
         "total":           total,
@@ -213,7 +79,6 @@ async def get_scan_symbols() -> tuple[list[str], dict]:
 
     print("Intraday scan symbols:")
     print(f"  EOD candidates:    {source_eod_candidates}")
-    print(f"  Journal positions: {source_journal}")
     print(f"  Regime ETFs:       {len(REGIME_ETFS)}")
     if source_screener:
         print(f"  Screener fallback: {source_screener}")
@@ -314,6 +179,10 @@ async def run_scan() -> dict:
                 skipped += 1
                 continue
 
+            _npe_bars = [{"open": c["o"], "high": c["h"], "low": c["l"],
+                           "close": c["c"], "volume": c["v"]} for c in candles]
+            new_pump = _npe.analyze(_npe_bars)
+
             results.append({
                 "symbol": symbol,
                 "price": candles[-1]["c"],
@@ -321,6 +190,7 @@ async def run_scan() -> dict:
                 "indicators": indicators,
                 "regime": regime,
                 "score": score,
+                "new_pump": new_pump,
                 "candles": candles[-100:],  # last 100 bars only
                 "scanned_at": scan_start.isoformat(),
                 "ai_analysis": None,
@@ -471,16 +341,7 @@ async def run_scan() -> dict:
             pm = premarket_data.get(r["symbol"])
             r["premarket"] = pm if pm else {"has_premarket": False, "premarket_pct": 0, "session": None}
 
-    # Step 6: AI analysis for top 20
-    if results:
-        print(f"Running AI analysis on top {min(20, len(results))} tickers...")
-        top20 = await analyze_batch(results)
-
-        # Merge AI analysis back into full results
-        top_symbols = {r["symbol"] for r in top20}
-        final = top20 + [r for r in results if r["symbol"] not in top_symbols]
-    else:
-        final = results
+    final = results
 
     top_symbols_list = [r["symbol"] for r in final[:5]]
     print(f"Scan complete. {len(final)} tickers. Top: {top_symbols_list}")
@@ -494,6 +355,20 @@ async def run_scan() -> dict:
         tier = r["score"]["tier"]
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
+    # New Pump debug summary
+    try:
+        np_summary = _npe.summarize_results(final)
+        print("[NewPump] label counts:", np_summary["label_counts"])
+        print("[NewPump] sequence counts:", np_summary["sequence_counts"])
+        print("[NewPump] top by score:")
+        for row in np_summary["top_by_score"][:10]:
+            print(f"  {row['symbol']:8s}  score={row['new_pump_score']:5.1f}"
+                  f"  {row['new_pump_label']:24s}  {row['new_pump_sequence_label']:22s}"
+                  f"  L34={row['has_l34']}  FRI={row['has_fri34']}"
+                  f"  G4={row['has_g4']}  B2={row['has_b2']}")
+    except Exception as _np_exc:
+        logger.warning(f"[NewPump] summary failed (non-fatal): {_np_exc}")
+
     # Save FIRE/ARM tickers as scan candidates (control group)
     try:
         from database import save_scan_candidates
@@ -503,39 +378,25 @@ async def run_scan() -> dict:
     except Exception as e:
         logger.warning(f"save_scan_candidates failed (non-fatal): {e}")
 
-    # Update pattern streaks (ARM+ multi-day accumulation tracking)
+    # Save full demand snapshot to demand_ticker_history (analytics layer).
+    # Applies demand_composite scoring on the in-memory candle map and stores
+    # the bar-label snapshot (tz/preup/line5/wyckoff) + scoring_config version
+    # so Live history is queryable on the same fields as Pump Study.
     try:
-        from scanner.pattern_streaks import update_pattern_streaks
-        await update_pattern_streaks(final)
-    except Exception as e:
-        logger.warning(f"update_pattern_streaks failed (non-fatal): {e}")
+        from database import save_demand_ticker_history
+        from scanner.demand_composite_scanner import apply_demand_composite
 
-    # Enrich results with earnings data (one Finnhub API call for full calendar)
-    try:
-        from data.finnhub_provider import get_earnings_calendar
-        earnings_cal = await get_earnings_calendar(days_ahead=14)
-        if earnings_cal:
-            for r in final:
-                info = earnings_cal.get(r["symbol"], {"has_earnings": False})
-                r["earnings"] = info
-                r["earnings_risk"] = info.get("risk", "NONE") if info.get("has_earnings") else "NONE"
-            logger.info(f"Earnings enrichment complete — {len(earnings_cal)} symbols in calendar")
+        candle_map = {
+            r["symbol"]: r.get("candles", [])
+            for r in final
+            if r.get("symbol") and r.get("candles")
+        }
+        scored = apply_demand_composite(final, candle_map=candle_map)
+        saved_hist = await save_demand_ticker_history(scored)
+        if saved_hist:
+            logger.info(f"Saved {saved_hist} demand_ticker_history rows")
     except Exception as e:
-        logger.warning(f"Earnings enrichment failed (non-fatal): {e}")
-
-    # ── Ribbon secondary pass (non-fatal) ────────────────────────────────────
-    # Discovers liquid compression setups excluded from main scan (no vol anomaly).
-    ribbon_extra = 0
-    try:
-        main_symbols = {r["symbol"] for r in final}
-        ribbon_extra = await run_ribbon_pass(
-            all_candles=all_data,
-            main_scan_symbols=main_symbols,
-            spy_pct_5d=spy_pct_5d,
-        )
-        logger.info(f"Ribbon pass added {ribbon_extra} tickers to ribbon_candidates")
-    except Exception as e:
-        logger.error(f"Ribbon pass failed (non-fatal): {e}")
+        logger.warning(f"save_demand_ticker_history failed (non-fatal): {e}")
 
     return {
         "results":            final,
@@ -547,6 +408,5 @@ async def run_scan() -> dict:
         "sector_performance": sector_perf,
         "market_regime":      regime,
         "symbol_sources":     symbol_sources,
-        "ribbon_extra_count": ribbon_extra,
         "scan_type":          "yahoo_intraday",
     }
