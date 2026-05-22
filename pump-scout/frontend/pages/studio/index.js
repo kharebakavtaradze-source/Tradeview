@@ -2,7 +2,7 @@
  * Studio Hub — Analytics Studio landing page
  * Shows the three studios as cards with recent run info and config version banner.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import PumpLayout from '../../components/PumpLayout';
 
@@ -264,11 +264,12 @@ export default function StudioIndex() {
   );
 }
 
-function StatusDot({ ok }) {
+function StatusDot({ ok, transient }) {
+  const bg = ok ? '#00e676' : (transient ? '#ffa940' : '#ff6b6b');
   return (
     <span style={{
       display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-      background: ok ? '#00e676' : '#ff6b6b',
+      background: bg,
     }} />
   );
 }
@@ -278,8 +279,9 @@ function SystemStatusPanel() {
   const [busy, setBusy] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanMsg, setScanMsg] = useState(null);
+  const pollRef = useRef(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setBusy(true);
     try {
       const r = await fetch(`${API_URL}/api/admin/status`);
@@ -289,7 +291,20 @@ function SystemStatusPanel() {
       setData({ ok: false, error: e.message });
     }
     setBusy(false);
-  };
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Auto-poll every 5s while the stack is recovering (any transient check
+  // or top-level failure). Stops once everything is green.
+  useEffect(() => {
+    if (!data) return;
+    const shouldPoll = data.any_transient || !data.ok;
+    if (shouldPoll) {
+      pollRef.current = setInterval(refresh, 5000);
+      return () => clearInterval(pollRef.current);
+    }
+  }, [data, refresh]);
 
   const triggerScan = async (mode) => {
     setScanBusy(true); setScanMsg(null);
@@ -305,9 +320,14 @@ function SystemStatusPanel() {
     setScanBusy(false);
   };
 
-  useEffect(() => { refresh(); }, []);
-
   const checks = data?.checks || {};
+  const transientCount = Object.values(checks).filter(c => !c.ok && c.transient).length;
+  const headerLabel =
+    !data        ? null :
+    data.ok      ? { color: '#00e676', text: 'All checks pass' } :
+    transientCount > 0 && transientCount === Object.values(checks).filter(c => !c.ok).length
+                 ? { color: '#ffa940', text: 'Recovering — auto-retrying every 5s' } :
+                 { color: '#ff6b6b', text: 'Some checks failing' };
 
   return (
     <div style={{ marginTop: 40, paddingTop: 24, borderTop: '1px solid var(--stroke-soft)' }}>
@@ -315,11 +335,11 @@ function SystemStatusPanel() {
         <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           System Status
         </span>
-        {data && (
+        {headerLabel && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <StatusDot ok={data.ok} />
-            <span style={{ fontSize: 11, fontFamily: 'var(--f-mono)', color: data.ok ? '#00e676' : '#ff6b6b' }}>
-              {data.ok ? 'All checks pass' : 'Some checks failing'}
+            <StatusDot ok={data.ok} transient={transientCount > 0 && !data.ok} />
+            <span style={{ fontSize: 11, fontFamily: 'var(--f-mono)', color: headerLabel.color }}>
+              {headerLabel.text}
             </span>
           </span>
         )}
@@ -346,23 +366,29 @@ function SystemStatusPanel() {
         ) : (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginBottom: 16 }}>
-              {Object.entries(checks).map(([name, c]) => (
-                <div key={name} style={{
-                  padding: '10px 12px', background: 'var(--bg-2)',
-                  borderRadius: 8, border: `1px solid ${c.ok ? 'var(--stroke-soft)' : 'rgba(255,107,107,0.4)'}`,
-                  display: 'flex', alignItems: 'flex-start', gap: 10,
-                }}>
-                  <StatusDot ok={c.ok} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 11, color: 'var(--ink)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
-                      {name.replace(/_/g, ' ')}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', lineHeight: 1.4, wordBreak: 'break-word' }}>
-                      {c.detail}
+              {Object.entries(checks).map(([name, c]) => {
+                const borderColor =
+                  c.ok          ? 'var(--stroke-soft)' :
+                  c.transient   ? 'rgba(255,169,64,0.4)' :
+                                  'rgba(255,107,107,0.4)';
+                return (
+                  <div key={name} style={{
+                    padding: '10px 12px', background: 'var(--bg-2)',
+                    borderRadius: 8, border: `1px solid ${borderColor}`,
+                    display: 'flex', alignItems: 'flex-start', gap: 10,
+                  }}>
+                    <StatusDot ok={c.ok} transient={c.transient} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: 'var(--ink)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                        {name.replace(/_/g, ' ')}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', lineHeight: 1.4, wordBreak: 'break-word' }}>
+                        {c.detail}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Trigger Scan controls */}
