@@ -181,7 +181,26 @@ async def admin_status():
     from sqlalchemy import text as _text
     from database import get_engine
 
-    out: dict = {"ok": True, "checks": {}}
+    # Recognise Postgres "transient" states so the UI can render them in
+    # yellow (will-recover) rather than red (broken). Railway restarts +
+    # CDC replicas often leave the DB unreadable for a few seconds; auto-
+    # poll resolves it without operator intervention.
+    _TRANSIENT_HINTS = (
+        "recovery mode",
+        "starting up",
+        "shutting down",
+        "the database system is starting",
+        "connection refused",
+        "could not connect to server",
+        "server closed the connection",
+        "ssl connection has been closed",
+    )
+
+    def _classify(err_str: str) -> bool:
+        msg = (err_str or "").lower()
+        return any(h in msg for h in _TRANSIENT_HINTS)
+
+    out: dict = {"ok": True, "checks": {}, "any_transient": False}
     checks = out["checks"]
 
     # 1. Database connection + scoring_config import
@@ -190,8 +209,13 @@ async def admin_status():
             await conn.execute(_text("SELECT 1"))
         checks["database"] = {"ok": True, "detail": "Connected."}
     except Exception as e:
-        checks["database"] = {"ok": False, "detail": f"Connection failed: {e}"}
+        transient = _classify(str(e))
+        checks["database"] = {
+            "ok": False, "transient": transient,
+            "detail": ("Recovering — will retry: " if transient else "Connection failed: ") + str(e),
+        }
         out["ok"] = False
+        if transient: out["any_transient"] = True
 
     try:
         from scanner.scoring_config import VERSION, SIGNALS
@@ -216,13 +240,19 @@ async def admin_status():
                 ))
                 checks["migrations"] = {"ok": True, "detail": "All expected columns present."}
             except Exception as col_err:
+                transient = _classify(str(col_err))
                 checks["migrations"] = {
-                    "ok":     False,
-                    "detail": f"Schema missing columns: {col_err}. Restart backend to run pending ALTERs.",
+                    "ok":        False,
+                    "transient": transient,
+                    "detail":    (
+                        f"Recovering — will retry: {col_err}"
+                        if transient
+                        else f"Schema missing columns: {col_err}. Restart backend to run pending ALTERs."
+                    ),
                 }
                 out["ok"] = False
+                if transient: out["any_transient"] = True
     except Exception:
-        # Already reported in database check.
         pass
 
     # 3. Live history accumulation
@@ -237,7 +267,6 @@ async def admin_status():
             if latest:
                 latest_dt = latest if isinstance(latest, _dt) else _dt.fromisoformat(str(latest))
                 age_minutes = round((_dt.utcnow() - latest_dt).total_seconds() / 60)
-        # Health: any rows at all? Fresh enough?
         if n == 0:
             checks["live_history"] = {
                 "ok": False, "rows": 0,
@@ -255,38 +284,45 @@ async def admin_status():
                 ),
             }
     except Exception as e:
-        checks["live_history"] = {"ok": False, "detail": f"Query failed: {e}"}
+        transient = _classify(str(e))
+        checks["live_history"] = {
+            "ok": False, "transient": transient,
+            "detail": ("Recovering — will retry: " if transient else "Query failed: ") + str(e),
+        }
+        if transient: out["any_transient"] = True
 
     # 4. Run inventory: pump-study / raw-pattern / replay counts by status
-    async def _count_by_status(table: str) -> dict:
+    async def _count_by_status(table: str) -> tuple[dict, bool]:
         try:
             async with get_engine().connect() as conn:
                 rs = await conn.execute(_text(
                     f"SELECT status, COUNT(*) FROM {table} GROUP BY status"
                 ))
-                return {r[0]: r[1] for r in rs.fetchall()}
+                return {r[0]: r[1] for r in rs.fetchall()}, False
         except Exception as e:
-            return {"_error": str(e)}
+            transient = _classify(str(e))
+            return {"_error": str(e), "_transient": transient}, transient
 
-    pump_counts    = await _count_by_status("pump_study_runs")
-    raw_counts     = await _count_by_status("raw_pattern_runs")
-    replay_counts  = await _count_by_status("replay_runs")
-
-    checks["pump_studies"] = {
-        "ok":       "_error" not in pump_counts,
-        "counts":   pump_counts,
-        "detail":   ", ".join(f"{k}={v}" for k, v in pump_counts.items()) or "none",
-    }
-    checks["raw_pattern_studies"] = {
-        "ok":       "_error" not in raw_counts,
-        "counts":   raw_counts,
-        "detail":   ", ".join(f"{k}={v}" for k, v in raw_counts.items()) or "none",
-    }
-    checks["replays"] = {
-        "ok":       "_error" not in replay_counts,
-        "counts":   replay_counts,
-        "detail":   ", ".join(f"{k}={v}" for k, v in replay_counts.items()) or "none",
-    }
+    for label, table in (
+        ("pump_studies",        "pump_study_runs"),
+        ("raw_pattern_studies", "raw_pattern_runs"),
+        ("replays",             "replay_runs"),
+    ):
+        counts, transient = await _count_by_status(table)
+        err = counts.pop("_error", None)
+        counts.pop("_transient", None)
+        if err:
+            checks[label] = {
+                "ok": False, "transient": transient,
+                "detail": ("Recovering — will retry: " if transient else "Query failed: ") + err,
+            }
+            if transient: out["any_transient"] = True
+        else:
+            checks[label] = {
+                "ok":     True,
+                "counts": counts,
+                "detail": ", ".join(f"{k}={v}" for k, v in counts.items()) or "none",
+            }
 
     # 5. Candle cache (range cache + DB cache)
     try:
