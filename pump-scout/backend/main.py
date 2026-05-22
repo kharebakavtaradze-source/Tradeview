@@ -190,10 +190,19 @@ async def admin_status():
         "starting up",
         "shutting down",
         "the database system is starting",
+        "the database system is not yet accepting connections",
+        "not yet accepting connections",
+        "consistent recovery state has not been yet reached",
+        "consistent recovery state",
+        "cannotconnectnow",
         "connection refused",
         "could not connect to server",
         "server closed the connection",
         "ssl connection has been closed",
+        "ssl connection has been closed unexpectedly",
+        "connection was closed in the middle of operation",
+        "connection is closed",
+        "terminating connection due to administrator command",
     )
 
     def _classify(err_str: str) -> bool:
