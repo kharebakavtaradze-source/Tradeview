@@ -3636,10 +3636,13 @@ async def analytics_live_history_filter(
 
 @app.get("/api/analytics/live-history/cooccurrence")
 async def analytics_live_history_cooccurrence(
-    group_by: str = "tz_t_signal,preup_token",
-    days:     int = 30,
-    min_count: int = 3,
-    config_version: Optional[str] = None,
+    group_by:          str            = "tz_t_signal,preup_token",
+    days:              int            = 30,
+    min_count:         int            = 3,
+    config_version:    Optional[str]  = None,
+    with_pump_lift:    bool           = False,
+    lift_window_days:  int            = 14,
+    lift_min_multiple: float          = 1.5,
 ):
     """
     Group demand_ticker_history rows by any subset of bar-label fields and
@@ -3649,6 +3652,16 @@ async def analytics_live_history_cooccurrence(
     Only whitelisted columns allowed — see _HISTORY_FILTER_COLUMNS.
 
     Use min_count to suppress one-off combos. Sorted by count desc.
+
+    Pump lift (with_pump_lift=true):
+      For each scan row, looks up the best subsequent pump_episode for the
+      same symbol that started within lift_window_days. Returns:
+        - n_pumped:           rows that had ANY confirmed pump in the window
+        - n_pump_target:      rows whose best pump_multiple >= lift_min_multiple
+        - avg_pump_multiple:  mean of best multiples (over n_pumped)
+        - hit_rate:           n_pump_target / n
+      Use this to find which Live combos actually preceded real pumps vs
+      were just noise. Slower than the no-lift query (correlated subquery).
     """
     from database import get_engine
     from sqlalchemy import text as _text
@@ -3664,48 +3677,101 @@ async def analytics_live_history_cooccurrence(
     where = []
     params: dict = {}
     if is_pg:
-        where.append("scanned_at > NOW() - INTERVAL :since_pg")
+        where.append("h.scanned_at > NOW() - INTERVAL :since_pg")
         params["since_pg"] = f"{int(days)} days"
     else:
-        where.append("scanned_at > datetime('now', :since)")
+        where.append("h.scanned_at > datetime('now', :since)")
         params["since"] = f"-{int(days)} days"
     if config_version:
-        where.append("scoring_config_version = :cv")
+        where.append("h.scoring_config_version = :cv")
         params["cv"] = config_version
 
-    # NULL → empty string so groupings don't collapse mixed-presence combos.
-    col_expr_list = ", ".join(f"COALESCE({c}, '') AS {c}" for c in cols)
+    col_expr_list = ", ".join(f"COALESCE(h.{c}, '') AS {c}" for c in cols)
     group_expr    = ", ".join(cols)
 
-    sql = (
-        f"SELECT {col_expr_list}, "
-        "COUNT(*) AS n, "
-        "AVG(demand_composite_score) AS avg_score, "
-        "AVG(combined_score)         AS avg_combined, "
-        "SUM(CASE WHEN demand_composite_tier='PRIME_BUY'      THEN 1 ELSE 0 END) AS n_prime, "
-        "SUM(CASE WHEN demand_composite_tier='HIGH_CONF_BUY'  THEN 1 ELSE 0 END) AS n_high, "
-        "SUM(CASE WHEN demand_composite_tier='BUY_WATCH'      THEN 1 ELSE 0 END) AS n_watch, "
-        "SUM(CASE WHEN demand_composite_tier='SETUP_MONITOR'  THEN 1 ELSE 0 END) AS n_setup "
-        "FROM demand_ticker_history "
-        f"WHERE {' AND '.join(where)} "
-        f"GROUP BY {group_expr} "
-        f"HAVING COUNT(*) >= :min_count "
-        "ORDER BY n DESC "
-        "LIMIT 500"
-    )
+    if with_pump_lift:
+        # Correlated subquery: best pump_multiple for same symbol starting
+        # within lift_window_days AFTER the scan. NULL if no episode.
+        if is_pg:
+            best_multiple_sql = (
+                "(SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                " WHERE ep.symbol = h.symbol "
+                "   AND ep.pump_start_date::date >= h.scanned_at::date "
+                "   AND ep.pump_start_date::date <= (h.scanned_at::date + (:lift_days || ' days')::interval)::date"
+                ")"
+            )
+            params["lift_days"] = str(int(lift_window_days))
+        else:
+            best_multiple_sql = (
+                "(SELECT MAX(ep.pump_multiple) FROM pump_episodes ep "
+                " WHERE ep.symbol = h.symbol "
+                "   AND ep.pump_start_date >= date(h.scanned_at) "
+                "   AND ep.pump_start_date <= date(h.scanned_at, :lift_days_offset)"
+                ")"
+            )
+            params["lift_days_offset"] = f"+{int(lift_window_days)} days"
+
+        # Two-stage: compute best_multiple per scan, then aggregate.
+        sql = (
+            f"SELECT {col_expr_list}, "
+            "COUNT(*) AS n, "
+            "AVG(h.demand_composite_score) AS avg_score, "
+            "AVG(h.combined_score)         AS avg_combined, "
+            "SUM(CASE WHEN h.demand_composite_tier='PRIME_BUY'      THEN 1 ELSE 0 END) AS n_prime, "
+            "SUM(CASE WHEN h.demand_composite_tier='HIGH_CONF_BUY'  THEN 1 ELSE 0 END) AS n_high, "
+            "SUM(CASE WHEN h.demand_composite_tier='BUY_WATCH'      THEN 1 ELSE 0 END) AS n_watch, "
+            "SUM(CASE WHEN h.demand_composite_tier='SETUP_MONITOR'  THEN 1 ELSE 0 END) AS n_setup, "
+            f"SUM(CASE WHEN {best_multiple_sql} IS NOT NULL THEN 1 ELSE 0 END) AS n_pumped, "
+            f"SUM(CASE WHEN {best_multiple_sql} >= :lift_target THEN 1 ELSE 0 END) AS n_pump_target, "
+            f"AVG({best_multiple_sql}) AS avg_pump_multiple "
+            "FROM demand_ticker_history h "
+            f"WHERE {' AND '.join(where)} "
+            f"GROUP BY {group_expr} "
+            "HAVING COUNT(*) >= :min_count "
+            "ORDER BY n DESC "
+            "LIMIT 500"
+        )
+        params["lift_target"] = float(lift_min_multiple)
+    else:
+        sql = (
+            f"SELECT {col_expr_list}, "
+            "COUNT(*) AS n, "
+            "AVG(h.demand_composite_score) AS avg_score, "
+            "AVG(h.combined_score)         AS avg_combined, "
+            "SUM(CASE WHEN h.demand_composite_tier='PRIME_BUY'      THEN 1 ELSE 0 END) AS n_prime, "
+            "SUM(CASE WHEN h.demand_composite_tier='HIGH_CONF_BUY'  THEN 1 ELSE 0 END) AS n_high, "
+            "SUM(CASE WHEN h.demand_composite_tier='BUY_WATCH'      THEN 1 ELSE 0 END) AS n_watch, "
+            "SUM(CASE WHEN h.demand_composite_tier='SETUP_MONITOR'  THEN 1 ELSE 0 END) AS n_setup "
+            "FROM demand_ticker_history h "
+            f"WHERE {' AND '.join(where)} "
+            f"GROUP BY {group_expr} "
+            "HAVING COUNT(*) >= :min_count "
+            "ORDER BY n DESC "
+            "LIMIT 500"
+        )
+
     params["min_count"] = max(1, int(min_count))
 
     async with get_engine().connect() as conn:
         result = await conn.execute(_text(sql), params)
         rows = [dict(r._mapping) for r in result.fetchall()]
 
+    # Derived hit_rate for client convenience
+    if with_pump_lift:
+        for r in rows:
+            n = r.get("n") or 0
+            r["hit_rate"] = (r.get("n_pump_target") or 0) / n if n else None
+
     return {
-        "ok":       True,
-        "group_by": cols,
-        "days":     days,
-        "config_version": config_version,
-        "count":    len(rows),
-        "rows":     rows,
+        "ok":              True,
+        "group_by":        cols,
+        "days":            days,
+        "config_version":  config_version,
+        "with_pump_lift":  with_pump_lift,
+        "lift_window_days":  lift_window_days  if with_pump_lift else None,
+        "lift_min_multiple": lift_min_multiple if with_pump_lift else None,
+        "count":           len(rows),
+        "rows":            rows,
     }
 
 

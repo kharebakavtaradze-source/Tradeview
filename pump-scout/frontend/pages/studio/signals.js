@@ -4,7 +4,7 @@
  * Powers the discovery loop: which TZ / PREUP / Line3-5 / Wyckoff
  * combinations show up most often, and how they distribute across tiers.
  */
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import PumpLayout from '../../components/PumpLayout';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -62,6 +62,21 @@ const TIER_COLORS = {
   SETUP_MONITOR: '#ffa940',
 };
 
+const PRESETS_LS_KEY = 'studio.signals.presets.v1';
+
+function loadPresets() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(PRESETS_LS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function savePresets(presets) {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(PRESETS_LS_KEY, JSON.stringify(presets)); } catch {}
+}
+
 export default function SignalsExplorer() {
   const [groupBy, setGroupBy]     = useState(['tz_t_signal', 'preup_token']);
   const [days, setDays]           = useState(30);
@@ -75,12 +90,52 @@ export default function SignalsExplorer() {
   const [drillRow, setDrillRow]   = useState(null);
   const [drillRows, setDrillRows] = useState(null);
 
+  // Pump-lift
+  const [withLift, setWithLift]   = useState(false);
+  const [liftDays, setLiftDays]   = useState(14);
+  const [liftTarget, setLiftTarget] = useState(1.5);
+
+  // Version comparison
+  const [compareMode, setCompareMode] = useState(false);
+  const [configA, setConfigA]   = useState('');
+  const [configB, setConfigB]   = useState('');
+  const [rowsA, setRowsA]       = useState(null);
+  const [rowsB, setRowsB]       = useState(null);
+
+  // Presets (localStorage)
+  const [presets, setPresets]   = useState([]);
+  const [presetName, setPresetName] = useState('');
+  useEffect(() => { setPresets(loadPresets()); }, []);
+
   const toggleField = (key) => {
     setGroupBy(prev => prev.includes(key)
       ? prev.filter(k => k !== key)
       : [...prev, key]
     );
   };
+
+  // Build the URL for a single cooccurrence call.
+  const buildQs = useCallback((cfgVer) => {
+    const qs = new URLSearchParams({
+      group_by:  groupBy.join(','),
+      days:      String(days),
+      min_count: String(minCount),
+    });
+    if (cfgVer) qs.set('config_version', cfgVer);
+    if (withLift) {
+      qs.set('with_pump_lift',    'true');
+      qs.set('lift_window_days',  String(liftDays));
+      qs.set('lift_min_multiple', String(liftTarget));
+    }
+    return qs;
+  }, [groupBy, days, minCount, withLift, liftDays, liftTarget]);
+
+  const fetchCoocc = useCallback(async (cfgVer) => {
+    const r = await fetch(`${API_URL}/api/analytics/live-history/cooccurrence?${buildQs(cfgVer)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    return Array.isArray(data.rows) ? data.rows : [];
+  }, [buildQs]);
 
   const runQuery = useCallback(async () => {
     if (groupBy.length === 0) {
@@ -92,22 +147,25 @@ export default function SignalsExplorer() {
     setDrillRow(null);
     setDrillRows(null);
     try {
-      const qs = new URLSearchParams({
-        group_by:  groupBy.join(','),
-        days:      String(days),
-        min_count: String(minCount),
-      });
-      if (configVer) qs.set('config_version', configVer);
-      const r = await fetch(`${API_URL}/api/analytics/live-history/cooccurrence?${qs}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      setRows(Array.isArray(data.rows) ? data.rows : []);
+      if (compareMode) {
+        const [a, b] = await Promise.all([
+          fetchCoocc(configA || null),
+          fetchCoocc(configB || null),
+        ]);
+        setRowsA(a); setRowsB(b);
+        setRows(null);
+      } else {
+        const r = await fetchCoocc(configVer || null);
+        setRows(r);
+        setRowsA(null); setRowsB(null);
+      }
     } catch (e) {
       setError(e.message);
-      setRows([]);
+      if (compareMode) { setRowsA([]); setRowsB([]); }
+      else { setRows([]); }
     }
     setLoading(false);
-  }, [groupBy, days, minCount, configVer]);
+  }, [compareMode, groupBy, configVer, configA, configB, fetchCoocc]);
 
   const drill = useCallback(async (row) => {
     setDrillRow(row);
@@ -137,6 +195,59 @@ export default function SignalsExplorer() {
     });
     return out;
   }, [rows, sortKey, sortDesc]);
+
+  // Merge rowsA/rowsB by combo key for side-by-side display.
+  const mergedCompareRows = useMemo(() => {
+    if (!rowsA && !rowsB) return null;
+    const keyOf = (r) => groupBy.map(k => r[k] ?? '').join('|');
+    const byKey = new Map();
+    (rowsA || []).forEach(r => { byKey.set(keyOf(r), { combo: r, a: r, b: null }); });
+    (rowsB || []).forEach(r => {
+      const k = keyOf(r);
+      const existing = byKey.get(k);
+      if (existing) existing.b = r;
+      else byKey.set(k, { combo: r, a: null, b: r });
+    });
+    const merged = Array.from(byKey.values());
+    merged.sort((x, y) => {
+      const xn = (x.a?.n || 0) + (x.b?.n || 0);
+      const yn = (y.a?.n || 0) + (y.b?.n || 0);
+      return yn - xn;
+    });
+    return merged;
+  }, [rowsA, rowsB, groupBy]);
+
+  // Presets
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) return;
+    const next = [
+      { name, groupBy, days, minCount, configVer, withLift, liftDays, liftTarget,
+        compareMode, configA, configB,
+        savedAt: new Date().toISOString() },
+      ...presets.filter(p => p.name !== name),
+    ];
+    setPresets(next);
+    savePresets(next);
+    setPresetName('');
+  };
+  const loadPreset = (p) => {
+    setGroupBy(p.groupBy || ['tz_t_signal', 'preup_token']);
+    setDays(p.days || 30);
+    setMinCount(p.minCount || 3);
+    setConfigVer(p.configVer || '');
+    setWithLift(!!p.withLift);
+    setLiftDays(p.liftDays || 14);
+    setLiftTarget(p.liftTarget || 1.5);
+    setCompareMode(!!p.compareMode);
+    setConfigA(p.configA || '');
+    setConfigB(p.configB || '');
+  };
+  const deletePreset = (name) => {
+    const next = presets.filter(p => p.name !== name);
+    setPresets(next);
+    savePresets(next);
+  };
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDesc(d => !d);
@@ -177,7 +288,7 @@ export default function SignalsExplorer() {
         </Section>
 
         {/* Filters */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 12 }}>
           <Section title="Time Window">
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {DAY_PRESETS.map(d => (
@@ -192,13 +303,15 @@ export default function SignalsExplorer() {
               style={inputStyle}
             />
           </Section>
-          <Section title="Config Version (optional)">
-            <input
-              type="text" placeholder="e.g. v3" value={configVer}
-              onChange={e => setConfigVer(e.target.value.trim())}
-              style={inputStyle}
-            />
-          </Section>
+          {!compareMode && (
+            <Section title="Config Version (optional)">
+              <input
+                type="text" placeholder="e.g. v3" value={configVer}
+                onChange={e => setConfigVer(e.target.value.trim())}
+                style={inputStyle}
+              />
+            </Section>
+          )}
           <Section title=" ">
             <button
               onClick={runQuery}
@@ -218,6 +331,75 @@ export default function SignalsExplorer() {
           </Section>
         </div>
 
+        {/* Pump-lift + Compare mode + Presets */}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
+          {/* Pump lift toggle */}
+          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Chip label={withLift ? '✓ Pump Lift' : 'Pump Lift'} active={withLift} onClick={() => setWithLift(v => !v)} />
+            {withLift && (
+              <>
+                <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>window</span>
+                <input type="number" min="1" max="60" value={liftDays}
+                  onChange={e => setLiftDays(parseInt(e.target.value) || 14)}
+                  style={{ ...inputStyle, width: 60 }} /> <span style={{ fontSize: 11, color: 'var(--ink-faint)' }}>d</span>
+                <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>≥</span>
+                <input type="number" min="1.0" step="0.1" value={liftTarget}
+                  onChange={e => setLiftTarget(parseFloat(e.target.value) || 1.5)}
+                  style={{ ...inputStyle, width: 60 }} /> <span style={{ fontSize: 11, color: 'var(--ink-faint)' }}>×</span>
+              </>
+            )}
+          </div>
+
+          {/* Compare mode */}
+          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Chip label={compareMode ? '✓ Compare Versions' : 'Compare Versions'} active={compareMode} onClick={() => setCompareMode(v => !v)} />
+            {compareMode && (
+              <>
+                <input type="text" placeholder="A (e.g. v3)" value={configA}
+                  onChange={e => setConfigA(e.target.value.trim())}
+                  style={{ ...inputStyle, width: 110 }} />
+                <span style={{ color: 'var(--ink-faint)' }}>vs</span>
+                <input type="text" placeholder="B (e.g. v4)" value={configB}
+                  onChange={e => setConfigB(e.target.value.trim())}
+                  style={{ ...inputStyle, width: 110 }} />
+              </>
+            )}
+          </div>
+
+          {/* Presets */}
+          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 280 }}>
+            <span style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>PRESETS</span>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: 1 }}>
+              {presets.length === 0 && <span style={{ fontSize: 11, color: 'var(--ink-faint)', fontFamily: 'var(--f-mono)' }}>None saved yet</span>}
+              {presets.map(p => (
+                <span key={p.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                  <Chip label={p.name} active={false} onClick={() => loadPreset(p)} />
+                  <button
+                    onClick={() => deletePreset(p.name)}
+                    title={`Delete preset ${p.name}`}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--ink-faint)', fontSize: 14, cursor: 'pointer', padding: '0 4px' }}
+                  >×</button>
+                </span>
+              ))}
+            </div>
+            <input type="text" placeholder="Name…" value={presetName}
+              onChange={e => setPresetName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') savePreset(); }}
+              style={{ ...inputStyle, width: 100 }} />
+            <button
+              onClick={savePreset}
+              disabled={!presetName.trim()}
+              style={{
+                background: !presetName.trim() ? 'var(--bg-2)' : 'var(--pump-lime-soft)',
+                color: !presetName.trim() ? 'var(--ink-dim)' : 'var(--pump-lime)',
+                border: '1px solid var(--stroke-soft)', borderRadius: 6,
+                padding: '5px 10px', fontSize: 11, fontFamily: 'var(--f-mono)',
+                cursor: !presetName.trim() ? 'not-allowed' : 'pointer',
+              }}
+            >Save</button>
+          </div>
+        </div>
+
         {error && (
           <div style={{ marginBottom: 14, fontSize: 12, color: '#ff4444', fontFamily: 'var(--f-mono)' }}>
             Error: {error}
@@ -234,8 +416,9 @@ export default function SignalsExplorer() {
           </div>
         )}
 
-        {sortedRows && sortedRows.length > 0 && (
-          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, overflow: 'hidden' }}>
+        {/* Single mode table */}
+        {!compareMode && sortedRows && sortedRows.length > 0 && (
+          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: 'var(--bg-2)', borderBottom: '1px solid var(--stroke-soft)' }}>
@@ -246,6 +429,13 @@ export default function SignalsExplorer() {
                   <SortTh active={sortKey === 'avg_score'}    desc={sortDesc} onClick={() => toggleSort('avg_score')}>Avg Score</SortTh>
                   <SortTh active={sortKey === 'avg_combined'} desc={sortDesc} onClick={() => toggleSort('avg_combined')}>Avg Combined</SortTh>
                   <Th>Tier Mix</Th>
+                  {withLift && (
+                    <>
+                      <SortTh active={sortKey === 'hit_rate'}          desc={sortDesc} onClick={() => toggleSort('hit_rate')}>Hit %</SortTh>
+                      <SortTh active={sortKey === 'avg_pump_multiple'} desc={sortDesc} onClick={() => toggleSort('avg_pump_multiple')}>Avg ×</SortTh>
+                      <Th>Pumped</Th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -264,6 +454,80 @@ export default function SignalsExplorer() {
                       <td style={cellMono}>{r.avg_combined != null ? parseFloat(r.avg_combined).toFixed(2) : '—'}</td>
                       <td style={{ padding: '6px 12px' }}>
                         <TierBar n_prime={r.n_prime} n_high={r.n_high} n_watch={r.n_watch} n_setup={r.n_setup} total={total} />
+                      </td>
+                      {withLift && (
+                        <>
+                          <td style={{ ...cellMono, color: r.hit_rate >= 0.3 ? '#00e676' : r.hit_rate >= 0.1 ? '#ffeb3b' : 'var(--ink-dim)', fontWeight: 600 }}>
+                            {r.hit_rate != null ? `${(r.hit_rate * 100).toFixed(1)}%` : '—'}
+                          </td>
+                          <td style={{ ...cellMono, color: r.avg_pump_multiple >= 2 ? '#00e676' : 'var(--ink-dim)', fontWeight: 600 }}>
+                            {r.avg_pump_multiple != null ? `×${parseFloat(r.avg_pump_multiple).toFixed(2)}` : '—'}
+                          </td>
+                          <td style={{ ...cellMono, color: 'var(--ink-dim)' }}>
+                            {r.n_pump_target ?? 0}/{r.n_pumped ?? 0}
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Compare mode table */}
+        {compareMode && mergedCompareRows && mergedCompareRows.length === 0 && (
+          <div style={{ color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 13, padding: '40px 0', textAlign: 'center' }}>
+            No combos found in either version. Try lowering Min Count, widening the time window, or checking that both config versions have data.
+          </div>
+        )}
+        {compareMode && mergedCompareRows && mergedCompareRows.length > 0 && (
+          <div style={{ background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)', borderRadius: 10, overflow: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: 'var(--bg-2)', borderBottom: '1px solid var(--stroke-soft)' }}>
+                  {groupBy.map(k => (
+                    <Th key={k}>{GROUP_BY_FIELDS.find(f => f.key === k)?.label || k}</Th>
+                  ))}
+                  <Th>A: n / score{withLift ? ' / hit' : ''}</Th>
+                  <Th>B: n / score{withLift ? ' / hit' : ''}</Th>
+                  <Th>Δ (B − A)</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {mergedCompareRows.slice(0, 100).map((m, i) => {
+                  const a = m.a, b = m.b, ref = a || b;
+                  const aN = a?.n || 0, bN = b?.n || 0;
+                  const aS = a?.avg_score, bS = b?.avg_score;
+                  const dCount = bN - aN;
+                  const dScore = (bS != null && aS != null) ? (bS - aS) : null;
+                  return (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--stroke-soft)' }}>
+                      {groupBy.map(k => (
+                        <td key={k} style={cellMono}>{ref[k] || <span style={{ color: 'var(--ink-faint)' }}>—</span>}</td>
+                      ))}
+                      <td style={{ ...cellMono, color: a ? 'var(--ink)' : 'var(--ink-faint)' }}>
+                        {a ? `${aN} · ${aS != null ? parseFloat(aS).toFixed(2) : '—'}` : '—'}
+                        {a && withLift && a.hit_rate != null && (
+                          <span style={{ color: 'var(--ink-faint)' }}> · {(a.hit_rate * 100).toFixed(0)}%</span>
+                        )}
+                      </td>
+                      <td style={{ ...cellMono, color: b ? 'var(--ink)' : 'var(--ink-faint)' }}>
+                        {b ? `${bN} · ${bS != null ? parseFloat(bS).toFixed(2) : '—'}` : '—'}
+                        {b && withLift && b.hit_rate != null && (
+                          <span style={{ color: 'var(--ink-faint)' }}> · {(b.hit_rate * 100).toFixed(0)}%</span>
+                        )}
+                      </td>
+                      <td style={{ ...cellMono, fontWeight: 600,
+                        color: dCount > 0 ? '#00e676' : dCount < 0 ? '#ff6b6b' : 'var(--ink-dim)',
+                      }}>
+                        {dCount > 0 ? '+' : ''}{dCount}
+                        {dScore != null && (
+                          <span style={{ color: 'var(--ink-faint)', fontWeight: 400, marginLeft: 6 }}>
+                            (score {dScore > 0 ? '+' : ''}{dScore.toFixed(2)})
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
