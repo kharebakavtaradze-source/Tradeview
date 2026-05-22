@@ -252,7 +252,140 @@ export default function StudioIndex() {
             </div>
           </div>
         )}
+
+        {/* Maintenance */}
+        <MaintenancePanel />
+
       </div>
     </PumpLayout>
+  );
+}
+
+function MaintenancePanel() {
+  const [keepLastN, setKeepLastN] = useState(3);
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const runCleanup = async (dryRun) => {
+    setBusy(true); setMsg(null);
+    try {
+      const qs = new URLSearchParams({ keep_last_n: String(keepLastN), dry_run: dryRun ? 'true' : 'false' });
+      const r = await fetch(`${API_URL}/api/admin/cleanup-all?${qs}`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (dryRun) {
+        setPreview(data);
+        setMsg('Preview — pass real cleanup to execute.');
+      } else {
+        setPreview(null);
+        setMsg(`Cleanup done. See server logs for per-table counts.`);
+      }
+    } catch (e) {
+      setMsg(`Error: ${e.message}`);
+    }
+    setBusy(false);
+  };
+
+  const wipeLiveHistory = async () => {
+    if (!window.confirm('Wipe ALL demand_ticker_history rows? This deletes every Live scan snapshot. Cannot be undone.')) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`${API_URL}/api/analytics/live-history?confirm=true`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setMsg(`Deleted ${data.deleted} Live history rows.`);
+    } catch (e) {
+      setMsg(`Error: ${e.message}`);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ marginTop: 40, paddingTop: 24, borderTop: '1px solid var(--stroke-soft)' }}>
+      <div style={{ fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 14 }}>
+        Maintenance
+      </div>
+      <div style={{
+        background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)',
+        borderRadius: 10, padding: 16,
+        display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)' }}>
+            Cleanup old runs — keep last
+          </span>
+          <input type="number" min="1" max="50" value={keepLastN}
+            onChange={e => setKeepLastN(parseInt(e.target.value) || 3)}
+            style={{
+              width: 60, padding: '6px 8px',
+              background: 'var(--bg-2)', border: '1px solid var(--stroke-soft)',
+              borderRadius: 6, color: 'var(--ink)',
+              fontSize: 12, fontFamily: 'var(--f-mono)',
+            }}
+          />
+          <button
+            onClick={() => runCleanup(true)}
+            disabled={busy}
+            style={{
+              padding: '5px 12px', borderRadius: 6, border: '1px solid var(--stroke-soft)',
+              background: 'var(--bg-2)', color: 'var(--ink)',
+              fontSize: 12, fontFamily: 'var(--f-mono)', cursor: busy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Preview
+          </button>
+          <button
+            onClick={() => {
+              if (window.confirm(`Delete ALL replay / pump-study / raw-pattern runs except the ${keepLastN} most recent of each? Cannot be undone.`)) {
+                runCleanup(false);
+              }
+            }}
+            disabled={busy}
+            style={{
+              padding: '5px 12px', borderRadius: 6, border: '1px solid #ff6b6b',
+              background: 'rgba(255,107,107,0.08)', color: '#ff6b6b',
+              fontSize: 12, fontFamily: 'var(--f-mono)', fontWeight: 600,
+              cursor: busy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Execute Cleanup
+          </button>
+        </div>
+
+        <div style={{ width: 1, height: 24, background: 'var(--stroke-soft)' }} />
+
+        <button
+          onClick={wipeLiveHistory}
+          disabled={busy}
+          title="Delete every row in demand_ticker_history"
+          style={{
+            padding: '5px 12px', borderRadius: 6, border: '1px solid #ff6b6b',
+            background: 'rgba(255,107,107,0.08)', color: '#ff6b6b',
+            fontSize: 12, fontFamily: 'var(--f-mono)', fontWeight: 600,
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Wipe Live History
+        </button>
+
+        {msg && (
+          <span style={{ fontSize: 11, color: msg.startsWith('Error') ? '#ff4444' : 'var(--ink-dim)', fontFamily: 'var(--f-mono)', marginLeft: 'auto' }}>
+            {msg}
+          </span>
+        )}
+      </div>
+
+      {preview && (
+        <pre style={{
+          marginTop: 10, padding: 12, borderRadius: 8,
+          background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)',
+          fontSize: 11, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)',
+          overflowX: 'auto', whiteSpace: 'pre-wrap',
+        }}>
+          {JSON.stringify(preview, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }

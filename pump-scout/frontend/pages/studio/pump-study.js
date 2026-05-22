@@ -277,6 +277,26 @@ export default function PumpStudyStudio() {
     }
   };
 
+  const handleDeleteRun = async (run) => {
+    const runId = run.run_id || run.id;
+    const ok = typeof window !== 'undefined' && window.confirm(
+      `Delete pump-study run ${runId}?\n\nThis removes the run, its episodes, snapshots, clusters, events, comparisons, and any linked raw-pattern run. Cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setPastRuns(prev => prev.filter(x => (x.run_id || x.id) !== runId));
+      if (activeRun && (activeRun.run_id || activeRun.id) === runId) {
+        setActiveRun(null);
+        setEpisodes(null);
+        setSignalLift(null);
+      }
+    } catch (e) {
+      setRunError(`Delete failed: ${e.message}`);
+    }
+  };
+
   const handleViewRun = async (run) => {
     const runId = run.run_id || run.id;
     try {
@@ -438,6 +458,18 @@ export default function PumpStudyStudio() {
                             }}
                           >
                             View
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteRun(run); }}
+                            title="Delete this run and all its child rows"
+                            style={{
+                              background: 'transparent', border: '1px solid var(--stroke-soft)',
+                              borderRadius: 5, padding: '3px 8px', cursor: 'pointer',
+                              fontSize: 11, color: '#ff6b6b', fontFamily: 'var(--f-mono)',
+                              marginLeft: 6,
+                            }}
+                          >
+                            ×
                           </button>
                         </div>
                       </div>
