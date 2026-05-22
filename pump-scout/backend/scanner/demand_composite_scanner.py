@@ -370,14 +370,27 @@ def _compute_readiness(
         last  = _labels[-1]
         prev  = _labels[-2] if len(_labels) >= 2 else {}
         prev2 = _labels[-3] if len(_labels) >= 3 else {}
-        # PREUP: EMA stack aligning bullish
-        if last.get("preup"):
-            conf_score += 2; confluence_signals.append("PREUP_NOW")
-        elif prev.get("preup") or prev2.get("preup"):
+        # PREUP: EMA stack aligning bullish — differentiate by token (R42 data).
+        # P55=+2.17 alpha, P2/P3/P50=neutral, P89=-0.73 alpha (already overbought).
+        _preup_now = last.get("preup") or ""
+        _preup_rec = prev.get("preup") or prev2.get("preup") or ""
+        if _preup_now == "P55":
+            conf_score += 2; confluence_signals.append("PREUP_P55")
+        elif _preup_now == "P89":
+            conf_score -= 1; confluence_signals.append("PREUP_P89_LATE")
+        elif _preup_now:
+            conf_score += 1; confluence_signals.append("PREUP_NOW")
+        elif _preup_rec:
             conf_score += 1; confluence_signals.append("PREUP_RECENT")
         # T1/T2 demand bar in last 3 bars
         if any(lb.get("t_signal") in ("T1", "T2") for lb in (last, prev, prev2)):
             conf_score += 1; confluence_signals.append("T1T2_BAR")
+        # T10/T11 bearish distribution bars: T10=-1.97 alpha, T11=-1.41 alpha (R42).
+        _t_last = last.get("t_signal") or ""
+        if _t_last in ("T10", "T11"):
+            conf_score -= 2; confluence_signals.append(f"BEARISH_TZ_{_t_last}")
+        elif any(lb.get("t_signal") in ("T10", "T11") for lb in (prev, prev2)):
+            conf_score -= 1; confluence_signals.append("BEARISH_TZ_RECENT")
         # Still in Bollinger squeeze (L bucket)
         if last.get("bucket") == "L":
             conf_score += 1; confluence_signals.append("WLNBB_L")
@@ -387,8 +400,12 @@ def _compute_readiness(
         _vx  = last.get("vix_token")  == "VX"
         _ps  = last.get("psar_token") in ("PS", "PB")
         _r2x = last.get("rsi2_token") == "R2X"
+        _r2l = last.get("rsi2_token") == "R2L"
         if _vx and _ps and _r2x:
             conf_score += 2; confluence_signals.append("VX_PS_R2X_BREAKOUT")
+        # PS-R2L (no VX required): +1.03 alpha, n=174 in R42 scanner replay.
+        elif _ps and _r2l and not _vx:
+            conf_score += 1; confluence_signals.append("PS_R2L_SETUP")
 
         # Gap ≥ 100% in last 5 bars: 6.18x lift (47% of 4x+ vs 8% of 2-4x, R92).
         # Gap ≥ 50%: 2.97x lift (65% of 4x+ vs 22% of 2-4x, R92).
@@ -667,8 +684,10 @@ def score_demand_composite(
         base = 2.5; reasons.append("v2_watch_high")
     elif "WATCH_MEDIUM" in v2:
         base = 2.0; reasons.append("v2_watch_medium")
-    elif "WATCH_LOW" in v2 or npl in ("NEW_PUMP_FIRE", "NEW_PUMP_STRONG"):
+    elif "WATCH_LOW" in v2 or npl == "NEW_PUMP_FIRE":
         base = 1.5; reasons.append("v2_watch_or_fire")
+    elif npl == "NEW_PUMP_STRONG":
+        base = -2.0; risks.append("np_strong_extended")
     elif npl == "NEW_PUMP_SETUP" or dec == "WATCH":
         base = 1.0; reasons.append("np_setup")
 
