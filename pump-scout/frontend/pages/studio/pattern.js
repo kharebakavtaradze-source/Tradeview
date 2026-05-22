@@ -134,9 +134,9 @@ export default function PatternStudio() {
 
   useEffect(() => {
     fetch(`${API_URL}/api/replay/pump-study/runs`)
-      .then(r => r.ok ? r.json() : [])
+      .then(r => r.ok ? r.json() : {})
       .then(data => {
-        const runs = Array.isArray(data) ? data : [];
+        const runs = Array.isArray(data) ? data : (data.runs || []);
         setPumpRuns(runs);
         if (runs.length > 0 && !selectedRunId) {
           setSelectedRunId(runs[0].run_id || runs[0].id || '');
