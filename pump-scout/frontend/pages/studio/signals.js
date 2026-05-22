@@ -134,8 +134,21 @@ export default function SignalsExplorer() {
   }, [groupBy, days, minCount, withLift, liftDays, liftTarget]);
 
   const fetchCoocc = useCallback(async (cfgVer) => {
-    const r = await fetch(`${API_URL}/api/analytics/live-history/cooccurrence?${buildQs(cfgVer)}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const url = `${API_URL}/api/analytics/live-history/cooccurrence?${buildQs(cfgVer)}`;
+    let r;
+    try {
+      r = await fetch(url);
+    } catch (netErr) {
+      throw new Error(`Network error reaching ${API_URL}. Is the backend deployed and the endpoint live? (${netErr.message})`);
+    }
+    if (r.status === 404) {
+      throw new Error(`Endpoint not found at ${API_URL}/api/analytics/live-history/cooccurrence — backend may not have the latest commit deployed yet.`);
+    }
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try { const eb = await r.json(); if (eb?.detail) detail = `${detail}: ${eb.detail}`; } catch {}
+      throw new Error(detail);
+    }
     const data = await r.json();
     return {
       rows:     Array.isArray(data.rows) ? data.rows : [],
