@@ -107,6 +107,13 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up Pump Scout backend...")
     await init_db()
     try:
+        from database import drop_legacy_tables
+        dropped = await drop_legacy_tables()
+        if dropped:
+            logger.info(f"Legacy tables: {dropped}")
+    except Exception as _exc:
+        logger.warning(f"drop_legacy_tables failed (non-fatal): {_exc}")
+    try:
         from scanner.massive_reference import load_from_db as _load_universe
         await _load_universe()
     except Exception as _exc:
@@ -3353,6 +3360,61 @@ async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, d
 
     results["dry_run"] = dry_run
     return results
+
+
+_WIPE_CONFIRM_TOKEN = "YES_NUKE_EVERYTHING"
+
+
+@app.post("/api/admin/db/wipe-all")
+async def admin_db_wipe_all(
+    confirm: str = "",
+    vacuum: bool = True,
+    keep: str = "",
+):
+    """
+    DESTRUCTIVE: TRUNCATE every table in the SQLAlchemy schema and reset
+    identity columns. Requires ?confirm=YES_NUKE_EVERYTHING.
+
+    Optional:
+      ?keep=tbl1,tbl2  — comma-separated tables to skip (e.g. "watchlist,journal").
+      ?vacuum=false    — skip VACUUM ANALYZE after truncate.
+
+    Returns the list of truncated tables, skipped tables, and any errors.
+    """
+    if confirm != _WIPE_CONFIRM_TOKEN:
+        raise HTTPException(
+            400,
+            detail=(
+                f"Refusing to wipe. Pass ?confirm={_WIPE_CONFIRM_TOKEN} to proceed. "
+                "Every table in the schema will be truncated."
+            ),
+        )
+
+    from database import wipe_database, vacuum_analyze_all
+
+    skip = tuple(t.strip() for t in keep.split(",") if t.strip())
+    logger.warning(
+        f"[ADMIN] DB wipe-all initiated by API. skip={skip} vacuum={vacuum}"
+    )
+
+    result = await wipe_database(skip=skip)
+    logger.warning(
+        f"[ADMIN] DB wipe-all complete: "
+        f"truncated={len(result.get('truncated', []))} "
+        f"skipped={len(result.get('skipped', []))} "
+        f"errors={len(result.get('errors', {}))}"
+    )
+
+    if vacuum:
+        try:
+            v = await vacuum_analyze_all()
+            result["vacuum"] = {"ran": True, "tables": len(v)}
+        except Exception as exc:
+            result["vacuum"] = {"ran": False, "error": str(exc)}
+    else:
+        result["vacuum"] = {"ran": False}
+
+    return {"ok": True, **result}
 
 
 async def _build_research_context_text(run_id: int) -> str:
