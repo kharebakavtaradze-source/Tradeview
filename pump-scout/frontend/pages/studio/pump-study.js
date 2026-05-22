@@ -188,7 +188,13 @@ export default function PumpStudyStudio() {
   const [loadingLift, setLoadingLift] = useState(false);
   const [reScoring, setReScoring] = useState(false);
 
+  // Raw-pattern-study state — Re-score depends on a completed raw run for
+  // this pump-study run. Shown as a status pill in the run header.
+  const [rawRun, setRawRun]       = useState(null);
+  const [rawBuilding, setRawBuilding] = useState(false);
+
   const pollRef = useRef(null);
+  const rawPollRef = useRef(null);
 
   // Load past runs on mount
   useEffect(() => {
@@ -315,7 +321,15 @@ export default function PumpStudyStudio() {
     setReScoring(true);
     try {
       const r = await fetch(`${API_URL}/api/replay/pump-study/${runId}/score-demand`, { method: 'POST' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        // Surface the FastAPI {detail} field if present — e.g. "No raw-pattern-study run found".
+        let detail = `HTTP ${r.status}`;
+        try {
+          const errBody = await r.json();
+          if (errBody?.detail) detail = errBody.detail;
+        } catch {}
+        throw new Error(detail);
+      }
       const data = await r.json();
       // Poll the run-detail until scoring_config_version flips to the target version.
       const target = data.target_config_version;
@@ -344,6 +358,70 @@ export default function PumpStudyStudio() {
     } catch (e) {
       setRunError(e.message);
       setReScoring(false);
+    }
+  };
+
+  // Fetch the latest raw_pattern_study run linked to the active pump-study
+  // run. Re-score requires this to exist + be complete.
+  const refreshRawRun = useCallback(async (runId) => {
+    if (!runId) { setRawRun(null); return; }
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/runs?pump_study_run_id=${runId}&limit=1`);
+      if (!r.ok) { setRawRun(null); return; }
+      const data = await r.json();
+      const runs = Array.isArray(data) ? data : (data.runs || []);
+      setRawRun(runs[0] || null);
+    } catch { setRawRun(null); }
+  }, []);
+
+  useEffect(() => {
+    if (activeRun) refreshRawRun(activeRun.run_id || activeRun.id);
+    else setRawRun(null);
+  }, [activeRun, refreshRawRun]);
+
+  // Poll while the raw-pattern-study run is being built.
+  useEffect(() => {
+    if (!rawBuilding || !activeRun) return;
+    const runId = activeRun.run_id || activeRun.id;
+    rawPollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/runs?pump_study_run_id=${runId}&limit=1`);
+        if (!r.ok) return;
+        const data = await r.json();
+        const latest = (data.runs || [])[0];
+        if (!latest) return;
+        setRawRun(latest);
+        if (latest.status === 'complete' || latest.status === 'error' || latest.status === 'failed') {
+          clearInterval(rawPollRef.current);
+          setRawBuilding(false);
+          loadRunData(runId); // refresh episodes — demand fields are now populated
+        }
+      } catch {}
+    }, 5000);
+    return () => clearInterval(rawPollRef.current);
+  }, [rawBuilding, activeRun, loadRunData]);
+
+  const handleBuildPatternFeatures = async () => {
+    if (!activeRun) return;
+    const runId = activeRun.run_id || activeRun.id;
+    setRunError(null);
+    setRawBuilding(true);
+    try {
+      const r = await fetch(`${API_URL}/api/replay/raw-pattern-study/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pump_study_run_id: runId }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const eb = await r.json(); if (eb?.detail) detail = eb.detail; } catch {}
+        throw new Error(detail);
+      }
+      // Polling effect picks it up from here.
+      refreshRawRun(runId);
+    } catch (e) {
+      setRunError(`Build pattern features failed: ${e.message}`);
+      setRawBuilding(false);
     }
   };
 
@@ -535,16 +613,66 @@ export default function PumpStudyStudio() {
                   </div>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* Pattern Features status + Build button */}
+                  {(() => {
+                    const rawStatus = rawRun?.status;
+                    const built     = rawStatus === 'complete';
+                    const building  = rawBuilding || rawStatus === 'running' || rawStatus === 'pending';
+                    const failed    = rawStatus === 'error' || rawStatus === 'failed';
+                    const label =
+                      built    ? `✓ Features ${rawRun?.scoring_config_version ? `· ${rawRun.scoring_config_version}` : ''}` :
+                      building ? <><Spinner /> Building…</> :
+                      failed   ? '⚠ Features failed' :
+                                 'No features';
+                    const color =
+                      built    ? '#00c864' :
+                      building ? 'var(--pump-lime)' :
+                      failed   ? '#ff4444' : 'var(--ink-dim)';
+                    return (
+                      <span style={{
+                        fontSize: 11, fontFamily: 'var(--f-mono)',
+                        color, padding: '4px 9px',
+                        border: `1px solid ${color === 'var(--ink-dim)' ? 'var(--stroke-soft)' : color}`,
+                        borderRadius: 5,
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                      }}>
+                        {label}
+                      </span>
+                    );
+                  })()}
+                  {!rawRun && !rawBuilding && (
+                    <button
+                      onClick={handleBuildPatternFeatures}
+                      disabled={!activeRun || activeRun.status === 'running'}
+                      title="Build raw-pattern-study features (daily features, episode features, demand scoring). Required before Re-score."
+                      style={{
+                        background: 'var(--bg-1)', border: '1px solid var(--stroke-soft)',
+                        borderRadius: 6, padding: '5px 11px',
+                        cursor: 'pointer',
+                        fontSize: 11, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)',
+                      }}
+                    >
+                      ⚙ Build Features
+                    </button>
+                  )}
                   <button
                     onClick={handleReScore}
-                    disabled={reScoring || !activeRun || activeRun.status === 'running'}
-                    title="Re-run demand scoring on existing snapshots with the current scoring_config. No candle re-fetch."
+                    disabled={reScoring || !activeRun || activeRun.status === 'running' ||
+                              !rawRun || rawRun.status !== 'complete'}
+                    title={
+                      !rawRun                       ? 'Build pattern features first.' :
+                      rawRun.status === 'running'   ? 'Pattern features still building — wait for completion.' :
+                      rawRun.status !== 'complete'  ? `Raw-pattern run is "${rawRun.status}" — only "complete" runs can be re-scored.` :
+                                                      'Re-run demand scoring on existing snapshots with the current scoring_config. No candle re-fetch.'
+                    }
                     style={{
                       background: reScoring ? 'var(--bg-2)' : 'var(--bg-1)',
                       border: '1px solid var(--stroke-soft)',
                       borderRadius: 6, padding: '5px 11px',
-                      cursor: reScoring ? 'not-allowed' : 'pointer',
-                      fontSize: 11, color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)',
+                      cursor: (reScoring || !rawRun || rawRun.status !== 'complete') ? 'not-allowed' : 'pointer',
+                      fontSize: 11,
+                      color: (!rawRun || rawRun.status !== 'complete') ? 'var(--ink-faint)' : 'var(--pump-lime)',
+                      fontFamily: 'var(--f-mono)',
                       display: 'inline-flex', alignItems: 'center', gap: 6,
                     }}
                   >
@@ -599,19 +727,28 @@ export default function PumpStudyStudio() {
                               >
                                 <td style={{ padding: '8px 12px', color: 'var(--pump-lime)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{ep.symbol || '—'}</td>
                                 <td style={{ padding: '8px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>
-                                  {ep.multiple != null ? `×${parseFloat(ep.multiple).toFixed(2)}` : ep.gain_multiple != null ? `×${parseFloat(ep.gain_multiple).toFixed(2)}` : '—'}
+                                  {(() => {
+                                    const m = ep.pump_multiple ?? ep.multiple ?? ep.gain_multiple;
+                                    return m != null ? `×${parseFloat(m).toFixed(2)}` : '—';
+                                  })()}
                                 </td>
                                 <td style={{ padding: '8px 12px', color: 'var(--ink-dim)' }}>{ep.pump_type || ep.type || '—'}</td>
-                                <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>{ep.start_date || ep.date || '—'}</td>
+                                <td style={{ padding: '8px 12px', color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', fontSize: 11 }}>{ep.pump_start_date || ep.start_date || ep.date || '—'}</td>
                                 <td style={{ padding: '8px 12px' }}>
-                                  {ep.caught != null ? (
-                                    <span style={{ color: ep.caught ? '#00c864' : '#ff4444', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
-                                      {ep.caught ? 'Yes' : 'No'}
-                                    </span>
-                                  ) : '—'}
+                                  {(() => {
+                                    const caught = ep.was_flagged_by_scanner ?? ep.caught;
+                                    return caught != null ? (
+                                      <span style={{ color: caught ? '#00c864' : '#ff4444', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
+                                        {caught ? 'Yes' : 'No'}
+                                      </span>
+                                    ) : '—';
+                                  })()}
                                 </td>
                                 <td style={{ padding: '8px 12px', color: 'var(--ink)', fontFamily: 'var(--f-mono)' }}>
-                                  {ep.score != null ? ep.score : '—'}
+                                  {(() => {
+                                    const s = ep.demand_score_at_breakout ?? ep.score;
+                                    return s != null ? parseFloat(s).toFixed(1) : '—';
+                                  })()}
                                 </td>
                               </tr>,
                               expanded && (
@@ -620,10 +757,13 @@ export default function PumpStudyStudio() {
                                     <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 12 }}>
                                       {[
                                         ['Pump Type', ep.pump_type || ep.type || '—'],
-                                        ['Duration (days)', ep.duration_days || '—'],
+                                        ['Window (days)', ep.pump_window_days ?? ep.duration_days ?? '—'],
                                         ['Peak Price', ep.peak_price != null ? `$${parseFloat(ep.peak_price).toFixed(2)}` : '—'],
                                         ['Start Price', ep.start_price != null ? `$${parseFloat(ep.start_price).toFixed(2)}` : '—'],
-                                        ['End Date', ep.end_date || '—'],
+                                        ['Peak Date', ep.pump_peak_date || ep.end_date || '—'],
+                                        ['Demand Tier', ep.demand_tier_at_breakout || '—'],
+                                        ['ATS', ep.ats_at_breakout || '—'],
+                                        ['Wyckoff (strongest)', ep.strongest_wyckoff_state || '—'],
                                       ].map(([k, v]) => (
                                         <div key={k}>
                                           <div style={{ fontSize: 10, color: 'var(--ink-dim)', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>{k}</div>
