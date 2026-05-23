@@ -33,6 +33,62 @@ def _get_db_url() -> str:
 DATABASE_URL = _get_db_url()
 _IS_SQLITE = "sqlite" in DATABASE_URL
 
+# ── Studio retention / storage knobs ──────────────────────────────────────────
+# How many most-recent complete runs to keep when auto-pruning runs from the
+# Analytics Studio (pump-study / raw-pattern-study / replay). Older complete
+# runs are bulk-deleted at the end of each fresh run. Set to 0 to disable.
+STUDIO_KEEP_LAST_RUNS = int(os.getenv("STUDIO_KEEP_LAST_RUNS", "3") or "3")
+
+# When true, after raw_pattern_daily_features is built from a pump-study's
+# snapshots, null out pump_episode_snapshots.snapshot_json for that run.
+# Saves ~50 % of pump-study storage. Off by default — turn on once you trust
+# the daily-features pipeline as the system of record.
+STUDIO_DROP_SNAPSHOT_JSON_AFTER_FEATURES = (
+    os.getenv("STUDIO_DROP_SNAPSHOT_JSON_AFTER_FEATURES", "0").lower()
+    in ("1", "true", "yes", "on")
+)
+
+# Fields inside snapshot_json.indicators that are already promoted to dedicated
+# columns on pump_episode_snapshots OR are unused by any downstream consumer.
+# We strip these before json.dumps to shrink the blob ~30-50 %.
+# Keep in sync with:
+#   - pump_episode_snapshots column list (database.py: PumpEpisodeSnapshot)
+#   - readers in replay/pump_study_engine.py (snapshot_to_raw_daily_feature,
+#     _build_ema_feature_json, _compute_per_bar_custom_flags, the per-bar
+#     ind.get(...) loop). Anything used there MUST stay.
+_SNAPSHOT_INDICATOR_REDUNDANT_KEYS = frozenset({
+    "rsi",            # → snapshot column `rsi` (rsi.value is what gets stored)
+    "cmf",            # → snapshot column `cmf`
+    "atr_pct",        # → snapshot column `atr_pct`
+    "bb_width",       # → snapshot column `bb_width`
+    "bb_squeeze",     # → snapshot column `bb_squeeze`
+    "vol_z",          # → snapshot column `volume_zscore`
+    "avg_vol_20",     # only used via vol_vs_avg20 (already in snapshot column)
+    # Nested dicts that are not read by any downstream pipeline consumer
+    "obv",
+    "institutional_flow",
+    "stealth",
+    "gap",
+})
+
+
+def _slim_snapshot_payload(snap: dict) -> dict:
+    """
+    Return a copy of `snap` with redundant indicator fields stripped from
+    `snap["indicators"]`. All other keys (regime, ignition, toxicity, new_pump,
+    custom_flags) are left untouched.
+    """
+    if not snap:
+        return snap
+    indicators = snap.get("indicators")
+    if not isinstance(indicators, dict):
+        return snap
+    slim_ind = {
+        k: v for k, v in indicators.items()
+        if k not in _SNAPSHOT_INDICATOR_REDUNDANT_KEYS
+    }
+    return {**snap, "indicators": slim_ind}
+
 if _IS_SQLITE:
     # Hard-fail in Railway/production environments — SQLite loses all data on restart
     if os.getenv("RAILWAY_ENVIRONMENT"):
@@ -3433,7 +3489,7 @@ async def save_pump_episode_snapshots(snapshots: list[dict]) -> int:
                 cmf                     = s.get("cmf"),
                 ribbon_class            = s.get("ribbon_class"),
                 wyckoff_state           = s.get("wyckoff_state"),
-                snapshot_json           = json.dumps(s.get("snapshot") or {}),
+                snapshot_json           = json.dumps(_slim_snapshot_payload(s.get("snapshot") or {})),
             )
             session.add(row)
         await session.commit()
@@ -4583,7 +4639,6 @@ async def cleanup_raw_pattern_runs(
         preview = [
             {
                 "run_id":     r.id,
-                "ticker":     r.ticker,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "status":     r.status,
             }
@@ -4651,10 +4706,13 @@ async def cleanup_pump_study_runs(
     Keeps the `keep_last_n` most-recent complete runs; deletes all child rows
     (snapshots, events, detections, episodes, clusters, comparisons).
     """
+    # Engine finalises pump_study runs as "comparison_complete"; the historical
+    # "complete" status is also accepted in case anything promotes it later.
+    _TERMINAL_PUMP_STATUSES = ("complete", "comparison_complete")
     async with get_session_factory()() as session:
         result = await session.execute(
             select(PumpStudyRun)
-            .where(PumpStudyRun.status == "complete")
+            .where(PumpStudyRun.status.in_(_TERMINAL_PUMP_STATUSES))
             .order_by(PumpStudyRun.created_at.desc())
         )
         complete_runs = result.scalars().all()
@@ -5953,3 +6011,153 @@ async def backfill_raw_pattern_demand_scores(limit: int = 2000) -> dict:
             await s3.commit()
 
     return {"updated": updated, "skipped": skipped}
+
+
+# ── Studio storage helpers ────────────────────────────────────────────────────
+
+async def null_snapshot_json_for_pump_runs(run_ids: list[int]) -> int:
+    """
+    NULL out snapshot_json on pump_episode_snapshots rows for the given runs.
+    The structured columns and raw OHLCV stay; only the verbose indicator blob
+    is cleared. Returns the number of rows updated.
+
+    Use this once raw_pattern_daily_features has been built — daily-features
+    is the system of record after that point, so snapshot_json is dead weight.
+    """
+    if not run_ids:
+        return 0
+    async with get_engine().begin() as conn:
+        res = await conn.execute(
+            text(
+                "UPDATE pump_episode_snapshots "
+                "SET snapshot_json = NULL "
+                "WHERE run_id = ANY(:ids) AND snapshot_json IS NOT NULL"
+            ),
+            {"ids": list(run_ids)},
+        )
+        return res.rowcount or 0
+
+
+# Tables surfaced by /api/admin/db/sizes. Order = display order in the UI.
+_STUDIO_SIZE_TABLES = (
+    # Pump-study lineage
+    "pump_episode_snapshots",
+    "pump_episode_events",
+    "pump_episode_detections",
+    "pump_episodes",
+    "pump_clusters",
+    "pump_comparison_members",
+    "pump_comparison_groups",
+    "pump_study_ai_summaries",
+    "pump_study_runs",
+    # Raw-pattern lineage
+    "raw_pattern_daily_features",
+    "raw_pattern_episode_features",
+    "raw_pattern_comparison_members",
+    "raw_pattern_comparisons",
+    "raw_pattern_ai_summaries",
+    "raw_pattern_runs",
+    "discovered_patterns",
+    # Replay lineage
+    "replay_signal_candidates",
+    "replay_outcomes",
+    "replay_missed_movers",
+    "replay_runs",
+    # Caches / journal
+    "candle_cache",
+    "demand_ticker_history",
+    "sector_cache",
+    "universe_cache",
+    "stock_split_cache",
+    "ai_signal_outcome",
+    "ai_pattern_memory",
+    "ai_trade_lesson",
+    "ai_signal_blacklist",
+    "ai_journal_position",
+    "ai_journal_entry",
+    "ai_journal_state",
+    "scans",
+    "scan_candidates",
+    "market_regime",
+    "sector_strength",
+)
+
+
+async def get_table_sizes() -> dict:
+    """
+    Per-table storage breakdown.
+
+    Returns
+    -------
+    {
+        "ok":              True,
+        "database_bytes":  int,                       # total DB size
+        "database_pretty": "1.8 GB",                  # pg_size_pretty
+        "tables": [
+            {"table": str, "total_bytes": int, "total_pretty": str,
+             "row_estimate": int, "indexes_bytes": int},
+            ...
+        ],
+        "engine":          "postgres" | "sqlite",
+    }
+
+    SQLite returns row counts only (no size — would require summing page usage).
+    """
+    if _IS_SQLITE:
+        rows = []
+        async with get_engine().connect() as conn:
+            for tbl in _STUDIO_SIZE_TABLES:
+                try:
+                    n = (await conn.execute(text(f"SELECT COUNT(*) FROM {tbl}"))).scalar() or 0
+                    rows.append({
+                        "table":         tbl,
+                        "total_bytes":   None,
+                        "total_pretty":  None,
+                        "row_estimate":  int(n),
+                        "indexes_bytes": None,
+                    })
+                except Exception:
+                    continue
+        return {
+            "ok": True, "engine": "sqlite",
+            "database_bytes": None, "database_pretty": None,
+            "tables": rows,
+        }
+
+    # PostgreSQL: pg_total_relation_size includes table + TOAST + indexes
+    rows = []
+    async with get_engine().connect() as conn:
+        db_bytes = (await conn.execute(text("SELECT pg_database_size(current_database())"))).scalar() or 0
+        db_pretty = (await conn.execute(text("SELECT pg_size_pretty(pg_database_size(current_database()))"))).scalar() or ""
+        for tbl in _STUDIO_SIZE_TABLES:
+            try:
+                row = (await conn.execute(
+                    text(
+                        "SELECT pg_total_relation_size(c.oid)   AS total_bytes, "
+                        "       pg_size_pretty(pg_total_relation_size(c.oid)) AS total_pretty, "
+                        "       pg_indexes_size(c.oid)          AS indexes_bytes, "
+                        "       COALESCE(s.n_live_tup, 0)::bigint AS row_estimate "
+                        "FROM pg_class c "
+                        "LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid "
+                        "WHERE c.relname = :name AND c.relkind = 'r'"
+                    ),
+                    {"name": tbl},
+                )).first()
+                if not row:
+                    continue
+                rows.append({
+                    "table":         tbl,
+                    "total_bytes":   int(row.total_bytes or 0),
+                    "total_pretty":  row.total_pretty,
+                    "row_estimate":  int(row.row_estimate or 0),
+                    "indexes_bytes": int(row.indexes_bytes or 0),
+                })
+            except Exception as exc:
+                logger.debug(f"get_table_sizes: skip {tbl}: {exc}")
+                continue
+    rows.sort(key=lambda r: r["total_bytes"], reverse=True)
+    return {
+        "ok": True, "engine": "postgres",
+        "database_bytes": int(db_bytes), "database_pretty": db_pretty,
+        "tables": rows,
+    }

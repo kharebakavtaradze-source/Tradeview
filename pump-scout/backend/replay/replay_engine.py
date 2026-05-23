@@ -98,6 +98,27 @@ def _trading_days_in_range(start: str, end: str) -> list[str]:
     return days
 
 
+async def _auto_prune_replay_runs() -> None:
+    """
+    Best-effort cleanup of older completed replay runs after a fresh one lands.
+    Bounded by STUDIO_KEEP_LAST_RUNS (default 3, set 0 to disable).
+    """
+    try:
+        from database import STUDIO_KEEP_LAST_RUNS, cleanup_replay_runs
+        if STUDIO_KEEP_LAST_RUNS <= 0:
+            return
+        res = await cleanup_replay_runs(
+            keep_last_n=STUDIO_KEEP_LAST_RUNS, dry_run=False
+        )
+        if res.get("deleted"):
+            logger.info(
+                f"[REPLAY] auto-prune: kept last {STUDIO_KEEP_LAST_RUNS} runs, "
+                f"deleted {res['deleted']}"
+            )
+    except Exception as exc:
+        logger.warning(f"[REPLAY] auto-prune failed (non-fatal): {exc}")
+
+
 # ── Main entry points ─────────────────────────────────────────────────────────
 
 async def run_single_day_replay(
@@ -166,6 +187,7 @@ async def run_single_day_replay(
             f"{len(candidates)} candidates, {len(outcomes)} outcomes, "
             f"{len(missed)} missed movers"
         )
+        await _auto_prune_replay_runs()
 
     except Exception as exc:
         logger.error(f"[REPLAY] run_id={run_id} failed: {exc}", exc_info=True)
@@ -276,6 +298,7 @@ async def run_date_range_replay(
             f"{len(trading_days)} days, {total_candidates} candidates, "
             f"{total_outcomes} outcomes, {total_missed} missed movers"
         )
+        await _auto_prune_replay_runs()
 
     except Exception as exc:
         logger.error(f"[REPLAY] run_id={run_id} range failed: {exc}", exc_info=True)

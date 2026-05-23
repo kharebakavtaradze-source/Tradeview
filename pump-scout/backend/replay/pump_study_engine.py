@@ -5634,6 +5634,22 @@ async def run_pump_study(run_id: int, params: dict) -> None:
             f"Families: {family_counts}"
         )
 
+        # Auto-prune older pump-study runs to keep storage bounded.
+        # Controlled by STUDIO_KEEP_LAST_RUNS (default 3). Best-effort.
+        try:
+            from database import STUDIO_KEEP_LAST_RUNS, cleanup_pump_study_runs
+            if STUDIO_KEEP_LAST_RUNS > 0:
+                res = await cleanup_pump_study_runs(
+                    keep_last_n=STUDIO_KEEP_LAST_RUNS, dry_run=False
+                )
+                if res.get("deleted"):
+                    logger.info(
+                        f"[PUMP_STUDY] auto-prune: kept last {STUDIO_KEEP_LAST_RUNS} runs, "
+                        f"deleted {res['deleted']}"
+                    )
+        except Exception as exc:
+            logger.warning(f"[PUMP_STUDY] auto-prune failed (non-fatal): {exc}")
+
     except Exception as exc:
         logger.error(f"[PUMP_STUDY] run_id={run_id} failed: {exc}", exc_info=True)
         _pump_study_progress.update({

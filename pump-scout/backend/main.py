@@ -2010,7 +2010,9 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
             )
 
             ps_run = await get_pump_study_run(run_id)
-            if not ps_run or ps_run.get("status") != "complete":
+            # Engine finalises pump-study runs as "comparison_complete"; accept
+            # the legacy "complete" too for forward-compat.
+            if not ps_run or ps_run.get("status") not in ("complete", "comparison_complete"):
                 logger.warning(f"[PUMP_STUDY] auto-build skipped: pump_study {run_id} not complete")
                 return
 
@@ -2046,6 +2048,38 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
                     )
                 except Exception as exc:
                     logger.exception(f"[PUMP_STUDY] auto-build demand backfill failed: {exc}")
+
+                # Storage optimisation: once raw_pattern_daily_features is the
+                # system of record, drop the verbose snapshot_json blob to free
+                # ~50 % of pump-study storage. Opt-in via env var.
+                try:
+                    from database import (
+                        STUDIO_DROP_SNAPSHOT_JSON_AFTER_FEATURES,
+                        null_snapshot_json_for_pump_runs,
+                    )
+                    if STUDIO_DROP_SNAPSHOT_JSON_AFTER_FEATURES:
+                        n = await null_snapshot_json_for_pump_runs([run_id])
+                        logger.info(
+                            f"[PUMP_STUDY] auto-build: nulled snapshot_json on "
+                            f"{n} pump_episode_snapshots rows (run_id={run_id})"
+                        )
+                except Exception as exc:
+                    logger.warning(f"[PUMP_STUDY] snapshot_json null-out failed (non-fatal): {exc}")
+
+                # Auto-prune older raw-pattern runs to bound storage.
+                try:
+                    from database import STUDIO_KEEP_LAST_RUNS, cleanup_raw_pattern_runs
+                    if STUDIO_KEEP_LAST_RUNS > 0:
+                        cres = await cleanup_raw_pattern_runs(
+                            keep_last_n=STUDIO_KEEP_LAST_RUNS, dry_run=False, vacuum=False
+                        )
+                        if cres.get("deleted"):
+                            logger.info(
+                                f"[PUMP_STUDY] raw-pattern auto-prune: kept last "
+                                f"{STUDIO_KEEP_LAST_RUNS}, deleted {cres['deleted']}"
+                            )
+                except Exception as exc:
+                    logger.warning(f"[PUMP_STUDY] raw-pattern auto-prune failed (non-fatal): {exc}")
             except Exception as exc:
                 await _upd(raw_run_id, {
                     "status": "error", "error_message": str(exc)[:500],
@@ -2821,6 +2855,26 @@ async def admin_cleanup_all(keep_last_n: int = 3, keep_candle_days: int = 200, d
     results["dry_run"] = dry_run
     return results
 
+
+@app.get("/api/admin/db/sizes")
+async def admin_db_sizes():
+    """
+    Per-table storage breakdown for the Analytics Studio tables.
+
+    PostgreSQL: returns total_bytes (table + TOAST + indexes), index size and
+    pg_database_size for the whole DB, sorted largest-first.
+    SQLite:     returns row counts only (no byte size).
+
+    Use this to diagnose why the DB is filling up. The biggest offenders are
+    typically pump_episode_snapshots, raw_pattern_daily_features and
+    candle_cache. Pair with POST /api/admin/cleanup-all to reclaim space.
+    """
+    from database import get_table_sizes
+    try:
+        return await get_table_sizes()
+    except Exception as exc:
+        logger.exception("admin_db_sizes failed")
+        raise HTTPException(500, detail=str(exc))
 
 
 @app.post("/api/admin/db/rebuild")
