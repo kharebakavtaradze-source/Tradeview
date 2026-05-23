@@ -71,23 +71,31 @@ _SNAPSHOT_INDICATOR_REDUNDANT_KEYS = frozenset({
     "gap",
 })
 
+# Top-level snapshot keys not used by Scanner v2 or any raw-pattern consumer.
+# early_ignition.calc_ignition and toxic_filter.score_toxicity are not in the
+# live scanner decision path (scanner_v2.py reads only np_decision).
+_SNAPSHOT_TOP_LEVEL_DROP = frozenset({"ignition", "toxicity"})
+
 
 def _slim_snapshot_payload(snap: dict) -> dict:
     """
-    Return a copy of `snap` with redundant indicator fields stripped from
-    `snap["indicators"]`. All other keys (regime, ignition, toxicity, new_pump,
-    custom_flags) are left untouched.
+    Return a copy of `snap` with dead-weight blobs stripped.
+
+    Removed at top level: ignition, toxicity (not used by Scanner v2 or
+    raw-pattern feature builders).
+    Removed from indicators: redundant fields that are already stored as
+    dedicated snapshot columns (rsi, cmf, atr_pct, …).
     """
     if not snap:
         return snap
-    indicators = snap.get("indicators")
-    if not isinstance(indicators, dict):
-        return snap
-    slim_ind = {
-        k: v for k, v in indicators.items()
-        if k not in _SNAPSHOT_INDICATOR_REDUNDANT_KEYS
-    }
-    return {**snap, "indicators": slim_ind}
+    result = {k: v for k, v in snap.items() if k not in _SNAPSHOT_TOP_LEVEL_DROP}
+    indicators = result.get("indicators")
+    if isinstance(indicators, dict):
+        result = {**result, "indicators": {
+            k: v for k, v in indicators.items()
+            if k not in _SNAPSHOT_INDICATOR_REDUNDANT_KEYS
+        }}
+    return result
 
 if _IS_SQLITE:
     # Hard-fail in Railway/production environments — SQLite loses all data on restart
