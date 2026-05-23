@@ -75,6 +75,20 @@ _pump_study_progress: dict = {
     "error":          None,
 }
 
+# Held for the entire pump-study run. The HTTP handler acquires it with
+# `if locked() raise 409` before kicking the background task, so two
+# launch-requests racing in the same event-loop tick can't both pass the
+# `_pump_study_progress["running"]` guard before the flag is set.
+_pump_study_lock: "asyncio.Lock | None" = None
+
+
+def get_pump_study_lock() -> asyncio.Lock:
+    """Lazily-created module-level lock (avoids binding to a stale event loop)."""
+    global _pump_study_lock
+    if _pump_study_lock is None:
+        _pump_study_lock = asyncio.Lock()
+    return _pump_study_lock
+
 
 def get_pump_study_progress() -> dict:
     """Return a snapshot of the current pump study progress."""
@@ -5179,9 +5193,11 @@ async def run_pump_study(run_id: int, params: dict) -> None:
         fetch_from = (
             date.fromisoformat(start_date) - timedelta(days=100)
         ).isoformat()
-        fetch_to = (
-            date.fromisoformat(end_date) + timedelta(days=window_days * 2 + 30)
-        ).isoformat()
+        # Need POST window after peak, and peak can land window_days*2 trading
+        # bars after end_date — but never request future dates: the Massive API
+        # wastes a round-trip returning empty bars past today.
+        _fetch_to_calendar = date.fromisoformat(end_date) + timedelta(days=window_days * 2 + 30)
+        fetch_to = min(_fetch_to_calendar, date.today()).isoformat()
 
         # ── 1. Universe ───────────────────────────────────────────────────────
         _pump_study_progress["phase"] = "UNIVERSE"

@@ -1932,8 +1932,21 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
     """
     from datetime import date as _d
     from database import create_pump_study_run
-    from replay.pump_study_engine import get_pump_study_progress
+    from replay.pump_study_engine import get_pump_study_progress, get_pump_study_lock
 
+    # Two layers of defense: the flag catches the common "two clicks far apart"
+    # case with a friendly error message; the lock catches the rare "two
+    # requests in the same event-loop tick" race that would otherwise slip
+    # past the flag before _run_bg gets scheduled.
+    if get_pump_study_lock().locked():
+        prog = get_pump_study_progress()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A pump study is already running (run_id={prog.get('run_id')}). "
+                "Wait for it to finish or check its status."
+            ),
+        )
     prog = get_pump_study_progress()
     if prog.get("running"):
         raise HTTPException(
@@ -1972,7 +1985,7 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
 
     run_id = await create_pump_study_run(params)
 
-    async def _run_bg():
+    async def _run_bg_inner():
         try:
             from replay.pump_study_engine import run_pump_study
             await run_pump_study(run_id, params)
@@ -2081,6 +2094,22 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
                 except Exception as exc:
                     logger.warning(f"[PUMP_STUDY] raw-pattern auto-prune failed (non-fatal): {exc}")
             except Exception as exc:
+                # Partial-failure cleanup: the build chain runs ~10 functions
+                # sequentially and each writes to its own child table. If one
+                # fails mid-way, earlier rows are already committed. Wipe the
+                # children so the failed run isn't a silent storage hog; keep
+                # the parent row so users can see the error_message.
+                try:
+                    from database import delete_raw_pattern_run_data
+                    res = await delete_raw_pattern_run_data(raw_run_id, delete_run_row=False)
+                    logger.info(
+                        f"[PUMP_STUDY] auto-build cleanup after failure: run={raw_run_id} "
+                        f"deleted={res.get('deleted')}"
+                    )
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        f"[PUMP_STUDY] post-failure cleanup itself failed (non-fatal): {cleanup_exc}"
+                    )
                 await _upd(raw_run_id, {
                     "status": "error", "error_message": str(exc)[:500],
                     "finished_at": datetime.utcnow(),
@@ -2088,6 +2117,13 @@ async def pump_study_start(body: dict, background_tasks: BackgroundTasks):
                 logger.exception(f"[PUMP_STUDY] auto-build raw_pattern_study run={raw_run_id} failed: {exc}")
         except Exception as exc:
             logger.exception(f"[PUMP_STUDY] auto-build setup failed for run={run_id}: {exc}")
+
+    async def _run_bg():
+        # Held for the entire pump-study + optional raw-pattern auto-build so
+        # a second launch can't slip past the in-memory guard during the
+        # background-task scheduling window.
+        async with get_pump_study_lock():
+            await _run_bg_inner()
 
     background_tasks.add_task(_run_bg)
 

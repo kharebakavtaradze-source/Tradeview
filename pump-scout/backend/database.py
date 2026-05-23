@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func, select, text
+from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func, insert, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -3326,27 +3326,31 @@ async def save_pump_episode_detections(run_id: int, detections: list[dict]) -> i
     """Bulk-insert raw detections. Returns count inserted."""
     if not detections:
         return 0
+    rows = [
+        {
+            "run_id":                   run_id,
+            "symbol":                   d["symbol"],
+            "window_start_date":        d["window_start_date"],
+            "window_peak_date":         d["window_peak_date"],
+            "window_days":              d.get("window_days"),
+            "start_price":              d["start_price"],
+            "peak_price":               d["peak_price"],
+            "multiple":                 d["multiple"],
+            "return_pct":               d["return_pct"],
+            "days_to_peak":             d.get("days_to_peak"),
+            "days_to_double":           d.get("days_to_double"),
+            "max_drawdown_before_peak": d.get("max_drawdown_before_peak"),
+            "cluster_id":               d.get("cluster_id"),
+            "is_canonical":             d.get("is_canonical", False),
+        }
+        for d in detections
+    ]
+    chunk = 2000
     async with get_session_factory()() as session:
-        for d in detections:
-            row = PumpEpisodeDetection(
-                run_id                   = run_id,
-                symbol                   = d["symbol"],
-                window_start_date        = d["window_start_date"],
-                window_peak_date         = d["window_peak_date"],
-                window_days              = d.get("window_days"),
-                start_price              = d["start_price"],
-                peak_price               = d["peak_price"],
-                multiple                 = d["multiple"],
-                return_pct               = d["return_pct"],
-                days_to_peak             = d.get("days_to_peak"),
-                days_to_double           = d.get("days_to_double"),
-                max_drawdown_before_peak = d.get("max_drawdown_before_peak"),
-                cluster_id               = d.get("cluster_id"),
-                is_canonical             = d.get("is_canonical", False),
-            )
-            session.add(row)
+        for i in range(0, len(rows), chunk):
+            await session.execute(insert(PumpEpisodeDetection), rows[i:i + chunk])
         await session.commit()
-    return len(detections)
+    return len(rows)
 
 
 async def get_pump_episode_detections(run_id: int) -> list[dict]:
@@ -3460,40 +3464,46 @@ async def get_pump_episode(episode_id: int) -> Optional[dict]:
 async def save_pump_episode_snapshots(snapshots: list[dict]) -> int:
     if not snapshots:
         return 0
+    rows = [
+        {
+            "episode_id":              s["episode_id"],
+            "run_id":                  s["run_id"],
+            "symbol":                  s["symbol"],
+            "date":                    s["date"],
+            "window_phase":            s.get("window_phase"),
+            "relative_day_from_start": s.get("relative_day_from_start"),
+            "relative_day_from_peak":  s.get("relative_day_from_peak"),
+            "open":                    s.get("open"),
+            "high":                    s.get("high"),
+            "low":                     s.get("low"),
+            "close":                   s.get("close"),
+            "volume":                  s.get("volume"),
+            "gap_pct":                 s.get("gap_pct"),
+            "intraday_range_pct":      s.get("intraday_range_pct"),
+            "close_position":          s.get("close_position"),
+            "daily_return_pct":        s.get("daily_return_pct"),
+            "cum_return_pct":          s.get("cum_return_pct"),
+            "volume_vs_avg20":         s.get("volume_vs_avg20"),
+            "volume_zscore":           s.get("volume_zscore"),
+            "atr_pct":                 s.get("atr_pct"),
+            "bb_width":                s.get("bb_width"),
+            "bb_squeeze":              s.get("bb_squeeze"),
+            "rsi":                     s.get("rsi"),
+            "cmf":                     s.get("cmf"),
+            "ribbon_class":            s.get("ribbon_class"),
+            "wyckoff_state":           s.get("wyckoff_state"),
+            "snapshot_json":           json.dumps(_slim_snapshot_payload(s.get("snapshot") or {})),
+        }
+        for s in snapshots
+    ]
+    # Chunk inserts to keep round-trip payloads sane on Postgres (parameter
+    # limit ~32K; ~28 cols × 1000 rows = 28K params, comfortable headroom).
+    chunk = 1000
     async with get_session_factory()() as session:
-        for s in snapshots:
-            row = PumpEpisodeSnapshot(
-                episode_id              = s["episode_id"],
-                run_id                  = s["run_id"],
-                symbol                  = s["symbol"],
-                date                    = s["date"],
-                window_phase            = s.get("window_phase"),
-                relative_day_from_start = s.get("relative_day_from_start"),
-                relative_day_from_peak  = s.get("relative_day_from_peak"),
-                open                    = s.get("open"),
-                high                    = s.get("high"),
-                low                     = s.get("low"),
-                close                   = s.get("close"),
-                volume                  = s.get("volume"),
-                gap_pct                 = s.get("gap_pct"),
-                intraday_range_pct      = s.get("intraday_range_pct"),
-                close_position          = s.get("close_position"),
-                daily_return_pct        = s.get("daily_return_pct"),
-                cum_return_pct          = s.get("cum_return_pct"),
-                volume_vs_avg20         = s.get("volume_vs_avg20"),
-                volume_zscore           = s.get("volume_zscore"),
-                atr_pct                 = s.get("atr_pct"),
-                bb_width                = s.get("bb_width"),
-                bb_squeeze              = s.get("bb_squeeze"),
-                rsi                     = s.get("rsi"),
-                cmf                     = s.get("cmf"),
-                ribbon_class            = s.get("ribbon_class"),
-                wyckoff_state           = s.get("wyckoff_state"),
-                snapshot_json           = json.dumps(_slim_snapshot_payload(s.get("snapshot") or {})),
-            )
-            session.add(row)
+        for i in range(0, len(rows), chunk):
+            await session.execute(insert(PumpEpisodeSnapshot), rows[i:i + chunk])
         await session.commit()
-    return len(snapshots)
+    return len(rows)
 
 
 async def get_pump_episode_snapshots(
@@ -3545,22 +3555,26 @@ async def get_snapshots_for_episodes(episode_ids: list[int]) -> list[dict]:
 async def save_pump_episode_events(events: list[dict]) -> int:
     if not events:
         return 0
+    rows = [
+        {
+            "episode_id":        ev["episode_id"],
+            "run_id":            ev["run_id"],
+            "symbol":            ev["symbol"],
+            "event_date":        ev["event_date"],
+            "event_type":        ev["event_type"],
+            "event_value":       ev.get("event_value"),
+            "event_detail_json": json.dumps(ev["event_detail"]) if ev.get("event_detail") else None,
+            "event_note":        ev.get("event_note"),
+            "days_before_pump":  ev.get("days_before_pump"),
+        }
+        for ev in events
+    ]
+    chunk = 2000
     async with get_session_factory()() as session:
-        for ev in events:
-            row = PumpEpisodeEvent(
-                episode_id        = ev["episode_id"],
-                run_id            = ev["run_id"],
-                symbol            = ev["symbol"],
-                event_date        = ev["event_date"],
-                event_type        = ev["event_type"],
-                event_value       = ev.get("event_value"),
-                event_detail_json = json.dumps(ev["event_detail"]) if ev.get("event_detail") else None,
-                event_note        = ev.get("event_note"),
-                days_before_pump  = ev.get("days_before_pump"),
-            )
-            session.add(row)
+        for i in range(0, len(rows), chunk):
+            await session.execute(insert(PumpEpisodeEvent), rows[i:i + chunk])
         await session.commit()
-    return len(events)
+    return len(rows)
 
 
 async def get_pump_episode_events(episode_id: int) -> list[dict]:
@@ -3727,23 +3741,27 @@ async def save_pump_comparison_group(run_id: int, group: dict) -> int:
 async def save_pump_comparison_members(members: list[dict]) -> int:
     if not members:
         return 0
+    rows = [
+        {
+            "group_id":        m["group_id"],
+            "run_id":          m["run_id"],
+            "group_name":      m["group_name"],
+            "symbol":          m["symbol"],
+            "episode_id":      m.get("episode_id"),
+            "pump_multiple":   m.get("pump_multiple"),
+            "pump_return_pct": m.get("pump_return_pct"),
+            "days_to_peak":    m.get("days_to_peak"),
+            "pump_type":       m.get("pump_type"),
+            "features_json":   json.dumps(m.get("features") or {}),
+        }
+        for m in members
+    ]
+    chunk = 2000
     async with get_session_factory()() as session:
-        for m in members:
-            row = PumpComparisonMember(
-                group_id        = m["group_id"],
-                run_id          = m["run_id"],
-                group_name      = m["group_name"],
-                symbol          = m["symbol"],
-                episode_id      = m.get("episode_id"),
-                pump_multiple   = m.get("pump_multiple"),
-                pump_return_pct = m.get("pump_return_pct"),
-                days_to_peak    = m.get("days_to_peak"),
-                pump_type       = m.get("pump_type"),
-                features_json   = json.dumps(m.get("features") or {}),
-            )
-            session.add(row)
+        for i in range(0, len(rows), chunk):
+            await session.execute(insert(PumpComparisonMember), rows[i:i + chunk])
         await session.commit()
-    return len(members)
+    return len(rows)
 
 
 async def get_pump_comparison_groups(run_id: int) -> list[dict]:
@@ -4607,6 +4625,51 @@ async def vacuum_analyze_all() -> dict:
             except Exception as e:
                 results[tbl] = f"error: {e}"
     return results
+
+
+async def delete_raw_pattern_run_data(run_id: int, delete_run_row: bool = True) -> dict:
+    """
+    Wipe all data associated with one raw_pattern_run.
+
+    Used when the auto-build chain (10 sequential build_raw_pattern_*
+    functions) fails mid-way: earlier successful steps have already written
+    rows into raw_pattern_daily_features / raw_pattern_episode_features /
+    raw_pattern_comparisons / etc. If we leave them, they pile up as silent
+    storage waste alongside an "error"-status run that nothing consumes.
+
+    Set delete_run_row=False to keep the parent row (e.g. so the user can
+    still see the error_message in the runs list) while clearing children.
+    """
+    counts: dict[str, int] = {}
+    async with get_engine().begin() as conn:
+        for tbl, label in [
+            ("raw_pattern_comparison_members", "cmp_members"),
+            ("raw_pattern_comparisons",         "cmp_features"),
+            ("raw_pattern_episode_features",    "ep_features"),
+            ("raw_pattern_daily_features",      "daily_features"),
+            ("raw_pattern_ai_summaries",        "ai_summaries"),
+            ("discovered_patterns",             "discovered_patterns"),
+        ]:
+            try:
+                r = await conn.execute(
+                    text(f"DELETE FROM {tbl} WHERE run_id = :rid"),
+                    {"rid": run_id},
+                )
+                counts[label] = r.rowcount or 0
+            except Exception as exc:
+                logger.warning(f"delete_raw_pattern_run_data: {tbl} failed: {exc}")
+                counts[label] = -1
+        if delete_run_row:
+            try:
+                r = await conn.execute(
+                    text("DELETE FROM raw_pattern_runs WHERE id = :rid"),
+                    {"rid": run_id},
+                )
+                counts["run"] = r.rowcount or 0
+            except Exception as exc:
+                logger.warning(f"delete_raw_pattern_run_data: run row failed: {exc}")
+                counts["run"] = -1
+    return {"run_id": run_id, "deleted": counts}
 
 
 async def cleanup_raw_pattern_runs(
